@@ -6,9 +6,12 @@ import {
   createRootRouteWithContext,
 } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
+import { ThemeProvider } from "next-themes";
 import type { PropsWithChildren } from "react";
 
+import { AnchoredToastProvider, ToastProvider } from "@/components/ui/toast";
 import { getLocale } from "@/paraglide/runtime";
+import { LanguageProvider } from "@/providers/language-provider";
 
 import TanStackQueryDevtools from "../integrations/tanstack-query/devtools";
 
@@ -48,17 +51,35 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
     ],
   }),
   shellComponent: RootDocument,
+  notFoundComponent: () => {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center">
+        <h1 className="text-3xl font-bold">404 - Not Found</h1>
+      </div>
+    );
+  },
 });
 
 function RootDocument({ children }: PropsWithChildren) {
   return (
-    <html lang={getLocale()}>
+    <html lang={getLocale()} suppressHydrationWarning>
       <head>
         <HeadContent />
       </head>
 
       <body>
-        {children}
+        <LanguageProvider>
+          <ThemeProvider
+            attribute="class"
+            defaultTheme="system"
+            enableSystem
+            disableTransitionOnChange
+          >
+            <ToastProvider>
+              <AnchoredToastProvider>{children}</AnchoredToastProvider>
+            </ToastProvider>
+          </ThemeProvider>
+        </LanguageProvider>
 
         <TanStackDevtools
           config={{

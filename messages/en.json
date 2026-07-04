@@ -1,9 +1,22 @@
 {
   "$schema": "https://inlang.com/schema/inlang-message-format",
-  "home_page": "Home page",
-  "about_page": "About page",
-  "example_message": "Welcome to your i18n app.",
-  "language_label": "Language",
-  "current_locale": "Current locale: {locale}",
-  "learn_router": "Learn Paraglide JS"
+  "language": "English",
+  "auth_title": "Login",
+  "auth_description": "Log in to your account to continue.",
+  "auth_sign_in_with_github": "Sign in with GitHub",
+  "auth_sign_in_with_google": "Sign in with Google",
+  "auth_login_label_email": "Email",
+  "auth_login_label_password": "Password",
+  "auth_login_button": "Login",
+  "auth_login_error_title": "Login Failed",
+  "auth_login_error_description": "Incorrect email or password. Please try again.",
+  "auth_login_to_signup": "Don't have an account? Sign up",
+  "auth_login_forgot_password": "Forgot password?",
+  "auth_signup_title": "Sign Up",
+  "auth_signup_description": "Create a new account to get started.",
+  "auth_signup_label_email": "Email",
+  "auth_signup_button": "Sign Up",
+  "auth_signup_mail_sent_title": "Email Sent",
+  "auth_signup_mail_sent_description": "Please check your email to complete the sign-up process",
+  "auth_signup_to_login": "Already have an account? Log in"
 }

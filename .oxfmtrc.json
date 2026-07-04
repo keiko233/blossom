@@ -7,21 +7,18 @@
   "trailingComma": "all",
   "printWidth": 80,
   "ignorePatterns": [],
-  "experimentalSortImports": {
-    "patterns": ["^@/(.*)$", "^@(.*)$", "^[./]"],
-    "rules": [
-      {
-        "name": "react",
-        "order": ["react", "react-dom"]
-      }
+  "sortImports": {
+    "groups": [
+      ["builtin", "external"],
+      ["internal"],
+      ["parent", "sibling", "index"],
+      "style",
+      "unknown"
     ]
   },
-  "experimentalTailwindcss": {
-    "rules": [
-      {
-        "name": "tailwind",
-        "order": ["tailwindcss", "tailwind-merge"]
-      }
-    ]
+  "sortTailwindcss": {
+    "stylesheet": "./src/styles.css",
+    "functions": ["clsx", "cn"],
+    "preserveWhitespace": false
   }
 }
