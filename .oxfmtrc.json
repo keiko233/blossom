@@ -1,0 +1,27 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "endOfLine": "lf",
+  "semi": true,
+  "bracketSpacing": true,
+  "tabWidth": 2,
+  "trailingComma": "all",
+  "printWidth": 80,
+  "ignorePatterns": [],
+  "experimentalSortImports": {
+    "patterns": ["^@/(.*)$", "^@(.*)$", "^[./]"],
+    "rules": [
+      {
+        "name": "react",
+        "order": ["react", "react-dom"]
+      }
+    ]
+  },
+  "experimentalTailwindcss": {
+    "rules": [
+      {
+        "name": "tailwind",
+        "order": ["tailwindcss", "tailwind-merge"]
+      }
+    ]
+  }
+}
