@@ -1,10 +1,16 @@
+import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { createServerFn, createServerOnlyFn } from "@tanstack/react-start";
 import { getRequestHeaders } from "@tanstack/react-start/server";
 import { betterAuth } from "better-auth";
 import { magicLink } from "better-auth/plugins";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
 
+import { db } from "@/db";
+import * as schema from "@/db/schema";
+import MagicLinkEmail from "@/templates/emails/magic-link";
+
 import { emailSignInSchema, emailSignUpSchema } from "./auth-schema";
+import { getEmailClient } from "./email";
 import { getServerEnv } from "./env";
 
 const buildSocialProviders = createServerOnlyFn(() => {
@@ -20,6 +26,10 @@ const buildAuth = createServerOnlyFn(() => {
   const env = getServerEnv();
 
   return betterAuth({
+    database: drizzleAdapter(db, {
+      provider: "pg",
+      schema,
+    }),
     emailAndPassword: {
       enabled: true,
     },
@@ -39,18 +49,25 @@ const buildAuth = createServerOnlyFn(() => {
             }
           : undefined,
     },
-    socialProviderConfig: {
-      github: {
-        clientId: env.GITHUB_CLIENT_ID,
-        clientSecret: env.GITHUB_CLIENT_SECRET,
-      },
-    },
     plugins: [
       tanstackStartCookies(),
       magicLink({
-        sendMagicLink: async ({ email, token, url, metadata }) => {
-          console.log("sendMagicLink", { email, token, url, metadata });
-          // send email to user
+        sendMagicLink: async (data) => {
+          const email = getEmailClient();
+
+          if (email) {
+            await email.emails.send({
+              from: env.RESEND_MAIL_FROM!,
+              to: data.email,
+              subject: `Welcome to ${env.APP_NAME}! Here's your link`,
+              react: <MagicLinkEmail email={data.email} link={data.url} />,
+            });
+          } else {
+            console.warn(
+              "Email is not enabled, please configure the RESEND_API_KEY and RESEND_MAIL_FROM",
+              data,
+            );
+          }
         },
       }),
     ],
