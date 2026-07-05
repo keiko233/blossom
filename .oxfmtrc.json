@@ -6,7 +6,7 @@
   "tabWidth": 2,
   "trailingComma": "all",
   "printWidth": 80,
-  "ignorePatterns": [],
+  "ignorePatterns": ["*.gen.ts", "*.gen.tsx", "*.gen.js", "*.gen.jsx"],
   "sortImports": {
     "groups": [
       ["builtin", "external"],

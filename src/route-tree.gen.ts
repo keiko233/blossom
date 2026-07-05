@@ -4,313 +4,313 @@
 // You should NOT make any changes in this file as it will be overwritten.
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
-import { Route as adminAdminIndexRouteImport } from "./routes/(admin)/admin/index";
-import { Route as adminRouteRouteImport } from "./routes/(admin)/route";
-import { Route as authAuthForgotRouteImport } from "./routes/(auth)/auth/forgot";
-import { Route as authAuthLoginRouteImport } from "./routes/(auth)/auth/login";
-import { Route as authAuthSignupRouteImport } from "./routes/(auth)/auth/signup";
-import { Route as authRouteRouteImport } from "./routes/(auth)/route";
-import { Route as staticIndexRouteImport } from "./routes/(static)/index";
-import { Route as userDashboardIndexRouteImport } from "./routes/(user)/dashboard/index";
-import { Route as userRouteRouteImport } from "./routes/(user)/route";
-import { Route as userWelcomeIndexRouteImport } from "./routes/(user)/welcome/index";
-import { Route as rootRouteImport } from "./routes/__root";
-import { Route as ApiSplatRouteImport } from "./routes/api.$";
-import { Route as ApiRpcSplatRouteImport } from "./routes/api.rpc.$";
-import { Route as ApiAuthSplatRouteImport } from "./routes/api/auth/$";
+import { Route as rootRouteImport } from './routes/__root'
+import { Route as userRouteRouteImport } from './routes/(user)/route'
+import { Route as authRouteRouteImport } from './routes/(auth)/route'
+import { Route as adminRouteRouteImport } from './routes/(admin)/route'
+import { Route as staticIndexRouteImport } from './routes/(static)/index'
+import { Route as ApiSplatRouteImport } from './routes/api.$'
+import { Route as userWelcomeIndexRouteImport } from './routes/(user)/welcome/index'
+import { Route as userDashboardIndexRouteImport } from './routes/(user)/dashboard/index'
+import { Route as adminAdminIndexRouteImport } from './routes/(admin)/admin/index'
+import { Route as ApiRpcSplatRouteImport } from './routes/api.rpc.$'
+import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as authAuthSignupRouteImport } from './routes/(auth)/auth/signup'
+import { Route as authAuthLoginRouteImport } from './routes/(auth)/auth/login'
+import { Route as authAuthForgotRouteImport } from './routes/(auth)/auth/forgot'
 
 const userRouteRoute = userRouteRouteImport.update({
-  id: "/(user)",
+  id: '/(user)',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const authRouteRoute = authRouteRouteImport.update({
-  id: "/(auth)",
+  id: '/(auth)',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const adminRouteRoute = adminRouteRouteImport.update({
-  id: "/(admin)",
+  id: '/(admin)',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const staticIndexRoute = staticIndexRouteImport.update({
-  id: "/(static)/",
-  path: "/",
+  id: '/(static)/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const ApiSplatRoute = ApiSplatRouteImport.update({
-  id: "/api/$",
-  path: "/api/$",
+  id: '/api/$',
+  path: '/api/$',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const userWelcomeIndexRoute = userWelcomeIndexRouteImport.update({
-  id: "/welcome/",
-  path: "/welcome/",
+  id: '/welcome/',
+  path: '/welcome/',
   getParentRoute: () => userRouteRoute,
-} as any);
+} as any)
 const userDashboardIndexRoute = userDashboardIndexRouteImport.update({
-  id: "/dashboard/",
-  path: "/dashboard/",
+  id: '/dashboard/',
+  path: '/dashboard/',
   getParentRoute: () => userRouteRoute,
-} as any);
+} as any)
 const adminAdminIndexRoute = adminAdminIndexRouteImport.update({
-  id: "/admin/",
-  path: "/admin/",
+  id: '/admin/',
+  path: '/admin/',
   getParentRoute: () => adminRouteRoute,
-} as any);
+} as any)
 const ApiRpcSplatRoute = ApiRpcSplatRouteImport.update({
-  id: "/api/rpc/$",
-  path: "/api/rpc/$",
+  id: '/api/rpc/$',
+  path: '/api/rpc/$',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
-  id: "/api/auth/$",
-  path: "/api/auth/$",
+  id: '/api/auth/$',
+  path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const authAuthSignupRoute = authAuthSignupRouteImport.update({
-  id: "/auth/signup",
-  path: "/auth/signup",
+  id: '/auth/signup',
+  path: '/auth/signup',
   getParentRoute: () => authRouteRoute,
-} as any);
+} as any)
 const authAuthLoginRoute = authAuthLoginRouteImport.update({
-  id: "/auth/login",
-  path: "/auth/login",
+  id: '/auth/login',
+  path: '/auth/login',
   getParentRoute: () => authRouteRoute,
-} as any);
+} as any)
 const authAuthForgotRoute = authAuthForgotRouteImport.update({
-  id: "/auth/forgot",
-  path: "/auth/forgot",
+  id: '/auth/forgot',
+  path: '/auth/forgot',
   getParentRoute: () => authRouteRoute,
-} as any);
+} as any)
 
 export interface FileRoutesByFullPath {
-  "/api/$": typeof ApiSplatRoute;
-  "/": typeof staticIndexRoute;
-  "/auth/forgot": typeof authAuthForgotRoute;
-  "/auth/login": typeof authAuthLoginRoute;
-  "/auth/signup": typeof authAuthSignupRoute;
-  "/api/auth/$": typeof ApiAuthSplatRoute;
-  "/api/rpc/$": typeof ApiRpcSplatRoute;
-  "/admin/": typeof adminAdminIndexRoute;
-  "/dashboard/": typeof userDashboardIndexRoute;
-  "/welcome/": typeof userWelcomeIndexRoute;
+  '/api/$': typeof ApiSplatRoute
+  '/': typeof staticIndexRoute
+  '/auth/forgot': typeof authAuthForgotRoute
+  '/auth/login': typeof authAuthLoginRoute
+  '/auth/signup': typeof authAuthSignupRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/rpc/$': typeof ApiRpcSplatRoute
+  '/admin/': typeof adminAdminIndexRoute
+  '/dashboard/': typeof userDashboardIndexRoute
+  '/welcome/': typeof userWelcomeIndexRoute
 }
 export interface FileRoutesByTo {
-  "/api/$": typeof ApiSplatRoute;
-  "/": typeof staticIndexRoute;
-  "/auth/forgot": typeof authAuthForgotRoute;
-  "/auth/login": typeof authAuthLoginRoute;
-  "/auth/signup": typeof authAuthSignupRoute;
-  "/api/auth/$": typeof ApiAuthSplatRoute;
-  "/api/rpc/$": typeof ApiRpcSplatRoute;
-  "/admin": typeof adminAdminIndexRoute;
-  "/dashboard": typeof userDashboardIndexRoute;
-  "/welcome": typeof userWelcomeIndexRoute;
+  '/api/$': typeof ApiSplatRoute
+  '/': typeof staticIndexRoute
+  '/auth/forgot': typeof authAuthForgotRoute
+  '/auth/login': typeof authAuthLoginRoute
+  '/auth/signup': typeof authAuthSignupRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/rpc/$': typeof ApiRpcSplatRoute
+  '/admin': typeof adminAdminIndexRoute
+  '/dashboard': typeof userDashboardIndexRoute
+  '/welcome': typeof userWelcomeIndexRoute
 }
 export interface FileRoutesById {
-  __root__: typeof rootRouteImport;
-  "/(admin)": typeof adminRouteRouteWithChildren;
-  "/(auth)": typeof authRouteRouteWithChildren;
-  "/(user)": typeof userRouteRouteWithChildren;
-  "/api/$": typeof ApiSplatRoute;
-  "/(static)/": typeof staticIndexRoute;
-  "/(auth)/auth/forgot": typeof authAuthForgotRoute;
-  "/(auth)/auth/login": typeof authAuthLoginRoute;
-  "/(auth)/auth/signup": typeof authAuthSignupRoute;
-  "/api/auth/$": typeof ApiAuthSplatRoute;
-  "/api/rpc/$": typeof ApiRpcSplatRoute;
-  "/(admin)/admin/": typeof adminAdminIndexRoute;
-  "/(user)/dashboard/": typeof userDashboardIndexRoute;
-  "/(user)/welcome/": typeof userWelcomeIndexRoute;
+  __root__: typeof rootRouteImport
+  '/(admin)': typeof adminRouteRouteWithChildren
+  '/(auth)': typeof authRouteRouteWithChildren
+  '/(user)': typeof userRouteRouteWithChildren
+  '/api/$': typeof ApiSplatRoute
+  '/(static)/': typeof staticIndexRoute
+  '/(auth)/auth/forgot': typeof authAuthForgotRoute
+  '/(auth)/auth/login': typeof authAuthLoginRoute
+  '/(auth)/auth/signup': typeof authAuthSignupRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/rpc/$': typeof ApiRpcSplatRoute
+  '/(admin)/admin/': typeof adminAdminIndexRoute
+  '/(user)/dashboard/': typeof userDashboardIndexRoute
+  '/(user)/welcome/': typeof userWelcomeIndexRoute
 }
 export interface FileRouteTypes {
-  fileRoutesByFullPath: FileRoutesByFullPath;
+  fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    | "/api/$"
-    | "/"
-    | "/auth/forgot"
-    | "/auth/login"
-    | "/auth/signup"
-    | "/api/auth/$"
-    | "/api/rpc/$"
-    | "/admin/"
-    | "/dashboard/"
-    | "/welcome/";
-  fileRoutesByTo: FileRoutesByTo;
+    | '/api/$'
+    | '/'
+    | '/auth/forgot'
+    | '/auth/login'
+    | '/auth/signup'
+    | '/api/auth/$'
+    | '/api/rpc/$'
+    | '/admin/'
+    | '/dashboard/'
+    | '/welcome/'
+  fileRoutesByTo: FileRoutesByTo
   to:
-    | "/api/$"
-    | "/"
-    | "/auth/forgot"
-    | "/auth/login"
-    | "/auth/signup"
-    | "/api/auth/$"
-    | "/api/rpc/$"
-    | "/admin"
-    | "/dashboard"
-    | "/welcome";
+    | '/api/$'
+    | '/'
+    | '/auth/forgot'
+    | '/auth/login'
+    | '/auth/signup'
+    | '/api/auth/$'
+    | '/api/rpc/$'
+    | '/admin'
+    | '/dashboard'
+    | '/welcome'
   id:
-    | "__root__"
-    | "/(admin)"
-    | "/(auth)"
-    | "/(user)"
-    | "/api/$"
-    | "/(static)/"
-    | "/(auth)/auth/forgot"
-    | "/(auth)/auth/login"
-    | "/(auth)/auth/signup"
-    | "/api/auth/$"
-    | "/api/rpc/$"
-    | "/(admin)/admin/"
-    | "/(user)/dashboard/"
-    | "/(user)/welcome/";
-  fileRoutesById: FileRoutesById;
+    | '__root__'
+    | '/(admin)'
+    | '/(auth)'
+    | '/(user)'
+    | '/api/$'
+    | '/(static)/'
+    | '/(auth)/auth/forgot'
+    | '/(auth)/auth/login'
+    | '/(auth)/auth/signup'
+    | '/api/auth/$'
+    | '/api/rpc/$'
+    | '/(admin)/admin/'
+    | '/(user)/dashboard/'
+    | '/(user)/welcome/'
+  fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  adminRouteRoute: typeof adminRouteRouteWithChildren;
-  authRouteRoute: typeof authRouteRouteWithChildren;
-  userRouteRoute: typeof userRouteRouteWithChildren;
-  ApiSplatRoute: typeof ApiSplatRoute;
-  staticIndexRoute: typeof staticIndexRoute;
-  ApiAuthSplatRoute: typeof ApiAuthSplatRoute;
-  ApiRpcSplatRoute: typeof ApiRpcSplatRoute;
+  adminRouteRoute: typeof adminRouteRouteWithChildren
+  authRouteRoute: typeof authRouteRouteWithChildren
+  userRouteRoute: typeof userRouteRouteWithChildren
+  ApiSplatRoute: typeof ApiSplatRoute
+  staticIndexRoute: typeof staticIndexRoute
+  ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiRpcSplatRoute: typeof ApiRpcSplatRoute
 }
 
-declare module "@tanstack/react-router" {
+declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    "/(user)": {
-      id: "/(user)";
-      path: "";
-      fullPath: "";
-      preLoaderRoute: typeof userRouteRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
-    "/(auth)": {
-      id: "/(auth)";
-      path: "";
-      fullPath: "";
-      preLoaderRoute: typeof authRouteRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
-    "/(admin)": {
-      id: "/(admin)";
-      path: "";
-      fullPath: "";
-      preLoaderRoute: typeof adminRouteRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
-    "/(static)/": {
-      id: "/(static)/";
-      path: "/";
-      fullPath: "/";
-      preLoaderRoute: typeof staticIndexRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
-    "/api/$": {
-      id: "/api/$";
-      path: "/api/$";
-      fullPath: "/api/$";
-      preLoaderRoute: typeof ApiSplatRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
-    "/(user)/welcome/": {
-      id: "/(user)/welcome/";
-      path: "/welcome";
-      fullPath: "/welcome/";
-      preLoaderRoute: typeof userWelcomeIndexRouteImport;
-      parentRoute: typeof userRouteRoute;
-    };
-    "/(user)/dashboard/": {
-      id: "/(user)/dashboard/";
-      path: "/dashboard";
-      fullPath: "/dashboard/";
-      preLoaderRoute: typeof userDashboardIndexRouteImport;
-      parentRoute: typeof userRouteRoute;
-    };
-    "/(admin)/admin/": {
-      id: "/(admin)/admin/";
-      path: "/admin";
-      fullPath: "/admin/";
-      preLoaderRoute: typeof adminAdminIndexRouteImport;
-      parentRoute: typeof adminRouteRoute;
-    };
-    "/api/rpc/$": {
-      id: "/api/rpc/$";
-      path: "/api/rpc/$";
-      fullPath: "/api/rpc/$";
-      preLoaderRoute: typeof ApiRpcSplatRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
-    "/api/auth/$": {
-      id: "/api/auth/$";
-      path: "/api/auth/$";
-      fullPath: "/api/auth/$";
-      preLoaderRoute: typeof ApiAuthSplatRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
-    "/(auth)/auth/signup": {
-      id: "/(auth)/auth/signup";
-      path: "/auth/signup";
-      fullPath: "/auth/signup";
-      preLoaderRoute: typeof authAuthSignupRouteImport;
-      parentRoute: typeof authRouteRoute;
-    };
-    "/(auth)/auth/login": {
-      id: "/(auth)/auth/login";
-      path: "/auth/login";
-      fullPath: "/auth/login";
-      preLoaderRoute: typeof authAuthLoginRouteImport;
-      parentRoute: typeof authRouteRoute;
-    };
-    "/(auth)/auth/forgot": {
-      id: "/(auth)/auth/forgot";
-      path: "/auth/forgot";
-      fullPath: "/auth/forgot";
-      preLoaderRoute: typeof authAuthForgotRouteImport;
-      parentRoute: typeof authRouteRoute;
-    };
+    '/(user)': {
+      id: '/(user)'
+      path: ''
+      fullPath: ''
+      preLoaderRoute: typeof userRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/(auth)': {
+      id: '/(auth)'
+      path: ''
+      fullPath: ''
+      preLoaderRoute: typeof authRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/(admin)': {
+      id: '/(admin)'
+      path: ''
+      fullPath: ''
+      preLoaderRoute: typeof adminRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/(static)/': {
+      id: '/(static)/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof staticIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/$': {
+      id: '/api/$'
+      path: '/api/$'
+      fullPath: '/api/$'
+      preLoaderRoute: typeof ApiSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/(user)/welcome/': {
+      id: '/(user)/welcome/'
+      path: '/welcome'
+      fullPath: '/welcome/'
+      preLoaderRoute: typeof userWelcomeIndexRouteImport
+      parentRoute: typeof userRouteRoute
+    }
+    '/(user)/dashboard/': {
+      id: '/(user)/dashboard/'
+      path: '/dashboard'
+      fullPath: '/dashboard/'
+      preLoaderRoute: typeof userDashboardIndexRouteImport
+      parentRoute: typeof userRouteRoute
+    }
+    '/(admin)/admin/': {
+      id: '/(admin)/admin/'
+      path: '/admin'
+      fullPath: '/admin/'
+      preLoaderRoute: typeof adminAdminIndexRouteImport
+      parentRoute: typeof adminRouteRoute
+    }
+    '/api/rpc/$': {
+      id: '/api/rpc/$'
+      path: '/api/rpc/$'
+      fullPath: '/api/rpc/$'
+      preLoaderRoute: typeof ApiRpcSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/auth/$': {
+      id: '/api/auth/$'
+      path: '/api/auth/$'
+      fullPath: '/api/auth/$'
+      preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/(auth)/auth/signup': {
+      id: '/(auth)/auth/signup'
+      path: '/auth/signup'
+      fullPath: '/auth/signup'
+      preLoaderRoute: typeof authAuthSignupRouteImport
+      parentRoute: typeof authRouteRoute
+    }
+    '/(auth)/auth/login': {
+      id: '/(auth)/auth/login'
+      path: '/auth/login'
+      fullPath: '/auth/login'
+      preLoaderRoute: typeof authAuthLoginRouteImport
+      parentRoute: typeof authRouteRoute
+    }
+    '/(auth)/auth/forgot': {
+      id: '/(auth)/auth/forgot'
+      path: '/auth/forgot'
+      fullPath: '/auth/forgot'
+      preLoaderRoute: typeof authAuthForgotRouteImport
+      parentRoute: typeof authRouteRoute
+    }
   }
 }
 
 interface adminRouteRouteChildren {
-  adminAdminIndexRoute: typeof adminAdminIndexRoute;
+  adminAdminIndexRoute: typeof adminAdminIndexRoute
 }
 
 const adminRouteRouteChildren: adminRouteRouteChildren = {
   adminAdminIndexRoute: adminAdminIndexRoute,
-};
+}
 
 const adminRouteRouteWithChildren = adminRouteRoute._addFileChildren(
   adminRouteRouteChildren,
-);
+)
 
 interface authRouteRouteChildren {
-  authAuthForgotRoute: typeof authAuthForgotRoute;
-  authAuthLoginRoute: typeof authAuthLoginRoute;
-  authAuthSignupRoute: typeof authAuthSignupRoute;
+  authAuthForgotRoute: typeof authAuthForgotRoute
+  authAuthLoginRoute: typeof authAuthLoginRoute
+  authAuthSignupRoute: typeof authAuthSignupRoute
 }
 
 const authRouteRouteChildren: authRouteRouteChildren = {
   authAuthForgotRoute: authAuthForgotRoute,
   authAuthLoginRoute: authAuthLoginRoute,
   authAuthSignupRoute: authAuthSignupRoute,
-};
+}
 
 const authRouteRouteWithChildren = authRouteRoute._addFileChildren(
   authRouteRouteChildren,
-);
+)
 
 interface userRouteRouteChildren {
-  userDashboardIndexRoute: typeof userDashboardIndexRoute;
-  userWelcomeIndexRoute: typeof userWelcomeIndexRoute;
+  userDashboardIndexRoute: typeof userDashboardIndexRoute
+  userWelcomeIndexRoute: typeof userWelcomeIndexRoute
 }
 
 const userRouteRouteChildren: userRouteRouteChildren = {
   userDashboardIndexRoute: userDashboardIndexRoute,
   userWelcomeIndexRoute: userWelcomeIndexRoute,
-};
+}
 
 const userRouteRouteWithChildren = userRouteRoute._addFileChildren(
   userRouteRouteChildren,
-);
+)
 
 const rootRouteChildren: RootRouteChildren = {
   adminRouteRoute: adminRouteRouteWithChildren,
@@ -320,17 +320,16 @@ const rootRouteChildren: RootRouteChildren = {
   staticIndexRoute: staticIndexRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiRpcSplatRoute: ApiRpcSplatRoute,
-};
+}
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
-  ._addFileTypes<FileRouteTypes>();
+  ._addFileTypes<FileRouteTypes>()
 
-import type { createStart } from "@tanstack/react-start";
-
-import type { getRouter } from "./router.tsx";
-declare module "@tanstack/react-start" {
+import type { getRouter } from './router.tsx'
+import type { createStart } from '@tanstack/react-start'
+declare module '@tanstack/react-start' {
   interface Register {
-    ssr: true;
-    router: Awaited<ReturnType<typeof getRouter>>;
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
   }
 }
