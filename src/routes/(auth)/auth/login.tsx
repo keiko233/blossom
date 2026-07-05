@@ -50,6 +50,7 @@ const SignInWithGithubButton = () => {
     try {
       await authClient.signIn.social({
         provider: "github",
+        callbackURL: "/dashboard",
       });
     } catch (error) {
       console.error(error);
@@ -79,6 +80,7 @@ const SignInWithGoogleButton = () => {
     try {
       await authClient.signIn.social({
         provider: "google",
+        callbackURL: "/dashboard",
       });
     } catch (error) {
       console.error(error);
@@ -115,7 +117,12 @@ function RouteComponent() {
     },
     onSubmit: async ({ value }) => {
       try {
-        const result = await emailSignIn({ data: value });
+        const result = await emailSignIn({
+          data: {
+            ...value,
+            callbackURL: "/dashboard",
+          },
+        });
 
         if (result) {
           await navigate({
