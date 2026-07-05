@@ -56,7 +56,6 @@ const buildAuth = createServerOnlyFn(() => {
       },
     },
     plugins: [
-      tanstackStartCookies(),
       admin(),
       magicLink({
         sendMagicLink: async (data) => {
@@ -77,6 +76,7 @@ const buildAuth = createServerOnlyFn(() => {
           }
         },
       }),
+      tanstackStartCookies(),
     ],
   });
 });
