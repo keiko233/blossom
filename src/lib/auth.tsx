@@ -2,7 +2,7 @@ import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { createServerFn, createServerOnlyFn } from "@tanstack/react-start";
 import { getRequestHeaders } from "@tanstack/react-start/server";
 import { betterAuth } from "better-auth";
-import { magicLink } from "better-auth/plugins";
+import { admin, magicLink } from "better-auth/plugins";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
 
 import { db } from "@/db";
@@ -49,14 +49,21 @@ const buildAuth = createServerOnlyFn(() => {
             }
           : undefined,
     },
+    socialProviderConfig: {
+      github: {
+        clientId: env.GITHUB_CLIENT_ID,
+        clientSecret: env.GITHUB_CLIENT_SECRET,
+      },
+    },
     plugins: [
       tanstackStartCookies(),
+      admin(),
       magicLink({
         sendMagicLink: async (data) => {
-          const email = getEmailClient();
+          const emailClient = getEmailClient();
 
-          if (email) {
-            await email.emails.send({
+          if (emailClient) {
+            await emailClient.emails.send({
               from: env.RESEND_MAIL_FROM!,
               to: data.email,
               subject: `Welcome to ${env.APP_NAME}! Here's your link`,
@@ -64,7 +71,7 @@ const buildAuth = createServerOnlyFn(() => {
             });
           } else {
             console.warn(
-              "Email is not enabled, please configure the RESEND_API_KEY and RESEND_MAIL_FROM",
+              "Email is not enabled, please configure the RESEND_API_KEY",
               data,
             );
           }
@@ -90,9 +97,12 @@ export const getSocialProviders = createServerFn({
   return cachedSocialProviders;
 });
 
+export type Session = ReturnType<typeof buildAuth>["$Infer"]["Session"];
+export type SessionUser = Session["user"];
+
 export const getSession = createServerFn({
   method: "GET",
-}).handler(async () => {
+}).handler(async (): Promise<Session | null> => {
   const headers = getRequestHeaders();
   const session = await getAuth().api.getSession({ headers });
   return session;
@@ -100,7 +110,7 @@ export const getSession = createServerFn({
 
 export const ensureSession = createServerFn({
   method: "GET",
-}).handler(async () => {
+}).handler(async (): Promise<Session> => {
   const headers = getRequestHeaders();
   const session = await getAuth().api.getSession({ headers });
   if (!session) {

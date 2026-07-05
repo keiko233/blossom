@@ -20,5 +20,5 @@ export const Route = createFileRoute("/(user)")({
 });
 
 function RouteComponent() {
-  return <div>Hello "/(admin)"!</div>;
+  return <div>Hello "/(user)"!</div>;
 }
