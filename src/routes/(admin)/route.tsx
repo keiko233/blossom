@@ -1,6 +1,10 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
 
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { getSession } from "@/lib/auth";
+
+import { AdminSidebar } from "./_modules/admin-sidebar";
+import { AdminHeader, AutoBreadcrumb } from "./_modules/header";
 
 export const Route = createFileRoute("/(admin)")({
   beforeLoad: async () => {
@@ -26,5 +30,19 @@ export const Route = createFileRoute("/(admin)")({
 });
 
 function RouteComponent() {
-  return <div>Hello "/(admin)"!</div>;
+  return (
+    <SidebarProvider>
+      <AdminSidebar />
+
+      <SidebarInset>
+        <AdminHeader>
+          <AutoBreadcrumb />
+        </AdminHeader>
+
+        <main className="">
+          <Outlet />
+        </main>
+      </SidebarInset>
+    </SidebarProvider>
+  );
 }

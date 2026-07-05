@@ -18,5 +18,15 @@
   "auth_signup_button": "Sign Up",
   "auth_signup_mail_sent_title": "Email Sent",
   "auth_signup_mail_sent_description": "Please check your email to complete the sign-up process",
-  "auth_signup_to_login": "Already have an account? Log in"
+  "auth_signup_to_login": "Already have an account? Log in",
+  "component_role_switcher_title": "Switch Role",
+  "component_role_switcher_role_user": "User",
+  "component_role_switcher_role_user_description": "Standard features and content of the application",
+  "component_role_switcher_role_admin": "Admin",
+  "component_role_switcher_role_admin_description": "Advanced features and management tools",
+  "admin_nav_dashboard": "Dashboard",
+  "admin_nav_proxies_title": "Proxies",
+  "admin_nav_proxies_item_nodes": "Nodes",
+  "admin_nav_proxies_item_groups": "Groups",
+  "admin_nav_proxies_item_rules": "Rules"
 }

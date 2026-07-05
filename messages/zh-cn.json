@@ -18,5 +18,15 @@
   "auth_signup_button": "注册",
   "auth_signup_mail_sent_title": "邮件已发送",
   "auth_signup_mail_sent_description": "请检查您的邮箱以完成注册。",
-  "auth_signup_to_login": "已有账户？点击登录。"
+  "auth_signup_to_login": "已有账户？点击登录。",
+  "component_role_switcher_title": "切换角色",
+  "component_role_switcher_role_user": "用户",
+  "component_role_switcher_role_user_description": "访问应用程序的标准功能和内容",
+  "component_role_switcher_role_admin": "管理员",
+  "component_role_switcher_role_admin_description": "访问高级功能和管理工具",
+  "admin_nav_dashboard": "仪表盘",
+  "admin_nav_proxies_title": "代理",
+  "admin_nav_proxies_item_nodes": "节点",
+  "admin_nav_proxies_item_groups": "分组",
+  "admin_nav_proxies_item_rules": "规则"
 }

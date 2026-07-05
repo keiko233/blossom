@@ -1,7 +1,6 @@
 "use client";
 
-import { mergeProps } from "@base-ui/react/merge-props";
-import { useRender } from "@base-ui/react/use-render";
+import { Link } from "@tanstack/react-router";
 import { ChevronRight, MoreHorizontal } from "lucide-react";
 import type * as React from "react";
 
@@ -44,19 +43,15 @@ export function BreadcrumbItem({
 
 export function BreadcrumbLink({
   className,
-  render,
   ...props
-}: useRender.ComponentProps<"a">): React.ReactElement {
-  const defaultProps = {
-    className: cn("transition-colors hover:text-foreground", className),
-    "data-slot": "breadcrumb-link",
-  };
-
-  return useRender({
-    defaultTagName: "a",
-    props: mergeProps<"a">(defaultProps, props),
-    render,
-  });
+}: React.ComponentProps<typeof Link>): React.ReactElement {
+  return (
+    <Link
+      className={cn("transition-colors hover:text-foreground", className)}
+      data-slot="breadcrumb-link"
+      {...props}
+    />
+  );
 }
 
 export function BreadcrumbPage({
