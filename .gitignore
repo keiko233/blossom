@@ -11,3 +11,9 @@ dist-ssr
 .vinxi
 __unconfig*
 todos.json
+
+# Rust build artifacts for the server-agent
+server-agent/target
+
+# Intermediate OpenAPI 3.1 spec; only the down-converted 3.0 spec.json is committed
+server-agent/openapi/spec-3.1.json
