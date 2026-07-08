@@ -4,6 +4,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
 } from "drizzle-orm/pg-core";
@@ -59,3 +60,42 @@ export const node = pgTable(
 
 export type Node = typeof node.$inferSelect;
 export type NewNode = typeof node.$inferInsert;
+
+/**
+ * A proxy group bundles nodes for access control. Nodes are not directly usable
+ * by end users; plans grant access to groups, and groups resolve to nodes
+ * (see `plan_group` / `subscription` in `@/db/plan-schema`).
+ * Named `proxy_group` because `group` is a SQL reserved word.
+ */
+export const proxyGroup = pgTable("proxy_group", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  remark: text("remark"),
+  sortOrder: integer("sort_order").default(0).notNull(),
+
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at")
+    .defaultNow()
+    .$onUpdate(() => /* @__PURE__ */ new Date())
+    .notNull(),
+});
+
+/** Node <-> group membership (many-to-many). */
+export const nodeGroup = pgTable(
+  "node_group",
+  {
+    nodeId: text("node_id")
+      .notNull()
+      .references(() => node.id, { onDelete: "cascade" }),
+    groupId: text("group_id")
+      .notNull()
+      .references(() => proxyGroup.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.nodeId, table.groupId] }),
+    index("node_group_group_idx").on(table.groupId),
+  ],
+);
+
+export type ProxyGroup = typeof proxyGroup.$inferSelect;
+export type NewProxyGroup = typeof proxyGroup.$inferInsert;

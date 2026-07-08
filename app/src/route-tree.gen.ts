@@ -20,12 +20,19 @@ import { Route as authAuthSignupRouteImport } from './routes/(auth)/auth/signup'
 import { Route as authAuthLoginRouteImport } from './routes/(auth)/auth/login'
 import { Route as authAuthForgotRouteImport } from './routes/(auth)/auth/forgot'
 import { Route as adminAdminProxiesRouteRouteImport } from './routes/(admin)/admin/proxies/route'
+import { Route as adminAdminPlansRouteRouteImport } from './routes/(admin)/admin/plans/route'
+import { Route as adminAdminPlansIndexRouteImport } from './routes/(admin)/admin/plans/index'
+import { Route as adminAdminPlansNewRouteImport } from './routes/(admin)/admin/plans/new'
+import { Route as adminAdminPlansPlanIdRouteImport } from './routes/(admin)/admin/plans/$planId'
 import { Route as adminAdminProxiesNodesRouteRouteImport } from './routes/(admin)/admin/proxies/nodes/route'
+import { Route as adminAdminProxiesGroupsRouteRouteImport } from './routes/(admin)/admin/proxies/groups/route'
 import { Route as adminAdminProxiesRulesIndexRouteImport } from './routes/(admin)/admin/proxies/rules/index'
 import { Route as adminAdminProxiesNodesIndexRouteImport } from './routes/(admin)/admin/proxies/nodes/index'
 import { Route as adminAdminProxiesGroupsIndexRouteImport } from './routes/(admin)/admin/proxies/groups/index'
 import { Route as adminAdminProxiesNodesNewRouteImport } from './routes/(admin)/admin/proxies/nodes/new'
 import { Route as adminAdminProxiesNodesNodeIdRouteImport } from './routes/(admin)/admin/proxies/nodes/$nodeId'
+import { Route as adminAdminProxiesGroupsNewRouteImport } from './routes/(admin)/admin/proxies/groups/new'
+import { Route as adminAdminProxiesGroupsGroupIdRouteImport } from './routes/(admin)/admin/proxies/groups/$groupId'
 
 const userRouteRoute = userRouteRouteImport.update({
   id: '/(user)',
@@ -99,10 +106,36 @@ const adminAdminProxiesRouteRoute = adminAdminProxiesRouteRouteImport.update({
   path: '/proxies',
   getParentRoute: () => adminAdminRouteRoute,
 } as any)
+const adminAdminPlansRouteRoute = adminAdminPlansRouteRouteImport.update({
+  id: '/plans',
+  path: '/plans',
+  getParentRoute: () => adminAdminRouteRoute,
+} as any)
+const adminAdminPlansIndexRoute = adminAdminPlansIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => adminAdminPlansRouteRoute,
+} as any)
+const adminAdminPlansNewRoute = adminAdminPlansNewRouteImport.update({
+  id: '/new',
+  path: '/new',
+  getParentRoute: () => adminAdminPlansRouteRoute,
+} as any)
+const adminAdminPlansPlanIdRoute = adminAdminPlansPlanIdRouteImport.update({
+  id: '/$planId',
+  path: '/$planId',
+  getParentRoute: () => adminAdminPlansRouteRoute,
+} as any)
 const adminAdminProxiesNodesRouteRoute =
   adminAdminProxiesNodesRouteRouteImport.update({
     id: '/nodes',
     path: '/nodes',
+    getParentRoute: () => adminAdminProxiesRouteRoute,
+  } as any)
+const adminAdminProxiesGroupsRouteRoute =
+  adminAdminProxiesGroupsRouteRouteImport.update({
+    id: '/groups',
+    path: '/groups',
     getParentRoute: () => adminAdminProxiesRouteRoute,
   } as any)
 const adminAdminProxiesRulesIndexRoute =
@@ -119,9 +152,9 @@ const adminAdminProxiesNodesIndexRoute =
   } as any)
 const adminAdminProxiesGroupsIndexRoute =
   adminAdminProxiesGroupsIndexRouteImport.update({
-    id: '/groups/',
-    path: '/groups/',
-    getParentRoute: () => adminAdminProxiesRouteRoute,
+    id: '/',
+    path: '/',
+    getParentRoute: () => adminAdminProxiesGroupsRouteRoute,
   } as any)
 const adminAdminProxiesNodesNewRoute =
   adminAdminProxiesNodesNewRouteImport.update({
@@ -135,11 +168,24 @@ const adminAdminProxiesNodesNodeIdRoute =
     path: '/$nodeId',
     getParentRoute: () => adminAdminProxiesNodesRouteRoute,
   } as any)
+const adminAdminProxiesGroupsNewRoute =
+  adminAdminProxiesGroupsNewRouteImport.update({
+    id: '/new',
+    path: '/new',
+    getParentRoute: () => adminAdminProxiesGroupsRouteRoute,
+  } as any)
+const adminAdminProxiesGroupsGroupIdRoute =
+  adminAdminProxiesGroupsGroupIdRouteImport.update({
+    id: '/$groupId',
+    path: '/$groupId',
+    getParentRoute: () => adminAdminProxiesGroupsRouteRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/admin': typeof adminAdminRouteRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/': typeof staticIndexRoute
+  '/admin/plans': typeof adminAdminPlansRouteRouteWithChildren
   '/admin/proxies': typeof adminAdminProxiesRouteRouteWithChildren
   '/auth/forgot': typeof authAuthForgotRoute
   '/auth/login': typeof authAuthLoginRoute
@@ -149,7 +195,13 @@ export interface FileRoutesByFullPath {
   '/admin/': typeof adminAdminIndexRoute
   '/dashboard/': typeof userDashboardIndexRoute
   '/welcome/': typeof userWelcomeIndexRoute
+  '/admin/proxies/groups': typeof adminAdminProxiesGroupsRouteRouteWithChildren
   '/admin/proxies/nodes': typeof adminAdminProxiesNodesRouteRouteWithChildren
+  '/admin/plans/$planId': typeof adminAdminPlansPlanIdRoute
+  '/admin/plans/new': typeof adminAdminPlansNewRoute
+  '/admin/plans/': typeof adminAdminPlansIndexRoute
+  '/admin/proxies/groups/$groupId': typeof adminAdminProxiesGroupsGroupIdRoute
+  '/admin/proxies/groups/new': typeof adminAdminProxiesGroupsNewRoute
   '/admin/proxies/nodes/$nodeId': typeof adminAdminProxiesNodesNodeIdRoute
   '/admin/proxies/nodes/new': typeof adminAdminProxiesNodesNewRoute
   '/admin/proxies/groups/': typeof adminAdminProxiesGroupsIndexRoute
@@ -168,6 +220,11 @@ export interface FileRoutesByTo {
   '/admin': typeof adminAdminIndexRoute
   '/dashboard': typeof userDashboardIndexRoute
   '/welcome': typeof userWelcomeIndexRoute
+  '/admin/plans/$planId': typeof adminAdminPlansPlanIdRoute
+  '/admin/plans/new': typeof adminAdminPlansNewRoute
+  '/admin/plans': typeof adminAdminPlansIndexRoute
+  '/admin/proxies/groups/$groupId': typeof adminAdminProxiesGroupsGroupIdRoute
+  '/admin/proxies/groups/new': typeof adminAdminProxiesGroupsNewRoute
   '/admin/proxies/nodes/$nodeId': typeof adminAdminProxiesNodesNodeIdRoute
   '/admin/proxies/nodes/new': typeof adminAdminProxiesNodesNewRoute
   '/admin/proxies/groups': typeof adminAdminProxiesGroupsIndexRoute
@@ -182,6 +239,7 @@ export interface FileRoutesById {
   '/(admin)/admin': typeof adminAdminRouteRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/(static)/': typeof staticIndexRoute
+  '/(admin)/admin/plans': typeof adminAdminPlansRouteRouteWithChildren
   '/(admin)/admin/proxies': typeof adminAdminProxiesRouteRouteWithChildren
   '/(auth)/auth/forgot': typeof authAuthForgotRoute
   '/(auth)/auth/login': typeof authAuthLoginRoute
@@ -191,7 +249,13 @@ export interface FileRoutesById {
   '/(admin)/admin/': typeof adminAdminIndexRoute
   '/(user)/dashboard/': typeof userDashboardIndexRoute
   '/(user)/welcome/': typeof userWelcomeIndexRoute
+  '/(admin)/admin/proxies/groups': typeof adminAdminProxiesGroupsRouteRouteWithChildren
   '/(admin)/admin/proxies/nodes': typeof adminAdminProxiesNodesRouteRouteWithChildren
+  '/(admin)/admin/plans/$planId': typeof adminAdminPlansPlanIdRoute
+  '/(admin)/admin/plans/new': typeof adminAdminPlansNewRoute
+  '/(admin)/admin/plans/': typeof adminAdminPlansIndexRoute
+  '/(admin)/admin/proxies/groups/$groupId': typeof adminAdminProxiesGroupsGroupIdRoute
+  '/(admin)/admin/proxies/groups/new': typeof adminAdminProxiesGroupsNewRoute
   '/(admin)/admin/proxies/nodes/$nodeId': typeof adminAdminProxiesNodesNodeIdRoute
   '/(admin)/admin/proxies/nodes/new': typeof adminAdminProxiesNodesNewRoute
   '/(admin)/admin/proxies/groups/': typeof adminAdminProxiesGroupsIndexRoute
@@ -204,6 +268,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/api/$'
     | '/'
+    | '/admin/plans'
     | '/admin/proxies'
     | '/auth/forgot'
     | '/auth/login'
@@ -213,7 +278,13 @@ export interface FileRouteTypes {
     | '/admin/'
     | '/dashboard/'
     | '/welcome/'
+    | '/admin/proxies/groups'
     | '/admin/proxies/nodes'
+    | '/admin/plans/$planId'
+    | '/admin/plans/new'
+    | '/admin/plans/'
+    | '/admin/proxies/groups/$groupId'
+    | '/admin/proxies/groups/new'
     | '/admin/proxies/nodes/$nodeId'
     | '/admin/proxies/nodes/new'
     | '/admin/proxies/groups/'
@@ -232,6 +303,11 @@ export interface FileRouteTypes {
     | '/admin'
     | '/dashboard'
     | '/welcome'
+    | '/admin/plans/$planId'
+    | '/admin/plans/new'
+    | '/admin/plans'
+    | '/admin/proxies/groups/$groupId'
+    | '/admin/proxies/groups/new'
     | '/admin/proxies/nodes/$nodeId'
     | '/admin/proxies/nodes/new'
     | '/admin/proxies/groups'
@@ -245,6 +321,7 @@ export interface FileRouteTypes {
     | '/(admin)/admin'
     | '/api/$'
     | '/(static)/'
+    | '/(admin)/admin/plans'
     | '/(admin)/admin/proxies'
     | '/(auth)/auth/forgot'
     | '/(auth)/auth/login'
@@ -254,7 +331,13 @@ export interface FileRouteTypes {
     | '/(admin)/admin/'
     | '/(user)/dashboard/'
     | '/(user)/welcome/'
+    | '/(admin)/admin/proxies/groups'
     | '/(admin)/admin/proxies/nodes'
+    | '/(admin)/admin/plans/$planId'
+    | '/(admin)/admin/plans/new'
+    | '/(admin)/admin/plans/'
+    | '/(admin)/admin/proxies/groups/$groupId'
+    | '/(admin)/admin/proxies/groups/new'
     | '/(admin)/admin/proxies/nodes/$nodeId'
     | '/(admin)/admin/proxies/nodes/new'
     | '/(admin)/admin/proxies/groups/'
@@ -379,11 +462,46 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof adminAdminProxiesRouteRouteImport
       parentRoute: typeof adminAdminRouteRoute
     }
+    '/(admin)/admin/plans': {
+      id: '/(admin)/admin/plans'
+      path: '/plans'
+      fullPath: '/admin/plans'
+      preLoaderRoute: typeof adminAdminPlansRouteRouteImport
+      parentRoute: typeof adminAdminRouteRoute
+    }
+    '/(admin)/admin/plans/': {
+      id: '/(admin)/admin/plans/'
+      path: '/'
+      fullPath: '/admin/plans/'
+      preLoaderRoute: typeof adminAdminPlansIndexRouteImport
+      parentRoute: typeof adminAdminPlansRouteRoute
+    }
+    '/(admin)/admin/plans/new': {
+      id: '/(admin)/admin/plans/new'
+      path: '/new'
+      fullPath: '/admin/plans/new'
+      preLoaderRoute: typeof adminAdminPlansNewRouteImport
+      parentRoute: typeof adminAdminPlansRouteRoute
+    }
+    '/(admin)/admin/plans/$planId': {
+      id: '/(admin)/admin/plans/$planId'
+      path: '/$planId'
+      fullPath: '/admin/plans/$planId'
+      preLoaderRoute: typeof adminAdminPlansPlanIdRouteImport
+      parentRoute: typeof adminAdminPlansRouteRoute
+    }
     '/(admin)/admin/proxies/nodes': {
       id: '/(admin)/admin/proxies/nodes'
       path: '/nodes'
       fullPath: '/admin/proxies/nodes'
       preLoaderRoute: typeof adminAdminProxiesNodesRouteRouteImport
+      parentRoute: typeof adminAdminProxiesRouteRoute
+    }
+    '/(admin)/admin/proxies/groups': {
+      id: '/(admin)/admin/proxies/groups'
+      path: '/groups'
+      fullPath: '/admin/proxies/groups'
+      preLoaderRoute: typeof adminAdminProxiesGroupsRouteRouteImport
       parentRoute: typeof adminAdminProxiesRouteRoute
     }
     '/(admin)/admin/proxies/rules/': {
@@ -402,10 +520,10 @@ declare module '@tanstack/react-router' {
     }
     '/(admin)/admin/proxies/groups/': {
       id: '/(admin)/admin/proxies/groups/'
-      path: '/groups'
+      path: '/'
       fullPath: '/admin/proxies/groups/'
       preLoaderRoute: typeof adminAdminProxiesGroupsIndexRouteImport
-      parentRoute: typeof adminAdminProxiesRouteRoute
+      parentRoute: typeof adminAdminProxiesGroupsRouteRoute
     }
     '/(admin)/admin/proxies/nodes/new': {
       id: '/(admin)/admin/proxies/nodes/new'
@@ -421,8 +539,55 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof adminAdminProxiesNodesNodeIdRouteImport
       parentRoute: typeof adminAdminProxiesNodesRouteRoute
     }
+    '/(admin)/admin/proxies/groups/new': {
+      id: '/(admin)/admin/proxies/groups/new'
+      path: '/new'
+      fullPath: '/admin/proxies/groups/new'
+      preLoaderRoute: typeof adminAdminProxiesGroupsNewRouteImport
+      parentRoute: typeof adminAdminProxiesGroupsRouteRoute
+    }
+    '/(admin)/admin/proxies/groups/$groupId': {
+      id: '/(admin)/admin/proxies/groups/$groupId'
+      path: '/$groupId'
+      fullPath: '/admin/proxies/groups/$groupId'
+      preLoaderRoute: typeof adminAdminProxiesGroupsGroupIdRouteImport
+      parentRoute: typeof adminAdminProxiesGroupsRouteRoute
+    }
   }
 }
+
+interface adminAdminPlansRouteRouteChildren {
+  adminAdminPlansPlanIdRoute: typeof adminAdminPlansPlanIdRoute
+  adminAdminPlansNewRoute: typeof adminAdminPlansNewRoute
+  adminAdminPlansIndexRoute: typeof adminAdminPlansIndexRoute
+}
+
+const adminAdminPlansRouteRouteChildren: adminAdminPlansRouteRouteChildren = {
+  adminAdminPlansPlanIdRoute: adminAdminPlansPlanIdRoute,
+  adminAdminPlansNewRoute: adminAdminPlansNewRoute,
+  adminAdminPlansIndexRoute: adminAdminPlansIndexRoute,
+}
+
+const adminAdminPlansRouteRouteWithChildren =
+  adminAdminPlansRouteRoute._addFileChildren(adminAdminPlansRouteRouteChildren)
+
+interface adminAdminProxiesGroupsRouteRouteChildren {
+  adminAdminProxiesGroupsGroupIdRoute: typeof adminAdminProxiesGroupsGroupIdRoute
+  adminAdminProxiesGroupsNewRoute: typeof adminAdminProxiesGroupsNewRoute
+  adminAdminProxiesGroupsIndexRoute: typeof adminAdminProxiesGroupsIndexRoute
+}
+
+const adminAdminProxiesGroupsRouteRouteChildren: adminAdminProxiesGroupsRouteRouteChildren =
+  {
+    adminAdminProxiesGroupsGroupIdRoute: adminAdminProxiesGroupsGroupIdRoute,
+    adminAdminProxiesGroupsNewRoute: adminAdminProxiesGroupsNewRoute,
+    adminAdminProxiesGroupsIndexRoute: adminAdminProxiesGroupsIndexRoute,
+  }
+
+const adminAdminProxiesGroupsRouteRouteWithChildren =
+  adminAdminProxiesGroupsRouteRoute._addFileChildren(
+    adminAdminProxiesGroupsRouteRouteChildren,
+  )
 
 interface adminAdminProxiesNodesRouteRouteChildren {
   adminAdminProxiesNodesNodeIdRoute: typeof adminAdminProxiesNodesNodeIdRoute
@@ -443,16 +608,17 @@ const adminAdminProxiesNodesRouteRouteWithChildren =
   )
 
 interface adminAdminProxiesRouteRouteChildren {
+  adminAdminProxiesGroupsRouteRoute: typeof adminAdminProxiesGroupsRouteRouteWithChildren
   adminAdminProxiesNodesRouteRoute: typeof adminAdminProxiesNodesRouteRouteWithChildren
-  adminAdminProxiesGroupsIndexRoute: typeof adminAdminProxiesGroupsIndexRoute
   adminAdminProxiesRulesIndexRoute: typeof adminAdminProxiesRulesIndexRoute
 }
 
 const adminAdminProxiesRouteRouteChildren: adminAdminProxiesRouteRouteChildren =
   {
+    adminAdminProxiesGroupsRouteRoute:
+      adminAdminProxiesGroupsRouteRouteWithChildren,
     adminAdminProxiesNodesRouteRoute:
       adminAdminProxiesNodesRouteRouteWithChildren,
-    adminAdminProxiesGroupsIndexRoute: adminAdminProxiesGroupsIndexRoute,
     adminAdminProxiesRulesIndexRoute: adminAdminProxiesRulesIndexRoute,
   }
 
@@ -462,11 +628,13 @@ const adminAdminProxiesRouteRouteWithChildren =
   )
 
 interface adminAdminRouteRouteChildren {
+  adminAdminPlansRouteRoute: typeof adminAdminPlansRouteRouteWithChildren
   adminAdminProxiesRouteRoute: typeof adminAdminProxiesRouteRouteWithChildren
   adminAdminIndexRoute: typeof adminAdminIndexRoute
 }
 
 const adminAdminRouteRouteChildren: adminAdminRouteRouteChildren = {
+  adminAdminPlansRouteRoute: adminAdminPlansRouteRouteWithChildren,
   adminAdminProxiesRouteRoute: adminAdminProxiesRouteRouteWithChildren,
   adminAdminIndexRoute: adminAdminIndexRoute,
 }

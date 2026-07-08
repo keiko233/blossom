@@ -1,12 +1,11 @@
 import { createServerFn } from "@tanstack/react-start";
-import { getRequestHeaders } from "@tanstack/react-start/server";
 import { desc, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
 import { db } from "@/db";
 import { node } from "@/db/proxy-schema";
 import { generateAgentToken } from "@/lib/agent-token";
-import { getAuth } from "@/lib/auth";
+import { ensureAdmin } from "@/lib/ensure-admin";
 import {
   createNodeSchema,
   nodeIdSchema,
@@ -16,22 +15,6 @@ import {
 
 /** TanStack Query key for the admin node list. */
 export const NODES_QUERY_KEY = ["admin", "nodes"] as const;
-
-/**
- * All node administration goes through these server functions (never the public
- * API). Each one asserts an authenticated admin session before touching the DB.
- */
-async function ensureAdmin() {
-  const headers = getRequestHeaders();
-  const session = await getAuth().api.getSession({ headers });
-  if (!session) {
-    throw new Error("Unauthorized");
-  }
-  if (session.user.role !== "admin") {
-    throw new Error("Forbidden");
-  }
-  return session;
-}
 
 export const listNodes = createServerFn({ method: "GET" }).handler(async () => {
   await ensureAdmin();

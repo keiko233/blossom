@@ -6,7 +6,7 @@ import {
   getCoreRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { EllipsisIcon, FolderIcon, PlusIcon } from "lucide-react";
+import { EllipsisIcon, PackageIcon, PlusIcon } from "lucide-react";
 import type React from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -36,98 +36,152 @@ import {
 } from "@/components/ui/table";
 import { toastManager } from "@/components/ui/toast";
 import {
-  deleteGroup,
-  type GroupListItem,
-  GROUPS_QUERY_KEY,
-  listGroups,
-} from "@/lib/groups";
+  deletePlan,
+  listPlans,
+  type PlanListItem,
+  PLANS_QUERY_KEY,
+} from "@/lib/plans";
 import { m } from "@/paraglide/messages";
 
-export const Route = createFileRoute("/(admin)/admin/proxies/groups/")({
+export const Route = createFileRoute("/(admin)/admin/plans/")({
   component: RouteComponent,
 });
 
-const columnHelper = createColumnHelper<GroupListItem>();
+const BYTES_PER_GB = 1024 ** 3;
+
+function formatTraffic(bytes: number): string {
+  const gb = bytes / BYTES_PER_GB;
+  if (gb >= 1024) {
+    return `${(gb / 1024).toLocaleString(undefined, { maximumFractionDigits: 2 })} TB`;
+  }
+  return `${gb.toLocaleString(undefined, { maximumFractionDigits: 2 })} GB`;
+}
+
+const columnHelper = createColumnHelper<PlanListItem>();
 
 function RouteComponent(): React.ReactElement {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
 
-  const { data: groups, isPending } = useQuery({
-    queryKey: GROUPS_QUERY_KEY,
-    queryFn: () => listGroups(),
+  const { data: plans, isPending } = useQuery({
+    queryKey: PLANS_QUERY_KEY,
+    queryFn: () => listPlans(),
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => deleteGroup({ data: { id } }),
+    mutationFn: (id: string) => deletePlan({ data: { id } }),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: GROUPS_QUERY_KEY });
+      await queryClient.invalidateQueries({ queryKey: PLANS_QUERY_KEY });
       toastManager.add({
         type: "success",
-        title: m.admin_proxies_groups_toast_deleted(),
+        title: m.admin_plans_toast_deleted(),
+      });
+    },
+    onError: (error) => {
+      toastManager.add({
+        type: "error",
+        title: error.message.includes("subscriptions")
+          ? m.admin_plans_delete_blocked()
+          : m.admin_plans_toast_error(),
       });
     },
   });
 
-  const requestDelete = async (group: GroupListItem) => {
+  const requestDelete = async (plan: PlanListItem) => {
     const confirmed = await Confirm.call({
-      title: m.admin_proxies_groups_delete_title(),
-      description: m.admin_proxies_groups_delete_description(),
-      confirmLabel: m.admin_proxies_groups_action_delete(),
-      cancelLabel: m.admin_proxies_groups_form_cancel(),
+      title: m.admin_plans_delete_title(),
+      description: m.admin_plans_delete_description(),
+      confirmLabel: m.admin_plans_action_delete(),
+      cancelLabel: m.admin_plans_form_cancel(),
       destructive: true,
     });
     if (confirmed) {
-      deleteMutation.mutate(group.id);
+      deleteMutation.mutate(plan.id);
     }
   };
 
-  const openCreate = () => void navigate({ to: "/admin/proxies/groups/new" });
+  const openCreate = () => void navigate({ to: "/admin/plans/new" });
 
-  const openEdit = (group: GroupListItem) =>
+  const openEdit = (plan: PlanListItem) =>
     void navigate({
-      to: "/admin/proxies/groups/$groupId",
-      params: { groupId: group.id },
+      to: "/admin/plans/$planId",
+      params: { planId: plan.id },
     });
 
   const columns = [
     columnHelper.accessor("name", {
-      header: () => m.admin_proxies_groups_col_name(),
+      header: () => m.admin_plans_col_name(),
       cell: (info) => {
-        const group = info.row.original;
+        const plan = info.row.original;
         return (
           <div className="flex flex-col gap-0.5">
-            <span className="font-medium">{group.name}</span>
-            {group.remark ? (
+            <span className="font-medium">{plan.name}</span>
+            {plan.description ? (
               <span className="text-xs text-muted-foreground">
-                {group.remark}
+                {plan.description}
               </span>
             ) : null}
           </div>
         );
       },
     }),
-    columnHelper.accessor("nodeCount", {
-      header: () => m.admin_proxies_groups_col_nodes(),
-      cell: (info) => <Badge variant="outline">{info.getValue()}</Badge>,
-    }),
-    columnHelper.accessor("planCount", {
-      header: () => m.admin_proxies_groups_col_plans(),
-      cell: (info) => <Badge variant="outline">{info.getValue()}</Badge>,
-    }),
-    columnHelper.accessor("createdAt", {
-      header: () => m.admin_proxies_groups_col_created(),
+    columnHelper.accessor("priceCents", {
+      header: () => m.admin_plans_col_price(),
       cell: (info) => (
-        <span className="text-muted-foreground">
-          {new Date(info.getValue()).toLocaleDateString()}
+        <span className="font-mono text-xs">
+          {(info.getValue() / 100).toFixed(2)}
         </span>
       ),
+    }),
+    columnHelper.accessor("durationDays", {
+      header: () => m.admin_plans_col_duration(),
+      cell: (info) => m.admin_plans_duration_days({ days: info.getValue() }),
+    }),
+    columnHelper.accessor("trafficBytes", {
+      header: () => m.admin_plans_col_traffic(),
+      cell: (info) => (
+        <span className="font-mono text-xs">
+          {formatTraffic(info.getValue())}
+        </span>
+      ),
+    }),
+    columnHelper.accessor("deviceLimit", {
+      header: () => m.admin_plans_col_devices(),
+      cell: (info) =>
+        info.getValue() === 0
+          ? m.admin_plans_device_unlimited()
+          : info.getValue(),
+    }),
+    columnHelper.accessor("groupCount", {
+      header: () => m.admin_plans_col_groups(),
+      cell: (info) => <Badge variant="outline">{info.getValue()}</Badge>,
+    }),
+    columnHelper.accessor("visible", {
+      header: () => m.admin_plans_col_visible(),
+      cell: (info) =>
+        info.getValue() ? (
+          <Badge variant="outline">
+            <span
+              aria-hidden="true"
+              className="size-1.5 rounded-full bg-emerald-500"
+            />
+            {m.admin_plans_visible_on()}
+          </Badge>
+        ) : (
+          <Badge variant="outline">
+            <span
+              aria-hidden="true"
+              className="size-1.5 rounded-full bg-muted-foreground/64"
+            />
+            {m.admin_plans_visible_off()}
+          </Badge>
+        ),
     }),
     columnHelper.display({
       id: "actions",
       header: () => <span className="sr-only">Actions</span>,
       cell: (info) => {
-        const group = info.row.original;
+        const plan = info.row.original;
         return (
           <div className="flex justify-end">
             <Menu>
@@ -138,15 +192,15 @@ function RouteComponent(): React.ReactElement {
                 <EllipsisIcon />
               </MenuTrigger>
               <MenuPopup align="end">
-                <MenuItem onClick={() => openEdit(group)}>
-                  {m.admin_proxies_groups_action_edit()}
+                <MenuItem onClick={() => openEdit(plan)}>
+                  {m.admin_plans_action_edit()}
                 </MenuItem>
                 <MenuSeparator />
                 <MenuItem
                   variant="destructive"
-                  onClick={() => void requestDelete(group)}
+                  onClick={() => void requestDelete(plan)}
                 >
-                  {m.admin_proxies_groups_action_delete()}
+                  {m.admin_plans_action_delete()}
                 </MenuItem>
               </MenuPopup>
             </Menu>
@@ -157,7 +211,7 @@ function RouteComponent(): React.ReactElement {
   ];
 
   const table = useReactTable({
-    data: groups ?? [],
+    data: plans ?? [],
     columns,
     getCoreRowModel: getCoreRowModel(),
   });
@@ -166,11 +220,11 @@ function RouteComponent(): React.ReactElement {
     <div className="flex flex-col gap-4 p-4">
       <div className="flex items-center justify-between">
         <h1 className="font-heading text-lg font-semibold">
-          {m.admin_nav_proxies_item_groups()}
+          {m.admin_nav_plans()}
         </h1>
         <Button onClick={openCreate}>
           <PlusIcon />
-          {m.admin_proxies_groups_add()}
+          {m.admin_plans_add()}
         </Button>
       </div>
 
@@ -178,7 +232,7 @@ function RouteComponent(): React.ReactElement {
         <div className="flex justify-center py-16">
           <Spinner />
         </div>
-      ) : groups && groups.length > 0 ? (
+      ) : plans && plans.length > 0 ? (
         <Table>
           <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (
@@ -212,13 +266,13 @@ function RouteComponent(): React.ReactElement {
         <Empty>
           <EmptyHeader>
             <EmptyMedia variant="icon">
-              <FolderIcon />
+              <PackageIcon />
             </EmptyMedia>
-            <EmptyTitle>{m.admin_proxies_groups_empty_title()}</EmptyTitle>
+            <EmptyTitle>{m.admin_plans_empty_title()}</EmptyTitle>
           </EmptyHeader>
           <Button onClick={openCreate}>
             <PlusIcon />
-            {m.admin_proxies_groups_add()}
+            {m.admin_plans_add()}
           </Button>
         </Empty>
       )}

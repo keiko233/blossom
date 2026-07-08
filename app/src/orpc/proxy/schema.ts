@@ -73,6 +73,27 @@ export function parseNodeSettings(
 
 export const nodeIdSchema = z.object({ id: z.string().min(1) });
 
+// --- Groups ------------------------------------------------------------------
+
+const groupMetaSchema = z.object({
+  name: z.string().min(1).max(128),
+  remark: z.string().max(512).optional(),
+  sortOrder: z.number().int().default(0),
+  // Full membership list; create/update replace the node_group rows with it.
+  nodeIds: z.array(z.string().min(1)).default([]),
+});
+
+export const createGroupSchema = groupMetaSchema;
+
+export const updateGroupSchema = groupMetaSchema.partial().extend({
+  id: z.string().min(1),
+});
+
+export type CreateGroupInput = z.infer<typeof createGroupSchema>;
+export type UpdateGroupInput = z.infer<typeof updateGroupSchema>;
+
+export const groupIdSchema = z.object({ id: z.string().min(1) });
+
 // --- Agent -----------------------------------------------------------------
 
 export const heartbeatSchema = z.object({

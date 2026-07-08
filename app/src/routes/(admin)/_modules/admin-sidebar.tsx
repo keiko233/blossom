@@ -1,6 +1,7 @@
 import { Link, useLocation } from "@tanstack/react-router";
 import type { ComponentProps } from "react";
 import DashboardLine from "~icons/mingcute/dashboard-3-line";
+import WalletLine from "~icons/mingcute/wallet-line";
 
 import { RoleSwitcher } from "@/components/role-switcher";
 import {
@@ -49,6 +50,17 @@ export function AdminSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
           {/* <SidebarGroupLabel>Management</SidebarGroupLabel> */}
           <SidebarMenu>
             <NavProxies />
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                isActive={pathname.startsWith("/admin/plans")}
+                render={
+                  <Link to="/admin/plans">
+                    <WalletLine />
+                    <span>{m.admin_nav_plans()}</span>
+                  </Link>
+                }
+              />
+            </SidebarMenuItem>
           </SidebarMenu>
         </SidebarGroup>
       </SidebarContent>
