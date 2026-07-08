@@ -47,9 +47,6 @@ import { m } from "@/paraglide/messages";
 import { TokenRevealDialog } from "./_modules/token-reveal-dialog";
 
 export const Route = createFileRoute("/(admin)/admin/proxies/nodes/")({
-  staticData: {
-    crumb: () => m.admin_nav_proxies_item_nodes(),
-  },
   component: RouteComponent,
 });
 
