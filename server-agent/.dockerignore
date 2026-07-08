@@ -1,0 +1,16 @@
+# Rust build artifacts — rebuilt inside the image, huge, and platform-specific.
+target/
+
+# Docker files themselves don't belong in the build context.
+Dockerfile
+.dockerignore
+
+# Secrets / local runtime config — must never enter the build context.
+.env
+.env.*
+docker-compose.yaml
+
+# Editor/OS cruft.
+.git/
+.gitignore
+*.md
