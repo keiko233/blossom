@@ -1,10 +1,10 @@
 import { Link, useLocation } from "@tanstack/react-router";
 import { useMemo, type ElementType } from "react";
+import CheckLine from "~icons/mingcute/check-line";
 import DownLine from "~icons/mingcute/down-line";
 import UserFill from "~icons/mingcute/user-2-fill";
 import UserSecurityFill from "~icons/mingcute/user-security-fill";
 
-import { Marquee } from "@/components/ui/marquee";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,43 +17,56 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  useSidebar,
 } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
+
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 enum Role {
   Admin = "admin",
   User = "user",
 }
 
-const roles = {
+const roleMeta = {
   [Role.User]: {
-    name: m.component_role_switcher_role_user(),
-    description: m.component_role_switcher_role_user_description(),
     url: "/dashboard",
     logo: UserFill,
   },
   [Role.Admin]: {
-    name: m.component_role_switcher_role_admin(),
-    description: m.component_role_switcher_role_admin_description(),
     url: "/admin",
     logo: UserSecurityFill,
   },
 } satisfies Record<
   Role,
   {
-    name: string;
-    description: string;
     url: string;
     logo: ElementType;
   }
 >;
 
 export function RoleSwitcher() {
-  const { isMobile } = useSidebar();
-
   const { pathname } = useLocation();
+  const roles = {
+    [Role.User]: {
+      ...roleMeta[Role.User],
+      name: m.component_role_switcher_role_user(),
+      description: m.component_role_switcher_role_user_description(),
+    },
+    [Role.Admin]: {
+      ...roleMeta[Role.Admin],
+      name: m.component_role_switcher_role_admin(),
+      description: m.component_role_switcher_role_admin_description(),
+    },
+  } satisfies Record<
+    Role,
+    {
+      name: string;
+      description: string;
+      url: string;
+      logo: ElementType;
+    }
+  >;
 
   const currentRole = useMemo(() => {
     if (pathname.startsWith("/admin")) {
@@ -63,11 +76,7 @@ export function RoleSwitcher() {
     return Role.User;
   }, [pathname]);
 
-  const {
-    name: currentRoleName,
-    description: currentRoleDescription,
-    logo: CurrentLogo,
-  } = roles[currentRole];
+  const { name: currentRoleName, logo: CurrentLogo } = roles[currentRole];
 
   return (
     <SidebarMenu>
@@ -76,23 +85,23 @@ export function RoleSwitcher() {
           <DropdownMenuTrigger
             render={
               <SidebarMenuButton
-                size="lg"
-                className="data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground"
+                className={cn(
+                  "data-popup-open:text-sidebar-accent-foregroun data-popup-open:bg-sidebar-accent",
+                  "group-data-[collapsible=icon]:p-0!",
+                )}
               >
                 <div
                   className={cn(
-                    "flex aspect-square size-8 items-center justify-center rounded-lg",
-                    "bg-sidebar-primary text-sidebar-primary-foreground",
+                    "flex aspect-square size-6 items-center justify-center rounded-md",
+                    "transform bg-sidebar-primary text-sidebar-primary-foreground transition-all duration-300",
+                    "group-data-[collapsible=icon]:size-8",
                   )}
                 >
                   <CurrentLogo className="size-4" />
                 </div>
 
-                <div className="grid flex-1 text-left text-sm leading-tight">
+                <div className="grid flex-1 text-left text-sm leading-tight font-bold">
                   <p>{currentRoleName}</p>
-                  <Marquee className="py-0 text-xs text-muted-foreground">
-                    {currentRoleDescription}
-                  </Marquee>
                 </div>
 
                 <DownLine className="ml-auto" />
@@ -101,9 +110,8 @@ export function RoleSwitcher() {
           />
 
           <DropdownMenuContent
-            className="w-56 rounded-lg"
+            className="w-60 rounded-lg"
             align="start"
-            side={isMobile ? "bottom" : "right"}
             sideOffset={4}
           >
             <DropdownMenuGroup>
@@ -111,26 +119,32 @@ export function RoleSwitcher() {
                 {m.component_role_switcher_title()}
               </DropdownMenuLabel>
 
-              {Object.values(roles).map(
-                ({ name, description, url, logo: Logo }) => (
-                  <DropdownMenuItem
-                    key={name}
-                    className="gap-2 p-2"
-                    render={
-                      <Link to={url}>
-                        <div className="flex size-6 items-center justify-center rounded-md border">
-                          <Logo className="size-3.5 shrink-0" />
-                        </div>
+              {Object.entries(roles).map(
+                ([role, { name, description, url, logo: Logo }]) => (
+                  <Tooltip key={role}>
+                    <TooltipTrigger
+                      className="gap-2 p-2"
+                      render={<DropdownMenuItem render={<Link to={url} />} />}
+                    >
+                      <div className="flex size-6 items-center justify-center rounded-md border">
+                        <Logo className="size-3.5 shrink-0" />
+                      </div>
 
-                        <div className="grid flex-1 text-left text-sm leading-tight">
-                          <p>{name}</p>
-                          <Marquee className="py-0 text-xs text-muted-foreground">
-                            {description}
-                          </Marquee>
-                        </div>
-                      </Link>
-                    }
-                  />
+                      <p className="flex flex-1 items-center text-left text-sm leading-tight">
+                        <span>{name}</span>
+
+                        {role === currentRole && (
+                          <CheckLine className="ml-auto" />
+                        )}
+                      </p>
+                    </TooltipTrigger>
+
+                    <TooltipPopup className="max-w-xs">
+                      <p className="text-xs text-muted-foreground">
+                        {description}
+                      </p>
+                    </TooltipPopup>
+                  </Tooltip>
                 ),
               )}
             </DropdownMenuGroup>

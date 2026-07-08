@@ -150,3 +150,11 @@ export const emailSignUp = createServerFn({
     });
     return result;
   });
+
+export const signOut = createServerFn({
+  method: "POST",
+}).handler(async () => {
+  const headers = getRequestHeaders();
+  const auth = getAuth();
+  await auth.api.signOut({ headers });
+});

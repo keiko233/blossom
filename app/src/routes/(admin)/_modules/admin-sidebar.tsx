@@ -13,6 +13,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
+import { UserProfileMenu } from "@/components/user-profile-menu";
 import { m } from "@/paraglide/messages";
 
 import { NavProxies } from "./nav-proxies";
@@ -52,7 +53,9 @@ export function AdminSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter />
+      <SidebarFooter>
+        <UserProfileMenu />
+      </SidebarFooter>
     </Sidebar>
   );
 }
