@@ -6,8 +6,8 @@ import {
   createRootRouteWithContext,
 } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
-import { ThemeProvider } from "next-themes";
 import type { PropsWithChildren } from "react";
+import { ThemeProvider } from "tanstack-theme-kit";
 
 import { AnchoredToastProvider, ToastProvider } from "@/components/ui/toast";
 import { getLocale } from "@/paraglide/runtime";

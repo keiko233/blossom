@@ -146,6 +146,9 @@ importers:
       tailwindcss:
         specifier: ^4.3.2
         version: 4.3.2
+      tanstack-theme-kit:
+        specifier: ^0.2.1
+        version: 0.2.1(react@19.2.7)(typescript@6.0.3)
       usehooks-ts:
         specifier: ^3.1.1
         version: 3.1.1(react@19.2.7)
@@ -4365,6 +4368,15 @@ packages:
   tailwindcss@4.3.2:
     resolution: {integrity: sha512-WtctNNSH8A9jlMIqxzuYumOHU5uGZyRv0Q5svQl+oEPy5w84YpBxdb7MdqyiSPQge5jTJ6zFQLq0PFygdccSBA==}
 
+  tanstack-theme-kit@0.2.1:
+    resolution: {integrity: sha512-mZIH8l4w7FAGgXQkBZNueOqao6h+4lb6kixuSxbv8IxkHBrannaq2ZcRE6ZPYsS6SiLshPoUrQa6XsBByL93nA==}
+    peerDependencies:
+      react: ^18 || ^19
+      typescript: '*'
+    peerDependenciesMeta:
+      typescript:
+        optional: true
+
   tapable@2.3.3:
     resolution: {integrity: sha512-uxc/zpqFg6x7C8vOE7lh6Lbda8eEL9zmVm/PLeTPBRhh1xCgdWaQ+J1CUieGpIfm2HdtsUpRv+HshiasBMcc6A==}
     engines: {node: '>=6'}
@@ -8374,6 +8386,12 @@ snapshots:
   tailwind-merge@3.6.0: {}
 
   tailwindcss@4.3.2: {}
+
+  tanstack-theme-kit@0.2.1(react@19.2.7)(typescript@6.0.3):
+    dependencies:
+      react: 19.2.7
+    optionalDependencies:
+      typescript: 6.0.3
 
   tapable@2.3.3: {}
 
