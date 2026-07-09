@@ -46,6 +46,7 @@ function makeSubscription(): Subscription {
     deviceLimit: 0,
     credentialUuid: UUID,
     credentialPassword: PASSWORD,
+    token: "token",
     createdAt: new Date(),
     updatedAt: new Date(),
   };

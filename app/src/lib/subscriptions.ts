@@ -6,7 +6,10 @@ import { db } from "@/db";
 import { user } from "@/db/auth-schema";
 import { plan, subscription } from "@/db/plan-schema";
 import { ensureAdmin } from "@/lib/ensure-admin";
-import { generateSubscriptionCredentials } from "@/lib/subscription-credentials";
+import {
+  generateSubscriptionCredentials,
+  generateSubscriptionToken,
+} from "@/lib/subscription-credentials";
 import {
   createSubscriptionSchema,
   subscriptionIdSchema,
@@ -68,6 +71,7 @@ export const createSubscription = createServerFn({ method: "POST" })
         deviceLimit: planRow.deviceLimit,
         credentialUuid: credentials.uuid,
         credentialPassword: credentials.password,
+        token: generateSubscriptionToken(),
       })
       .returning();
     return row;
@@ -88,6 +92,26 @@ export const resetSubscriptionCredentials = createServerFn({ method: "POST" })
         credentialUuid: credentials.uuid,
         credentialPassword: credentials.password,
       })
+      .where(eq(subscription.id, data.id))
+      .returning();
+    if (!row) {
+      throw new Error("Not found");
+    }
+    return row;
+  });
+
+/**
+ * Rotates a subscription's link token. The old subscription URL stops working
+ * immediately, but the proxy credentials are not changed: connected clients
+ * keep working until the agent next pulls config.
+ */
+export const refreshSubscriptionToken = createServerFn({ method: "POST" })
+  .validator(subscriptionIdSchema)
+  .handler(async ({ data }) => {
+    await ensureAdmin();
+    const [row] = await db
+      .update(subscription)
+      .set({ token: generateSubscriptionToken() })
       .where(eq(subscription.id, data.id))
       .returning();
     if (!row) {

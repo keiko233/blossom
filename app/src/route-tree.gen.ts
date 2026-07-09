@@ -14,6 +14,7 @@ import { Route as adminAdminRouteRouteImport } from './routes/(admin)/admin/rout
 import { Route as userWelcomeIndexRouteImport } from './routes/(user)/welcome/index'
 import { Route as userDashboardIndexRouteImport } from './routes/(user)/dashboard/index'
 import { Route as adminAdminIndexRouteImport } from './routes/(admin)/admin/index'
+import { Route as ApiSubTokenRouteImport } from './routes/api/sub/$token'
 import { Route as ApiRpcSplatRouteImport } from './routes/api/rpc/$'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as authAuthSignupRouteImport } from './routes/(auth)/auth/signup'
@@ -78,6 +79,11 @@ const adminAdminIndexRoute = adminAdminIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => adminAdminRouteRoute,
+} as any)
+const ApiSubTokenRoute = ApiSubTokenRouteImport.update({
+  id: '/api/sub/$token',
+  path: '/api/sub/$token',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ApiRpcSplatRoute = ApiRpcSplatRouteImport.update({
   id: '/api/rpc/$',
@@ -211,6 +217,7 @@ export interface FileRoutesByFullPath {
   '/auth/signup': typeof authAuthSignupRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/rpc/$': typeof ApiRpcSplatRoute
+  '/api/sub/$token': typeof ApiSubTokenRoute
   '/admin/': typeof adminAdminIndexRoute
   '/dashboard/': typeof userDashboardIndexRoute
   '/welcome/': typeof userWelcomeIndexRoute
@@ -238,6 +245,7 @@ export interface FileRoutesByTo {
   '/auth/signup': typeof authAuthSignupRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/rpc/$': typeof ApiRpcSplatRoute
+  '/api/sub/$token': typeof ApiSubTokenRoute
   '/admin': typeof adminAdminIndexRoute
   '/dashboard': typeof userDashboardIndexRoute
   '/welcome': typeof userWelcomeIndexRoute
@@ -270,6 +278,7 @@ export interface FileRoutesById {
   '/(auth)/auth/signup': typeof authAuthSignupRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/rpc/$': typeof ApiRpcSplatRoute
+  '/api/sub/$token': typeof ApiSubTokenRoute
   '/(admin)/admin/': typeof adminAdminIndexRoute
   '/(user)/dashboard/': typeof userDashboardIndexRoute
   '/(user)/welcome/': typeof userWelcomeIndexRoute
@@ -302,6 +311,7 @@ export interface FileRouteTypes {
     | '/auth/signup'
     | '/api/auth/$'
     | '/api/rpc/$'
+    | '/api/sub/$token'
     | '/admin/'
     | '/dashboard/'
     | '/welcome/'
@@ -329,6 +339,7 @@ export interface FileRouteTypes {
     | '/auth/signup'
     | '/api/auth/$'
     | '/api/rpc/$'
+    | '/api/sub/$token'
     | '/admin'
     | '/dashboard'
     | '/welcome'
@@ -360,6 +371,7 @@ export interface FileRouteTypes {
     | '/(auth)/auth/signup'
     | '/api/auth/$'
     | '/api/rpc/$'
+    | '/api/sub/$token'
     | '/(admin)/admin/'
     | '/(user)/dashboard/'
     | '/(user)/welcome/'
@@ -387,6 +399,7 @@ export interface RootRouteChildren {
   staticIndexRoute: typeof staticIndexRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiRpcSplatRoute: typeof ApiRpcSplatRoute
+  ApiSubTokenRoute: typeof ApiSubTokenRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -453,6 +466,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin/'
       preLoaderRoute: typeof adminAdminIndexRouteImport
       parentRoute: typeof adminAdminRouteRoute
+    }
+    '/api/sub/$token': {
+      id: '/api/sub/$token'
+      path: '/api/sub/$token'
+      fullPath: '/api/sub/$token'
+      preLoaderRoute: typeof ApiSubTokenRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/rpc/$': {
       id: '/api/rpc/$'
@@ -763,6 +783,7 @@ const rootRouteChildren: RootRouteChildren = {
   staticIndexRoute: staticIndexRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiRpcSplatRoute: ApiRpcSplatRoute,
+  ApiSubTokenRoute: ApiSubTokenRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

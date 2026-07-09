@@ -8,12 +8,50 @@ import { node, nodeGroup } from "@/db/proxy-schema";
 import type { Node } from "@/db/proxy-schema";
 
 /**
- * Plain server-side helpers resolving who may use which node. Kept out of
- * `@/lib/subscriptions` on purpose: that module is imported by client pages
- * for its server functions, and unlike `createServerFn` handlers (which the
- * compiler strips from the client bundle), plain exports survive bundling and
- * would drag `db` — and the node-postgres driver — into the browser.
+ * Finds an active subscription by its public link token. Returns the
+ * subscription together with the user row so callers can enforce bans.
  */
+export async function findSubscriptionByToken(
+  token: string,
+): Promise<{
+  subscription: Subscription;
+  user: { banned: boolean | null; banExpires: Date | null };
+} | null> {
+  const [row] = await db
+    .select({
+      subscription,
+      user: { banned: user.banned, banExpires: user.banExpires },
+    })
+    .from(subscription)
+    .innerJoin(user, eq(user.id, subscription.userId))
+    .where(eq(subscription.token, token));
+
+  return row ?? null;
+}
+
+/**
+ * Resolves the nodes a single subscription may access right now. The caller is
+ * expected to have already validated the subscription status, expiration, ban
+ * state, and traffic quota. This only filters the node side (`enabled = true`
+ * and the subscription's plan groups).
+ */
+export async function getSubscriptionAccessibleNodes(
+  subscriptionId: string,
+): Promise<Node[]> {
+  const rows = await db
+    .select({ node })
+    .from(subscription)
+    .innerJoin(planGroup, eq(planGroup.planId, subscription.planId))
+    .innerJoin(nodeGroup, eq(nodeGroup.groupId, planGroup.groupId))
+    .innerJoin(node, eq(node.id, nodeGroup.nodeId))
+    .where(and(eq(subscription.id, subscriptionId), eq(node.enabled, true)));
+
+  const byId = new Map<string, Node>();
+  for (const row of rows) {
+    byId.set(row.node.id, row.node);
+  }
+  return [...byId.values()];
+}
 
 /**
  * Resolves the nodes a user may access right now: the union of nodes across

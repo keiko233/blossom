@@ -96,6 +96,10 @@ export const subscription = pgTable(
     credentialUuid: text("credential_uuid").notNull().unique(),
     credentialPassword: text("credential_password").notNull(),
 
+    // Opaque subscription-link token: knowing it grants the compiled Clash config,
+    // so it is rotatable independently of the proxy credentials.
+    token: text("token").notNull().unique(),
+
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()

@@ -1,6 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { ArrowLeftIcon, EllipsisIcon, PlusIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  CopyIcon,
+  EllipsisIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  ScrollTextIcon,
+} from "lucide-react";
 import type React from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -29,15 +36,18 @@ import type { SubscriptionStatus } from "@/db/plan-schema";
 import {
   createSubscription,
   deleteSubscription,
+  refreshSubscriptionToken,
   resetSubscriptionCredentials,
   updateSubscription,
 } from "@/lib/subscriptions";
 import { getUserDetail, USERS_QUERY_KEY } from "@/lib/users";
 import { m } from "@/paraglide/messages";
 
+import { AccessLogDialog } from "./_modules/access-log-dialog";
 import { AssignPlanDialog } from "./_modules/assign-plan-dialog";
 import { CredentialDialog } from "./_modules/credential-dialog";
 import { EditSubscriptionDialog } from "./_modules/edit-subscription-dialog";
+import { SubscriptionLinkDialog } from "./_modules/subscription-link-dialog";
 import { useUserActions } from "./_modules/use-user-actions";
 
 export const Route = createFileRoute("/(admin)/admin/users/$userId")({
@@ -173,6 +183,21 @@ function RouteComponent(): React.ReactElement {
     onError,
   });
 
+  const refreshLinkMutation = useMutation({
+    mutationFn: (id: string) => refreshSubscriptionToken({ data: { id } }),
+    onSuccess: async (row) => {
+      await invalidate();
+      toastManager.add({
+        type: "success",
+        title: m.admin_users_subs_toast_link_refreshed(),
+      });
+      await SubscriptionLinkDialog.call({
+        url: `${window.location.origin}/api/sub/${row.token}`,
+      });
+    },
+    onError,
+  });
+
   const requestAssign = async () => {
     const planId = await AssignPlanDialog.call();
     if (planId) {
@@ -218,6 +243,35 @@ function RouteComponent(): React.ReactElement {
     if (confirmed) {
       resetMutation.mutate(subscriptionId);
     }
+  };
+
+  const requestCopyLink = async (sub: { token: string }) => {
+    const url = `${window.location.origin}/api/sub/${sub.token}`;
+    await navigator.clipboard.writeText(url);
+    toastManager.add({
+      type: "success",
+      title: m.admin_users_subs_link_copied(),
+    });
+  };
+
+  const requestRefreshLink = async (subscriptionId: string) => {
+    const confirmed = await Confirm.call({
+      title: m.admin_users_subs_refresh_link_title(),
+      description: m.admin_users_subs_refresh_link_description(),
+      confirmLabel: m.admin_users_subs_action_refresh_link(),
+      cancelLabel: m.admin_users_form_cancel(),
+      destructive: true,
+    });
+    if (confirmed) {
+      refreshLinkMutation.mutate(subscriptionId);
+    }
+  };
+
+  const viewAccessLogs = async (subscriptionId: string) => {
+    await AccessLogDialog.call({
+      subjectType: "subscription",
+      subjectId: subscriptionId,
+    });
   };
 
   if (isPending || !detail) {
@@ -409,6 +463,28 @@ function RouteComponent(): React.ReactElement {
                           <MenuItem onClick={() => void requestReset(sub.id)}>
                             {m.admin_users_subs_action_reset_credentials()}
                           </MenuItem>
+                          <MenuSeparator />
+                          <MenuItem onClick={() => void requestCopyLink(sub)}>
+                            <span className="flex items-center gap-2">
+                              <CopyIcon className="size-4" />
+                              {m.admin_users_subs_action_copy_link()}
+                            </span>
+                          </MenuItem>
+                          <MenuItem
+                            onClick={() => void requestRefreshLink(sub.id)}
+                          >
+                            <span className="flex items-center gap-2">
+                              <RefreshCwIcon className="size-4" />
+                              {m.admin_users_subs_action_refresh_link()}
+                            </span>
+                          </MenuItem>
+                          <MenuItem onClick={() => void viewAccessLogs(sub.id)}>
+                            <span className="flex items-center gap-2">
+                              <ScrollTextIcon className="size-4" />
+                              {m.admin_users_subs_action_access_logs()}
+                            </span>
+                          </MenuItem>
+                          <MenuSeparator />
                           <MenuItem onClick={() => void requestEdit(sub)}>
                             {m.admin_users_subs_action_edit()}
                           </MenuItem>

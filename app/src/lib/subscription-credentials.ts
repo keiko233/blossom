@@ -21,3 +21,8 @@ export function generateSubscriptionCredentials(): SubscriptionCredentials {
     password: randomBytes(32).toString("base64"),
   };
 }
+
+/** 32 hex chars (128-bit): URL-safe, matches the migration backfill format. */
+export function generateSubscriptionToken(): string {
+  return randomBytes(16).toString("hex");
+}

@@ -116,6 +116,9 @@ importers:
       lucide-react:
         specifier: ^0.545.0
         version: 0.545.0(react@19.2.7)
+      meta-json-schema:
+        specifier: ^1.19.27
+        version: 1.19.27
       next-themes:
         specifier: ^0.4.6
         version: 0.4.6(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -152,6 +155,9 @@ importers:
       usehooks-ts:
         specifier: ^3.1.1
         version: 3.1.1(react@19.2.7)
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -3780,6 +3786,10 @@ packages:
   meow@14.1.0:
     resolution: {integrity: sha512-EDYo6VlmtnumlcBCbh1gLJ//9jvM/ndXHfVXIFrZVr6fGcwTUyCTFNTLCKuY3ffbK8L/+3Mzqnd58RojiZqHVw==}
     engines: {node: '>=20'}
+
+  meta-json-schema@1.19.27:
+    resolution: {integrity: sha512-o/0G25JL42VXN0KGr34BEuDwAMmx8mZeeeXeZZufET47IyQDD2QCfsh4c3Q+htQWwnh7D1BtBK947hLakjlhew==}
+    engines: {node: '>=22', pnpm: '>=10'}
 
   mime-db@1.52.0:
     resolution: {integrity: sha512-sPU4uV7dYlvtWJxwwxHD0PuihVNiE7TyAbQ5SWxDCB9mUYvOgroQOwYQQOKPJ8CIbE+1ETVlOoK1UC2nU3gYvg==}
@@ -7738,6 +7748,8 @@ snapshots:
 
   meow@14.1.0: {}
 
+  meta-json-schema@1.19.27: {}
+
   mime-db@1.52.0: {}
 
   mime-db@1.54.0: {}
@@ -8654,8 +8666,7 @@ snapshots:
 
   yallist@3.1.1: {}
 
-  yaml@2.9.0:
-    optional: true
+  yaml@2.9.0: {}
 
   yargs-parser@21.1.1: {}
 

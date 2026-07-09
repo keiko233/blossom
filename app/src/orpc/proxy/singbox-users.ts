@@ -51,7 +51,7 @@ function decodedKey(password: string): Buffer {
  * the 256-bit methods as-is; the 128-bit method takes the first 16 bytes.
  * Classic methods (and every other password protocol) accept any string.
  */
-function passwordFor(node: Node, password: string): string {
+export function passwordFor(node: Node, password: string): string {
   if (node.protocol !== "shadowsocks") {
     return password;
   }
