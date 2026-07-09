@@ -15,36 +15,74 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Decide which images need building: only the ones whose sources changed.
+  # Tag pushes and manual dispatches always build everything.
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.targets.outputs.targets }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            app:
+              - 'app/**'
+              - 'Dockerfile'
+              - '.dockerignore'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - '.github/workflows/docker.yml'
+            server-agent:
+              - 'server-agent/**'
+              - '.github/workflows/docker.yml'
+
+      - id: targets
+        env:
+          APP_CHANGED: ${{ steps.filter.outputs.app }}
+          AGENT_CHANGED: ${{ steps.filter.outputs['server-agent'] }}
+          BUILD_ALL: ${{ github.event_name == 'workflow_dispatch' || github.ref_type == 'tag' }}
+        run: |
+          targets=$(jq -cn \
+            --arg repo "ghcr.io/$GITHUB_REPOSITORY" \
+            --arg app "$APP_CHANGED" \
+            --arg agent "$AGENT_CHANGED" \
+            --arg all "$BUILD_ALL" '
+            []
+            + (if $all == "true" or $app == "true" then [{
+                name: "app",
+                context: ".",
+                image: $repo,
+                "cache-path": "pnpm-store",
+                "cache-map": {"pnpm-store": "/pnpm/store"}
+              }] else [] end)
+            + (if $all == "true" or $agent == "true" then [{
+                name: "server-agent",
+                context: "./server-agent",
+                image: ($repo + "/server-agent"),
+                "cache-path": "go-pkg-mod\ngo-build-cache\ncargo-registry\ncargo-target",
+                "cache-map": {
+                  "go-pkg-mod": "/go/pkg/mod",
+                  "go-build-cache": "/root/.cache/go-build",
+                  "cargo-registry": "/usr/local/cargo/registry",
+                  "cargo-target": "/app/target"
+                }
+              }] else [] end)')
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+          echo "building: $(jq -r 'map(.name) | join(", ") | if . == "" then "(nothing)" else . end' <<< "$targets")"
+
   # Build each image natively per architecture (no QEMU emulation) and push
   # by digest; the merge job below assembles the multi-arch manifest.
   build:
+    needs: prepare
+    if: needs.prepare.outputs.targets != '[]'
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - name: app
-            context: .
-            image: ghcr.io/${{ github.repository }}
-            cache-path: pnpm-store
-            cache-map: |
-              {
-                "pnpm-store": "/pnpm/store"
-              }
-          - name: server-agent
-            context: ./server-agent
-            image: ghcr.io/${{ github.repository }}/server-agent
-            cache-path: |
-              go-pkg-mod
-              go-build-cache
-              cargo-registry
-              cargo-target
-            cache-map: |
-              {
-                "go-pkg-mod": "/go/pkg/mod",
-                "go-build-cache": "/root/.cache/go-build",
-                "cargo-registry": "/usr/local/cargo/registry",
-                "cargo-target": "/app/target"
-              }
+        target: ${{ fromJSON(needs.prepare.outputs.targets) }}
         platform:
           - arch: amd64
             runner: ubuntu-latest
@@ -68,7 +106,7 @@ jobs:
         id: cache-mounts
         uses: actions/cache@v4
         with:
-          path: ${{ matrix.target.cache-path }}
+          path: ${{ matrix.target['cache-path'] }}
           key: cache-mounts-${{ matrix.target.name }}-${{ matrix.platform.arch }}-${{ hashFiles('pnpm-lock.yaml', 'server-agent/Cargo.lock') }}
           restore-keys: |
             cache-mounts-${{ matrix.target.name }}-${{ matrix.platform.arch }}-
@@ -76,7 +114,7 @@ jobs:
       - name: Inject cache mounts into buildkit
         uses: reproducible-containers/buildkit-cache-dance@v3
         with:
-          cache-map: ${{ matrix.target.cache-map }}
+          cache-map: ${{ toJSON(matrix.target['cache-map']) }}
           skip-extraction: ${{ steps.cache-mounts.outputs.cache-hit }}
 
       - id: build
@@ -103,16 +141,13 @@ jobs:
 
   # Combine the per-arch digests into one tagged multi-arch manifest per image.
   merge:
-    needs: build
+    needs: [prepare, build]
+    if: needs.prepare.outputs.targets != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - name: app
-            image: ghcr.io/${{ github.repository }}
-          - name: server-agent
-            image: ghcr.io/${{ github.repository }}/server-agent
+        target: ${{ fromJSON(needs.prepare.outputs.targets) }}
     steps:
       - uses: actions/download-artifact@v4
         with:
