@@ -10,23 +10,115 @@ permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Build each image natively per architecture (no QEMU emulation) and push
+  # by digest; the merge job below assembles the multi-arch manifest.
   build:
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: app
+            context: .
+            image: ghcr.io/${{ github.repository }}
+            cache-path: pnpm-store
+            cache-map: |
+              {
+                "pnpm-store": "/pnpm/store"
+              }
+          - name: server-agent
+            context: ./server-agent
+            image: ghcr.io/${{ github.repository }}/server-agent
+            cache-path: |
+              go-pkg-mod
+              go-build-cache
+              cargo-registry
+              cargo-target
+            cache-map: |
+              {
+                "go-pkg-mod": "/go/pkg/mod",
+                "go-build-cache": "/root/.cache/go-build",
+                "cargo-registry": "/usr/local/cargo/registry",
+                "cargo-target": "/app/target"
+              }
+        platform:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.platform.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Persist the Dockerfile RUN cache mounts (pnpm store, go mod/build,
+      # cargo registry/target) across runs — ephemeral runners lose them.
+      - name: Restore build cache mounts
+        id: cache-mounts
+        uses: actions/cache@v4
+        with:
+          path: ${{ matrix.target.cache-path }}
+          key: cache-mounts-${{ matrix.target.name }}-${{ matrix.platform.arch }}-${{ hashFiles('pnpm-lock.yaml', 'server-agent/Cargo.lock') }}
+          restore-keys: |
+            cache-mounts-${{ matrix.target.name }}-${{ matrix.platform.arch }}-
+
+      - name: Inject cache mounts into buildkit
+        uses: reproducible-containers/buildkit-cache-dance@v3
+        with:
+          cache-map: ${{ matrix.target.cache-map }}
+          skip-extraction: ${{ steps.cache-mounts.outputs.cache-hit }}
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.target.context }}
+          platforms: linux/${{ matrix.platform.arch }}
+          outputs: type=image,name=${{ matrix.target.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.target.name }}-${{ matrix.platform.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target.name }}-${{ matrix.platform.arch }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.target.name }}-${{ matrix.platform.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Combine the per-arch digests into one tagged multi-arch manifest per image.
+  merge:
+    needs: build
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
+        target:
           - name: app
-            context: .
             image: ghcr.io/${{ github.repository }}
           - name: server-agent
-            context: ./server-agent
             image: ghcr.io/${{ github.repository }}/server-agent
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/setup-qemu-action@v3
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-${{ matrix.target.name }}-*
+          merge-multiple: true
 
       - uses: docker/setup-buildx-action@v3
 
@@ -39,19 +131,19 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ matrix.image }}
+          images: ${{ matrix.target.image }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - uses: docker/build-push-action@v6
-        with:
-          context: ${{ matrix.context }}
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ matrix.target.image }}@sha256:%s ' *)
+
+      - name: Inspect
+        run: docker buildx imagetools inspect ${{ matrix.target.image }}:${{ steps.meta.outputs.version }}

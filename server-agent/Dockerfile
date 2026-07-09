@@ -6,7 +6,9 @@
 FROM golang:alpine AS singbox
 RUN apk add --no-cache git build-base
 ENV CGO_ENABLED=0 GOBIN=/out
-RUN go install -v -tags with_v2ray_api github.com/sagernet/sing-box/cmd/sing-box@latest
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go install -v -tags with_v2ray_api github.com/sagernet/sing-box/cmd/sing-box@latest
 # -> /out/sing-box
 
 # ── Stage 2: build the Rust agent against musl (fully static) ─────────────────

@@ -12,7 +12,7 @@ COPY app/package.json app/
 # .dockerignore. Setting HUSKY=0 makes husky a no-op while still allowing
 # dependency build scripts (e.g. @parcel/watcher, esbuild, sharp) to run.
 ENV HUSKY=0
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+RUN --mount=type=cache,target=/pnpm/store \
     pnpm install --frozen-lockfile
 COPY app/ app/
 ARG VITE_APP_NAME
