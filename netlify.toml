@@ -1,0 +1,4 @@
+[build]
+  base = "app"
+  command = "pnpm run build:netlify"
+  publish = "dist/client"
