@@ -33,6 +33,17 @@ The app selects its deploy target through the `DEPLOY_TARGET` build switch in `a
 
 For Cloudflare, push secrets with `wrangler secret put <NAME>` and non-secret vars through `vars` in `app/wrangler.jsonc`. For Netlify and Vercel, configure environment variables in their dashboards; the build presets handle the rest.
 
+### Prebuilt Docker images
+
+Every push to `main` (and `v*` tags) runs `.github/workflows/docker.yml`, which builds and publishes multi-arch (amd64/arm64) images to GHCR:
+
+| Image | Contents |
+|---|---|
+| `ghcr.io/keiko233/blossom` | The app as a self-contained Node server on port 3000 (built with `DEPLOY_TARGET=node`). |
+| `ghcr.io/keiko233/blossom/server-agent` | The Rust server-agent bundled with sing-box (compiled with `with_v2ray_api`). |
+
+Tags: `latest` tracks `main`, `sha-<commit>` pins a build, and `v*` releases also get semver tags (`1.2.3`, `1.2`). Note the app image only runs the server — database migrations still need to be applied separately (see below). `VITE_APP_NAME` is baked in at build time, so a custom app name requires building the image yourself with `--build-arg VITE_APP_NAME=<name>`.
+
 ## Environment variables
 
 Server env vars are validated at runtime on the first request, so production builds do not need secrets present at build time. Client env vars (`VITE_*`) are baked into the bundle and validated at build time.
@@ -79,6 +90,8 @@ This brings up:
 - `app` — The Node server on <http://localhost:3000>, with a health check at `/api/health`.
 
 Before any real deployment, change the placeholder `BETTER_AUTH_SECRET` and set `BETTER_AUTH_URL` to your public domain in `docker-compose.yaml`. `VITE_APP_NAME` is a Docker build ARG; rebuild the image to change the bundled client app name.
+
+To skip building locally, point the `app` service at the prebuilt image (`image: ghcr.io/keiko233/blossom:latest` instead of `build: .`) — the `migrate` service still builds the `builder` stage locally, since migrations are not part of the runtime image.
 
 ## Server agent
 
