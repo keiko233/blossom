@@ -245,11 +245,22 @@ const BUILDERS: Record<string, ProxyBuilder> = {
     if (typeof method !== "string") {
       return null;
     }
+    let password = passwordFor(node, credentials.password);
+    if (method.startsWith("2022-")) {
+      // SS2022 multi-user: the client authenticates with an identity header
+      // encrypted by the server PSK, so its password is `serverPSK:userPSK`.
+      // A bare user PSK fails server-side with "invalid request".
+      const serverPassword = node.settings.password;
+      if (typeof serverPassword !== "string" || serverPassword === "") {
+        return null;
+      }
+      password = `${serverPassword}:${password}`;
+    }
     return {
       ...baseProxy(node),
       type: "ss",
       cipher: method,
-      password: passwordFor(node, credentials.password),
+      password,
     };
   },
 

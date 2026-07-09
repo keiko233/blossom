@@ -98,8 +98,41 @@ describe("buildClashConfig", () => {
     const node = makeNode("shadowsocks", { method: "aes-256-gcm" });
     const { config } = buildClashConfig([node], { credentials });
     expect(config).toMatchObject({
-      proxies: [expect.objectContaining({ type: "ss", cipher: "aes-256-gcm" })],
+      proxies: [
+        expect.objectContaining({
+          type: "ss",
+          cipher: "aes-256-gcm",
+          password: credentials.password,
+        }),
+      ],
     });
+  });
+
+  it("prefixes the server PSK for shadowsocks 2022 methods", () => {
+    const serverPsk = Buffer.alloc(32, 7).toString("base64");
+    const node = makeNode("shadowsocks", {
+      method: "2022-blake3-aes-256-gcm",
+      password: serverPsk,
+    });
+    const { config } = buildClashConfig([node], { credentials });
+    expect(config).toMatchObject({
+      proxies: [
+        expect.objectContaining({
+          type: "ss",
+          cipher: "2022-blake3-aes-256-gcm",
+          password: `${serverPsk}:${credentials.password}`,
+        }),
+      ],
+    });
+  });
+
+  it("skips shadowsocks 2022 nodes without a server PSK", () => {
+    const node = makeNode("shadowsocks", {
+      method: "2022-blake3-aes-256-gcm",
+    });
+    expect(() => buildClashConfig([node], { credentials })).toThrow(
+      "No usable proxies",
+    );
   });
 
   it("produces unique proxy names", () => {
