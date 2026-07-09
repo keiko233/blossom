@@ -5,7 +5,7 @@ services:
       context: .
       dockerfile: Dockerfile
     # Or pin a prebuilt image instead of building:
-    # image: ghcr.io/keiko233/blossom-server-agent:latest
+    # image: ghcr.io/keiko233/blossom/server-agent:latest
     container_name: blossom-agent
     restart: unless-stopped
 

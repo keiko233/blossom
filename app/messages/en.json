@@ -60,6 +60,8 @@
   "admin_proxies_nodes_toast_token_copied": "Token copied to clipboard",
   "admin_proxies_nodes_token_title": "Agent token",
   "admin_proxies_nodes_token_description": "Copy this token now — it is shown only once and cannot be retrieved later. The agent uses it as a bearer token to pull its config and report heartbeats.",
+  "admin_proxies_nodes_toast_command_copied": "Command copied to clipboard",
+  "admin_proxies_nodes_token_docker_label": "Or deploy the agent on the node with a single Docker command:",
   "admin_proxies_nodes_token_done": "Done",
   "admin_proxies_nodes_form_create_title": "Add Node",
   "admin_proxies_nodes_form_edit_title": "Edit Node",

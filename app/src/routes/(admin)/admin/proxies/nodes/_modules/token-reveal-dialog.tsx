@@ -31,12 +31,21 @@ export interface TokenRevealProps {
  */
 export const TokenRevealDialog = createCallable<TokenRevealProps, void>(
   ({ call, token }) => {
-    const copy = async () => {
-      await navigator.clipboard.writeText(token);
-      toastManager.add({
-        type: "success",
-        title: m.admin_proxies_nodes_toast_token_copied(),
-      });
+    // Callable components only mount on client-side .call(), so window is safe.
+    const dockerCommand = [
+      "docker run -d --name blossom-agent",
+      "--restart unless-stopped",
+      "--network host",
+      "--cap-add NET_ADMIN",
+      "--device /dev/net/tun",
+      `-e AGENT_URL=${window.location.origin}/api`,
+      `-e AGENT_TOKEN=${token}`,
+      "ghcr.io/keiko233/blossom/server-agent:latest",
+    ].join(" ");
+
+    const copy = async (text: string, title: string) => {
+      await navigator.clipboard.writeText(text);
+      toastManager.add({ type: "success", title });
     };
 
     return (
@@ -55,7 +64,7 @@ export const TokenRevealDialog = createCallable<TokenRevealProps, void>(
               {m.admin_proxies_nodes_token_description()}
             </DialogDescription>
           </DialogHeader>
-          <div className="px-6">
+          <div className="space-y-4 px-6">
             <div className="flex items-center gap-2 rounded-lg border bg-muted/32 p-3">
               <code className="min-w-0 flex-1 truncate font-mono text-xs">
                 {token}
@@ -65,10 +74,36 @@ export const TokenRevealDialog = createCallable<TokenRevealProps, void>(
                 variant="secondary"
                 size="icon"
                 aria-label="Copy"
-                onClick={() => void copy()}
+                onClick={() =>
+                  void copy(token, m.admin_proxies_nodes_toast_token_copied())
+                }
               >
                 <CopyIcon />
               </Button>
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm text-muted-foreground">
+                {m.admin_proxies_nodes_token_docker_label()}
+              </p>
+              <div className="flex items-start gap-2 rounded-lg border bg-muted/32 p-3">
+                <code className="min-w-0 flex-1 font-mono text-xs break-all">
+                  {dockerCommand}
+                </code>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="icon"
+                  aria-label="Copy"
+                  onClick={() =>
+                    void copy(
+                      dockerCommand,
+                      m.admin_proxies_nodes_toast_command_copied(),
+                    )
+                  }
+                >
+                  <CopyIcon />
+                </Button>
+              </div>
             </div>
           </div>
           <DialogFooter>

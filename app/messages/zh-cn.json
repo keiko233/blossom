@@ -60,6 +60,8 @@
   "admin_proxies_nodes_toast_token_copied": "令牌已复制到剪贴板",
   "admin_proxies_nodes_token_title": "Agent 令牌",
   "admin_proxies_nodes_token_description": "请立即复制此令牌——它只显示一次，之后无法再取回。Agent 会将其作为 Bearer 令牌用于拉取配置和上报心跳。",
+  "admin_proxies_nodes_toast_command_copied": "命令已复制到剪贴板",
+  "admin_proxies_nodes_token_docker_label": "或者在节点上用一条 Docker 命令直接部署 Agent：",
   "admin_proxies_nodes_token_done": "完成",
   "admin_proxies_nodes_form_create_title": "添加节点",
   "admin_proxies_nodes_form_edit_title": "编辑节点",
