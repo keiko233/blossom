@@ -51,6 +51,9 @@ import { SubscriptionLinkDialog } from "./_modules/subscription-link-dialog";
 import { useUserActions } from "./_modules/use-user-actions";
 
 export const Route = createFileRoute("/(admin)/admin/users/$userId")({
+  staticData: {
+    crumb: () => m.admin_users_detail_title(),
+  },
   component: RouteComponent,
 });
 

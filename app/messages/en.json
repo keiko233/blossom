@@ -167,6 +167,7 @@
   "admin_users_ban_field_reason": "Reason",
   "admin_users_ban_field_days": "Duration (days, empty = permanent)",
   "admin_users_ban_confirm": "Ban",
+  "admin_users_detail_title": "User details",
   "admin_users_detail_email_verified": "Verified",
   "admin_users_detail_email_unverified": "Unverified",
   "admin_users_detail_ban_reason": "Reason: {reason}",

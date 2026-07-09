@@ -167,6 +167,7 @@
   "admin_users_ban_field_reason": "原因",
   "admin_users_ban_field_days": "时长（天，留空为永久）",
   "admin_users_ban_confirm": "封禁",
+  "admin_users_detail_title": "用户详情",
   "admin_users_detail_email_verified": "已验证",
   "admin_users_detail_email_unverified": "未验证",
   "admin_users_detail_ban_reason": "原因：{reason}",

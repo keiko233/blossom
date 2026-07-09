@@ -10,6 +10,7 @@ import type { PropsWithChildren } from "react";
 import { ThemeProvider } from "tanstack-theme-kit";
 
 import { AnchoredToastProvider, ToastProvider } from "@/components/ui/toast";
+import { clientEnv } from "@/lib/env-client";
 import { getLocale } from "@/paraglide/runtime";
 import { LanguageProvider } from "@/providers/language-provider";
 
@@ -40,7 +41,7 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
         content: "width=device-width, initial-scale=1",
       },
       {
-        title: "TanStack Start Starter",
+        title: clientEnv.VITE_APP_NAME,
       },
     ],
     links: [
