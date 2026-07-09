@@ -19,9 +19,12 @@ import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as authAuthSignupRouteImport } from './routes/(auth)/auth/signup'
 import { Route as authAuthLoginRouteImport } from './routes/(auth)/auth/login'
 import { Route as authAuthForgotRouteImport } from './routes/(auth)/auth/forgot'
+import { Route as adminAdminUsersRouteRouteImport } from './routes/(admin)/admin/users/route'
 import { Route as adminAdminProxiesRouteRouteImport } from './routes/(admin)/admin/proxies/route'
 import { Route as adminAdminPlansRouteRouteImport } from './routes/(admin)/admin/plans/route'
+import { Route as adminAdminUsersIndexRouteImport } from './routes/(admin)/admin/users/index'
 import { Route as adminAdminPlansIndexRouteImport } from './routes/(admin)/admin/plans/index'
+import { Route as adminAdminUsersUserIdRouteImport } from './routes/(admin)/admin/users/$userId'
 import { Route as adminAdminPlansNewRouteImport } from './routes/(admin)/admin/plans/new'
 import { Route as adminAdminPlansPlanIdRouteImport } from './routes/(admin)/admin/plans/$planId'
 import { Route as adminAdminProxiesNodesRouteRouteImport } from './routes/(admin)/admin/proxies/nodes/route'
@@ -101,6 +104,11 @@ const authAuthForgotRoute = authAuthForgotRouteImport.update({
   path: '/auth/forgot',
   getParentRoute: () => authRouteRoute,
 } as any)
+const adminAdminUsersRouteRoute = adminAdminUsersRouteRouteImport.update({
+  id: '/users',
+  path: '/users',
+  getParentRoute: () => adminAdminRouteRoute,
+} as any)
 const adminAdminProxiesRouteRoute = adminAdminProxiesRouteRouteImport.update({
   id: '/proxies',
   path: '/proxies',
@@ -111,10 +119,20 @@ const adminAdminPlansRouteRoute = adminAdminPlansRouteRouteImport.update({
   path: '/plans',
   getParentRoute: () => adminAdminRouteRoute,
 } as any)
+const adminAdminUsersIndexRoute = adminAdminUsersIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => adminAdminUsersRouteRoute,
+} as any)
 const adminAdminPlansIndexRoute = adminAdminPlansIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => adminAdminPlansRouteRoute,
+} as any)
+const adminAdminUsersUserIdRoute = adminAdminUsersUserIdRouteImport.update({
+  id: '/$userId',
+  path: '/$userId',
+  getParentRoute: () => adminAdminUsersRouteRoute,
 } as any)
 const adminAdminPlansNewRoute = adminAdminPlansNewRouteImport.update({
   id: '/new',
@@ -187,6 +205,7 @@ export interface FileRoutesByFullPath {
   '/': typeof staticIndexRoute
   '/admin/plans': typeof adminAdminPlansRouteRouteWithChildren
   '/admin/proxies': typeof adminAdminProxiesRouteRouteWithChildren
+  '/admin/users': typeof adminAdminUsersRouteRouteWithChildren
   '/auth/forgot': typeof authAuthForgotRoute
   '/auth/login': typeof authAuthLoginRoute
   '/auth/signup': typeof authAuthSignupRoute
@@ -199,7 +218,9 @@ export interface FileRoutesByFullPath {
   '/admin/proxies/nodes': typeof adminAdminProxiesNodesRouteRouteWithChildren
   '/admin/plans/$planId': typeof adminAdminPlansPlanIdRoute
   '/admin/plans/new': typeof adminAdminPlansNewRoute
+  '/admin/users/$userId': typeof adminAdminUsersUserIdRoute
   '/admin/plans/': typeof adminAdminPlansIndexRoute
+  '/admin/users/': typeof adminAdminUsersIndexRoute
   '/admin/proxies/groups/$groupId': typeof adminAdminProxiesGroupsGroupIdRoute
   '/admin/proxies/groups/new': typeof adminAdminProxiesGroupsNewRoute
   '/admin/proxies/nodes/$nodeId': typeof adminAdminProxiesNodesNodeIdRoute
@@ -222,7 +243,9 @@ export interface FileRoutesByTo {
   '/welcome': typeof userWelcomeIndexRoute
   '/admin/plans/$planId': typeof adminAdminPlansPlanIdRoute
   '/admin/plans/new': typeof adminAdminPlansNewRoute
+  '/admin/users/$userId': typeof adminAdminUsersUserIdRoute
   '/admin/plans': typeof adminAdminPlansIndexRoute
+  '/admin/users': typeof adminAdminUsersIndexRoute
   '/admin/proxies/groups/$groupId': typeof adminAdminProxiesGroupsGroupIdRoute
   '/admin/proxies/groups/new': typeof adminAdminProxiesGroupsNewRoute
   '/admin/proxies/nodes/$nodeId': typeof adminAdminProxiesNodesNodeIdRoute
@@ -241,6 +264,7 @@ export interface FileRoutesById {
   '/(static)/': typeof staticIndexRoute
   '/(admin)/admin/plans': typeof adminAdminPlansRouteRouteWithChildren
   '/(admin)/admin/proxies': typeof adminAdminProxiesRouteRouteWithChildren
+  '/(admin)/admin/users': typeof adminAdminUsersRouteRouteWithChildren
   '/(auth)/auth/forgot': typeof authAuthForgotRoute
   '/(auth)/auth/login': typeof authAuthLoginRoute
   '/(auth)/auth/signup': typeof authAuthSignupRoute
@@ -253,7 +277,9 @@ export interface FileRoutesById {
   '/(admin)/admin/proxies/nodes': typeof adminAdminProxiesNodesRouteRouteWithChildren
   '/(admin)/admin/plans/$planId': typeof adminAdminPlansPlanIdRoute
   '/(admin)/admin/plans/new': typeof adminAdminPlansNewRoute
+  '/(admin)/admin/users/$userId': typeof adminAdminUsersUserIdRoute
   '/(admin)/admin/plans/': typeof adminAdminPlansIndexRoute
+  '/(admin)/admin/users/': typeof adminAdminUsersIndexRoute
   '/(admin)/admin/proxies/groups/$groupId': typeof adminAdminProxiesGroupsGroupIdRoute
   '/(admin)/admin/proxies/groups/new': typeof adminAdminProxiesGroupsNewRoute
   '/(admin)/admin/proxies/nodes/$nodeId': typeof adminAdminProxiesNodesNodeIdRoute
@@ -270,6 +296,7 @@ export interface FileRouteTypes {
     | '/'
     | '/admin/plans'
     | '/admin/proxies'
+    | '/admin/users'
     | '/auth/forgot'
     | '/auth/login'
     | '/auth/signup'
@@ -282,7 +309,9 @@ export interface FileRouteTypes {
     | '/admin/proxies/nodes'
     | '/admin/plans/$planId'
     | '/admin/plans/new'
+    | '/admin/users/$userId'
     | '/admin/plans/'
+    | '/admin/users/'
     | '/admin/proxies/groups/$groupId'
     | '/admin/proxies/groups/new'
     | '/admin/proxies/nodes/$nodeId'
@@ -305,7 +334,9 @@ export interface FileRouteTypes {
     | '/welcome'
     | '/admin/plans/$planId'
     | '/admin/plans/new'
+    | '/admin/users/$userId'
     | '/admin/plans'
+    | '/admin/users'
     | '/admin/proxies/groups/$groupId'
     | '/admin/proxies/groups/new'
     | '/admin/proxies/nodes/$nodeId'
@@ -323,6 +354,7 @@ export interface FileRouteTypes {
     | '/(static)/'
     | '/(admin)/admin/plans'
     | '/(admin)/admin/proxies'
+    | '/(admin)/admin/users'
     | '/(auth)/auth/forgot'
     | '/(auth)/auth/login'
     | '/(auth)/auth/signup'
@@ -335,7 +367,9 @@ export interface FileRouteTypes {
     | '/(admin)/admin/proxies/nodes'
     | '/(admin)/admin/plans/$planId'
     | '/(admin)/admin/plans/new'
+    | '/(admin)/admin/users/$userId'
     | '/(admin)/admin/plans/'
+    | '/(admin)/admin/users/'
     | '/(admin)/admin/proxies/groups/$groupId'
     | '/(admin)/admin/proxies/groups/new'
     | '/(admin)/admin/proxies/nodes/$nodeId'
@@ -455,6 +489,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof authAuthForgotRouteImport
       parentRoute: typeof authRouteRoute
     }
+    '/(admin)/admin/users': {
+      id: '/(admin)/admin/users'
+      path: '/users'
+      fullPath: '/admin/users'
+      preLoaderRoute: typeof adminAdminUsersRouteRouteImport
+      parentRoute: typeof adminAdminRouteRoute
+    }
     '/(admin)/admin/proxies': {
       id: '/(admin)/admin/proxies'
       path: '/proxies'
@@ -469,12 +510,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof adminAdminPlansRouteRouteImport
       parentRoute: typeof adminAdminRouteRoute
     }
+    '/(admin)/admin/users/': {
+      id: '/(admin)/admin/users/'
+      path: '/'
+      fullPath: '/admin/users/'
+      preLoaderRoute: typeof adminAdminUsersIndexRouteImport
+      parentRoute: typeof adminAdminUsersRouteRoute
+    }
     '/(admin)/admin/plans/': {
       id: '/(admin)/admin/plans/'
       path: '/'
       fullPath: '/admin/plans/'
       preLoaderRoute: typeof adminAdminPlansIndexRouteImport
       parentRoute: typeof adminAdminPlansRouteRoute
+    }
+    '/(admin)/admin/users/$userId': {
+      id: '/(admin)/admin/users/$userId'
+      path: '/$userId'
+      fullPath: '/admin/users/$userId'
+      preLoaderRoute: typeof adminAdminUsersUserIdRouteImport
+      parentRoute: typeof adminAdminUsersRouteRoute
     }
     '/(admin)/admin/plans/new': {
       id: '/(admin)/admin/plans/new'
@@ -627,15 +682,30 @@ const adminAdminProxiesRouteRouteWithChildren =
     adminAdminProxiesRouteRouteChildren,
   )
 
+interface adminAdminUsersRouteRouteChildren {
+  adminAdminUsersUserIdRoute: typeof adminAdminUsersUserIdRoute
+  adminAdminUsersIndexRoute: typeof adminAdminUsersIndexRoute
+}
+
+const adminAdminUsersRouteRouteChildren: adminAdminUsersRouteRouteChildren = {
+  adminAdminUsersUserIdRoute: adminAdminUsersUserIdRoute,
+  adminAdminUsersIndexRoute: adminAdminUsersIndexRoute,
+}
+
+const adminAdminUsersRouteRouteWithChildren =
+  adminAdminUsersRouteRoute._addFileChildren(adminAdminUsersRouteRouteChildren)
+
 interface adminAdminRouteRouteChildren {
   adminAdminPlansRouteRoute: typeof adminAdminPlansRouteRouteWithChildren
   adminAdminProxiesRouteRoute: typeof adminAdminProxiesRouteRouteWithChildren
+  adminAdminUsersRouteRoute: typeof adminAdminUsersRouteRouteWithChildren
   adminAdminIndexRoute: typeof adminAdminIndexRoute
 }
 
 const adminAdminRouteRouteChildren: adminAdminRouteRouteChildren = {
   adminAdminPlansRouteRoute: adminAdminPlansRouteRouteWithChildren,
   adminAdminProxiesRouteRoute: adminAdminProxiesRouteRouteWithChildren,
+  adminAdminUsersRouteRoute: adminAdminUsersRouteRouteWithChildren,
   adminAdminIndexRoute: adminAdminIndexRoute,
 }
 

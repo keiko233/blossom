@@ -61,7 +61,7 @@ export type SubscriptionStatus = "active" | "expired" | "cancelled";
  * A user's purchased plan. Quota and device limit are snapshotted at purchase
  * time so later plan edits do not affect existing subscriptions. Multiple
  * active subscriptions stack: the user's accessible nodes are the union across
- * all of them (see `getUserAccessibleNodes` in `@/lib/subscriptions`).
+ * all of them (see `getUserAccessibleNodes` in `@/lib/subscription-access`).
  */
 export const subscription = pgTable(
   "subscription",
@@ -88,6 +88,13 @@ export const subscription = pgTable(
       .default(0)
       .notNull(),
     deviceLimit: integer("device_limit").notNull(),
+
+    // Per-subscription proxy credentials, embedded as sing-box inbound users with
+    // `name` = subscription id so reported traffic maps 1:1 to a subscription.
+    // Stored in plaintext by design: sing-box needs the raw secret (contrast
+    // `node.agentTokenHash`, which only ever stores a hash).
+    credentialUuid: text("credential_uuid").notNull().unique(),
+    credentialPassword: text("credential_password").notNull(),
 
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")

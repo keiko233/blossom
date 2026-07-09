@@ -1,4 +1,8 @@
-import { agentHeartbeat, getAgentConfig } from "../proxy/agent";
+import {
+  agentHeartbeat,
+  getAgentConfig,
+  reportAgentTraffic,
+} from "../proxy/agent";
 import { addTodo, listTodos } from "./todos";
 
 export default {
@@ -9,5 +13,6 @@ export default {
   agent: {
     getConfig: getAgentConfig,
     heartbeat: agentHeartbeat,
+    reportTraffic: reportAgentTraffic,
   },
 };

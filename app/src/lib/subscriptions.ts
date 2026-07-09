@@ -1,13 +1,12 @@
 import { createServerFn } from "@tanstack/react-start";
-import { and, desc, eq, gt } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
 import { db } from "@/db";
 import { user } from "@/db/auth-schema";
-import { plan, planGroup, subscription } from "@/db/plan-schema";
-import { node, nodeGroup } from "@/db/proxy-schema";
-import type { Node } from "@/db/proxy-schema";
+import { plan, subscription } from "@/db/plan-schema";
 import { ensureAdmin } from "@/lib/ensure-admin";
+import { generateSubscriptionCredentials } from "@/lib/subscription-credentials";
 import {
   createSubscriptionSchema,
   subscriptionIdSchema,
@@ -56,6 +55,7 @@ export const createSubscription = createServerFn({ method: "POST" })
 
     // Quota and device limit are snapshotted so later plan edits don't affect
     // already-sold subscriptions.
+    const credentials = generateSubscriptionCredentials();
     const [row] = await db
       .insert(subscription)
       .values({
@@ -66,8 +66,33 @@ export const createSubscription = createServerFn({ method: "POST" })
         expiresAt,
         trafficQuotaBytes: planRow.trafficBytes,
         deviceLimit: planRow.deviceLimit,
+        credentialUuid: credentials.uuid,
+        credentialPassword: credentials.password,
       })
       .returning();
+    return row;
+  });
+
+/**
+ * Rotates a subscription's proxy credentials. The old secret keeps working on a
+ * node until its agent next pulls config — there is no push invalidation.
+ */
+export const resetSubscriptionCredentials = createServerFn({ method: "POST" })
+  .validator(subscriptionIdSchema)
+  .handler(async ({ data }) => {
+    await ensureAdmin();
+    const credentials = generateSubscriptionCredentials();
+    const [row] = await db
+      .update(subscription)
+      .set({
+        credentialUuid: credentials.uuid,
+        credentialPassword: credentials.password,
+      })
+      .where(eq(subscription.id, data.id))
+      .returning();
+    if (!row) {
+      throw new Error("Not found");
+    }
     return row;
   });
 
@@ -105,36 +130,6 @@ export const deleteSubscription = createServerFn({ method: "POST" })
     return { id: row.id };
   });
 
-/**
- * Resolves the nodes a user may access right now: the union of nodes across
- * all groups bound to the plans of the user's active, unexpired subscriptions.
- * Multiple subscriptions stack. Traffic exhaustion is deliberately not
- * filtered here yet — enforcement is a separate concern.
- *
- * Plain helper (not a server function): callers are user-facing endpoints and
- * the subscription compiler, which bring their own auth.
- */
-export async function getUserAccessibleNodes(userId: string): Promise<Node[]> {
-  const rows = await db
-    .select({ node })
-    .from(subscription)
-    .innerJoin(planGroup, eq(planGroup.planId, subscription.planId))
-    .innerJoin(nodeGroup, eq(nodeGroup.groupId, planGroup.groupId))
-    .innerJoin(node, eq(node.id, nodeGroup.nodeId))
-    .where(
-      and(
-        eq(subscription.userId, userId),
-        eq(subscription.status, "active"),
-        gt(subscription.expiresAt, new Date()),
-        eq(node.enabled, true),
-      ),
-    );
-
-  // Dedupe in JS: DISTINCT over jsonb columns is awkward, and overlapping
-  // groups across plans produce duplicates.
-  const byId = new Map<string, Node>();
-  for (const row of rows) {
-    byId.set(row.node.id, row.node);
-  }
-  return [...byId.values()];
-}
+// Node-access resolution helpers (getUserAccessibleNodes,
+// getNodeActiveSubscriptions) live in `@/lib/subscription-access`: they are
+// plain functions, and this module must stay importable from client pages.

@@ -99,3 +99,26 @@ export const groupIdSchema = z.object({ id: z.string().min(1) });
 export const heartbeatSchema = z.object({
   agentVersion: z.string().optional(),
 });
+
+/**
+ * Traffic deltas the agent reads from sing-box's v2ray_api stats and reports
+ * per user. Sing-box user names are subscription ids, so each entry maps
+ * straight to a subscription row. Deltas, not totals: the agent resets the
+ * stat counters on read (`reset=true`) and posts what accumulated.
+ */
+export const trafficReportSchema = z.object({
+  // Reporting window bounds as stated by the agent; optional metadata.
+  windowStartedAt: z.iso.datetime().optional(),
+  windowEndedAt: z.iso.datetime().optional(),
+  entries: z
+    .array(
+      z.object({
+        subscriptionId: z.string().min(1),
+        uplinkBytes: z.number().int().min(0),
+        downlinkBytes: z.number().int().min(0),
+      }),
+    )
+    .max(10_000),
+});
+
+export type TrafficReportInput = z.infer<typeof trafficReportSchema>;

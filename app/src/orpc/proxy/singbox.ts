@@ -18,7 +18,8 @@ import type { Node } from "@/db/proxy-schema";
 export type SingboxConfig = Configuration;
 
 export interface SingboxUser {
-  name: string;
+  /** Subscription id; absent for protocols keyed by `username` (naive/socks/http). */
+  name?: string;
   // Protocol-specific credential fields are merged in by the caller (password/uuid).
   [key: string]: unknown;
 }
@@ -68,7 +69,11 @@ export function nodeToSingboxConfig(
         stats: {
           enabled: true,
           inbounds: [`node-${node.id}`],
-          users: users.map((u) => u.name),
+          // username-keyed protocols (naive/socks/http) have no `name` and are
+          // invisible to v2ray_api user stats — their traffic goes unreported.
+          users: users.flatMap((u) =>
+            typeof u.name === "string" ? u.name : [],
+          ),
         },
       },
     };
