@@ -4,6 +4,7 @@ import { stringify } from "yaml";
 import type { Subscription } from "@/db/plan-schema";
 import { recordAccessLog } from "@/lib/access-log-record";
 import { buildClashConfig } from "@/lib/clash-config";
+import { getClientIp } from "@/lib/client-ip";
 import {
   findSubscriptionByToken,
   getSubscriptionAccessibleNodes,
@@ -11,18 +12,6 @@ import {
 import { parseClientUserAgent } from "@/lib/user-agent";
 
 const PROFILE_UPDATE_INTERVAL_HOURS = 24;
-
-function getClientIp(request: Request): string | null {
-  const cf = request.headers.get("cf-connecting-ip");
-  if (cf) {
-    return cf.trim();
-  }
-  const forwarded = request.headers.get("x-forwarded-for");
-  if (forwarded) {
-    return forwarded.split(",")[0]?.trim() || null;
-  }
-  return null;
-}
 
 function isSubscriptionEligible(
   subscription: Subscription,

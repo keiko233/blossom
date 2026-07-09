@@ -9,6 +9,7 @@ import { Route as userRouteRouteImport } from './routes/(user)/route'
 import { Route as authRouteRouteImport } from './routes/(auth)/route'
 import { Route as adminRouteRouteImport } from './routes/(admin)/route'
 import { Route as staticIndexRouteImport } from './routes/(static)/index'
+import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as ApiSplatRouteImport } from './routes/api/$'
 import { Route as adminAdminRouteRouteImport } from './routes/(admin)/admin/route'
 import { Route as userWelcomeIndexRouteImport } from './routes/(user)/welcome/index'
@@ -53,6 +54,11 @@ const adminRouteRoute = adminRouteRouteImport.update({
 const staticIndexRoute = staticIndexRouteImport.update({
   id: '/(static)/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiHealthRoute = ApiHealthRouteImport.update({
+  id: '/api/health',
+  path: '/api/health',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiSplatRoute = ApiSplatRouteImport.update({
@@ -208,6 +214,7 @@ const adminAdminProxiesGroupsGroupIdRoute =
 export interface FileRoutesByFullPath {
   '/admin': typeof adminAdminRouteRouteWithChildren
   '/api/$': typeof ApiSplatRoute
+  '/api/health': typeof ApiHealthRoute
   '/': typeof staticIndexRoute
   '/admin/plans': typeof adminAdminPlansRouteRouteWithChildren
   '/admin/proxies': typeof adminAdminProxiesRouteRouteWithChildren
@@ -238,6 +245,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/api/$': typeof ApiSplatRoute
+  '/api/health': typeof ApiHealthRoute
   '/': typeof staticIndexRoute
   '/admin/proxies': typeof adminAdminProxiesRouteRouteWithChildren
   '/auth/forgot': typeof authAuthForgotRoute
@@ -269,6 +277,7 @@ export interface FileRoutesById {
   '/(user)': typeof userRouteRouteWithChildren
   '/(admin)/admin': typeof adminAdminRouteRouteWithChildren
   '/api/$': typeof ApiSplatRoute
+  '/api/health': typeof ApiHealthRoute
   '/(static)/': typeof staticIndexRoute
   '/(admin)/admin/plans': typeof adminAdminPlansRouteRouteWithChildren
   '/(admin)/admin/proxies': typeof adminAdminProxiesRouteRouteWithChildren
@@ -302,6 +311,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/admin'
     | '/api/$'
+    | '/api/health'
     | '/'
     | '/admin/plans'
     | '/admin/proxies'
@@ -332,6 +342,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/api/$'
+    | '/api/health'
     | '/'
     | '/admin/proxies'
     | '/auth/forgot'
@@ -362,6 +373,7 @@ export interface FileRouteTypes {
     | '/(user)'
     | '/(admin)/admin'
     | '/api/$'
+    | '/api/health'
     | '/(static)/'
     | '/(admin)/admin/plans'
     | '/(admin)/admin/proxies'
@@ -396,6 +408,7 @@ export interface RootRouteChildren {
   authRouteRoute: typeof authRouteRouteWithChildren
   userRouteRoute: typeof userRouteRouteWithChildren
   ApiSplatRoute: typeof ApiSplatRoute
+  ApiHealthRoute: typeof ApiHealthRoute
   staticIndexRoute: typeof staticIndexRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiRpcSplatRoute: typeof ApiRpcSplatRoute
@@ -430,6 +443,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof staticIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/health': {
+      id: '/api/health'
+      path: '/api/health'
+      fullPath: '/api/health'
+      preLoaderRoute: typeof ApiHealthRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/$': {
@@ -780,6 +800,7 @@ const rootRouteChildren: RootRouteChildren = {
   authRouteRoute: authRouteRouteWithChildren,
   userRouteRoute: userRouteRouteWithChildren,
   ApiSplatRoute: ApiSplatRoute,
+  ApiHealthRoute: ApiHealthRoute,
   staticIndexRoute: staticIndexRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiRpcSplatRoute: ApiRpcSplatRoute,
