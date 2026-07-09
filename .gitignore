@@ -5,6 +5,8 @@ dist-ssr
 *.local
 .env
 .nitro
+.netlify
+.vercel
 .tanstack
 .wrangler
 .output
