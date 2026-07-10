@@ -35,7 +35,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toastManager } from "@/components/ui/toast";
-import { formatTraffic } from "@/lib/format";
+import { formatAmount, formatTraffic } from "@/lib/format";
 import {
   deletePlan,
   listPlans,
@@ -120,7 +120,7 @@ function RouteComponent(): React.ReactElement {
       header: () => m.admin_plans_col_price(),
       cell: (info) => (
         <span className="font-mono text-xs">
-          {(info.getValue() / 100).toFixed(2)}
+          {formatAmount(info.getValue())}
         </span>
       ),
     }),

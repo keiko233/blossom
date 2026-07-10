@@ -2,7 +2,12 @@ import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { toastManager } from "@/components/ui/toast";
-import { bytesToGb, gbToBytes } from "@/lib/format";
+import {
+  amountToCents,
+  bytesToGb,
+  centsToAmount,
+  gbToBytes,
+} from "@/lib/format";
 import { createPlan, getPlan, PLANS_QUERY_KEY, updatePlan } from "@/lib/plans";
 import { m } from "@/paraglide/messages";
 
@@ -29,7 +34,7 @@ function defaultValues(plan?: PlanWithGroups): PlanFormValues {
   return {
     name: plan?.name ?? "",
     description: plan?.description ?? "",
-    price: plan ? plan.priceCents / 100 : 0,
+    price: plan ? centsToAmount(plan.priceCents) : 0,
     durationDays: plan?.durationDays ?? 30,
     trafficGb: plan ? bytesToGb(plan.trafficBytes) : 100,
     deviceLimit: plan?.deviceLimit ?? 0,
@@ -43,7 +48,7 @@ function toPayload(v: PlanFormValues) {
   return {
     name: v.name,
     description: v.description || undefined,
-    priceCents: Math.round(v.price * 100),
+    priceCents: amountToCents(v.price),
     durationDays: v.durationDays,
     trafficBytes: gbToBytes(v.trafficGb),
     deviceLimit: v.deviceLimit,
