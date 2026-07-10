@@ -1,3 +1,5 @@
+import { createPrivateKey, createPublicKey } from "node:crypto";
+
 import type { Node } from "@/db/proxy-schema";
 import type { JsonValue } from "@/orpc/proxy/schema";
 import { passwordFor } from "@/orpc/proxy/singbox-users";
@@ -6,6 +8,21 @@ interface SubscriptionCredentials {
   uuid: string;
   password: string;
 }
+
+/**
+ * Fields deliberately NOT converted from sing-box inbound to Clash Meta proxy:
+ *
+ * - Server-only fields that have no client meaning: trojan `fallback`,
+ *   hysteria2 `masquerade` / `ignore_client_bandwidth`, anytls `padding_scheme`,
+ *   TLS certificate material / `min_version` / `max_version`.
+ * - `tls.ech`: the inbound only stores the server ECH key, not the config list
+ *   clients need, so it is omitted. ECH-enabled servers still accept plain TLS.
+ * - vless `flow`: it is deliberately not set server-side (see singbox-users.ts),
+ *   so no client flow value is emitted.
+ * - shadowsocks `plugin` / `plugin_opts` and `udp_over_tcp`: these are
+ *   sing-box outbound-only options and can never appear in stored inbound
+ *   settings, so they are not mapped to Clash Meta.
+ */
 
 interface ParsedTls {
   tls?: boolean;
@@ -47,15 +64,67 @@ function parseTls(settings: Record<string, JsonValue>): ParsedTls | null {
   return result;
 }
 
+const PKCS8_X25519_PREFIX = Buffer.from(
+  "302e020100300506032b656e04220420",
+  "hex",
+);
+
+function realityPublicKey(privateKeyB64url: string): string | null {
+  const raw = Buffer.from(privateKeyB64url, "base64url");
+  if (raw.length !== 32) return null;
+  try {
+    const priv = createPrivateKey({
+      key: Buffer.concat([PKCS8_X25519_PREFIX, raw]),
+      format: "der",
+      type: "pkcs8",
+    });
+    const spki = createPublicKey(priv).export({ type: "spki", format: "der" });
+    return Buffer.from(spki.subarray(-32)).toString("base64url");
+  } catch {
+    return null;
+  }
+}
+
+function parseRealityOpts(
+  tlsObj: Record<string, JsonValue>,
+): Record<string, JsonValue> | null {
+  const reality = tlsObj.reality;
+  if (
+    typeof reality !== "object" ||
+    reality === null ||
+    Array.isArray(reality)
+  ) {
+    return null;
+  }
+  const realityObj = reality as Record<string, JsonValue>;
+  const privateKey =
+    typeof realityObj.private_key === "string" ? realityObj.private_key : null;
+  if (!privateKey) return null;
+  const publicKey = realityPublicKey(privateKey);
+  if (publicKey === null) return null;
+
+  const shortIdList = realityObj.short_id;
+  const shortId =
+    Array.isArray(shortIdList) && typeof shortIdList[0] === "string"
+      ? shortIdList[0]
+      : "";
+  return {
+    "public-key": publicKey,
+    "short-id": shortId,
+  };
+}
+
 interface TransportResult {
   network?: string;
   "ws-opts"?: Record<string, JsonValue>;
   "grpc-opts"?: Record<string, JsonValue>;
   "h2-opts"?: Record<string, JsonValue>;
+  "http-opts"?: Record<string, JsonValue>;
 }
 
 function parseTransport(
   settings: Record<string, JsonValue>,
+  tlsEnabled: boolean,
 ): TransportResult | null {
   const transport = settings.transport;
   if (
@@ -125,12 +194,29 @@ function parseTransport(
     }
 
     case "http": {
-      const host = typeof t.host === "string" ? t.host : "";
+      let hostList: string[] = [];
+      if (typeof t.host === "string") {
+        hostList = t.host ? [t.host] : [];
+      } else if (Array.isArray(t.host)) {
+        hostList = t.host.filter((v): v is string => typeof v === "string");
+      }
       const path = typeof t.path === "string" ? t.path : "/";
-      return {
-        network: "h2",
-        "h2-opts": { host: host ? [host] : [], path },
+      if (tlsEnabled) {
+        return {
+          network: "h2",
+          "h2-opts": { host: hostList, path },
+        };
+      }
+      const httpOpts: Record<string, JsonValue> = {
+        path: [path],
       };
+      if (typeof t.method === "string") {
+        httpOpts.method = t.method;
+      }
+      if (hostList.length > 0) {
+        httpOpts.headers = { Host: hostList };
+      }
+      return { network: "http", "http-opts": httpOpts };
     }
 
     case "quic":
@@ -142,47 +228,145 @@ function parseTransport(
   }
 }
 
+function parseSmux(
+  settings: Record<string, JsonValue>,
+): Record<string, JsonValue> | undefined {
+  const multiplex = settings.multiplex;
+  if (
+    typeof multiplex !== "object" ||
+    multiplex === null ||
+    Array.isArray(multiplex)
+  ) {
+    return undefined;
+  }
+  const mux = multiplex as Record<string, JsonValue>;
+  if (mux.enabled !== true) return undefined;
+
+  const smux: Record<string, JsonValue> = {
+    enabled: true,
+    protocol: "h2mux",
+    padding: mux.padding === true,
+  };
+
+  const brutal = mux.brutal;
+  if (typeof brutal === "object" && brutal !== null && !Array.isArray(brutal)) {
+    const b = brutal as Record<string, JsonValue>;
+    if (
+      b.enabled === true &&
+      typeof b.up_mbps === "number" &&
+      typeof b.down_mbps === "number"
+    ) {
+      smux["brutal-opts"] = { up: b.up_mbps, down: b.down_mbps };
+    }
+  }
+
+  return smux;
+}
+
+function parseDurationMs(value: JsonValue): number | undefined {
+  if (typeof value !== "string") return undefined;
+  const match = value.match(/^(\d+(?:\.\d+)?)(ms|s|m|h)$/);
+  if (!match) return undefined;
+  const n = Number.parseFloat(match[1]);
+  const unit = match[2];
+  switch (unit) {
+    case "ms":
+      return n;
+    case "s":
+      return n * 1000;
+    case "m":
+      return n * 60 * 1000;
+    case "h":
+      return n * 60 * 60 * 1000;
+  }
+  return undefined;
+}
+
 type ProxyBuilder = (
   node: Node,
   credentials: SubscriptionCredentials,
 ) => Record<string, JsonValue> | null;
 
 function baseProxy(node: Node): Record<string, JsonValue> {
-  return {
+  const proxy: Record<string, JsonValue> = {
     name: node.name,
     server: node.address,
     port: node.listenPort,
     udp: true,
   };
+  if (node.settings.tcp_fast_open === true) {
+    proxy.tfo = true;
+  }
+  if (node.settings.tcp_multi_path === true) {
+    proxy.mptcp = true;
+  }
+  return proxy;
 }
 
 const BUILDERS: Record<string, ProxyBuilder> = {
   vless(node, credentials) {
     const tlsSettings = node.settings.tls;
-    if (
+    const tlsObj =
       typeof tlsSettings === "object" &&
       tlsSettings !== null &&
-      !Array.isArray(tlsSettings) &&
-      (tlsSettings as Record<string, JsonValue>).reality
-    ) {
-      // Reality public-key derivation is not implemented yet.
-      return null;
-    }
+      !Array.isArray(tlsSettings)
+        ? (tlsSettings as Record<string, JsonValue>)
+        : null;
+    const reality = tlsObj?.reality;
+    // A stored reality object with enabled !== true means Reality is switched
+    // off; the node is then a plain-TLS (or plaintext) vless inbound.
+    const hasReality =
+      tlsObj?.enabled === true &&
+      typeof reality === "object" &&
+      reality !== null &&
+      !Array.isArray(reality) &&
+      (reality as Record<string, JsonValue>).enabled === true;
 
     const proxy: Record<string, JsonValue> = {
       ...baseProxy(node),
       type: "vless",
       uuid: credentials.uuid,
     };
-    const tls = parseTls(node.settings);
-    if (tls) {
-      Object.assign(proxy, tls);
+
+    let tlsEnabled = false;
+    if (hasReality && tlsObj) {
+      const realityOpts = parseRealityOpts(tlsObj);
+      if (realityOpts === null) return null;
+      tlsEnabled = true;
+      proxy.tls = true;
+      if (typeof tlsObj.server_name === "string") {
+        proxy.servername = tlsObj.server_name;
+        proxy.sni = tlsObj.server_name;
+      }
+      proxy["client-fingerprint"] = "chrome";
+      proxy["reality-opts"] = realityOpts;
+      if (Array.isArray(tlsObj.alpn)) {
+        const alpn = tlsObj.alpn.filter(
+          (v): v is string => typeof v === "string",
+        );
+        if (alpn.length > 0) {
+          proxy.alpn = alpn;
+        }
+      }
+    } else {
+      const tls = parseTls(node.settings);
+      if (tls) {
+        tlsEnabled = true;
+        Object.assign(proxy, tls);
+      }
     }
-    const transport = parseTransport(node.settings);
+
+    const transport = parseTransport(node.settings, tlsEnabled);
     if (transport === null) {
       return null;
     }
     Object.assign(proxy, transport);
+
+    const smux = parseSmux(node.settings);
+    if (smux) {
+      proxy.smux = smux;
+    }
+
     return proxy;
   },
 
@@ -210,11 +394,17 @@ const BUILDERS: Record<string, ProxyBuilder> = {
         proxy["skip-cert-verify"] = tls["skip-cert-verify"];
       }
     }
-    const transport = parseTransport(node.settings);
+    const transport = parseTransport(node.settings, tls !== null);
     if (transport === null) {
       return null;
     }
     Object.assign(proxy, transport);
+
+    const smux = parseSmux(node.settings);
+    if (smux) {
+      proxy.smux = smux;
+    }
+
     return proxy;
   },
 
@@ -228,7 +418,7 @@ const BUILDERS: Record<string, ProxyBuilder> = {
     if (tls) {
       Object.assign(proxy, tls);
     }
-    const transport = parseTransport(node.settings);
+    const transport = parseTransport(node.settings, tls !== null);
     if (transport?.network === "h2") {
       // Trojan over h2 is not portable in Clash Meta; skip this node.
       return null;
@@ -237,6 +427,12 @@ const BUILDERS: Record<string, ProxyBuilder> = {
       return null;
     }
     Object.assign(proxy, transport);
+
+    const smux = parseSmux(node.settings);
+    if (smux) {
+      proxy.smux = smux;
+    }
+
     return proxy;
   },
 
@@ -256,12 +452,20 @@ const BUILDERS: Record<string, ProxyBuilder> = {
       }
       password = `${serverPassword}:${password}`;
     }
-    return {
+
+    const proxy: Record<string, JsonValue> = {
       ...baseProxy(node),
       type: "ss",
       cipher: method,
       password,
     };
+
+    const smux = parseSmux(node.settings);
+    if (smux) {
+      proxy.smux = smux;
+    }
+
+    return proxy;
   },
 
   hysteria2(node, credentials) {
@@ -317,6 +521,12 @@ const BUILDERS: Record<string, ProxyBuilder> = {
     if (typeof obfs === "string") {
       proxy.obfs = obfs;
     }
+    if (typeof node.settings.recv_window_conn === "number") {
+      proxy["recv-window-conn"] = node.settings.recv_window_conn;
+    }
+    if (node.settings.disable_mtu_discovery === true) {
+      proxy["disable-mtu-discovery"] = true;
+    }
     return proxy;
   },
 
@@ -337,6 +547,13 @@ const BUILDERS: Record<string, ProxyBuilder> = {
       proxy["congestion-controller"] = congestion;
     } else {
       proxy["congestion-controller"] = "cubic";
+    }
+    if (node.settings.zero_rtt_handshake === true) {
+      proxy["reduce-rtt"] = true;
+    }
+    const heartbeatMs = parseDurationMs(node.settings.heartbeat);
+    if (typeof heartbeatMs === "number") {
+      proxy["heartbeat-interval"] = heartbeatMs;
     }
     return proxy;
   },
