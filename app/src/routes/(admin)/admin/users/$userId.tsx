@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/table";
 import { toastManager } from "@/components/ui/toast";
 import type { SubscriptionStatus } from "@/db/plan-schema";
+import { formatBytes } from "@/lib/format";
 import {
   createSubscription,
   deleteSubscription,
@@ -56,22 +57,6 @@ export const Route = createFileRoute("/(admin)/admin/users/$userId")({
   },
   component: RouteComponent,
 });
-
-const BYTES_PER_GB = 1024 ** 3;
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024 ** 2) {
-    return `${(bytes / 1024).toLocaleString(undefined, { maximumFractionDigits: 1 })} KB`;
-  }
-  if (bytes < BYTES_PER_GB) {
-    return `${(bytes / 1024 ** 2).toLocaleString(undefined, { maximumFractionDigits: 1 })} MB`;
-  }
-  const gb = bytes / BYTES_PER_GB;
-  if (gb >= 1024) {
-    return `${(gb / 1024).toLocaleString(undefined, { maximumFractionDigits: 2 })} TB`;
-  }
-  return `${gb.toLocaleString(undefined, { maximumFractionDigits: 2 })} GB`;
-}
 
 function subscriptionStatusBadge(status: SubscriptionStatus) {
   switch (status) {

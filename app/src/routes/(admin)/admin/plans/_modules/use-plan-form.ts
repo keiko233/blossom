@@ -2,13 +2,12 @@ import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { toastManager } from "@/components/ui/toast";
+import { bytesToGb, gbToBytes } from "@/lib/format";
 import { createPlan, getPlan, PLANS_QUERY_KEY, updatePlan } from "@/lib/plans";
 import { m } from "@/paraglide/messages";
 
 /** Plan row plus its bound group ids, as returned by `getPlan`. */
 export type PlanWithGroups = Awaited<ReturnType<typeof getPlan>>;
-
-const BYTES_PER_GB = 1024 ** 3;
 
 /**
  * Form state uses human units (currency major units, GB); the DB stores cents
@@ -32,7 +31,7 @@ function defaultValues(plan?: PlanWithGroups): PlanFormValues {
     description: plan?.description ?? "",
     price: plan ? plan.priceCents / 100 : 0,
     durationDays: plan?.durationDays ?? 30,
-    trafficGb: plan ? plan.trafficBytes / BYTES_PER_GB : 100,
+    trafficGb: plan ? bytesToGb(plan.trafficBytes) : 100,
     deviceLimit: plan?.deviceLimit ?? 0,
     visible: plan?.visible ?? true,
     sortOrder: plan?.sortOrder ?? 0,
@@ -46,7 +45,7 @@ function toPayload(v: PlanFormValues) {
     description: v.description || undefined,
     priceCents: Math.round(v.price * 100),
     durationDays: v.durationDays,
-    trafficBytes: Math.round(v.trafficGb * BYTES_PER_GB),
+    trafficBytes: gbToBytes(v.trafficGb),
     deviceLimit: v.deviceLimit,
     visible: v.visible,
     sortOrder: v.sortOrder,

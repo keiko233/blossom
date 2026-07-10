@@ -35,6 +35,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toastManager } from "@/components/ui/toast";
+import { formatTraffic } from "@/lib/format";
 import {
   deletePlan,
   listPlans,
@@ -46,16 +47,6 @@ import { m } from "@/paraglide/messages";
 export const Route = createFileRoute("/(admin)/admin/plans/")({
   component: RouteComponent,
 });
-
-const BYTES_PER_GB = 1024 ** 3;
-
-function formatTraffic(bytes: number): string {
-  const gb = bytes / BYTES_PER_GB;
-  if (gb >= 1024) {
-    return `${(gb / 1024).toLocaleString(undefined, { maximumFractionDigits: 2 })} TB`;
-  }
-  return `${gb.toLocaleString(undefined, { maximumFractionDigits: 2 })} GB`;
-}
 
 const columnHelper = createColumnHelper<PlanListItem>();
 
