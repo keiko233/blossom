@@ -33,7 +33,10 @@
             "type": "string"
           }
         },
-        "required": ["id", "name"]
+        "required": [
+          "id",
+          "name"
+        ]
       },
       "UndefinedError": {
         "type": "object",
@@ -52,7 +55,12 @@
           },
           "data": {}
         },
-        "required": ["defined", "code", "status", "message"]
+        "required": [
+          "defined",
+          "code",
+          "status",
+          "message"
+        ]
       }
     }
   },
@@ -104,7 +112,9 @@
                     "type": "string"
                   }
                 },
-                "required": ["name"]
+                "required": [
+                  "name"
+                ]
               }
             }
           }
@@ -176,7 +186,93 @@
                       "type": "boolean"
                     }
                   },
-                  "required": ["ok"]
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agent/traffic": {
+      "post": {
+        "operationId": "reportAgentTraffic",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "windowStartedAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "windowEndedAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "entries": {
+                    "type": "array",
+                    "maxItems": 10000,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "subscriptionId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "uplinkBytes": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "downlinkBytes": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "subscriptionId",
+                        "uplinkBytes",
+                        "downlinkBytes"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "entries"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "dropped": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "accepted",
+                    "dropped"
+                  ]
                 }
               }
             }

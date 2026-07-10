@@ -1,7 +1,9 @@
 //! Fetches the node's sing-box config from the blossom API and materialises it
-//! on disk for sing-box to read. The config is treated as opaque JSON — the
-//! server has already validated it and injected the `experimental.v2ray_api`
-//! hooks, so the agent only diffs and writes, never interprets.
+//! on disk for sing-box to read. The config is otherwise treated as opaque JSON
+//! — the server has already validated it and injected the `experimental.v2ray_api`
+//! hooks, so the agent only diffs and writes, never interprets, with one
+//! exception: it reads `experimental.v2ray_api.listen` to find the stats
+//! endpoint.
 
 use std::path::PathBuf;
 
@@ -28,6 +30,8 @@ pub struct ConfigManager {
     config_path: PathBuf,
     /// Serialized form of the last config written, for cheap diffing.
     last: Option<String>,
+    /// The sing-box v2ray API listen address extracted from the latest config.
+    v2ray_listen: Option<String>,
 }
 
 impl ConfigManager {
@@ -39,12 +43,18 @@ impl ConfigManager {
             _temp: temp,
             config_path,
             last: None,
+            v2ray_listen: None,
         })
     }
 
     /// Path sing-box is launched against.
     pub fn config_path(&self) -> &PathBuf {
         &self.config_path
+    }
+
+    /// The sing-box v2ray API listen address, if the latest config provided one.
+    pub fn v2ray_api_listen(&self) -> Option<&str> {
+        self.v2ray_listen.as_deref()
     }
 
     /// Pulls the latest config, writes it if it changed, and reports whether a
@@ -57,6 +67,7 @@ impl ConfigManager {
             .await
             .map_err(|e| anyhow::anyhow!("failed to fetch config: {e}"))?;
         let config = response.into_inner();
+        self.v2ray_listen = extract_v2ray_listen(&config);
 
         // Pretty-print so the on-disk file is human-inspectable during debugging;
         // the exact bytes are what we diff against next time.
@@ -68,9 +79,8 @@ impl ConfigManager {
             return Ok(FetchStatus::Unchanged);
         }
 
-        std::fs::write(&self.config_path, &serialized).with_context(|| {
-            format!("failed to write config to {}", self.config_path.display())
-        })?;
+        std::fs::write(&self.config_path, &serialized)
+            .with_context(|| format!("failed to write config to {}", self.config_path.display()))?;
         self.last = Some(serialized);
         info!("config written to {}", self.config_path.display());
         Ok(FetchStatus::Updated)
@@ -85,5 +95,67 @@ impl ConfigManager {
         std::fs::read_to_string(&self.config_path)
             .map(|existing| existing == serialized)
             .unwrap_or(false)
+    }
+}
+
+/// Reads `experimental.v2ray_api.listen` from a sing-box config object.
+fn extract_v2ray_listen(config: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
+    config
+        .get("experimental")?
+        .get("v2ray_api")?
+        .get("listen")?
+        .as_str()
+        .map(String::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::extract_v2ray_listen;
+
+    #[test]
+    fn extracts_listen_when_present() {
+        let config = json!({
+            "experimental": {
+                "v2ray_api": {
+                    "listen": "127.0.0.1:8080"
+                }
+            }
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        assert_eq!(
+            extract_v2ray_listen(&config),
+            Some("127.0.0.1:8080".to_string())
+        );
+    }
+
+    #[test]
+    fn returns_none_when_experimental_missing() {
+        let config = json!({}).as_object().unwrap().clone();
+        assert_eq!(extract_v2ray_listen(&config), None);
+    }
+
+    #[test]
+    fn returns_none_when_v2ray_api_missing() {
+        let config = json!({ "experimental": {} }).as_object().unwrap().clone();
+        assert_eq!(extract_v2ray_listen(&config), None);
+    }
+
+    #[test]
+    fn returns_none_when_listen_not_string() {
+        let config = json!({
+            "experimental": {
+                "v2ray_api": {
+                    "listen": 8080
+                }
+            }
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        assert_eq!(extract_v2ray_listen(&config), None);
     }
 }

@@ -6,6 +6,8 @@
 mod client;
 mod config;
 mod process;
+mod stats;
+mod traffic;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -17,6 +19,7 @@ use tracing::{error, info};
 
 use crate::config::{ConfigManager, FetchStatus};
 use crate::process::{SingBoxManager, resolve_binary};
+use crate::traffic::TrafficReporter;
 
 const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -71,6 +74,16 @@ async fn main() -> Result<()> {
         .await
         .context("initial config fetch failed")?;
 
+    let mut reporter: Option<TrafficReporter> = config
+        .v2ray_api_listen()
+        .map(|addr| {
+            TrafficReporter::new(addr.to_string()).context("failed to create traffic reporter")
+        })
+        .transpose()?;
+    if reporter.is_none() {
+        info!("v2ray_api not configured; traffic reporting disabled");
+    }
+
     let bin = resolve_binary(args.sing_box_path);
     let manager = SingBoxManager::start(bin, config.config_path().clone()).await?;
 
@@ -84,7 +97,7 @@ async fn main() -> Result<()> {
     loop {
         tokio::select! {
             _ = ticker.tick() => {
-                poll_once(&mut config, &manager, &client).await;
+                poll_once(&mut config, &manager, &client, &mut reporter).await;
             }
             _ = signal::ctrl_c() => {
                 info!("received ctrl-c, shutting down");
@@ -98,20 +111,62 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// One polling cycle: refresh config (reloading sing-box if it changed) and
-/// heartbeat. Errors are logged, never fatal — the loop keeps the node alive.
-async fn poll_once(config: &mut ConfigManager, manager: &SingBoxManager, client: &client::Client) {
-    match config.fetch().await {
-        Ok(FetchStatus::Updated) => {
-            info!("config changed; reloading sing-box");
-            if let Err(e) = manager.reload().await {
-                error!("failed to request reload: {e}");
+/// One polling cycle: collect traffic deltas, refresh config (reloading sing-box
+/// if it changed), reconcile the traffic reporter, and heartbeat. Errors are
+/// logged, never fatal — the loop keeps the node alive.
+async fn poll_once(
+    config: &mut ConfigManager,
+    manager: &SingBoxManager,
+    client: &client::Client,
+    reporter: &mut Option<TrafficReporter>,
+) {
+    // Drain counters before any potential config reload, which would zero them.
+    if let Some(reporter) = reporter.as_mut() {
+        reporter.collect_and_report(client).await;
+    }
+
+    let fetch_status = match config.fetch().await {
+        Ok(status) => Some(status),
+        Err(e) => {
+            error!("config fetch failed: {e}");
+            None
+        }
+    };
+
+    if fetch_status.is_some() {
+        reconcile_reporter(config.v2ray_api_listen(), reporter);
+    }
+
+    if fetch_status == Some(FetchStatus::Updated) {
+        info!("config changed; reloading sing-box");
+        if let Err(e) = manager.reload().await {
+            error!("failed to request reload: {e}");
+        }
+    }
+
+    heartbeat(client).await;
+}
+
+fn reconcile_reporter(addr: Option<&str>, reporter: &mut Option<TrafficReporter>) {
+    match (addr, reporter.as_mut()) {
+        (Some(addr), Some(reporter)) => {
+            if let Err(e) = reporter.update_addr(addr) {
+                error!("failed to update traffic stats address: {e}");
             }
         }
-        Ok(FetchStatus::Unchanged) => {}
-        Err(e) => error!("config fetch failed: {e}"),
+        (Some(addr), None) => match TrafficReporter::new(addr.to_string()) {
+            Ok(r) => {
+                info!("traffic reporting enabled");
+                *reporter = Some(r);
+            }
+            Err(e) => error!("failed to enable traffic reporting: {e}"),
+        },
+        (None, Some(_)) => {
+            info!("v2ray_api no longer configured; traffic reporting disabled");
+            *reporter = None;
+        }
+        (None, None) => {}
     }
-    heartbeat(client).await;
 }
 
 async fn heartbeat(client: &client::Client) {

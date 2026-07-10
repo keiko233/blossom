@@ -32,5 +32,8 @@ pub fn new_client(base_url: &str, token: &str) -> anyhow::Result<Client> {
         .build()
         .context("failed to build HTTP client")?;
 
-    Ok(Client::new_with_client(base_url.trim_end_matches('/'), http))
+    Ok(Client::new_with_client(
+        base_url.trim_end_matches('/'),
+        http,
+    ))
 }

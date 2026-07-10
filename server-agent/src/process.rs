@@ -125,7 +125,10 @@ async fn supervise(
             backoff = BACKOFF_MIN;
             warn!("sing-box exited after a healthy run; restarting in {backoff:?}");
         } else {
-            warn!("sing-box crashed after {:?}; restarting in {backoff:?}", started.elapsed());
+            warn!(
+                "sing-box crashed after {:?}; restarting in {backoff:?}",
+                started.elapsed()
+            );
         }
 
         match restart(&bin, &config_path, backoff, &mut ctrl_rx).await {
