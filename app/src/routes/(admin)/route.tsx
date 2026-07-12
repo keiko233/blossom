@@ -1,11 +1,12 @@
 import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
 
+import { AutoBreadcrumb } from "@/components/app-shell/auto-breadcrumb";
+import { AppShellHeader } from "@/components/app-shell/header";
 import { Confirm } from "@/components/ui/confirm";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { getSession } from "@/lib/auth";
 
 import { AdminSidebar } from "./_modules/admin-sidebar";
-import { AdminHeader, AutoBreadcrumb } from "./_modules/header";
 import { TokenRevealDialog } from "./admin/proxies/nodes/_modules/token-reveal-dialog";
 
 export const Route = createFileRoute("/(admin)")({
@@ -32,14 +33,16 @@ export const Route = createFileRoute("/(admin)")({
 });
 
 function RouteComponent() {
+  const { user } = Route.useRouteContext();
+
   return (
     <SidebarProvider>
-      <AdminSidebar />
+      <AdminSidebar user={user} />
 
       <SidebarInset>
-        <AdminHeader>
+        <AppShellHeader>
           <AutoBreadcrumb />
-        </AdminHeader>
+        </AppShellHeader>
 
         <main className="">
           <Outlet />

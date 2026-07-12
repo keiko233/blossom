@@ -11,6 +11,7 @@ import { Route as adminRouteRouteImport } from './routes/(admin)/route'
 import { Route as staticIndexRouteImport } from './routes/(static)/index'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as ApiSplatRouteImport } from './routes/api/$'
+import { Route as userDashboardRouteRouteImport } from './routes/(user)/dashboard/route'
 import { Route as adminAdminRouteRouteImport } from './routes/(admin)/admin/route'
 import { Route as userWelcomeIndexRouteImport } from './routes/(user)/welcome/index'
 import { Route as userDashboardIndexRouteImport } from './routes/(user)/dashboard/index'
@@ -24,6 +25,7 @@ import { Route as authAuthForgotRouteImport } from './routes/(auth)/auth/forgot'
 import { Route as adminAdminUsersRouteRouteImport } from './routes/(admin)/admin/users/route'
 import { Route as adminAdminProxiesRouteRouteImport } from './routes/(admin)/admin/proxies/route'
 import { Route as adminAdminPlansRouteRouteImport } from './routes/(admin)/admin/plans/route'
+import { Route as userDashboardSubscriptionsIndexRouteImport } from './routes/(user)/dashboard/subscriptions/index'
 import { Route as adminAdminUsersIndexRouteImport } from './routes/(admin)/admin/users/index'
 import { Route as adminAdminPlansIndexRouteImport } from './routes/(admin)/admin/plans/index'
 import { Route as adminAdminUsersUserIdRouteImport } from './routes/(admin)/admin/users/$userId'
@@ -66,6 +68,11 @@ const ApiSplatRoute = ApiSplatRouteImport.update({
   path: '/api/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const userDashboardRouteRoute = userDashboardRouteRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
+  getParentRoute: () => userRouteRoute,
+} as any)
 const adminAdminRouteRoute = adminAdminRouteRouteImport.update({
   id: '/admin',
   path: '/admin',
@@ -77,9 +84,9 @@ const userWelcomeIndexRoute = userWelcomeIndexRouteImport.update({
   getParentRoute: () => userRouteRoute,
 } as any)
 const userDashboardIndexRoute = userDashboardIndexRouteImport.update({
-  id: '/dashboard/',
-  path: '/dashboard/',
-  getParentRoute: () => userRouteRoute,
+  id: '/',
+  path: '/',
+  getParentRoute: () => userDashboardRouteRoute,
 } as any)
 const adminAdminIndexRoute = adminAdminIndexRouteImport.update({
   id: '/',
@@ -131,6 +138,12 @@ const adminAdminPlansRouteRoute = adminAdminPlansRouteRouteImport.update({
   path: '/plans',
   getParentRoute: () => adminAdminRouteRoute,
 } as any)
+const userDashboardSubscriptionsIndexRoute =
+  userDashboardSubscriptionsIndexRouteImport.update({
+    id: '/subscriptions/',
+    path: '/subscriptions/',
+    getParentRoute: () => userDashboardRouteRoute,
+  } as any)
 const adminAdminUsersIndexRoute = adminAdminUsersIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -213,6 +226,7 @@ const adminAdminProxiesGroupsGroupIdRoute =
 
 export interface FileRoutesByFullPath {
   '/admin': typeof adminAdminRouteRouteWithChildren
+  '/dashboard': typeof userDashboardRouteRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/': typeof staticIndexRoute
@@ -235,6 +249,7 @@ export interface FileRoutesByFullPath {
   '/admin/users/$userId': typeof adminAdminUsersUserIdRoute
   '/admin/plans/': typeof adminAdminPlansIndexRoute
   '/admin/users/': typeof adminAdminUsersIndexRoute
+  '/dashboard/subscriptions/': typeof userDashboardSubscriptionsIndexRoute
   '/admin/proxies/groups/$groupId': typeof adminAdminProxiesGroupsGroupIdRoute
   '/admin/proxies/groups/new': typeof adminAdminProxiesGroupsNewRoute
   '/admin/proxies/nodes/$nodeId': typeof adminAdminProxiesNodesNodeIdRoute
@@ -262,6 +277,7 @@ export interface FileRoutesByTo {
   '/admin/users/$userId': typeof adminAdminUsersUserIdRoute
   '/admin/plans': typeof adminAdminPlansIndexRoute
   '/admin/users': typeof adminAdminUsersIndexRoute
+  '/dashboard/subscriptions': typeof userDashboardSubscriptionsIndexRoute
   '/admin/proxies/groups/$groupId': typeof adminAdminProxiesGroupsGroupIdRoute
   '/admin/proxies/groups/new': typeof adminAdminProxiesGroupsNewRoute
   '/admin/proxies/nodes/$nodeId': typeof adminAdminProxiesNodesNodeIdRoute
@@ -276,6 +292,7 @@ export interface FileRoutesById {
   '/(auth)': typeof authRouteRouteWithChildren
   '/(user)': typeof userRouteRouteWithChildren
   '/(admin)/admin': typeof adminAdminRouteRouteWithChildren
+  '/(user)/dashboard': typeof userDashboardRouteRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/(static)/': typeof staticIndexRoute
@@ -298,6 +315,7 @@ export interface FileRoutesById {
   '/(admin)/admin/users/$userId': typeof adminAdminUsersUserIdRoute
   '/(admin)/admin/plans/': typeof adminAdminPlansIndexRoute
   '/(admin)/admin/users/': typeof adminAdminUsersIndexRoute
+  '/(user)/dashboard/subscriptions/': typeof userDashboardSubscriptionsIndexRoute
   '/(admin)/admin/proxies/groups/$groupId': typeof adminAdminProxiesGroupsGroupIdRoute
   '/(admin)/admin/proxies/groups/new': typeof adminAdminProxiesGroupsNewRoute
   '/(admin)/admin/proxies/nodes/$nodeId': typeof adminAdminProxiesNodesNodeIdRoute
@@ -310,6 +328,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/admin'
+    | '/dashboard'
     | '/api/$'
     | '/api/health'
     | '/'
@@ -332,6 +351,7 @@ export interface FileRouteTypes {
     | '/admin/users/$userId'
     | '/admin/plans/'
     | '/admin/users/'
+    | '/dashboard/subscriptions/'
     | '/admin/proxies/groups/$groupId'
     | '/admin/proxies/groups/new'
     | '/admin/proxies/nodes/$nodeId'
@@ -359,6 +379,7 @@ export interface FileRouteTypes {
     | '/admin/users/$userId'
     | '/admin/plans'
     | '/admin/users'
+    | '/dashboard/subscriptions'
     | '/admin/proxies/groups/$groupId'
     | '/admin/proxies/groups/new'
     | '/admin/proxies/nodes/$nodeId'
@@ -372,6 +393,7 @@ export interface FileRouteTypes {
     | '/(auth)'
     | '/(user)'
     | '/(admin)/admin'
+    | '/(user)/dashboard'
     | '/api/$'
     | '/api/health'
     | '/(static)/'
@@ -394,6 +416,7 @@ export interface FileRouteTypes {
     | '/(admin)/admin/users/$userId'
     | '/(admin)/admin/plans/'
     | '/(admin)/admin/users/'
+    | '/(user)/dashboard/subscriptions/'
     | '/(admin)/admin/proxies/groups/$groupId'
     | '/(admin)/admin/proxies/groups/new'
     | '/(admin)/admin/proxies/nodes/$nodeId'
@@ -459,6 +482,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/(user)/dashboard': {
+      id: '/(user)/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof userDashboardRouteRouteImport
+      parentRoute: typeof userRouteRoute
+    }
     '/(admin)/admin': {
       id: '/(admin)/admin'
       path: '/admin'
@@ -475,10 +505,10 @@ declare module '@tanstack/react-router' {
     }
     '/(user)/dashboard/': {
       id: '/(user)/dashboard/'
-      path: '/dashboard'
+      path: '/'
       fullPath: '/dashboard/'
       preLoaderRoute: typeof userDashboardIndexRouteImport
-      parentRoute: typeof userRouteRoute
+      parentRoute: typeof userDashboardRouteRoute
     }
     '/(admin)/admin/': {
       id: '/(admin)/admin/'
@@ -549,6 +579,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin/plans'
       preLoaderRoute: typeof adminAdminPlansRouteRouteImport
       parentRoute: typeof adminAdminRouteRoute
+    }
+    '/(user)/dashboard/subscriptions/': {
+      id: '/(user)/dashboard/subscriptions/'
+      path: '/subscriptions'
+      fullPath: '/dashboard/subscriptions/'
+      preLoaderRoute: typeof userDashboardSubscriptionsIndexRouteImport
+      parentRoute: typeof userDashboardRouteRoute
     }
     '/(admin)/admin/users/': {
       id: '/(admin)/admin/users/'
@@ -781,13 +818,26 @@ const authRouteRouteWithChildren = authRouteRoute._addFileChildren(
   authRouteRouteChildren,
 )
 
-interface userRouteRouteChildren {
+interface userDashboardRouteRouteChildren {
   userDashboardIndexRoute: typeof userDashboardIndexRoute
+  userDashboardSubscriptionsIndexRoute: typeof userDashboardSubscriptionsIndexRoute
+}
+
+const userDashboardRouteRouteChildren: userDashboardRouteRouteChildren = {
+  userDashboardIndexRoute: userDashboardIndexRoute,
+  userDashboardSubscriptionsIndexRoute: userDashboardSubscriptionsIndexRoute,
+}
+
+const userDashboardRouteRouteWithChildren =
+  userDashboardRouteRoute._addFileChildren(userDashboardRouteRouteChildren)
+
+interface userRouteRouteChildren {
+  userDashboardRouteRoute: typeof userDashboardRouteRouteWithChildren
   userWelcomeIndexRoute: typeof userWelcomeIndexRoute
 }
 
 const userRouteRouteChildren: userRouteRouteChildren = {
-  userDashboardIndexRoute: userDashboardIndexRoute,
+  userDashboardRouteRoute: userDashboardRouteRouteWithChildren,
   userWelcomeIndexRoute: userWelcomeIndexRoute,
 }
 

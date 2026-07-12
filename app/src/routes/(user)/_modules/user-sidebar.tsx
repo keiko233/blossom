@@ -1,7 +1,6 @@
 import { Link, useLocation } from "@tanstack/react-router";
 import type { ComponentProps } from "react";
 import DashboardLine from "~icons/mingcute/dashboard-3-line";
-import UserLine from "~icons/mingcute/user-3-line";
 import WalletLine from "~icons/mingcute/wallet-line";
 
 import { RoleSwitcher } from "@/components/role-switcher";
@@ -19,61 +18,41 @@ import { UserProfileMenu } from "@/components/user-profile-menu";
 import type { SessionUser } from "@/lib/auth";
 import { m } from "@/paraglide/messages";
 
-import { NavProxies } from "./nav-proxies";
-
-export interface AdminSidebarProps extends ComponentProps<typeof Sidebar> {
+export interface UserSidebarProps extends ComponentProps<typeof Sidebar> {
   user: SessionUser;
 }
 
-export function AdminSidebar({ user, ...props }: AdminSidebarProps) {
+export function UserSidebar({ user, ...props }: UserSidebarProps) {
   const { pathname } = useLocation();
 
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
-        <RoleSwitcher role="admin" isAdmin={user.role === "admin"} />
+        <RoleSwitcher role="user" isAdmin={user.role === "admin"} />
       </SidebarHeader>
 
       <SidebarContent>
         <SidebarGroup>
-          {/* <SidebarGroupLabel>Overview</SidebarGroupLabel> */}
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton
-                isActive={pathname === "/admin"}
+                isActive={pathname === "/dashboard"}
                 render={
-                  <Link to="/admin">
+                  <Link to="/dashboard">
                     <DashboardLine />
-                    <span>{m.admin_nav_dashboard()}</span>
+                    <span>{m.user_nav_dashboard()}</span>
                   </Link>
                 }
               />
             </SidebarMenuItem>
-          </SidebarMenu>
-        </SidebarGroup>
 
-        <SidebarGroup>
-          {/* <SidebarGroupLabel>Management</SidebarGroupLabel> */}
-          <SidebarMenu>
-            <NavProxies />
             <SidebarMenuItem>
               <SidebarMenuButton
-                isActive={pathname.startsWith("/admin/plans")}
+                isActive={pathname.startsWith("/dashboard/subscriptions")}
                 render={
-                  <Link to="/admin/plans">
+                  <Link to="/dashboard/subscriptions">
                     <WalletLine />
-                    <span>{m.admin_nav_plans()}</span>
-                  </Link>
-                }
-              />
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                isActive={pathname.startsWith("/admin/users")}
-                render={
-                  <Link to="/admin/users">
-                    <UserLine />
-                    <span>{m.admin_nav_users()}</span>
+                    <span>{m.user_nav_subscriptions()}</span>
                   </Link>
                 }
               />

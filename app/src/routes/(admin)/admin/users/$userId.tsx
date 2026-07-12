@@ -10,6 +10,11 @@ import {
 } from "lucide-react";
 import type React from "react";
 
+import {
+  SubscriptionQuotaUsage,
+  SubscriptionStatusBadge,
+  SubscriptionTrafficTable,
+} from "@/components/subscriptions";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,7 +26,6 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "@/components/ui/menu";
-import { Meter, MeterIndicator, MeterTrack } from "@/components/ui/meter";
 import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
@@ -33,7 +37,6 @@ import {
 } from "@/components/ui/table";
 import { toastManager } from "@/components/ui/toast";
 import type { SubscriptionStatus } from "@/db/plan-schema";
-import { formatBytes } from "@/lib/format";
 import {
   createSubscription,
   deleteSubscription,
@@ -57,41 +60,6 @@ export const Route = createFileRoute("/(admin)/admin/users/$userId")({
   },
   component: RouteComponent,
 });
-
-function subscriptionStatusBadge(status: SubscriptionStatus) {
-  switch (status) {
-    case "active":
-      return (
-        <Badge variant="outline">
-          <span
-            aria-hidden="true"
-            className="size-1.5 rounded-full bg-emerald-500"
-          />
-          {m.admin_users_subs_status_active()}
-        </Badge>
-      );
-    case "expired":
-      return (
-        <Badge variant="outline">
-          <span
-            aria-hidden="true"
-            className="size-1.5 rounded-full bg-muted-foreground/64"
-          />
-          {m.admin_users_subs_status_expired()}
-        </Badge>
-      );
-    case "cancelled":
-      return (
-        <Badge variant="outline">
-          <span
-            aria-hidden="true"
-            className="size-1.5 rounded-full bg-destructive"
-          />
-          {m.admin_users_subs_status_cancelled()}
-        </Badge>
-      );
-  }
-}
 
 function RouteComponent(): React.ReactElement {
   const { userId } = Route.useParams();
@@ -398,7 +366,9 @@ function RouteComponent(): React.ReactElement {
               {subscriptions.map(({ subscription: sub, planName }) => (
                 <TableRow key={sub.id}>
                   <TableCell className="font-medium">{planName}</TableCell>
-                  <TableCell>{subscriptionStatusBadge(sub.status)}</TableCell>
+                  <TableCell>
+                    <SubscriptionStatusBadge status={sub.status} />
+                  </TableCell>
                   <TableCell>
                     <span className="text-xs text-muted-foreground">
                       {new Date(sub.startedAt).toLocaleDateString()} –{" "}
@@ -406,27 +376,10 @@ function RouteComponent(): React.ReactElement {
                     </span>
                   </TableCell>
                   <TableCell>
-                    {sub.trafficQuotaBytes === 0 ? (
-                      <span className="text-xs text-muted-foreground">
-                        {formatBytes(sub.trafficUsedBytes)} /{" "}
-                        {m.admin_users_subs_traffic_unlimited()}
-                      </span>
-                    ) : (
-                      <div className="flex min-w-36 flex-col gap-1">
-                        <span className="text-xs text-muted-foreground">
-                          {formatBytes(sub.trafficUsedBytes)} /{" "}
-                          {formatBytes(sub.trafficQuotaBytes)}
-                        </span>
-                        <Meter
-                          value={sub.trafficUsedBytes}
-                          max={sub.trafficQuotaBytes}
-                        >
-                          <MeterTrack className="rounded-full">
-                            <MeterIndicator />
-                          </MeterTrack>
-                        </Meter>
-                      </div>
-                    )}
+                    <SubscriptionQuotaUsage
+                      trafficQuotaBytes={sub.trafficQuotaBytes}
+                      trafficUsedBytes={sub.trafficUsedBytes}
+                    />
                   </TableCell>
                   <TableCell>
                     <div className="flex justify-end">
@@ -503,50 +456,15 @@ function RouteComponent(): React.ReactElement {
         <h2 className="font-heading text-base font-semibold">
           {m.admin_users_traffic_title()}
         </h2>
-        {traffic.length > 0 ? (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{m.admin_users_traffic_col_time()}</TableHead>
-                <TableHead>{m.admin_users_traffic_col_node()}</TableHead>
-                <TableHead>{m.admin_users_traffic_col_up()}</TableHead>
-                <TableHead>{m.admin_users_traffic_col_down()}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {traffic.map(({ record, nodeName }) => (
-                <TableRow key={record.id}>
-                  <TableCell>
-                    <span className="text-xs text-muted-foreground">
-                      {new Date(record.createdAt).toLocaleString()}
-                    </span>
-                  </TableCell>
-                  <TableCell>
-                    {nodeName ?? (
-                      <span className="text-muted-foreground">
-                        {m.admin_users_traffic_node_deleted()}
-                      </span>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <span className="font-mono text-xs">
-                      {formatBytes(record.uplinkBytes)}
-                    </span>
-                  </TableCell>
-                  <TableCell>
-                    <span className="font-mono text-xs">
-                      {formatBytes(record.downlinkBytes)}
-                    </span>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        ) : (
-          <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
-            {m.admin_users_traffic_empty()}
-          </div>
-        )}
+        <SubscriptionTrafficTable
+          records={traffic.map(({ record, nodeName }) => ({
+            id: record.id,
+            createdAt: record.createdAt,
+            nodeName,
+            uplinkBytes: record.uplinkBytes,
+            downlinkBytes: record.downlinkBytes,
+          }))}
+        />
       </div>
     </div>
   );

@@ -16,9 +16,8 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "@/components/ui/menu";
-import { useAuthedUser } from "@/hooks/use-authed-user";
 import { useLockFn } from "@/hooks/use-lock-fn";
-import { signOut } from "@/lib/auth";
+import { signOut, type SessionUser } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import { getLocale, locales, setLocale } from "@/paraglide/runtime";
@@ -103,9 +102,11 @@ const LogoutMenuItem = () => {
   );
 };
 
-export function UserProfileMenu() {
-  const user = useAuthedUser();
+export interface UserProfileMenuProps {
+  user: SessionUser;
+}
 
+export function UserProfileMenu({ user }: UserProfileMenuProps) {
   return (
     <Menu>
       <MenuTrigger
