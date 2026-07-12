@@ -13,12 +13,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { m } from "@/paraglide/messages";
 import {
   listAccessLogs,
   ACCESS_LOGS_QUERY_KEY,
   type AccessLogListResult,
-} from "@/lib/access-logs";
-import { m } from "@/paraglide/messages";
+} from "@/query/access-logs";
 
 const PAGE_SIZE = 20;
 

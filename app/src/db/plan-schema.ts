@@ -61,7 +61,7 @@ export type SubscriptionStatus = "active" | "expired" | "cancelled";
  * A user's purchased plan. Quota and device limit are snapshotted at purchase
  * time so later plan edits do not affect existing subscriptions. Multiple
  * active subscriptions stack: the user's accessible nodes are the union across
- * all of them (see `getUserAccessibleNodes` in `@/lib/subscription-access`).
+ * all of them (see `getUserAccessibleNodes` in `@/query/subscription-access`).
  */
 export const subscription = pgTable(
   "subscription",

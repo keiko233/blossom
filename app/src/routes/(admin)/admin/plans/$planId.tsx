@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import type React from "react";
 
-import { getPlan } from "@/lib/plans";
 import { m } from "@/paraglide/messages";
+import { getPlan } from "@/query/plans";
 
 import { PlanFormPage } from "./_modules/plan-form-page";
 

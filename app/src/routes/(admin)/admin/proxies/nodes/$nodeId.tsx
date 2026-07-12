@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import type React from "react";
 
-import { getNode } from "@/lib/nodes";
 import { m } from "@/paraglide/messages";
+import { getNode } from "@/query/nodes";
 
 import { NodeFormPage } from "./_modules/node-form-page";
 

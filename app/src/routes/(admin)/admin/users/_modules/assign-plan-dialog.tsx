@@ -20,8 +20,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { listPlans, PLANS_QUERY_KEY } from "@/lib/plans";
 import { m } from "@/paraglide/messages";
+import { listPlans, PLANS_QUERY_KEY } from "@/query/plans";
 
 const EXIT_MS = 200;
 

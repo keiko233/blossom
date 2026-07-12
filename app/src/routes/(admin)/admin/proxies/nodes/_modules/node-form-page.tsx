@@ -32,14 +32,14 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs";
-import type { NodeDetail } from "@/lib/nodes";
-import { listServers, SERVERS_QUERY_KEY } from "@/lib/servers";
 import {
   NODE_PROTOCOLS,
   type NodeProtocol,
   settingsSchemaFor,
 } from "@/orpc/proxy/sing-box-registry";
 import { m } from "@/paraglide/messages";
+import type { NodeDetail } from "@/query/nodes";
+import { listServers, SERVERS_QUERY_KEY } from "@/query/servers";
 
 import { settingsDefaults, useNodeFormController } from "./use-node-form";
 

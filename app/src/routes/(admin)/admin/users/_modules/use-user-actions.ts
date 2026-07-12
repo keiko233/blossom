@@ -1,8 +1,8 @@
 import { useMutation } from "@tanstack/react-query";
 
 import { toastManager } from "@/components/ui/toast";
-import { banUser, setUserRole, unbanUser } from "@/lib/users";
 import { m } from "@/paraglide/messages";
+import { banUser, setUserRole, unbanUser } from "@/query/users";
 
 import { BanUserDialog } from "./ban-user-dialog";
 

@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 
 import type { Node } from "@/db/proxy-schema";
+import type { ResolvedNode } from "@/query/subscription-access";
 
 import { buildClashConfig } from "./clash-config";
 import { clashMetaSchema } from "./clash-meta-schema";
-import type { ResolvedNode } from "./subscription-access";
 
 const credentials = {
   uuid: "550e8400-e29b-41d4-a716-446655440000",

@@ -7,8 +7,8 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import type { ServerDTO } from "@/lib/servers";
 import { m } from "@/paraglide/messages";
+import type { ServerDTO } from "@/query/servers";
 
 import { TokenRevealDialog } from "./token-reveal-dialog";
 import { useServerFormController } from "./use-server-form";

@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import type React from "react";
 
-import { getGroup } from "@/lib/groups";
 import { m } from "@/paraglide/messages";
+import { getGroup } from "@/query/groups";
 
 import { GroupFormPage } from "./_modules/group-form-page";
 

@@ -6,9 +6,6 @@ import {
   pruneSettings,
 } from "@/components/schema-form/schema-defaults";
 import { toastManager } from "@/components/ui/toast";
-import { createNode, NODES_QUERY_KEY, updateNode } from "@/lib/nodes";
-import type { NodeDetail } from "@/lib/nodes";
-import { SERVERS_QUERY_KEY } from "@/lib/servers";
 import type { JsonValue } from "@/orpc/proxy/schema";
 import {
   NODE_PROTOCOLS,
@@ -16,6 +13,9 @@ import {
   settingsSchemaFor,
 } from "@/orpc/proxy/sing-box-registry";
 import { m } from "@/paraglide/messages";
+import { createNode, NODES_QUERY_KEY, updateNode } from "@/query/nodes";
+import type { NodeDetail } from "@/query/nodes";
+import { SERVERS_QUERY_KEY } from "@/query/servers";
 
 export interface NodeFormValues {
   name: string;

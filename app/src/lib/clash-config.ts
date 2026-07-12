@@ -1,7 +1,7 @@
 import type { JsonValue } from "@/orpc/proxy/schema";
+import type { ResolvedNode } from "@/query/subscription-access";
 
 import { nodeToClashProxy } from "./clash-proxies";
-import type { ResolvedNode } from "./subscription-access";
 
 interface SubscriptionCredentials {
   uuid: string;

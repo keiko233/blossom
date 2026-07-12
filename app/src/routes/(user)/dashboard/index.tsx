@@ -22,10 +22,10 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Spinner } from "@/components/ui/spinner";
-import { currentUserQueryKey, getCurrentUser } from "@/lib/current-user";
 import { formatDate } from "@/lib/format";
 import { isSubscriptionActive } from "@/lib/subscription-helpers";
 import { m } from "@/paraglide/messages";
+import { currentUserQueryKey, getCurrentUser } from "@/query/current-user";
 
 export const Route = createFileRoute("/(user)/dashboard/")({
   component: RouteComponent,

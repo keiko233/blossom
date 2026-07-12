@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import type React from "react";
 
-import { getServer } from "@/lib/servers";
 import { m } from "@/paraglide/messages";
+import { getServer } from "@/query/servers";
 
 import { ServerFormPage } from "./_modules/server-form-page";
 

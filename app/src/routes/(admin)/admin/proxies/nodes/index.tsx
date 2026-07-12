@@ -35,14 +35,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toastManager } from "@/components/ui/toast";
+import { m } from "@/paraglide/messages";
 import {
   deleteNode,
   listNodes,
   NODES_QUERY_KEY,
   type NodeListItem,
-} from "@/lib/nodes";
-import { SERVERS_QUERY_KEY } from "@/lib/servers";
-import { m } from "@/paraglide/messages";
+} from "@/query/nodes";
+import { SERVERS_QUERY_KEY } from "@/query/servers";
 
 export const Route = createFileRoute("/(admin)/admin/proxies/nodes/")({
   component: RouteComponent,

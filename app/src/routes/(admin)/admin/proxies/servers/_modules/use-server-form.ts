@@ -2,9 +2,9 @@ import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { toastManager } from "@/components/ui/toast";
-import { createServer, SERVERS_QUERY_KEY, updateServer } from "@/lib/servers";
-import type { ServerDTO } from "@/lib/servers";
 import { m } from "@/paraglide/messages";
+import { createServer, SERVERS_QUERY_KEY, updateServer } from "@/query/servers";
+import type { ServerDTO } from "@/query/servers";
 
 export interface ServerFormValues {
   name: string;

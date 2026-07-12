@@ -34,8 +34,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { listUsers, type UserListItem, USERS_QUERY_KEY } from "@/lib/users";
 import { m } from "@/paraglide/messages";
+import { listUsers, type UserListItem, USERS_QUERY_KEY } from "@/query/users";
 
 import { useUserActions } from "./_modules/use-user-actions";
 

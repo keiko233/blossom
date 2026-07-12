@@ -2,13 +2,13 @@ import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { toastManager } from "@/components/ui/toast";
+import { m } from "@/paraglide/messages";
 import {
   createGroup,
   getGroup,
   GROUPS_QUERY_KEY,
   updateGroup,
-} from "@/lib/groups";
-import { m } from "@/paraglide/messages";
+} from "@/query/groups";
 
 /** Group row plus its member node ids, as returned by `getGroup`. */
 export type GroupWithNodes = Awaited<ReturnType<typeof getGroup>>;

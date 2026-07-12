@@ -35,14 +35,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toastManager } from "@/components/ui/toast";
+import { m } from "@/paraglide/messages";
 import {
   deleteServer,
   listServers,
   regenerateServerToken,
   SERVERS_QUERY_KEY,
   type ServerListItem,
-} from "@/lib/servers";
-import { m } from "@/paraglide/messages";
+} from "@/query/servers";
 
 import { TokenRevealDialog } from "./_modules/token-reveal-dialog";
 

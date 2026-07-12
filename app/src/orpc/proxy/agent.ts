@@ -1,14 +1,18 @@
 import { ORPCError } from "@orpc/server";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
-import { db } from "@/db";
-import { subscription } from "@/db/plan-schema";
-import { node, server, type Server } from "@/db/proxy-schema";
-import { trafficRecord, type NewTrafficRecord } from "@/db/traffic-schema";
+import type { NewTrafficRecord } from "@/db/traffic-schema";
 import { hashAgentToken, parseBearerToken } from "@/lib/agent-token";
-import { getNodeActiveSubscriptions } from "@/lib/subscription-access";
+import {
+  findAgentServerByTokenHash,
+  getSubscriptionUserMap,
+  listEnabledServerNodes,
+  listServerNodeIds,
+  recordAgentTraffic,
+  updateAgentHeartbeat,
+} from "@/query/agent";
+import { getNodeActiveSubscriptions } from "@/query/subscription-access";
 
 import { base } from "../base";
 import { heartbeatSchema, trafficReportSchema } from "./schema";
@@ -41,15 +45,12 @@ const agentProcedure = base.use(async ({ context, next }) => {
     throw new ORPCError("UNAUTHORIZED");
   }
 
-  const [row] = await db
-    .select()
-    .from(server)
-    .where(eq(server.agentTokenHash, hashAgentToken(token)));
+  const row = await findAgentServerByTokenHash(hashAgentToken(token));
   if (!row) {
     throw new ORPCError("UNAUTHORIZED");
   }
 
-  return next({ context: { ...context, server: row as Server } });
+  return next({ context: { ...context, server: row } });
 });
 
 /**
@@ -81,13 +82,7 @@ export const getAgentConfig = agentProcedure
     // stable `inbounds` array so identical entitlement snapshots never produce a
     // spurious config diff that would re-hot-reload the agent.
     const nodes = context.server.enabled
-      ? await db
-          .select()
-          .from(node)
-          .where(
-            and(eq(node.serverId, context.server.id), eq(node.enabled, true)),
-          )
-          .orderBy(asc(node.id))
+      ? await listEnabledServerNodes(context.server.id)
       : [];
 
     // Fetch each node's active subscriptions in parallel — N concurrent queries
@@ -120,10 +115,7 @@ export const agentHeartbeat = agentProcedure
   .input(heartbeatSchema)
   .output(z.object({ ok: z.boolean() }))
   .handler(async ({ context, input }) => {
-    await db
-      .update(server)
-      .set({ lastSeenAt: new Date(), agentVersion: input.agentVersion })
-      .where(eq(server.id, context.server.id));
+    await updateAgentHeartbeat(context.server.id, input.agentVersion);
     return { ok: true };
   });
 
@@ -165,11 +157,7 @@ export const reportAgentTraffic = agentProcedure
 
     // Resolve the calling server's node ids once; used for verifying coded node
     // ids and for legacy single-node attribution.
-    const serverNodeRows = await db
-      .select({ id: node.id })
-      .from(node)
-      .where(eq(node.serverId, context.server.id));
-    const serverNodeIds = new Set(serverNodeRows.map((n) => n.id));
+    const serverNodeIds = new Set(await listServerNodeIds(context.server.id));
 
     const rekeyed = eligible.map((entry) => {
       const resolved = resolveReportedTrafficUser(
@@ -185,11 +173,7 @@ export const reportAgentTraffic = agentProcedure
     });
 
     const subIds = [...new Set(rekeyed.map((r) => r.subscriptionId))];
-    const subs = await db
-      .select({ id: subscription.id, userId: subscription.userId })
-      .from(subscription)
-      .where(inArray(subscription.id, subIds));
-    const userBySub = new Map(subs.map((sub) => [sub.id, sub.userId]));
+    const userBySub = await getSubscriptionUserMap(subIds);
 
     const known = rekeyed.filter((r) => userBySub.has(r.subscriptionId));
     if (known.length === 0) {
@@ -214,8 +198,6 @@ export const reportAgentTraffic = agentProcedure
       windowStartedAt,
       windowEndedAt,
     }));
-    await db.insert(trafficRecord).values(records);
-
     // A subscription appears once per report (one stats counter per user), but
     // sum defensively in case an agent splits entries.
     const deltaBySub = new Map<string, number>();
@@ -227,14 +209,7 @@ export const reportAgentTraffic = agentProcedure
           r.downlinkBytes,
       );
     }
-    for (const [subscriptionId, delta] of deltaBySub) {
-      await db
-        .update(subscription)
-        .set({
-          trafficUsedBytes: sql`${subscription.trafficUsedBytes} + ${delta}`,
-        })
-        .where(eq(subscription.id, subscriptionId));
-    }
+    await recordAgentTraffic(records, deltaBySub);
 
     return { accepted: known.length, dropped: eligible.length - known.length };
   });

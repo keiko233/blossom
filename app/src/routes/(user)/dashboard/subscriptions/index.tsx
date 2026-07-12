@@ -24,7 +24,6 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { toastManager } from "@/components/ui/toast";
 import type { SubscriptionStatus } from "@/db/plan-schema";
-import { currentUserQueryKey, getCurrentUser } from "@/lib/current-user";
 import { formatDate } from "@/lib/format";
 import {
   buildSubscriptionUrl,
@@ -32,6 +31,7 @@ import {
   isSubscriptionUsable,
 } from "@/lib/subscription-helpers";
 import { m } from "@/paraglide/messages";
+import { currentUserQueryKey, getCurrentUser } from "@/query/current-user";
 
 export const Route = createFileRoute("/(user)/dashboard/subscriptions/")({
   staticData: {

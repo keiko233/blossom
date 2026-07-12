@@ -2,8 +2,7 @@ import { createPrivateKey, createPublicKey } from "node:crypto";
 
 import type { JsonValue } from "@/orpc/proxy/schema";
 import { passwordFor } from "@/orpc/proxy/singbox-users";
-
-import type { ResolvedNode } from "./subscription-access";
+import type { ResolvedNode } from "@/query/subscription-access";
 
 interface SubscriptionCredentials {
   uuid: string;

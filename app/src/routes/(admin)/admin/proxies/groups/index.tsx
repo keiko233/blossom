@@ -35,13 +35,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toastManager } from "@/components/ui/toast";
+import { m } from "@/paraglide/messages";
 import {
   deleteGroup,
   type GroupListItem,
   GROUPS_QUERY_KEY,
   listGroups,
-} from "@/lib/groups";
-import { m } from "@/paraglide/messages";
+} from "@/query/groups";
 
 export const Route = createFileRoute("/(admin)/admin/proxies/groups/")({
   component: RouteComponent,

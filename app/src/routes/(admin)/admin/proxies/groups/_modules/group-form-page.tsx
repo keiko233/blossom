@@ -24,9 +24,9 @@ import {
   NumberFieldIncrement,
   NumberFieldInput,
 } from "@/components/ui/number-field";
-import type { NodeListItem } from "@/lib/nodes";
-import { listNodes, NODES_QUERY_KEY } from "@/lib/nodes";
 import { m } from "@/paraglide/messages";
+import type { NodeListItem } from "@/query/nodes";
+import { listNodes, NODES_QUERY_KEY } from "@/query/nodes";
 
 import { type GroupWithNodes, useGroupFormController } from "./use-group-form";
 

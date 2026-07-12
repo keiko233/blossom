@@ -27,9 +27,9 @@ import {
 } from "@/components/ui/number-field";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import type { GroupListItem } from "@/lib/groups";
-import { GROUPS_QUERY_KEY, listGroups } from "@/lib/groups";
 import { m } from "@/paraglide/messages";
+import type { GroupListItem } from "@/query/groups";
+import { GROUPS_QUERY_KEY, listGroups } from "@/query/groups";
 
 import { type PlanWithGroups, usePlanFormController } from "./use-plan-form";
 

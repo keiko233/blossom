@@ -4,9 +4,9 @@ import { db } from "@/db";
 import { accessLog, type NewAccessLog } from "@/db/access-log-schema";
 
 /**
- * Persists an access-log row. Kept separate from the query module and from
- * client-facing files so importing the query helpers never drags the database
- * driver into the browser bundle.
+ * Persists an access-log row. Kept separate from the client-facing access-log
+ * server functions so importing those helpers never drags this direct database
+ * writer into the browser bundle.
  */
 export async function recordAccessLog(
   entry: Omit<NewAccessLog, "id">,

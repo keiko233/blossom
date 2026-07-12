@@ -5,8 +5,7 @@ import { db } from "@/db";
 import { plan, subscription } from "@/db/plan-schema";
 import { node, server } from "@/db/proxy-schema";
 import { trafficRecord } from "@/db/traffic-schema";
-
-import { ensureSession } from "./auth";
+import { ensureSession } from "@/lib/auth";
 
 /** Prefix for the signed-in user's own dashboard data query key. */
 export const CURRENT_USER_QUERY_KEY = ["user", "dashboard"] as const;

@@ -2,14 +2,14 @@ import { createFileRoute } from "@tanstack/react-router";
 import { stringify } from "yaml";
 
 import type { Subscription } from "@/db/plan-schema";
-import { recordAccessLog } from "@/lib/access-log-record";
 import { buildClashConfig } from "@/lib/clash-config";
 import { getClientIp } from "@/lib/client-ip";
+import { parseClientUserAgent } from "@/lib/user-agent";
+import { recordAccessLog } from "@/query/access-log-record";
 import {
   findSubscriptionByToken,
   getSubscriptionAccessibleNodes,
-} from "@/lib/subscription-access";
-import { parseClientUserAgent } from "@/lib/user-agent";
+} from "@/query/subscription-access";
 
 const PROFILE_UPDATE_INTERVAL_HOURS = 24;
 

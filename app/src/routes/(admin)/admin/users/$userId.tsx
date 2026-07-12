@@ -37,15 +37,15 @@ import {
 } from "@/components/ui/table";
 import { toastManager } from "@/components/ui/toast";
 import type { SubscriptionStatus } from "@/db/plan-schema";
+import { m } from "@/paraglide/messages";
 import {
   createSubscription,
   deleteSubscription,
   refreshSubscriptionToken,
   resetSubscriptionCredentials,
   updateSubscription,
-} from "@/lib/subscriptions";
-import { getUserDetail, USERS_QUERY_KEY } from "@/lib/users";
-import { m } from "@/paraglide/messages";
+} from "@/query/subscriptions";
+import { getUserDetail, USERS_QUERY_KEY } from "@/query/users";
 
 import { AccessLogDialog } from "./_modules/access-log-dialog";
 import { AssignPlanDialog } from "./_modules/assign-plan-dialog";

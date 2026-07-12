@@ -36,13 +36,13 @@ import {
 } from "@/components/ui/table";
 import { toastManager } from "@/components/ui/toast";
 import { formatAmount, formatTraffic } from "@/lib/format";
+import { m } from "@/paraglide/messages";
 import {
   deletePlan,
   listPlans,
   type PlanListItem,
   PLANS_QUERY_KEY,
-} from "@/lib/plans";
-import { m } from "@/paraglide/messages";
+} from "@/query/plans";
 
 export const Route = createFileRoute("/(admin)/admin/plans/")({
   component: RouteComponent,

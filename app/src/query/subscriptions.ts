@@ -155,5 +155,5 @@ export const deleteSubscription = createServerFn({ method: "POST" })
   });
 
 // Node-access resolution helpers (getUserAccessibleNodes,
-// getNodeActiveSubscriptions) live in `@/lib/subscription-access`: they are
+// getNodeActiveSubscriptions) live in `@/query/subscription-access`: they are
 // plain functions, and this module must stay importable from client pages.

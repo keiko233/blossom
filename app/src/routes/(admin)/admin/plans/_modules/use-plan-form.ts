@@ -8,8 +8,13 @@ import {
   centsToAmount,
   gbToBytes,
 } from "@/lib/format";
-import { createPlan, getPlan, PLANS_QUERY_KEY, updatePlan } from "@/lib/plans";
 import { m } from "@/paraglide/messages";
+import {
+  createPlan,
+  getPlan,
+  PLANS_QUERY_KEY,
+  updatePlan,
+} from "@/query/plans";
 
 /** Plan row plus its bound group ids, as returned by `getPlan`. */
 export type PlanWithGroups = Awaited<ReturnType<typeof getPlan>>;
