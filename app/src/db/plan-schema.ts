@@ -89,10 +89,14 @@ export const subscription = pgTable(
       .notNull(),
     deviceLimit: integer("device_limit").notNull(),
 
-    // Per-subscription proxy credentials, embedded as sing-box inbound users with
-    // `name` = subscription id so reported traffic maps 1:1 to a subscription.
+    // Per-subscription proxy credentials, embedded as sing-box inbound users.
+    // For `name`-keyed protocols the inbound user name now carries the coded
+    // (node, subscription) identifier (see `traffic-user-codec`) so traffic
+    // reports still map 1:1 to a subscription and a node; for username-keyed
+    // protocols the bare subscription id is used and per-node attribution is
+    // lost — those protocols are invisible to v2ray_api user stats regardless.
     // Stored in plaintext by design: sing-box needs the raw secret (contrast
-    // `node.agentTokenHash`, which only ever stores a hash).
+    // `server.agentTokenHash`, which only ever stores a hash).
     credentialUuid: text("credential_uuid").notNull().unique(),
     credentialPassword: text("credential_password").notNull(),
 

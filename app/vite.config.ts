@@ -49,7 +49,7 @@ const config = defineConfig(({ mode, command }) => {
       tanstackStart({
         router: {
           generatedRouteTree: `route-tree.gen.ts`,
-          routeTreeFileHeader: [`/* oxlint-disable */`],
+          routeTreeFileHeader: [`/* oxlint-disable */`, `// @ts-nocheck`],
           routeFileIgnorePattern: "_modules",
         },
       }),

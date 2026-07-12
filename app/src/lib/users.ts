@@ -5,7 +5,7 @@ import { count, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { user } from "@/db/auth-schema";
 import { plan, subscription } from "@/db/plan-schema";
-import { node } from "@/db/proxy-schema";
+import { node, server } from "@/db/proxy-schema";
 import { trafficRecord } from "@/db/traffic-schema";
 import { getAuth } from "@/lib/auth";
 import { ensureAdmin } from "@/lib/ensure-admin";
@@ -62,11 +62,18 @@ export const getUserDetail = createServerFn({ method: "GET" })
         .innerJoin(plan, eq(plan.id, subscription.planId))
         .where(eq(subscription.userId, data.id))
         .orderBy(desc(subscription.createdAt)),
-      // Left join: nodeId is nulled when a node is deleted, history remains.
+      // Left-join both node and server: a deleted node nulls nodeName and the
+      // denormalized serverId still points at the producing host if it
+      // survives. Both gone → deleted.
       db
-        .select({ record: trafficRecord, nodeName: node.name })
+        .select({
+          record: trafficRecord,
+          nodeName: node.name,
+          serverName: server.name,
+        })
         .from(trafficRecord)
         .leftJoin(node, eq(node.id, trafficRecord.nodeId))
+        .leftJoin(server, eq(server.id, trafficRecord.serverId))
         .where(eq(trafficRecord.userId, data.id))
         .orderBy(desc(trafficRecord.createdAt))
         .limit(50),

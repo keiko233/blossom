@@ -5,6 +5,7 @@ import type { Subscription } from "@/db/plan-schema";
 import type { Node } from "@/db/proxy-schema";
 
 import { buildInboundUser } from "./singbox-users";
+import { encodeTrafficUser } from "./traffic-user-codec";
 
 function makeNode(
   protocol: string,
@@ -16,17 +17,14 @@ function makeNode(
     remark: null,
     tags: [],
     enabled: true,
-    address: "example.com",
+    serverId: "server-1",
+    address: null,
     listenPort: 443,
     protocol,
     settings,
-    agentTokenHash: "hash",
-    agentTokenPrefix: "agt_test",
-    lastSeenAt: null,
-    agentVersion: null,
     createdAt: new Date(),
     updatedAt: new Date(),
-  } as Node;
+  } as unknown as Node;
 }
 
 // 32 random bytes in base64, as generateSubscriptionCredentials produces.
@@ -54,20 +52,23 @@ function makeSubscription(): Subscription {
 
 describe("buildInboundUser", () => {
   const sub = makeSubscription();
+  // All name-keyed protocols now carry the codec-encoded (node, sub) identifier
+  // so v2ray_api per-user stats still attribute traffic to a specific inbound.
+  const codedName = encodeTrafficUser("node-1", "sub-1");
 
   it("maps vless to name + uuid without flow", () => {
     const user = buildInboundUser(makeNode("vless"), sub);
-    expect(user).toEqual({ name: "sub-1", uuid: UUID });
+    expect(user).toEqual({ name: codedName, uuid: UUID });
   });
 
   it("maps vmess to name + uuid", () => {
     const user = buildInboundUser(makeNode("vmess"), sub);
-    expect(user).toEqual({ name: "sub-1", uuid: UUID });
+    expect(user).toEqual({ name: codedName, uuid: UUID });
   });
 
   it("maps trojan to name + password", () => {
     const user = buildInboundUser(makeNode("trojan"), sub);
-    expect(user).toEqual({ name: "sub-1", password: PASSWORD });
+    expect(user).toEqual({ name: codedName, password: PASSWORD });
   });
 
   it("keeps the stored password for classic shadowsocks methods", () => {
@@ -92,20 +93,27 @@ describe("buildInboundUser", () => {
 
   it("maps tuic to name + uuid + password", () => {
     const user = buildInboundUser(makeNode("tuic"), sub);
-    expect(user).toEqual({ name: "sub-1", uuid: UUID, password: PASSWORD });
+    expect(user).toEqual({
+      name: codedName,
+      uuid: UUID,
+      password: PASSWORD,
+    });
   });
 
   it("maps hysteria to auth_str, not password", () => {
     const user = buildInboundUser(makeNode("hysteria"), sub);
-    expect(user).toEqual({ name: "sub-1", auth_str: PASSWORD });
+    expect(user).toEqual({ name: codedName, auth_str: PASSWORD });
   });
 
   it("maps hysteria2 to name + password", () => {
     const user = buildInboundUser(makeNode("hysteria2"), sub);
-    expect(user).toEqual({ name: "sub-1", password: PASSWORD });
+    expect(user).toEqual({ name: codedName, password: PASSWORD });
   });
 
   it("keys naive users by username instead of name", () => {
+    // Username-keyed protocols keep the bare subscription id — they have no
+    // `name` field, so per-user v2ray_api stats are already keyed on `username`.
+    // Per-node attribution loss is an accepted limitation for these protocols.
     const user = buildInboundUser(makeNode("naive"), sub);
     expect(user).toEqual({ username: "sub-1", password: PASSWORD });
   });

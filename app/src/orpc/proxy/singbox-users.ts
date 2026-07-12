@@ -3,6 +3,7 @@ import type { Node } from "@/db/proxy-schema";
 
 import { INBOUND_BY_TYPE } from "./sing-box-registry";
 import type { SingboxUser } from "./singbox";
+import { encodeTrafficUser } from "./traffic-user-codec";
 
 /**
  * Maps a subscription onto a sing-box inbound user for a given node. Which
@@ -70,8 +71,16 @@ export function passwordFor(node: Node, password: string): string {
  * protocol has no users array (tun/redirect/... — not node protocols anyway).
  *
  * Field selection by shape:
- *  - `name` → subscription id (`username` for naive/socks/http, which have no
- *    `name`; those protocols also escape v2ray_api stats — known limitation)
+ *  - `name` → coded (node, subscription) identifier. The codec encodes both
+ *    so v2ray_api per-user stats map back to the producing inbound; see
+ *    `traffic-user-codec` for the wire format. `username`-keyed protocols
+ *    (naive/socks/http) have no `name` field at all, so v2ray_api never sees
+ *    a per-user counter for them — their traffic is not reported per user,
+ *    regardless of whether the value were bare or coded. We therefore keep
+ *    their `username` filled with the bare subscription id: it cannot carry
+ *    per-node attribution anyway, and the bare id matches the legacy path.
+ *  - `username` → subscription id (naive/socks/http; per-node attribution
+ *    is lost for these protocols as described above, a known limitation)
  *  - `uuid` → credentialUuid (vless/vmess/tuic)
  *  - `password` → credentialPassword, SS2022 key-length adjusted (trojan/ss/
  *    hysteria2/anytls/shadowtls/tuic/naive/socks/http)
@@ -89,7 +98,7 @@ export function buildInboundUser(
 
   const user: SingboxUser = {};
   if ("name" in shape) {
-    user.name = sub.id;
+    user.name = encodeTrafficUser(node.id, sub.id);
   } else if ("username" in shape) {
     user.username = sub.id;
   }

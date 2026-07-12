@@ -10,10 +10,11 @@ export { NODE_PROTOCOLS };
 export type { NodeProtocol } from "./sing-box-registry";
 
 /**
- * Node input schemas. Protocol-specific configuration lives in `settings`, a native
- * sing-box inbound fragment validated against the schema for the chosen `protocol`
- * (see `sing-box-registry`). There is no hand-written per-protocol shape — the
- * sing-box schema is the single source of truth.
+ * Server input schemas. A server is one physical host: name/remark/address/
+ * enabled + the manageable agent credentials (write-only on create/reset; the
+ * plaintext is returned exactly once). Specified separately from nodes so the
+ * admin UI can manage servers and their tokens independently of the inbounds
+ * the host runs.
  */
 
 /** Serializable JSON value — used for jsonb columns that cross the server-fn boundary. */
@@ -25,6 +26,31 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
+const serverMetaSchema = z.object({
+  name: z.string().min(1).max(128),
+  remark: z.string().max(512).optional(),
+  enabled: z.boolean().default(true),
+  address: z.string().min(1),
+});
+
+export const createServerSchema = serverMetaSchema;
+
+export const updateServerSchema = serverMetaSchema.partial().extend({
+  id: z.string().min(1),
+});
+
+export const serverIdSchema = z.object({ id: z.string().min(1) });
+
+export type CreateServerInput = z.infer<typeof createServerSchema>;
+export type UpdateServerInput = z.infer<typeof updateServerSchema>;
+
+/**
+ * Node input schemas. Protocol-specific configuration lives in `settings`, a native
+ * sing-box inbound fragment validated against the schema for the chosen `protocol`
+ * (see `sing-box-registry`). There is no hand-written per-protocol shape — the
+ * sing-box schema is the single source of truth.
+ */
+
 const protocolSchema = z
   .string()
   .refine(isNodeProtocol, { message: "Unsupported protocol" });
@@ -33,12 +59,16 @@ const protocolSchema = z
 // then strictly re-validated against `settingsSchemaFor(protocol)` in `parseNodeInput`.
 const settingsSchema = z.record(z.string(), z.json());
 
+const serverRefSchema = z.string().min(1);
+
 const nodeMetaSchema = z.object({
   name: z.string().min(1).max(128),
   remark: z.string().max(512).optional(),
   tags: z.array(z.string()).default([]),
   enabled: z.boolean().default(true),
-  address: z.string().min(1),
+  serverId: serverRefSchema,
+  // Optional override; null/undefined means "use server.address".
+  address: z.string().min(1).nullable().optional(),
   listenPort: z.number().int().min(1).max(65535),
   protocol: protocolSchema,
   settings: settingsSchema,

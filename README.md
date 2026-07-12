@@ -1,6 +1,6 @@
 # Blossom
 
-Blossom is a sing-box proxy subscription control plane. It is a TanStack Start SSR app built with React 19, backed by an oRPC API, better-auth authentication, and Drizzle/PostgreSQL. A Rust server-agent lives under `server-agent/` and runs on proxy nodes, consuming the `/api/agent/*` OpenAPI surface.
+Blossom is a sing-box proxy subscription control plane. It is a TanStack Start SSR app built with React 19, backed by an oRPC API, better-auth authentication, and Drizzle/PostgreSQL. A Rust server-agent lives under `server-agent/` and runs once per physical proxy server, consuming the `/api/agent/*` OpenAPI surface.
 
 ## Development
 
@@ -95,7 +95,7 @@ To skip building locally, point the `app` service at the prebuilt image (`image:
 
 ## Server agent
 
-The Rust server-agent in `server-agent/` consumes the control-plane OpenAPI spec at `/api/agent/*`. After changing the agent-facing API, regenerate the agent client while the dev server is running:
+The Rust server-agent in `server-agent/` consumes the control-plane OpenAPI spec at `/api/agent/*`. Each server owns one agent token and one sing-box process; every enabled node assigned to that server becomes an inbound in the same generated sing-box config. After changing the agent-facing API, regenerate the agent client while the dev server is running:
 
 ```bash
 pnpm --filter @blossom/app agent:spec

@@ -2,13 +2,15 @@ import { bigint, index, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 
 import { user } from "./auth-schema.ts";
 import { subscription } from "./plan-schema.ts";
-import { node } from "./proxy-schema.ts";
+import { node, server } from "./proxy-schema.ts";
 
 /**
  * One agent traffic report entry: bytes a subscription consumed on a node over a
  * reporting window. Counters on `subscription.trafficUsedBytes` hold the running
  * total; these rows keep the per-node history for charts and audit. `userId` is
- * denormalized from the subscription for direct per-user queries.
+ * denormalized from the subscription for direct per-user queries. `serverId` is
+ * denormalized from the agent's token-bearing server so per-server queries survive
+ * node moves/deletes.
  */
 export const trafficRecord = pgTable(
   "traffic_record",
@@ -22,6 +24,11 @@ export const trafficRecord = pgTable(
       .references(() => user.id, { onDelete: "cascade" }),
     // Set null on node delete: usage history outlives the node.
     nodeId: text("node_id").references(() => node.id, {
+      onDelete: "set null",
+    }),
+    // Denormalized from the agent's server; null when the server is later
+    // deleted (FK is SET NULL on purpose: history must survive).
+    serverId: text("server_id").references(() => server.id, {
       onDelete: "set null",
     }),
     uplinkBytes: bigint("uplink_bytes", { mode: "number" }).notNull(),
@@ -40,6 +47,7 @@ export const trafficRecord = pgTable(
     ),
     index("traffic_record_user_idx").on(table.userId, table.createdAt),
     index("traffic_record_node_idx").on(table.nodeId, table.createdAt),
+    index("traffic_record_server_idx").on(table.serverId, table.createdAt),
   ],
 );
 

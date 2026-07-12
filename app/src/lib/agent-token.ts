@@ -1,10 +1,10 @@
 import { createHash, randomBytes } from "node:crypto";
 
 /**
- * Per-node agent credentials. A node's token is the only thing an agent presents,
- * and it resolves to exactly one node — so a node can only ever read its own config
- * and heartbeat itself (least privilege). Only the hash is persisted; the plaintext
- * is shown once at create/reset time.
+ * Per-server agent credentials. A server's token is the only thing an agent
+ * presents, and it resolves to exactly one physical server. That agent can only
+ * read the server's combined multi-inbound config and heartbeat that server.
+ * Only the hash is persisted; plaintext is shown once at create/reset time.
  */
 
 const TOKEN_PREFIX = "agt_";

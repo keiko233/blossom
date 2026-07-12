@@ -5,29 +5,41 @@ import type { Node } from "@/db/proxy-schema";
 
 import { buildClashConfig } from "./clash-config";
 import { clashMetaSchema } from "./clash-meta-schema";
+import type { ResolvedNode } from "./subscription-access";
 
 const credentials = {
   uuid: "550e8400-e29b-41d4-a716-446655440000",
   password: "cXdlcnR5dWkvb3BhZnM=",
 };
 
-function makeNode(protocol: string, settings: Record<string, unknown>): Node {
-  return {
+function makeResolved(
+  protocol: string,
+  settings: Record<string, unknown>,
+  overrides: Partial<ResolvedNode> = {},
+): ResolvedNode {
+  const node: Node = {
     id: `node-${protocol}`,
     name: `${protocol.toUpperCase()} Node`,
     remark: null,
     tags: [],
     enabled: true,
-    address: "example.com",
+    serverId: `server-${protocol}`,
+    address: null,
     listenPort: 443,
     protocol,
     settings: settings as Node["settings"],
-    agentTokenHash: "hash",
-    agentTokenPrefix: "pre",
-    lastSeenAt: null,
-    agentVersion: null,
     createdAt: new Date(),
     updatedAt: new Date(),
+  } as unknown as Node;
+  return {
+    node,
+    server: {
+      id: `server-${protocol}`,
+      name: `${protocol.toUpperCase()} Server`,
+      address: "example.com",
+    },
+    address: "example.com",
+    ...overrides,
   };
 }
 
@@ -58,7 +70,7 @@ describe("buildClashConfig", () => {
   });
 
   it("builds a serializable vless+ws config", () => {
-    const node = makeNode("vless", {
+    const node = makeResolved("vless", {
       tls: {
         enabled: true,
         server_name: "example.com",
@@ -90,7 +102,7 @@ describe("buildClashConfig", () => {
   });
 
   it("builds a vmess+grpc config", () => {
-    const node = makeNode("vmess", {
+    const node = makeResolved("vmess", {
       tls: { enabled: true, server_name: "example.com" },
       transport: { type: "grpc", service_name: "svc" },
     });
@@ -101,7 +113,7 @@ describe("buildClashConfig", () => {
   });
 
   it("builds a trojan config", () => {
-    const node = makeNode("trojan", {
+    const node = makeResolved("trojan", {
       tls: { enabled: true, server_name: "example.com" },
     });
     const { config } = buildClashConfig([node], { credentials });
@@ -116,7 +128,7 @@ describe("buildClashConfig", () => {
   });
 
   it("builds a shadowsocks config", () => {
-    const node = makeNode("shadowsocks", { method: "aes-256-gcm" });
+    const node = makeResolved("shadowsocks", { method: "aes-256-gcm" });
     const { config } = buildClashConfig([node], { credentials });
     expect(config).toMatchObject({
       proxies: [
@@ -131,7 +143,7 @@ describe("buildClashConfig", () => {
 
   it("prefixes the server PSK for shadowsocks 2022 methods", () => {
     const serverPsk = Buffer.alloc(32, 7).toString("base64");
-    const node = makeNode("shadowsocks", {
+    const node = makeResolved("shadowsocks", {
       method: "2022-blake3-aes-256-gcm",
       password: serverPsk,
     });
@@ -148,7 +160,7 @@ describe("buildClashConfig", () => {
   });
 
   it("skips shadowsocks 2022 nodes without a server PSK", () => {
-    const node = makeNode("shadowsocks", {
+    const node = makeResolved("shadowsocks", {
       method: "2022-blake3-aes-256-gcm",
     });
     expect(() => buildClashConfig([node], { credentials })).toThrow(
@@ -157,7 +169,7 @@ describe("buildClashConfig", () => {
   });
 
   it("produces unique proxy names", () => {
-    const node = makeNode("vless", {});
+    const node = makeResolved("vless", {});
     const { config } = buildClashConfig([node, node], { credentials });
     const names = (config as { proxies: { name: string }[] }).proxies.map(
       (p) => p.name,
@@ -168,7 +180,7 @@ describe("buildClashConfig", () => {
   });
 
   it("serializes to YAML without errors", () => {
-    const node = makeNode("vless", {
+    const node = makeResolved("vless", {
       tls: { enabled: true, server_name: "example.com" },
     });
     const { config } = buildClashConfig([node], { credentials });
@@ -177,12 +189,12 @@ describe("buildClashConfig", () => {
   });
 
   it("applies tfo and mptcp to proxies", () => {
-    const vlessNode = makeNode("vless", {
+    const vlessNode = makeResolved("vless", {
       tcp_fast_open: true,
       tcp_multi_path: true,
       tls: { enabled: true, server_name: "example.com" },
     });
-    const ssNode = makeNode("shadowsocks", {
+    const ssNode = makeResolved("shadowsocks", {
       method: "aes-256-gcm",
       tcp_fast_open: true,
     });
@@ -194,7 +206,7 @@ describe("buildClashConfig", () => {
   });
 
   it("maps multiplex to smux with padding and brutal options", () => {
-    const node = makeNode("vless", {
+    const node = makeResolved("vless", {
       tls: { enabled: true, server_name: "example.com" },
       multiplex: {
         enabled: true,
@@ -218,7 +230,7 @@ describe("buildClashConfig", () => {
   });
 
   it("maps multiplex to smux without brutal when speeds are missing", () => {
-    const node = makeNode("trojan", {
+    const node = makeResolved("trojan", {
       tls: { enabled: true, server_name: "example.com" },
       multiplex: { enabled: true, padding: false },
     });
@@ -243,7 +255,7 @@ describe("buildClashConfig", () => {
   it("derives the vless Reality public key from the private key", () => {
     const privateKey = "RU-e9PZ4FAHqaQSBSQl4Jq0_CVNZN1q493YbS7C5I7g";
     const expectedPublicKey = "K21PpkAl6FKaZ3jKtE8oyu_Sqk75g9eCzIVzyCU5rgw";
-    const node = makeNode("vless", {
+    const node = makeResolved("vless", {
       tls: {
         enabled: true,
         server_name: "example.com",
@@ -272,7 +284,7 @@ describe("buildClashConfig", () => {
   });
 
   it("skips vless Reality nodes with an invalid private key", () => {
-    const node = makeNode("vless", {
+    const node = makeResolved("vless", {
       tls: {
         enabled: true,
         server_name: "example.com",
@@ -285,7 +297,7 @@ describe("buildClashConfig", () => {
   });
 
   it("treats vless with a disabled reality object as plain TLS", () => {
-    const node = makeNode("vless", {
+    const node = makeResolved("vless", {
       tls: {
         enabled: true,
         server_name: "example.com",
@@ -303,7 +315,7 @@ describe("buildClashConfig", () => {
   });
 
   it("maps transport http with TLS to h2", () => {
-    const node = makeNode("vless", {
+    const node = makeResolved("vless", {
       tls: { enabled: true, server_name: "example.com" },
       transport: { type: "http", host: "example.com", path: "/h2" },
     });
@@ -319,7 +331,7 @@ describe("buildClashConfig", () => {
   });
 
   it("maps transport http without TLS to http with array-valued opts", () => {
-    const node = makeNode("vmess", {
+    const node = makeResolved("vmess", {
       transport: {
         type: "http",
         host: "example.com",
@@ -343,7 +355,7 @@ describe("buildClashConfig", () => {
   });
 
   it("maps transport http host array to h2 with all hosts", () => {
-    const node = makeNode("vless", {
+    const node = makeResolved("vless", {
       tls: { enabled: true, server_name: "example.com" },
       transport: {
         type: "http",
@@ -366,7 +378,7 @@ describe("buildClashConfig", () => {
   });
 
   it("maps transport http host array to http headers with all hosts", () => {
-    const node = makeNode("vmess", {
+    const node = makeResolved("vmess", {
       transport: {
         type: "http",
         host: ["a.example.com", "b.example.com"],
@@ -388,7 +400,7 @@ describe("buildClashConfig", () => {
   });
 
   it("maps tuic reduce-rtt and heartbeat interval", () => {
-    const node = makeNode("tuic", {
+    const node = makeResolved("tuic", {
       tls: { enabled: true, server_name: "example.com" },
       zero_rtt_handshake: true,
       heartbeat: "10s",
@@ -406,7 +418,7 @@ describe("buildClashConfig", () => {
   });
 
   it("parses tuic heartbeat in milliseconds", () => {
-    const node = makeNode("tuic", {
+    const node = makeResolved("tuic", {
       tls: { enabled: true, server_name: "example.com" },
       heartbeat: "500ms",
     });
@@ -421,7 +433,7 @@ describe("buildClashConfig", () => {
   });
 
   it("maps hysteria v1 receive window conn and mtu discovery", () => {
-    const node = makeNode("hysteria", {
+    const node = makeResolved("hysteria", {
       tls: { enabled: true, server_name: "example.com" },
       recv_window_conn: 4194304,
       disable_mtu_discovery: true,
@@ -447,26 +459,26 @@ describe("buildClashConfig", () => {
       return;
     }
     const nodes = [
-      makeNode("vless", {
+      makeResolved("vless", {
         tls: { enabled: true, server_name: "example.com" },
       }),
-      makeNode("vmess", {
+      makeResolved("vmess", {
         tls: { enabled: true, server_name: "example.com" },
       }),
-      makeNode("trojan", {
+      makeResolved("trojan", {
         tls: { enabled: true, server_name: "example.com" },
       }),
-      makeNode("shadowsocks", { method: "aes-256-gcm" }),
-      makeNode("hysteria2", {
+      makeResolved("shadowsocks", { method: "aes-256-gcm" }),
+      makeResolved("hysteria2", {
         tls: { enabled: true, server_name: "example.com" },
       }),
-      makeNode("hysteria", {
+      makeResolved("hysteria", {
         tls: { enabled: true, server_name: "example.com" },
       }),
-      makeNode("tuic", {
+      makeResolved("tuic", {
         tls: { enabled: true, server_name: "example.com" },
       }),
-      makeNode("anytls", {
+      makeResolved("anytls", {
         tls: { enabled: true, server_name: "example.com" },
       }),
     ];

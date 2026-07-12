@@ -19,6 +19,10 @@ import { m } from "@/paraglide/messages";
 
 const items = [
   {
+    name: m.admin_nav_proxies_item_servers(),
+    url: "/admin/proxies/servers",
+  },
+  {
     name: m.admin_nav_proxies_item_nodes(),
     url: "/admin/proxies/nodes",
   },

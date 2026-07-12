@@ -6,8 +6,9 @@ import {
   pruneSettings,
 } from "@/components/schema-form/schema-defaults";
 import { toastManager } from "@/components/ui/toast";
-import type { Node } from "@/db/proxy-schema";
 import { createNode, NODES_QUERY_KEY, updateNode } from "@/lib/nodes";
+import type { NodeDetail } from "@/lib/nodes";
+import { SERVERS_QUERY_KEY } from "@/lib/servers";
 import type { JsonValue } from "@/orpc/proxy/schema";
 import {
   NODE_PROTOCOLS,
@@ -21,6 +22,9 @@ export interface NodeFormValues {
   remark: string;
   tags: string;
   enabled: boolean;
+  serverId: string;
+  // Address override. Empty string means "no override": send `null` to the
+  // backend so the node falls back to its server's address.
   address: string;
   listenPort: number;
   protocol: NodeProtocol;
@@ -37,13 +41,16 @@ export function settingsDefaults(
   >;
 }
 
-function defaultValues(node?: Node): NodeFormValues {
+function defaultValues(node: NodeDetail | undefined): NodeFormValues {
   const protocol = node?.protocol ?? NODE_PROTOCOLS[0];
+  // `NodeFormPage` only renders when there is at least one server (see create
+  // page guard); when editing, the node's existing server is the default.
   return {
     name: node?.name ?? "",
     remark: node?.remark ?? "",
     tags: (node?.tags ?? []).join(", "),
     enabled: node?.enabled ?? true,
+    serverId: node?.serverId ?? "",
     address: node?.address ?? "",
     listenPort: node?.listenPort ?? 443,
     protocol,
@@ -63,7 +70,11 @@ function toPayload(v: NodeFormValues) {
       .map((t) => t.trim())
       .filter(Boolean),
     enabled: v.enabled,
-    address: v.address,
+    serverId: v.serverId,
+    // Empty override → null (fall back to server.address). A non-empty string
+    // is the per-node override. `updateNode` distinguishes undefined (leave
+    // alone) from null (clear); we never want to leave it alone on save.
+    address: v.address.trim() === "" ? null : v.address.trim(),
     listenPort: v.listenPort,
     protocol: v.protocol,
     settings: pruned ?? {},
@@ -72,7 +83,7 @@ function toPayload(v: NodeFormValues) {
 
 // Extracted so `ReturnType` yields a concrete form type for sub-components.
 function useNodeForm(
-  node: Node | undefined,
+  node: NodeDetail | undefined,
   onSubmit: (values: NodeFormValues) => Promise<void>,
 ) {
   return useForm({
@@ -86,18 +97,19 @@ function useNodeForm(
 export type NodeForm = ReturnType<typeof useNodeForm>;
 
 export interface UseNodeFormControllerOptions {
-  node?: Node;
+  node?: NodeDetail;
   /**
-   * Called after a successful save. `token` is the one-time plaintext agent token,
-   * present only on create; the page reveals it before navigating back to the list.
+   * Called after a successful save. The create flow no longer mints an agent
+   * token (the owning server carries it), so there is no token to reveal.
    */
-  onSuccess: (result: { token?: string }) => void;
+  onSuccess: () => void;
 }
 
 /**
  * Owns the create/update mutation and the form instance for the full-page node
- * editor. The route component remounts per node (keyed by id), so no reset effect is
- * needed. The component consumes `{ form, isEdit }` and renders fields.
+ * editor. The route component remounts per node (keyed by id), so no reset
+ * effect is needed. `createNode` returns only the row — no token, since the
+ * owning server owns the agent credential.
  */
 export function useNodeFormController({
   node,
@@ -111,20 +123,22 @@ export function useNodeFormController({
       const payload = toPayload(values);
       if (node) {
         await updateNode({ data: { id: node.id, ...payload } });
-        return { token: undefined as string | undefined };
+        return;
       }
-      const result = await createNode({ data: payload });
-      return { token: result.token };
+      await createNode({ data: payload });
     },
-    onSuccess: async ({ token }) => {
+    onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: NODES_QUERY_KEY });
+      // Server nodeCount changes on create/delete and (potentially) on
+      // server-id edits; invalidate so the servers list reflects it.
+      await queryClient.invalidateQueries({ queryKey: SERVERS_QUERY_KEY });
       toastManager.add({
         type: "success",
         title: isEdit
           ? m.admin_proxies_nodes_toast_updated()
           : m.admin_proxies_nodes_toast_created(),
       });
-      onSuccess({ token });
+      onSuccess();
     },
     onError: () => {
       toastManager.add({

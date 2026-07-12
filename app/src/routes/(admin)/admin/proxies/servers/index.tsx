@@ -36,23 +36,24 @@ import {
 } from "@/components/ui/table";
 import { toastManager } from "@/components/ui/toast";
 import {
-  deleteNode,
-  listNodes,
-  NODES_QUERY_KEY,
-  type NodeListItem,
-} from "@/lib/nodes";
-import { SERVERS_QUERY_KEY } from "@/lib/servers";
+  deleteServer,
+  listServers,
+  regenerateServerToken,
+  SERVERS_QUERY_KEY,
+  type ServerListItem,
+} from "@/lib/servers";
 import { m } from "@/paraglide/messages";
 
-export const Route = createFileRoute("/(admin)/admin/proxies/nodes/")({
+import { TokenRevealDialog } from "./_modules/token-reveal-dialog";
+
+export const Route = createFileRoute("/(admin)/admin/proxies/servers/")({
   component: RouteComponent,
 });
 
-// A server's agent is considered online if it heartbeated within this window;
-// a node inherits its server's online status.
+// A server's agent is considered online if it heartbeated within this window.
 const ONLINE_THRESHOLD_MS = 2 * 60 * 1000;
 
-function serverOnline(server: NodeListItem["serverSummary"]): boolean {
+function isOnline(server: ServerListItem): boolean {
   if (!server.lastSeenAt) {
     return false;
   }
@@ -61,130 +62,155 @@ function serverOnline(server: NodeListItem["serverSummary"]): boolean {
   );
 }
 
-const columnHelper = createColumnHelper<NodeListItem>();
+const columnHelper = createColumnHelper<ServerListItem>();
 
 function RouteComponent(): React.ReactElement {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
 
-  const { data: nodes, isPending } = useQuery({
-    queryKey: NODES_QUERY_KEY,
-    queryFn: () => listNodes(),
+  const { data: servers, isPending } = useQuery({
+    queryKey: SERVERS_QUERY_KEY,
+    queryFn: () => listServers(),
   });
 
   const invalidate = () =>
-    Promise.all([
-      queryClient.invalidateQueries({ queryKey: NODES_QUERY_KEY }),
-      queryClient.invalidateQueries({ queryKey: SERVERS_QUERY_KEY }),
-    ]);
+    queryClient.invalidateQueries({ queryKey: SERVERS_QUERY_KEY });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => deleteNode({ data: { id } }),
+    mutationFn: (id: string) => deleteServer({ data: { id } }),
     onSuccess: async () => {
       await invalidate();
       toastManager.add({
         type: "success",
-        title: m.admin_proxies_nodes_toast_deleted(),
+        title: m.admin_proxies_servers_toast_deleted(),
       });
     },
-    onError: () => {
+    onError: (error: unknown) => {
+      // The CRUD layer throws a clear "still has nodes" message; FK RESTRICT
+      // beneath makes that robust. Surface it as a toast, not a generic error.
+      const message = error instanceof Error ? error.message : String(error);
       toastManager.add({
         type: "error",
-        title: m.admin_proxies_nodes_toast_error(),
+        title:
+          message.includes("node") || message.includes("节点")
+            ? m.admin_proxies_servers_toast_blocked()
+            : m.admin_proxies_servers_toast_error(),
       });
     },
   });
 
-  const requestDelete = async (node: NodeListItem) => {
+  const regenMutation = useMutation({
+    mutationFn: (id: string) => regenerateServerToken({ data: { id } }),
+    onSuccess: async (result) => {
+      await invalidate();
+      toastManager.add({
+        type: "success",
+        title: m.admin_proxies_servers_toast_token_reset(),
+      });
+      await TokenRevealDialog.call({ token: result.token });
+    },
+    onError: () => {
+      toastManager.add({
+        type: "error",
+        title: m.admin_proxies_servers_toast_error(),
+      });
+    },
+  });
+
+  const requestDelete = async (server: ServerListItem) => {
+    if (server.nodeCount > 0) {
+      toastManager.add({
+        type: "error",
+        title: m.admin_proxies_servers_toast_blocked(),
+      });
+      return;
+    }
+
     const confirmed = await Confirm.call({
-      title: m.admin_proxies_nodes_delete_title(),
-      description: m.admin_proxies_nodes_delete_description(),
-      confirmLabel: m.admin_proxies_nodes_action_delete(),
-      cancelLabel: m.admin_proxies_nodes_form_cancel(),
+      title: m.admin_proxies_servers_delete_title(),
+      description: m.admin_proxies_servers_delete_description(),
+      confirmLabel: m.admin_proxies_servers_action_delete(),
+      cancelLabel: m.admin_proxies_servers_form_cancel(),
       destructive: true,
     });
     if (confirmed) {
-      deleteMutation.mutate(node.id);
+      deleteMutation.mutate(server.id);
     }
   };
 
-  const openCreate = () => void navigate({ to: "/admin/proxies/nodes/new" });
+  const openCreate = () => void navigate({ to: "/admin/proxies/servers/new" });
 
-  const openEdit = (node: NodeListItem) =>
+  const openEdit = (server: ServerListItem) =>
     void navigate({
-      to: "/admin/proxies/nodes/$nodeId",
-      params: { nodeId: node.id },
+      to: "/admin/proxies/servers/$serverId",
+      params: { serverId: server.id },
     });
+
+  const copyAgentInfo = async (server: ServerListItem) => {
+    const info = JSON.stringify(
+      {
+        serverId: server.id,
+        address: server.address,
+        tokenPrefix: server.agentTokenPrefix,
+      },
+      null,
+      2,
+    );
+    await navigator.clipboard.writeText(info);
+    toastManager.add({
+      type: "success",
+      title: m.admin_proxies_servers_toast_copied(),
+    });
+  };
 
   const columns = [
     columnHelper.accessor("name", {
-      header: () => m.admin_proxies_nodes_col_name(),
+      header: () => m.admin_proxies_servers_col_name(),
       cell: (info) => {
-        const node = info.row.original;
+        const server = info.row.original;
         return (
           <div className="flex flex-col gap-0.5">
-            <span className="font-medium">{node.name}</span>
-            {node.remark ? (
+            <span className="font-medium">{server.name}</span>
+            {server.remark ? (
               <span className="text-xs text-muted-foreground">
-                {node.remark}
+                {server.remark}
               </span>
             ) : null}
+            <span className="font-mono text-xs text-muted-foreground">
+              {server.agentTokenPrefix}
+              {server.agentVersion ? ` · v${server.agentVersion}` : ""}
+            </span>
           </div>
         );
       },
     }),
-    columnHelper.accessor("serverSummary.name", {
-      header: () => m.admin_proxies_nodes_col_server(),
+    columnHelper.accessor("address", {
+      header: () => m.admin_proxies_servers_col_address(),
       cell: (info) => (
-        <span className="text-xs text-muted-foreground">{info.getValue()}</span>
+        <span className="font-mono text-xs">{info.getValue()}</span>
       ),
     }),
-    columnHelper.display({
-      id: "endpoint",
-      header: () => m.admin_proxies_nodes_col_endpoint(),
-      cell: (info) => {
-        const node = info.row.original;
-        return (
-          <span className="font-mono text-xs">
-            {node.resolvedAddress}:{node.listenPort}
-          </span>
-        );
-      },
-    }),
-    columnHelper.accessor("protocol", {
-      header: () => m.admin_proxies_nodes_col_protocol(),
+    columnHelper.accessor("nodeCount", {
+      header: () => m.admin_proxies_servers_col_nodes(),
       cell: (info) => <Badge variant="outline">{info.getValue()}</Badge>,
     }),
     columnHelper.display({
       id: "status",
-      header: () => m.admin_proxies_nodes_col_status(),
+      header: () => m.admin_proxies_servers_col_status(),
       cell: (info) => {
-        const node = info.row.original;
-        // Server disabled wins: even if the node is enabled the whole host
-        // stops serving because the agent pulls an empty config.
-        if (!node.serverSummary.enabled) {
+        const server = info.row.original;
+        if (!server.enabled) {
           return (
             <Badge variant="outline">
               <span
                 aria-hidden="true"
                 className="size-1.5 rounded-full bg-muted-foreground/64"
               />
-              {m.admin_proxies_nodes_status_server_disabled()}
+              {m.admin_proxies_servers_status_disabled()}
             </Badge>
           );
         }
-        if (!node.enabled) {
-          return (
-            <Badge variant="outline">
-              <span
-                aria-hidden="true"
-                className="size-1.5 rounded-full bg-muted-foreground/64"
-              />
-              {m.admin_proxies_nodes_status_disabled()}
-            </Badge>
-          );
-        }
-        const online = serverOnline(node.serverSummary);
+        const online = isOnline(server);
         return (
           <Badge variant="outline">
             <span
@@ -196,27 +222,9 @@ function RouteComponent(): React.ReactElement {
               }
             />
             {online
-              ? m.admin_proxies_nodes_status_online()
-              : m.admin_proxies_nodes_status_offline()}
+              ? m.admin_proxies_servers_status_online()
+              : m.admin_proxies_servers_status_offline()}
           </Badge>
-        );
-      },
-    }),
-    columnHelper.accessor("tags", {
-      header: () => m.admin_proxies_nodes_col_tags(),
-      cell: (info) => {
-        const tags = info.getValue();
-        if (!tags.length) {
-          return <span className="text-muted-foreground">—</span>;
-        }
-        return (
-          <div className="flex flex-wrap gap-1">
-            {tags.map((tag) => (
-              <Badge key={tag} variant="secondary" size="sm">
-                {tag}
-              </Badge>
-            ))}
-          </div>
         );
       },
     }),
@@ -224,7 +232,7 @@ function RouteComponent(): React.ReactElement {
       id: "actions",
       header: () => <span className="sr-only">Actions</span>,
       cell: (info) => {
-        const node = info.row.original;
+        const server = info.row.original;
         return (
           <div className="flex justify-end">
             <Menu>
@@ -235,15 +243,21 @@ function RouteComponent(): React.ReactElement {
                 <EllipsisIcon />
               </MenuTrigger>
               <MenuPopup align="end">
-                <MenuItem onClick={() => openEdit(node)}>
-                  {m.admin_proxies_nodes_action_edit()}
+                <MenuItem onClick={() => openEdit(server)}>
+                  {m.admin_proxies_servers_action_edit()}
+                </MenuItem>
+                <MenuItem onClick={() => void copyAgentInfo(server)}>
+                  {m.admin_proxies_servers_action_copy_agent()}
+                </MenuItem>
+                <MenuItem onClick={() => regenMutation.mutate(server.id)}>
+                  {m.admin_proxies_servers_action_reset_token()}
                 </MenuItem>
                 <MenuSeparator />
                 <MenuItem
                   variant="destructive"
-                  onClick={() => void requestDelete(node)}
+                  onClick={() => void requestDelete(server)}
                 >
-                  {m.admin_proxies_nodes_action_delete()}
+                  {m.admin_proxies_servers_action_delete()}
                 </MenuItem>
               </MenuPopup>
             </Menu>
@@ -254,7 +268,7 @@ function RouteComponent(): React.ReactElement {
   ];
 
   const table = useReactTable({
-    data: nodes ?? [],
+    data: servers ?? [],
     columns,
     getCoreRowModel: getCoreRowModel(),
   });
@@ -263,11 +277,11 @@ function RouteComponent(): React.ReactElement {
     <div className="flex flex-col gap-4 p-4">
       <div className="flex items-center justify-between">
         <h1 className="font-heading text-lg font-semibold">
-          {m.admin_nav_proxies_item_nodes()}
+          {m.admin_nav_proxies_item_servers()}
         </h1>
         <Button onClick={openCreate}>
           <PlusIcon />
-          {m.admin_proxies_nodes_add()}
+          {m.admin_proxies_servers_add()}
         </Button>
       </div>
 
@@ -275,7 +289,7 @@ function RouteComponent(): React.ReactElement {
         <div className="flex justify-center py-16">
           <Spinner />
         </div>
-      ) : nodes && nodes.length > 0 ? (
+      ) : servers && servers.length > 0 ? (
         <Table>
           <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (
@@ -311,11 +325,11 @@ function RouteComponent(): React.ReactElement {
             <EmptyMedia variant="icon">
               <ServerIcon />
             </EmptyMedia>
-            <EmptyTitle>{m.admin_proxies_nodes_empty_title()}</EmptyTitle>
+            <EmptyTitle>{m.admin_proxies_servers_empty_title()}</EmptyTitle>
           </EmptyHeader>
           <Button onClick={openCreate}>
             <PlusIcon />
-            {m.admin_proxies_nodes_add()}
+            {m.admin_proxies_servers_add()}
           </Button>
         </Empty>
       )}

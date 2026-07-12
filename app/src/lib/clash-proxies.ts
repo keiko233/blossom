@@ -1,8 +1,9 @@
 import { createPrivateKey, createPublicKey } from "node:crypto";
 
-import type { Node } from "@/db/proxy-schema";
 import type { JsonValue } from "@/orpc/proxy/schema";
 import { passwordFor } from "@/orpc/proxy/singbox-users";
+
+import type { ResolvedNode } from "./subscription-access";
 
 interface SubscriptionCredentials {
   uuid: string;
@@ -283,28 +284,29 @@ function parseDurationMs(value: JsonValue): number | undefined {
 }
 
 type ProxyBuilder = (
-  node: Node,
+  resolved: ResolvedNode,
   credentials: SubscriptionCredentials,
 ) => Record<string, JsonValue> | null;
 
-function baseProxy(node: Node): Record<string, JsonValue> {
+function baseProxy(resolved: ResolvedNode): Record<string, JsonValue> {
   const proxy: Record<string, JsonValue> = {
-    name: node.name,
-    server: node.address,
-    port: node.listenPort,
+    name: resolved.node.name,
+    server: resolved.address,
+    port: resolved.node.listenPort,
     udp: true,
   };
-  if (node.settings.tcp_fast_open === true) {
+  if (resolved.node.settings.tcp_fast_open === true) {
     proxy.tfo = true;
   }
-  if (node.settings.tcp_multi_path === true) {
+  if (resolved.node.settings.tcp_multi_path === true) {
     proxy.mptcp = true;
   }
   return proxy;
 }
 
 const BUILDERS: Record<string, ProxyBuilder> = {
-  vless(node, credentials) {
+  vless(resolved, credentials) {
+    const node = resolved.node;
     const tlsSettings = node.settings.tls;
     const tlsObj =
       typeof tlsSettings === "object" &&
@@ -323,7 +325,7 @@ const BUILDERS: Record<string, ProxyBuilder> = {
       (reality as Record<string, JsonValue>).enabled === true;
 
     const proxy: Record<string, JsonValue> = {
-      ...baseProxy(node),
+      ...baseProxy(resolved),
       type: "vless",
       uuid: credentials.uuid,
     };
@@ -370,9 +372,10 @@ const BUILDERS: Record<string, ProxyBuilder> = {
     return proxy;
   },
 
-  vmess(node, credentials) {
+  vmess(resolved, credentials) {
+    const node = resolved.node;
     const proxy: Record<string, JsonValue> = {
-      ...baseProxy(node),
+      ...baseProxy(resolved),
       type: "vmess",
       uuid: credentials.uuid,
       alterId: 0,
@@ -408,9 +411,10 @@ const BUILDERS: Record<string, ProxyBuilder> = {
     return proxy;
   },
 
-  trojan(node, credentials) {
+  trojan(resolved, credentials) {
+    const node = resolved.node;
     const proxy: Record<string, JsonValue> = {
-      ...baseProxy(node),
+      ...baseProxy(resolved),
       type: "trojan",
       password: credentials.password,
     };
@@ -436,7 +440,8 @@ const BUILDERS: Record<string, ProxyBuilder> = {
     return proxy;
   },
 
-  shadowsocks(node, credentials) {
+  shadowsocks(resolved, credentials) {
+    const node = resolved.node;
     const method = node.settings.method;
     if (typeof method !== "string") {
       return null;
@@ -454,7 +459,7 @@ const BUILDERS: Record<string, ProxyBuilder> = {
     }
 
     const proxy: Record<string, JsonValue> = {
-      ...baseProxy(node),
+      ...baseProxy(resolved),
       type: "ss",
       cipher: method,
       password,
@@ -468,9 +473,10 @@ const BUILDERS: Record<string, ProxyBuilder> = {
     return proxy;
   },
 
-  hysteria2(node, credentials) {
+  hysteria2(resolved, credentials) {
+    const node = resolved.node;
     const proxy: Record<string, JsonValue> = {
-      ...baseProxy(node),
+      ...baseProxy(resolved),
       type: "hysteria2",
       password: credentials.password,
     };
@@ -499,9 +505,10 @@ const BUILDERS: Record<string, ProxyBuilder> = {
     return proxy;
   },
 
-  hysteria(node, credentials) {
+  hysteria(resolved, credentials) {
+    const node = resolved.node;
     const proxy: Record<string, JsonValue> = {
-      ...baseProxy(node),
+      ...baseProxy(resolved),
       type: "hysteria",
       "auth-str": credentials.password,
     };
@@ -530,9 +537,10 @@ const BUILDERS: Record<string, ProxyBuilder> = {
     return proxy;
   },
 
-  tuic(node, credentials) {
+  tuic(resolved, credentials) {
+    const node = resolved.node;
     const proxy: Record<string, JsonValue> = {
-      ...baseProxy(node),
+      ...baseProxy(resolved),
       type: "tuic",
       uuid: credentials.uuid,
       password: credentials.password,
@@ -558,9 +566,10 @@ const BUILDERS: Record<string, ProxyBuilder> = {
     return proxy;
   },
 
-  anytls(node, credentials) {
+  anytls(resolved, credentials) {
+    const node = resolved.node;
     const proxy: Record<string, JsonValue> = {
-      ...baseProxy(node),
+      ...baseProxy(resolved),
       type: "anytls",
       password: credentials.password,
       "client-fingerprint": "chrome",
@@ -574,17 +583,19 @@ const BUILDERS: Record<string, ProxyBuilder> = {
 };
 
 /**
- * Converts a Node and subscription credentials into a Clash Meta proxy object.
- * Returns null when the protocol is unsupported or the node configuration is not
- * expressible in Clash Meta (e.g. Reality with an undecryptable private key).
+ * Converts a resolved node and subscription credentials into a Clash Meta proxy
+ * object. The resolved address (per-node override or server fallback) is used
+ * for `server`; the protocol `settings` come from the node row. Returns null
+ * when the protocol is unsupported or the node configuration is not expressible
+ * in Clash Meta (e.g. Reality with an undecryptable private key).
  */
 export function nodeToClashProxy(
-  node: Node,
+  resolved: ResolvedNode,
   credentials: SubscriptionCredentials,
 ): Record<string, JsonValue> | null {
-  const builder = BUILDERS[node.protocol];
+  const builder = BUILDERS[resolved.node.protocol];
   if (!builder) {
     return null;
   }
-  return builder(node, credentials);
+  return builder(resolved, credentials);
 }

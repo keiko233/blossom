@@ -4,16 +4,50 @@ import { db } from "@/db";
 import { user } from "@/db/auth-schema";
 import { planGroup, subscription } from "@/db/plan-schema";
 import type { Subscription } from "@/db/plan-schema";
-import { node, nodeGroup } from "@/db/proxy-schema";
-import type { Node } from "@/db/proxy-schema";
+import { node, nodeGroup, server, type Node } from "@/db/proxy-schema";
+
+/**
+ * Minimal, never-secret-bearing summary of the server a node lives on. Only
+ * what the client-facing config and audit UI need: the public address (the
+ * node's fallback when it has no override) and an identity for display. The
+ * agent token hash/prefix, heartbeat, and version are deliberately excluded
+ * so this struct is safe to thread through subscription/Clash compilation
+ * paths without surprising leak paths. `enabled` is omitted because the access
+ * queries already filtered on it; carrying it here would be redundant.
+ */
+export interface ServerSummary {
+  id: string;
+  name: string;
+  address: string;
+}
+
+/**
+ * A node paired with the owning server's public summary after the access
+ * queries. `address` is the resolved client-facing endpoint
+ * (`node.address ?? server.address`); callers that emit client configs use
+ * this single field instead of touching the raw columns so the
+ * override/fallback rule lives in one place.
+ */
+export interface ResolvedNode {
+  node: Node;
+  server: ServerSummary;
+  /** Final client-facing address: per-node override or server fallback. */
+  address: string;
+}
+
+function resolve(nodeRow: Node, serverRow: ServerSummary): ResolvedNode {
+  return {
+    node: nodeRow,
+    server: serverRow,
+    address: nodeRow.address ?? serverRow.address,
+  };
+}
 
 /**
  * Finds an active subscription by its public link token. Returns the
  * subscription together with the user row so callers can enforce bans.
  */
-export async function findSubscriptionByToken(
-  token: string,
-): Promise<{
+export async function findSubscriptionByToken(token: string): Promise<{
   subscription: Subscription;
   user: { banned: boolean | null; banExpires: Date | null };
 } | null> {
@@ -32,23 +66,38 @@ export async function findSubscriptionByToken(
 /**
  * Resolves the nodes a single subscription may access right now. The caller is
  * expected to have already validated the subscription status, expiration, ban
- * state, and traffic quota. This only filters the node side (`enabled = true`
- * and the subscription's plan groups).
+ * state, and traffic quota. This only filters the node/server side
+ * (`node.enabled = true`, `server.enabled = true`, and the subscription's plan
+ * groups) and resolves the per-node address fallback.
  */
 export async function getSubscriptionAccessibleNodes(
   subscriptionId: string,
-): Promise<Node[]> {
+): Promise<ResolvedNode[]> {
   const rows = await db
-    .select({ node })
+    .select({
+      node,
+      server: {
+        id: server.id,
+        name: server.name,
+        address: server.address,
+      },
+    })
     .from(subscription)
     .innerJoin(planGroup, eq(planGroup.planId, subscription.planId))
     .innerJoin(nodeGroup, eq(nodeGroup.groupId, planGroup.groupId))
     .innerJoin(node, eq(node.id, nodeGroup.nodeId))
-    .where(and(eq(subscription.id, subscriptionId), eq(node.enabled, true)));
+    .innerJoin(server, eq(server.id, node.serverId))
+    .where(
+      and(
+        eq(subscription.id, subscriptionId),
+        eq(node.enabled, true),
+        eq(server.enabled, true),
+      ),
+    );
 
-  const byId = new Map<string, Node>();
-  for (const row of rows) {
-    byId.set(row.node.id, row.node);
+  const byId = new Map<string, ResolvedNode>();
+  for (const { node: n, server: s } of rows) {
+    byId.set(n.id, resolve(n, s));
   }
   return [...byId.values()];
 }
@@ -56,33 +105,46 @@ export async function getSubscriptionAccessibleNodes(
 /**
  * Resolves the nodes a user may access right now: the union of nodes across
  * all groups bound to the plans of the user's active, unexpired subscriptions.
- * Multiple subscriptions stack. Traffic exhaustion is deliberately not
+ * Multiple subscriptions stack. Both server- and node-level `enabled` flags
+ * are filters here — a disabled server hides all of its nodes, and a disabled
+ * node is hidden individually. Traffic exhaustion is deliberately not
  * filtered here yet — enforcement is a separate concern.
  *
  * Callers are user-facing endpoints and the subscription compiler, which
  * bring their own auth.
  */
-export async function getUserAccessibleNodes(userId: string): Promise<Node[]> {
+export async function getUserAccessibleNodes(
+  userId: string,
+): Promise<ResolvedNode[]> {
   const rows = await db
-    .select({ node })
+    .select({
+      node,
+      server: {
+        id: server.id,
+        name: server.name,
+        address: server.address,
+      },
+    })
     .from(subscription)
     .innerJoin(planGroup, eq(planGroup.planId, subscription.planId))
     .innerJoin(nodeGroup, eq(nodeGroup.groupId, planGroup.groupId))
     .innerJoin(node, eq(node.id, nodeGroup.nodeId))
+    .innerJoin(server, eq(server.id, node.serverId))
     .where(
       and(
         eq(subscription.userId, userId),
         eq(subscription.status, "active"),
         gt(subscription.expiresAt, new Date()),
         eq(node.enabled, true),
+        eq(server.enabled, true),
       ),
     );
 
   // Dedupe in JS: DISTINCT over jsonb columns is awkward, and overlapping
   // groups across plans produce duplicates.
-  const byId = new Map<string, Node>();
-  for (const row of rows) {
-    byId.set(row.node.id, row.node);
+  const byId = new Map<string, ResolvedNode>();
+  for (const { node: n, server: s } of rows) {
+    byId.set(n.id, resolve(n, s));
   }
   return [...byId.values()];
 }
@@ -94,7 +156,9 @@ export async function getUserAccessibleNodes(userId: string): Promise<Node[]> {
  * (`banned` is trusted only alongside `banExpires` — better-auth clears expired
  * bans lazily), and exhausted quotas (0 means unlimited, mirroring deviceLimit).
  * Enforcement is exactly this filter: a dropped subscription disappears from the
- * config on the agent's next pull.
+ * config on the agent's next pull. Server-level disable is enforced upstream —
+ * the agent endpoint compiles the config for an enabled server and walks every
+ * enabled node through this resolver — so we only re-check the node here.
  *
  * The caller is the token-authenticated agent endpoint.
  */

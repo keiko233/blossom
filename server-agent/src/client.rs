@@ -1,6 +1,6 @@
 //! Progenitor-generated client for the blossom `/api` surface, plus the Bearer
 //! auth wiring (progenitor does not implement OpenAPI security schemes itself,
-//! so the per-node token is injected as a default header on the reqwest client).
+//! so the per-server token is injected as a default header on the reqwest client).
 
 use std::time::Duration;
 

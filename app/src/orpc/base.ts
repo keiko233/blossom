@@ -7,7 +7,7 @@ export interface ORPCContext {
 /**
  * Base oRPC builder carrying the request headers. The only procedures mounted on
  * the public oRPC/OpenAPI surface are the agent endpoints (see `proxy/agent.ts`),
- * which authenticate with a per-node token. All admin operations live in server
- * functions (`@/lib/nodes`), not the API.
+ * which authenticate with a per-server token. All admin operations live in
+ * server functions (`@/lib/nodes` and `@/lib/servers`), not the API.
  */
 export const base = os.$context<ORPCContext>();

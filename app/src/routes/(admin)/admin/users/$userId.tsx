@@ -457,10 +457,11 @@ function RouteComponent(): React.ReactElement {
           {m.admin_users_traffic_title()}
         </h2>
         <SubscriptionTrafficTable
-          records={traffic.map(({ record, nodeName }) => ({
+          records={traffic.map(({ record, nodeName, serverName }) => ({
             id: record.id,
             createdAt: record.createdAt,
-            nodeName,
+            sourceName: nodeName ?? serverName,
+            isServer: nodeName === null && serverName !== null,
             uplinkBytes: record.uplinkBytes,
             downlinkBytes: record.downlinkBytes,
           }))}

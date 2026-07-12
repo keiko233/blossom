@@ -7,7 +7,7 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { getSession } from "@/lib/auth";
 
 import { AdminSidebar } from "./_modules/admin-sidebar";
-import { TokenRevealDialog } from "./admin/proxies/nodes/_modules/token-reveal-dialog";
+import { TokenRevealDialog } from "./admin/proxies/servers/_modules/token-reveal-dialog";
 
 export const Route = createFileRoute("/(admin)")({
   beforeLoad: async () => {

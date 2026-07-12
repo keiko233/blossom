@@ -1,7 +1,9 @@
-//! server-agent: runs sing-box on a proxy node, driven by the blossom control
-//! plane. It pulls the node's full sing-box config over the `/api` surface,
-//! keeps sing-box running (restart on crash, SIGHUP hot-reload on config change),
-//! and heartbeats its version back to the server.
+//! server-agent: runs sing-box on a proxy server host, driven by the blossom
+//! control plane. It pulls the server's full multi-inbound sing-box config over
+//! the `/api` surface, keeps sing-box running (restart on crash, SIGHUP
+//! hot-reload on config change), and heartbeats its version back to the server.
+//! A server owns one agent token and one running sing-box process; each "node"
+//! on that server is compiled as one inbound inside that single config.
 
 mod client;
 mod config;
@@ -24,19 +26,24 @@ use crate::traffic::TrafficReporter;
 const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Parser)]
-#[command(name = "server-agent", version, about = "blossom proxy node agent")]
+#[command(name = "server-agent", version, about = "blossom proxy server agent")]
 struct Args {
     /// Base URL of the blossom API, including the `/api` prefix
     /// (e.g. http://localhost:3000/api).
     #[arg(long, env = "AGENT_URL")]
     url: String,
 
-    /// Per-node agent token (the `agt_...` value shown once at node creation).
+    /// Per-server agent token (shown once at server creation or token reset).
     #[arg(long, env = "AGENT_TOKEN")]
     token: String,
 
     /// Seconds between config-fetch + heartbeat cycles.
-    #[arg(long, default_value_t = 60)]
+    #[arg(
+        long,
+        default_value_t = 60,
+        env = "AGENT_INTERVAL",
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
     interval: u64,
 
     /// Log level: trace, debug, info, warn, or error.
@@ -87,7 +94,7 @@ async fn main() -> Result<()> {
     let bin = resolve_binary(args.sing_box_path);
     let manager = SingBoxManager::start(bin, config.config_path().clone()).await?;
 
-    // Post an immediate heartbeat so the node shows online without waiting a cycle.
+    // Post an immediate heartbeat so the server shows online without waiting a cycle.
     heartbeat(&client).await;
 
     info!("agent running; polling every {}s", args.interval);
@@ -113,7 +120,7 @@ async fn main() -> Result<()> {
 
 /// One polling cycle: collect traffic deltas, refresh config (reloading sing-box
 /// if it changed), reconcile the traffic reporter, and heartbeat. Errors are
-/// logged, never fatal — the loop keeps the node alive.
+/// logged, never fatal — the loop keeps the server agent alive.
 async fn poll_once(
     config: &mut ConfigManager,
     manager: &SingBoxManager,

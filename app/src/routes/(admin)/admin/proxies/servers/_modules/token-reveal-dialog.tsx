@@ -25,9 +25,11 @@ export interface TokenRevealProps {
 /**
  * Imperative one-time agent-token reveal: `await TokenRevealDialog.call({ token })`.
  *
- * The plaintext is never stored, so this is the only chance to copy it — surfaced
- * after both node creation and token reset. Render `<TokenRevealDialog />` once high
- * in the tree; `call.ended` drives the controlled `open` so the exit animation plays.
+ * The plaintext is never stored, so this is the only chance to copy it —
+ * surfaced after server creation and token reset. Render `<TokenRevealDialog />`
+ * once high in the tree; `call.ended` drives the controlled `open` so the exit
+ * animation plays. The token is the server-level credential the agent presents
+ * to pull the (multi-inbound) config and post heartbeats.
  */
 export const TokenRevealDialog = createCallable<TokenRevealProps, void>(
   ({ call, token }) => {
@@ -59,9 +61,9 @@ export const TokenRevealDialog = createCallable<TokenRevealProps, void>(
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{m.admin_proxies_nodes_token_title()}</DialogTitle>
+            <DialogTitle>{m.admin_proxies_servers_token_title()}</DialogTitle>
             <DialogDescription>
-              {m.admin_proxies_nodes_token_description()}
+              {m.admin_proxies_servers_token_description()}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 px-6">
@@ -75,7 +77,7 @@ export const TokenRevealDialog = createCallable<TokenRevealProps, void>(
                 size="icon"
                 aria-label="Copy"
                 onClick={() =>
-                  void copy(token, m.admin_proxies_nodes_toast_token_copied())
+                  void copy(token, m.admin_proxies_servers_toast_token_copied())
                 }
               >
                 <CopyIcon />
@@ -83,7 +85,7 @@ export const TokenRevealDialog = createCallable<TokenRevealProps, void>(
             </div>
             <div className="space-y-2">
               <p className="text-sm text-muted-foreground">
-                {m.admin_proxies_nodes_token_docker_label()}
+                {m.admin_proxies_servers_token_docker_label()}
               </p>
               <div className="flex items-start gap-2 rounded-lg border bg-muted/32 p-3">
                 <code className="min-w-0 flex-1 font-mono text-xs break-all">
@@ -97,7 +99,7 @@ export const TokenRevealDialog = createCallable<TokenRevealProps, void>(
                   onClick={() =>
                     void copy(
                       dockerCommand,
-                      m.admin_proxies_nodes_toast_command_copied(),
+                      m.admin_proxies_servers_toast_command_copied(),
                     )
                   }
                 >
@@ -108,7 +110,7 @@ export const TokenRevealDialog = createCallable<TokenRevealProps, void>(
           </div>
           <DialogFooter>
             <DialogClose render={<Button />}>
-              {m.admin_proxies_nodes_token_done()}
+              {m.admin_proxies_servers_token_done()}
             </DialogClose>
           </DialogFooter>
         </DialogContent>

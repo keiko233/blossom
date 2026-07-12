@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 
 import { db } from "@/db";
 import { node } from "@/db/proxy-schema";
-import { generateAgentToken } from "@/lib/agent-token";
+import { server } from "@/db/proxy-schema";
 import { ensureAdmin } from "@/lib/ensure-admin";
 import {
   createNodeSchema,
@@ -16,28 +16,135 @@ import {
 /** TanStack Query key for the admin node list. */
 export const NODES_QUERY_KEY = ["admin", "nodes"] as const;
 
+/**
+ * Node as served to the admin list. Includes the owning server's security-
+ * relevant summary (id, name, address, enabled) and the resolved public
+ * endpoint address (= node.address ?? server.address). Never carries an agent
+ * token hash — the token lives on the server now.
+ */
+export interface NodeListItem {
+  id: string;
+  name: string;
+  remark: string | null;
+  tags: string[];
+  enabled: boolean;
+  serverId: string;
+  address: string | null;
+  resolvedAddress: string;
+  listenPort: number;
+  protocol: string;
+  settings: Record<string, unknown>;
+  serverSummary: {
+    id: string;
+    name: string;
+    address: string;
+    enabled: boolean;
+    agentTokenPrefix: string;
+    lastSeenAt: Date | null;
+  };
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * Node as returned from `getNode` for the edit page. Carries the raw override
+ * (which may be null when the node falls back to its server's address) plus
+ * the owning server's summary so the form can show the fallback inline.
+ */
+export interface NodeDetail extends Omit<NodeListItem, "serverSummary"> {
+  serverSummary: NodeListItem["serverSummary"] & {
+    remark: string | null;
+    enabled: boolean;
+  };
+}
+
+function resolveAddress(
+  nodeRow: typeof node.$inferSelect,
+  serverRow: {
+    address: string;
+  },
+): string {
+  return nodeRow.address ?? serverRow.address;
+}
+
 export const listNodes = createServerFn({ method: "GET" }).handler(async () => {
   await ensureAdmin();
-  return db.select().from(node).orderBy(desc(node.createdAt));
+  const rows = await db
+    .select({ node, server })
+    .from(node)
+    .innerJoin(server, eq(server.id, node.serverId))
+    .orderBy(desc(node.createdAt));
+
+  return rows.map(({ node: n, server: s }) => ({
+    id: n.id,
+    name: n.name,
+    remark: n.remark,
+    tags: n.tags,
+    enabled: n.enabled,
+    serverId: n.serverId,
+    address: n.address,
+    resolvedAddress: resolveAddress(n, s),
+    listenPort: n.listenPort,
+    protocol: n.protocol,
+    settings: n.settings,
+    serverSummary: {
+      id: s.id,
+      name: s.name,
+      address: s.address,
+      enabled: s.enabled,
+      agentTokenPrefix: s.agentTokenPrefix,
+      lastSeenAt: s.lastSeenAt,
+    },
+    createdAt: n.createdAt,
+    updatedAt: n.updatedAt,
+  })) satisfies NodeListItem[];
 });
 
 export const getNode = createServerFn({ method: "GET" })
   .validator(nodeIdSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
-    const [row] = await db.select().from(node).where(eq(node.id, data.id));
+    const [row] = await db
+      .select({ node, server })
+      .from(node)
+      .innerJoin(server, eq(server.id, node.serverId))
+      .where(eq(node.id, data.id));
     if (!row) {
       throw new Error("Not found");
     }
-    return row;
+    const { node: n, server: s } = row;
+    return {
+      id: n.id,
+      name: n.name,
+      remark: n.remark,
+      tags: n.tags,
+      enabled: n.enabled,
+      serverId: n.serverId,
+      address: n.address,
+      resolvedAddress: resolveAddress(n, s),
+      listenPort: n.listenPort,
+      protocol: n.protocol,
+      settings: n.settings,
+      serverSummary: {
+        id: s.id,
+        name: s.name,
+        remark: s.remark,
+        address: s.address,
+        enabled: s.enabled,
+        agentTokenPrefix: s.agentTokenPrefix,
+        lastSeenAt: s.lastSeenAt,
+      },
+      createdAt: n.createdAt,
+      updatedAt: n.updatedAt,
+    } satisfies NodeDetail;
   });
 
 export const createNode = createServerFn({ method: "POST" })
   .validator(createNodeSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
-    const credential = generateAgentToken();
 
+    // No agent token is minted here — the owning server holds it.
     const [row] = await db
       .insert(node)
       .values({
@@ -46,25 +153,25 @@ export const createNode = createServerFn({ method: "POST" })
         remark: data.remark,
         tags: data.tags,
         enabled: data.enabled,
-        address: data.address,
+        serverId: data.serverId,
+        // `null` IS a valid override ("use server.address"); only `undefined`
+        // should fall back to the schema default (empty {}).
+        address: data.address ?? null,
         listenPort: data.listenPort,
         protocol: data.protocol,
         // Strictly re-validate the fragment against the sing-box schema for this protocol.
         settings: parseNodeSettings(data.protocol, data.settings),
-        agentTokenHash: credential.hash,
-        agentTokenPrefix: credential.prefix,
       })
       .returning();
 
-    // Plaintext token is returned once here and never persisted.
-    return { node: row, token: credential.token };
+    return { node: row };
   });
 
 export const updateNode = createServerFn({ method: "POST" })
   .validator(updateNodeSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
-    const { id, protocol, settings, ...rest } = data;
+    const { id, protocol, settings, address, ...rest } = data;
 
     // Validating settings needs the effective protocol (may be unchanged on edit).
     let settingsUpdate:
@@ -87,12 +194,20 @@ export const updateNode = createServerFn({ method: "POST" })
       };
     }
 
+    // `undefined` => leave address alone; `null` => explicitly drop override and
+    // fall back to server.address; string => set override.
+    const addressUpdate =
+      address === undefined
+        ? {}
+        : { address: address === null ? null : address };
+
     const [row] = await db
       .update(node)
       .set({
         ...rest,
         ...(protocol ? { protocol } : {}),
         ...settingsUpdate,
+        ...addressUpdate,
       })
       .where(eq(node.id, id))
       .returning();
@@ -112,25 +227,4 @@ export const deleteNode = createServerFn({ method: "POST" })
       throw new Error("Not found");
     }
     return { id: row.id };
-  });
-
-export const regenerateAgentToken = createServerFn({ method: "POST" })
-  .validator(nodeIdSchema)
-  .handler(async ({ data }) => {
-    await ensureAdmin();
-    const credential = generateAgentToken();
-
-    const [row] = await db
-      .update(node)
-      .set({
-        agentTokenHash: credential.hash,
-        agentTokenPrefix: credential.prefix,
-      })
-      .where(eq(node.id, data.id))
-      .returning();
-
-    if (!row) {
-      throw new Error("Not found");
-    }
-    return { id: row.id, token: credential.token };
   });

@@ -1,9 +1,17 @@
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { ArrowLeftIcon } from "lucide-react";
 import type React from "react";
+import { useEffect } from "react";
 
 import { schemaSections } from "@/components/schema-form/schema-form";
 import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -21,9 +29,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs";
-import type { Node } from "@/db/proxy-schema";
+import type { NodeDetail } from "@/lib/nodes";
+import { listServers, SERVERS_QUERY_KEY } from "@/lib/servers";
 import {
   NODE_PROTOCOLS,
   type NodeProtocol,
@@ -31,14 +41,14 @@ import {
 } from "@/orpc/proxy/sing-box-registry";
 import { m } from "@/paraglide/messages";
 
-import { TokenRevealDialog } from "./token-reveal-dialog";
 import { settingsDefaults, useNodeFormController } from "./use-node-form";
 
 const NODES_LIST = "/admin/proxies/nodes" as const;
+const SERVERS_NEW = "/admin/proxies/servers/new" as const;
 
 export interface NodeFormPageProps {
   /** Present when editing; absent for the create page. */
-  node?: Node;
+  node?: NodeDetail;
 }
 
 export function NodeFormPage({ node }: NodeFormPageProps): React.ReactElement {
@@ -47,16 +57,72 @@ export function NodeFormPage({ node }: NodeFormPageProps): React.ReactElement {
 
   const goToList = () => void navigate({ to: NODES_LIST });
 
-  const { form } = useNodeFormController({
-    node,
-    onSuccess: async ({ token }) => {
-      // On create, reveal the one-time token before returning to the list.
-      if (token) {
-        await TokenRevealDialog.call({ token });
-      }
-      goToList();
-    },
+  const { data: servers, isPending: isServersPending } = useQuery({
+    queryKey: SERVERS_QUERY_KEY,
+    queryFn: () => listServers(),
   });
+
+  const formController = useNodeFormController({
+    node,
+    onSuccess: goToList,
+  });
+  const { form } = formController;
+  const serverOptions = servers ?? [];
+  const firstServerId = servers?.[0]?.id;
+
+  // The form is created before the server query necessarily resolves. Select
+  // the first server once on create, without mutating form state during render.
+  useEffect(() => {
+    if (!isEdit && !form.store.state.values.serverId && firstServerId) {
+      form.setFieldValue("serverId", firstServerId);
+    }
+  }, [firstServerId, form, isEdit]);
+
+  if (isServersPending) {
+    return (
+      <div className="flex min-h-40 items-center justify-center p-4">
+        <Spinner />
+      </div>
+    );
+  }
+
+  // No servers → cannot create a node; show an explicit CTA and disable save
+  // so the user never has to read a generic backend FK error.
+  if (!isEdit && serverOptions.length === 0) {
+    return (
+      <div className="flex flex-col">
+        <header className="sticky top-0 z-10 flex items-center gap-3 border-b bg-background/80 px-4 py-3 backdrop-blur">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label={m.admin_proxies_nodes_form_back()}
+            onClick={goToList}
+          >
+            <ArrowLeftIcon />
+          </Button>
+          <h1 className="font-heading text-lg font-semibold">
+            {m.admin_proxies_nodes_form_create_title()}
+          </h1>
+        </header>
+        <div className="p-4">
+          <Empty>
+            <EmptyHeader>
+              <EmptyTitle>
+                {m.admin_proxies_nodes_form_no_server_title()}
+              </EmptyTitle>
+              <EmptyDescription>
+                {m.admin_proxies_nodes_form_no_server_description()}
+              </EmptyDescription>
+            </EmptyHeader>
+            <Button onClick={() => void navigate({ to: SERVERS_NEW })}>
+              {m.admin_proxies_nodes_form_no_server_action()}
+            </Button>
+          </Empty>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col">
@@ -81,9 +147,18 @@ export function NodeFormPage({ node }: NodeFormPageProps): React.ReactElement {
           <Button type="button" variant="ghost" onClick={goToList}>
             {m.admin_proxies_nodes_form_cancel()}
           </Button>
-          <form.Subscribe selector={(s) => s.isSubmitting}>
-            {(isSubmitting) => (
-              <Button type="submit" form="node-form" disabled={isSubmitting}>
+          <form.Subscribe
+            selector={(s) => ({
+              isSubmitting: s.isSubmitting,
+              serverId: s.values.serverId,
+            })}
+          >
+            {({ isSubmitting, serverId }) => (
+              <Button
+                type="submit"
+                form="node-form"
+                disabled={isSubmitting || !serverId}
+              >
                 {m.admin_proxies_nodes_form_save()}
               </Button>
             )}
@@ -160,6 +235,44 @@ export function NodeFormPage({ node }: NodeFormPageProps): React.ReactElement {
                       )}
                     </form.Field>
 
+                    <form.Field name="serverId">
+                      {(field) => (
+                        <Field>
+                          <FieldLabel>
+                            {m.admin_proxies_nodes_field_server()}
+                          </FieldLabel>
+                          <Select
+                            value={field.state.value}
+                            onValueChange={(v) => field.handleChange(v ?? "")}
+                          >
+                            <SelectTrigger>
+                              <SelectValue
+                                placeholder={m.admin_proxies_nodes_field_server_placeholder()}
+                              />
+                            </SelectTrigger>
+                            <SelectPopup>
+                              {serverOptions.length === 0 ? (
+                                <div className="px-3 py-2 text-xs text-muted-foreground">
+                                  {m.admin_proxies_nodes_field_server_empty()}
+                                </div>
+                              ) : (
+                                serverOptions.map((s) => (
+                                  <SelectItem key={s.id} value={s.id}>
+                                    <div className="flex flex-col">
+                                      <span>{s.name}</span>
+                                      <span className="font-mono text-xs text-muted-foreground">
+                                        {s.address}
+                                      </span>
+                                    </div>
+                                  </SelectItem>
+                                ))
+                              )}
+                            </SelectPopup>
+                          </Select>
+                        </Field>
+                      )}
+                    </form.Field>
+
                     <div className="grid grid-cols-[2fr_1fr] gap-3">
                       <form.Field name="address">
                         {(field) => (
@@ -169,10 +282,13 @@ export function NodeFormPage({ node }: NodeFormPageProps): React.ReactElement {
                             </FieldLabel>
                             <Input
                               value={field.state.value}
-                              onValueChange={(v) => field.handleChange(v)}
+                              onValueChange={(v) => field.handleChange(v ?? "")}
                               onBlur={field.handleBlur}
-                              placeholder="example.com"
+                              placeholder={m.admin_proxies_nodes_field_address_placeholder()}
                             />
+                            <p className="text-xs text-muted-foreground">
+                              {m.admin_proxies_nodes_field_address_helper()}
+                            </p>
                           </Field>
                         )}
                       </form.Field>
@@ -226,6 +342,9 @@ export function NodeFormPage({ node }: NodeFormPageProps): React.ReactElement {
                           <Select
                             value={field.state.value}
                             onValueChange={(v) => {
+                              if (!v) {
+                                return;
+                              }
                               const next = v as NodeProtocol;
                               field.handleChange(next);
                               form.setFieldValue(

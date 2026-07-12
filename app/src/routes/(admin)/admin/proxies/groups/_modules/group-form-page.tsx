@@ -24,7 +24,7 @@ import {
   NumberFieldIncrement,
   NumberFieldInput,
 } from "@/components/ui/number-field";
-import type { Node } from "@/db/proxy-schema";
+import type { NodeListItem } from "@/lib/nodes";
 import { listNodes, NODES_QUERY_KEY } from "@/lib/nodes";
 import { m } from "@/paraglide/messages";
 
@@ -165,14 +165,14 @@ export function GroupFormPage({
                       multiple
                       items={nodeOptions}
                       value={selected}
-                      onValueChange={(next: Node[]) =>
+                      onValueChange={(next: NodeListItem[]) =>
                         field.handleChange(next.map((n) => n.id))
                       }
-                      itemToStringLabel={(n: Node) => n.name}
+                      itemToStringLabel={(n: NodeListItem) => n.name}
                     >
                       <ComboboxChips>
                         <ComboboxValue>
-                          {(value: Node[]) => (
+                          {(value: NodeListItem[]) => (
                             <>
                               {value.map((n) => (
                                 <ComboboxChip key={n.id} aria-label={n.name}>
@@ -195,12 +195,13 @@ export function GroupFormPage({
                           {m.admin_proxies_groups_field_nodes_empty()}
                         </ComboboxEmpty>
                         <ComboboxList>
-                          {(n: Node) => (
+                          {(n: NodeListItem) => (
                             <ComboboxItem key={n.id} value={n}>
                               <div className="flex flex-col">
                                 <span>{n.name}</span>
                                 <span className="font-mono text-xs text-muted-foreground">
-                                  {n.address}:{n.listenPort}
+                                  {n.serverSummary.name} · {n.resolvedAddress}:
+                                  {n.listenPort}
                                 </span>
                               </div>
                             </ComboboxItem>

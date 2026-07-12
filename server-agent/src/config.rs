@@ -1,9 +1,9 @@
-//! Fetches the node's sing-box config from the blossom API and materialises it
-//! on disk for sing-box to read. The config is otherwise treated as opaque JSON
-//! — the server has already validated it and injected the `experimental.v2ray_api`
-//! hooks, so the agent only diffs and writes, never interprets, with one
-//! exception: it reads `experimental.v2ray_api.listen` to find the stats
-//! endpoint.
+//! Fetches the server's combined multi-inbound sing-box config from the blossom
+//! API and materialises it on disk. The config is otherwise treated as opaque
+//! JSON — the control plane has already validated it and injected the
+//! `experimental.v2ray_api` hooks, so the agent only diffs and writes, never
+//! interprets, with one exception: it reads `experimental.v2ray_api.listen` to
+//! find the stats endpoint.
 
 use std::path::PathBuf;
 

@@ -23,7 +23,7 @@ services:
     environment:
       # Base URL of the blossom API, including the /api prefix.
       AGENT_URL: ${AGENT_URL:?set AGENT_URL in .env}
-      # Per-node token (the agt_... value shown once at node creation).
+      # Per-server token (shown once at server creation or token reset).
       AGENT_TOKEN: ${AGENT_TOKEN:?set AGENT_TOKEN in .env}
       # trace | debug | info | warn | error
       AGENT_LOG_LEVEL: ${AGENT_LOG_LEVEL:-info}

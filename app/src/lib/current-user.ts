@@ -3,7 +3,7 @@ import { desc, eq } from "drizzle-orm";
 
 import { db } from "@/db";
 import { plan, subscription } from "@/db/plan-schema";
-import { node } from "@/db/proxy-schema";
+import { node, server } from "@/db/proxy-schema";
 import { trafficRecord } from "@/db/traffic-schema";
 
 import { ensureSession } from "./auth";
@@ -52,18 +52,34 @@ export const getCurrentUser = createServerFn({ method: "GET" }).handler(
         .select({
           id: trafficRecord.id,
           nodeName: node.name,
+          serverName: server.name,
           uplinkBytes: trafficRecord.uplinkBytes,
           downlinkBytes: trafficRecord.downlinkBytes,
           createdAt: trafficRecord.createdAt,
         })
         .from(trafficRecord)
         .leftJoin(node, eq(node.id, trafficRecord.nodeId))
+        .leftJoin(server, eq(server.id, trafficRecord.serverId))
         .where(eq(trafficRecord.userId, userId))
         .orderBy(desc(trafficRecord.createdAt))
         .limit(50),
     ]);
 
-    return { subscriptions, trafficRecords };
+    return {
+      subscriptions,
+      // Map the joined rows onto the table's `sourceName`/`isServer` contract:
+      // a non-null node name wins; otherwise fall back to the denormalized
+      // server name (true for multi-inbound records whose node has moved /
+      // been deleted); finally both null → deleted.
+      trafficRecords: trafficRecords.map((r) => ({
+        id: r.id,
+        sourceName: r.nodeName ?? r.serverName,
+        isServer: r.nodeName === null && r.serverName !== null,
+        uplinkBytes: r.uplinkBytes,
+        downlinkBytes: r.downlinkBytes,
+        createdAt: r.createdAt,
+      })),
+    };
   },
 );
 

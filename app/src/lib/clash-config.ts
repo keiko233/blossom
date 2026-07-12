@@ -1,7 +1,7 @@
-import type { Node } from "@/db/proxy-schema";
 import type { JsonValue } from "@/orpc/proxy/schema";
 
 import { nodeToClashProxy } from "./clash-proxies";
+import type { ResolvedNode } from "./subscription-access";
 
 interface SubscriptionCredentials {
   uuid: string;
@@ -32,14 +32,14 @@ function uniqueProxyNames(
  * caller can return a 403 rather than an invalid Clash config.
  */
 export function buildClashConfig(
-  nodes: Node[],
+  nodes: ResolvedNode[],
   options: BuildOptions,
 ): { config: unknown; proxyNames: string[] } {
   const { credentials } = options;
 
   const proxies = uniqueProxyNames(
     nodes
-      .map((node) => nodeToClashProxy(node, credentials))
+      .map((resolved) => nodeToClashProxy(resolved, credentials))
       .filter((proxy): proxy is Record<string, JsonValue> => proxy !== null),
   );
 
