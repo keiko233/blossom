@@ -80,6 +80,8 @@ export const createServer = createServerFn({ method: "POST" })
         remark: data.remark,
         enabled: data.enabled,
         address: data.address,
+        configPollIntervalSeconds: data.configPollIntervalSeconds,
+        heartbeatIntervalSeconds: data.heartbeatIntervalSeconds,
         agentTokenHash: credential.hash,
         agentTokenPrefix: credential.prefix,
       })

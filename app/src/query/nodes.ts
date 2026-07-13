@@ -41,6 +41,13 @@ export interface NodeListItem {
     enabled: boolean;
     agentTokenPrefix: string;
     lastSeenAt: Date | null;
+    heartbeatIntervalSeconds: number;
+    runtimeState: string;
+    configState: string;
+    appliedRevision: string | null;
+    activeNodeIds: string[];
+    lastErrorMessage: string | null;
+    lastErrorNodeId: string | null;
   };
   createdAt: Date;
   updatedAt: Date;
@@ -94,6 +101,13 @@ export const listNodes = createServerFn({ method: "GET" }).handler(async () => {
       enabled: s.enabled,
       agentTokenPrefix: s.agentTokenPrefix,
       lastSeenAt: s.lastSeenAt,
+      heartbeatIntervalSeconds: s.heartbeatIntervalSeconds,
+      runtimeState: s.runtimeState,
+      configState: s.configState,
+      appliedRevision: s.appliedRevision,
+      activeNodeIds: s.activeNodeIds,
+      lastErrorMessage: s.lastErrorMessage,
+      lastErrorNodeId: s.lastErrorNodeId,
     },
     createdAt: n.createdAt,
     updatedAt: n.updatedAt,
@@ -133,6 +147,13 @@ export const getNode = createServerFn({ method: "GET" })
         enabled: s.enabled,
         agentTokenPrefix: s.agentTokenPrefix,
         lastSeenAt: s.lastSeenAt,
+        heartbeatIntervalSeconds: s.heartbeatIntervalSeconds,
+        runtimeState: s.runtimeState,
+        configState: s.configState,
+        appliedRevision: s.appliedRevision,
+        activeNodeIds: s.activeNodeIds,
+        lastErrorMessage: s.lastErrorMessage,
+        lastErrorNodeId: s.lastErrorNodeId,
       },
       createdAt: n.createdAt,
       updatedAt: n.updatedAt,

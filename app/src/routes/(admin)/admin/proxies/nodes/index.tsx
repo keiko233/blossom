@@ -35,6 +35,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toastManager } from "@/components/ui/toast";
+import { deriveNodeHealth } from "@/lib/agent-status";
 import { m } from "@/paraglide/messages";
 import {
   deleteNode,
@@ -48,19 +49,6 @@ export const Route = createFileRoute("/(admin)/admin/proxies/nodes/")({
   component: RouteComponent,
 });
 
-// A server's agent is considered online if it heartbeated within this window;
-// a node inherits its server's online status.
-const ONLINE_THRESHOLD_MS = 2 * 60 * 1000;
-
-function serverOnline(server: NodeListItem["serverSummary"]): boolean {
-  if (!server.lastSeenAt) {
-    return false;
-  }
-  return (
-    Date.now() - new Date(server.lastSeenAt).getTime() < ONLINE_THRESHOLD_MS
-  );
-}
-
 const columnHelper = createColumnHelper<NodeListItem>();
 
 function RouteComponent(): React.ReactElement {
@@ -70,6 +58,7 @@ function RouteComponent(): React.ReactElement {
   const { data: nodes, isPending } = useQuery({
     queryKey: NODES_QUERY_KEY,
     queryFn: () => listNodes(),
+    refetchInterval: 15_000,
   });
 
   const invalidate = () =>
@@ -184,21 +173,53 @@ function RouteComponent(): React.ReactElement {
             </Badge>
           );
         }
-        const online = serverOnline(node.serverSummary);
+        const health = deriveNodeHealth(
+          node.id,
+          node.enabled,
+          node.serverSummary,
+        );
+        const label = {
+          server_disabled: m.admin_proxies_nodes_status_server_disabled(),
+          disabled: m.admin_proxies_nodes_status_disabled(),
+          agent_offline: m.admin_proxies_nodes_status_agent_offline(),
+          runtime_error: m.admin_proxies_nodes_status_runtime_error(),
+          config_error: m.admin_proxies_nodes_status_config_error(),
+          serving_stale: m.admin_proxies_nodes_status_serving_stale(),
+          serving: m.admin_proxies_nodes_status_serving(),
+          idle: m.admin_proxies_nodes_status_idle(),
+          unknown: m.admin_proxies_nodes_status_unknown(),
+        }[health];
+        const dotClass =
+          health === "serving"
+            ? "bg-emerald-500"
+            : health === "serving_stale" ||
+                health === "idle" ||
+                health === "unknown"
+              ? "bg-amber-500"
+              : "bg-red-500";
         return (
-          <Badge variant="outline">
-            <span
-              aria-hidden="true"
-              className={
-                online
-                  ? "size-1.5 rounded-full bg-emerald-500"
-                  : "size-1.5 rounded-full bg-red-500"
-              }
-            />
-            {online
-              ? m.admin_proxies_nodes_status_online()
-              : m.admin_proxies_nodes_status_offline()}
-          </Badge>
+          <div className="flex max-w-80 flex-col items-start gap-1">
+            <Badge
+              variant="outline"
+              title={node.serverSummary.lastErrorMessage ?? undefined}
+            >
+              <span
+                aria-hidden="true"
+                className={`size-1.5 rounded-full ${dotClass}`}
+              />
+              {label}
+            </Badge>
+            {node.serverSummary.lastErrorMessage &&
+            (!node.serverSummary.lastErrorNodeId ||
+              node.serverSummary.lastErrorNodeId === node.id) &&
+            ["config_error", "serving_stale", "runtime_error"].includes(
+              health,
+            ) ? (
+              <span className="line-clamp-2 text-xs text-destructive">
+                {node.serverSummary.lastErrorMessage}
+              </span>
+            ) : null}
+          </div>
         );
       },
     }),

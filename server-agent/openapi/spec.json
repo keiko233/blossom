@@ -156,6 +156,97 @@
         }
       }
     },
+    "/agent/config/v2": {
+      "get": {
+        "operationId": "getAgentConfigV2",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "apiVersion": {
+                      "enum": [
+                        2
+                      ]
+                    },
+                    "agent": {
+                      "type": "object",
+                      "properties": {
+                        "configPollIntervalSeconds": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "heartbeatIntervalSeconds": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "configPollIntervalSeconds",
+                        "heartbeatIntervalSeconds"
+                      ]
+                    },
+                    "singbox": {
+                      "type": "object",
+                      "properties": {
+                        "revision": {
+                          "type": "string"
+                        },
+                        "materializedNodeIds": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "config": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "revision",
+                        "materializedNodeIds",
+                        "config"
+                      ]
+                    },
+                    "actions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "type"
+                        ],
+                        "additionalProperties": {}
+                      }
+                    }
+                  },
+                  "required": [
+                    "apiVersion",
+                    "agent",
+                    "singbox",
+                    "actions"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/agent/heartbeat": {
       "post": {
         "operationId": "agentHeartbeat",
@@ -168,6 +259,97 @@
                 "properties": {
                   "agentVersion": {
                     "type": "string"
+                  },
+                  "singBoxVersion": {
+                    "type": "string"
+                  },
+                  "runtimeState": {
+                    "enum": [
+                      "unknown",
+                      "starting",
+                      "running",
+                      "stopped",
+                      "crash_loop"
+                    ],
+                    "type": "string"
+                  },
+                  "configState": {
+                    "enum": [
+                      "unknown",
+                      "applied",
+                      "rejected",
+                      "apply_failed"
+                    ],
+                    "type": "string"
+                  },
+                  "observedRevision": {
+                    "type": "string",
+                    "maxLength": 128
+                  },
+                  "appliedRevision": {
+                    "type": "string",
+                    "maxLength": 128
+                  },
+                  "activeNodeIds": {
+                    "type": "array",
+                    "maxItems": 10000,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "clearActiveNodeIds": {
+                    "type": "boolean"
+                  },
+                  "effectiveConfigPollIntervalSeconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 86400
+                  },
+                  "effectiveHeartbeatIntervalSeconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 3600
+                  },
+                  "appliedAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "clearError": {
+                    "type": "boolean"
+                  },
+                  "error": {
+                    "type": "object",
+                    "properties": {
+                      "phase": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      },
+                      "code": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      "message": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 16384
+                      },
+                      "nodeId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "occurredAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    },
+                    "required": [
+                      "phase",
+                      "code",
+                      "message"
+                    ]
                   }
                 }
               }

@@ -11,6 +11,8 @@ export interface ServerFormValues {
   remark: string;
   enabled: boolean;
   address: string;
+  configPollIntervalSeconds: number;
+  heartbeatIntervalSeconds: number;
 }
 
 function defaultValues(server?: ServerDTO): ServerFormValues {
@@ -19,6 +21,8 @@ function defaultValues(server?: ServerDTO): ServerFormValues {
     remark: server?.remark ?? "",
     enabled: server?.enabled ?? true,
     address: server?.address ?? "",
+    configPollIntervalSeconds: server?.configPollIntervalSeconds ?? 60,
+    heartbeatIntervalSeconds: server?.heartbeatIntervalSeconds ?? 30,
   };
 }
 
@@ -28,6 +32,8 @@ function toPayload(v: ServerFormValues) {
     remark: v.remark || undefined,
     enabled: v.enabled,
     address: v.address,
+    configPollIntervalSeconds: v.configPollIntervalSeconds,
+    heartbeatIntervalSeconds: v.heartbeatIntervalSeconds,
   };
 }
 

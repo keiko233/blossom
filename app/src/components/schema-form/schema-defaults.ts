@@ -15,9 +15,15 @@ import {
  * type-appropriate empty value. Objects recurse so every field is controlled.
  */
 export function defaultsFromSchema(schema: AnyZod): unknown {
-  const { inner, defaultValue } = unwrap(schema);
+  const { inner, defaultValue, isOptional } = unwrap(schema);
   if (defaultValue !== undefined) {
     return defaultValue;
+  }
+  // Optional branches start absent. In particular, recursively materialising an
+  // optional object creates invalid sing-box fragments such as
+  // `dns01_challenge: { provider: "" }` even when the user never enabled it.
+  if (isOptional) {
+    return undefined;
   }
 
   switch (typeOf(inner)) {
@@ -66,6 +72,14 @@ export function pruneSettings(value: unknown, schema: AnyZod): unknown {
   const { inner, isOptional } = unwrap(schema);
 
   if (typeOf(inner) === "object") {
+    if (
+      isOptional &&
+      (value === undefined ||
+        value === null ||
+        isEqual(value, defaultsFromSchema(inner)))
+    ) {
+      return undefined;
+    }
     const shape = objectShape(inner) ?? {};
     const source = (value ?? {}) as Record<string, unknown>;
     const out: Record<string, unknown> = {};

@@ -164,7 +164,7 @@ export function SchemaField({
   defaultOpen,
   variant = "card",
 }: SchemaFieldProps): React.ReactElement | null {
-  const { inner } = unwrap(schema);
+  const { inner, isOptional } = unwrap(schema);
   const kind = typeOf(inner);
   const label = humanizeKey(labelKey);
   const meta = fieldMeta(schema);
@@ -180,6 +180,7 @@ export function SchemaField({
         help={meta.help}
         defaultOpen={defaultOpen}
         variant={variant}
+        optional={isOptional}
       />
     );
   }
@@ -433,6 +434,7 @@ function ObjectGroup({
   help,
   defaultOpen,
   variant,
+  optional,
 }: {
   form: SchemaFormApi;
   name: string;
@@ -441,8 +443,49 @@ function ObjectGroup({
   help?: string;
   defaultOpen?: boolean;
   variant?: GroupVariant;
+  optional: boolean;
 }): React.ReactElement {
   const shape = objectShape(inner) ?? {};
+  if (optional) {
+    return (
+      <form.Field name={name}>
+        {(field: AnyFieldApi) => {
+          const enabled = field.state.value !== undefined;
+          return (
+            <GroupShell
+              label={label}
+              help={help}
+              defaultOpen={defaultOpen}
+              variant={variant}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <Label>{label}</Label>
+                <Switch
+                  checked={enabled}
+                  onCheckedChange={(next) =>
+                    field.handleChange(
+                      next ? defaultsFromSchema(inner) : undefined,
+                    )
+                  }
+                />
+              </div>
+              {enabled
+                ? Object.entries(shape).map(([key, child]) => (
+                    <SchemaField
+                      key={key}
+                      form={form}
+                      name={`${name}.${key}`}
+                      schema={child}
+                      labelKey={key}
+                    />
+                  ))
+                : null}
+            </GroupShell>
+          );
+        }}
+      </form.Field>
+    );
+  }
   return (
     <GroupShell
       label={label}

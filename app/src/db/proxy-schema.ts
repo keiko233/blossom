@@ -12,6 +12,19 @@ import {
 
 import type { JsonValue, NodeProtocol } from "@/orpc/proxy/schema";
 
+export type AgentRuntimeState =
+  | "unknown"
+  | "starting"
+  | "running"
+  | "stopped"
+  | "crash_loop";
+
+export type AgentConfigState =
+  | "unknown"
+  | "applied"
+  | "rejected"
+  | "apply_failed";
+
 /**
  * A server is one physical proxy host managed by a single Rust server-agent:
  * it owns the agent token, heartbeat, agent version, and a default public
@@ -40,6 +53,38 @@ export const server = pgTable(
     agentTokenPrefix: text("agent_token_prefix").notNull(),
     lastSeenAt: timestamp("last_seen_at"),
     agentVersion: text("agent_version"),
+    configPollIntervalSeconds: integer("config_poll_interval_seconds")
+      .default(60)
+      .notNull(),
+    heartbeatIntervalSeconds: integer("heartbeat_interval_seconds")
+      .default(30)
+      .notNull(),
+
+    // Latest runtime/config snapshot reported by the agent. Reachability is
+    // still derived from lastSeenAt; these fields describe what sing-box itself
+    // is doing and which exact config is serving.
+    singBoxVersion: text("sing_box_version"),
+    runtimeState: text("runtime_state")
+      .$type<AgentRuntimeState>()
+      .default("unknown")
+      .notNull(),
+    configState: text("config_state")
+      .$type<AgentConfigState>()
+      .default("unknown")
+      .notNull(),
+    observedRevision: text("observed_revision"),
+    appliedRevision: text("applied_revision"),
+    activeNodeIds: jsonb("active_node_ids")
+      .$type<string[]>()
+      .default([])
+      .notNull(),
+    statusReportedAt: timestamp("status_reported_at"),
+    lastAppliedAt: timestamp("last_applied_at"),
+    lastErrorPhase: text("last_error_phase"),
+    lastErrorCode: text("last_error_code"),
+    lastErrorMessage: text("last_error_message"),
+    lastErrorNodeId: text("last_error_node_id"),
+    lastErrorAt: timestamp("last_error_at"),
 
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")

@@ -95,7 +95,7 @@ To skip building locally, point the `app` service at the prebuilt image (`image:
 
 ## Server agent
 
-The Rust server-agent in `server-agent/` consumes the control-plane OpenAPI spec at `/api/agent/*`. Each server owns one agent token and one sing-box process; every enabled node assigned to that server becomes an inbound in the same generated sing-box config. After changing the agent-facing API, regenerate the agent client while the dev server is running:
+The Rust server-agent in `server-agent/` consumes the control-plane OpenAPI spec at `/api/agent/*`. Each server owns one agent token and one sing-box process; every enabled node assigned to that server becomes an inbound in the same generated sing-box config. New agents pull the versioned control document from `/api/agent/config/v2`, which carries server-managed polling intervals alongside the sing-box config. Candidates are checked by the target sing-box binary before reload, and the last-known-good config is persisted for rollback. After changing the agent-facing API, regenerate the agent client while the dev server is running:
 
 ```bash
 pnpm --filter @blossom/app agent:spec

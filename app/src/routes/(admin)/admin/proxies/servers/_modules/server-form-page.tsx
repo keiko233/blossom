@@ -6,6 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  NumberField,
+  NumberFieldDecrement,
+  NumberFieldGroup,
+  NumberFieldIncrement,
+  NumberFieldInput,
+} from "@/components/ui/number-field";
 import { Switch } from "@/components/ui/switch";
 import { m } from "@/paraglide/messages";
 import type { ServerDTO } from "@/query/servers";
@@ -129,6 +136,52 @@ export function ServerFormPage({
                 </Field>
               )}
             </form.Field>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <form.Field name="configPollIntervalSeconds">
+                {(field) => (
+                  <Field>
+                    <FieldLabel>
+                      {m.admin_proxies_servers_field_config_interval()}
+                    </FieldLabel>
+                    <NumberField
+                      min={5}
+                      max={86_400}
+                      value={field.state.value}
+                      onValueChange={(value) => field.handleChange(value ?? 60)}
+                    >
+                      <NumberFieldGroup>
+                        <NumberFieldDecrement />
+                        <NumberFieldInput />
+                        <NumberFieldIncrement />
+                      </NumberFieldGroup>
+                    </NumberField>
+                  </Field>
+                )}
+              </form.Field>
+
+              <form.Field name="heartbeatIntervalSeconds">
+                {(field) => (
+                  <Field>
+                    <FieldLabel>
+                      {m.admin_proxies_servers_field_heartbeat_interval()}
+                    </FieldLabel>
+                    <NumberField
+                      min={5}
+                      max={300}
+                      value={field.state.value}
+                      onValueChange={(value) => field.handleChange(value ?? 30)}
+                    >
+                      <NumberFieldGroup>
+                        <NumberFieldDecrement />
+                        <NumberFieldInput />
+                        <NumberFieldIncrement />
+                      </NumberFieldGroup>
+                    </NumberField>
+                  </Field>
+                )}
+              </form.Field>
+            </div>
 
             <form.Field name="enabled">
               {(field) => (

@@ -31,6 +31,8 @@ const serverMetaSchema = z.object({
   remark: z.string().max(512).optional(),
   enabled: z.boolean().default(true),
   address: z.string().min(1),
+  configPollIntervalSeconds: z.number().int().min(5).max(86_400).default(60),
+  heartbeatIntervalSeconds: z.number().int().min(5).max(300).default(30),
 });
 
 export const createServerSchema = serverMetaSchema;
@@ -128,6 +130,40 @@ export const groupIdSchema = z.object({ id: z.string().min(1) });
 
 export const heartbeatSchema = z.object({
   agentVersion: z.string().optional(),
+  singBoxVersion: z.string().optional(),
+  runtimeState: z
+    .enum(["unknown", "starting", "running", "stopped", "crash_loop"])
+    .optional(),
+  configState: z
+    .enum(["unknown", "applied", "rejected", "apply_failed"])
+    .optional(),
+  observedRevision: z.string().max(128).optional(),
+  appliedRevision: z.string().max(128).optional(),
+  activeNodeIds: z.array(z.string().min(1)).max(10_000).optional(),
+  clearActiveNodeIds: z.boolean().optional(),
+  effectiveConfigPollIntervalSeconds: z
+    .number()
+    .int()
+    .min(1)
+    .max(86_400)
+    .optional(),
+  effectiveHeartbeatIntervalSeconds: z
+    .number()
+    .int()
+    .min(1)
+    .max(3_600)
+    .optional(),
+  appliedAt: z.iso.datetime().optional(),
+  clearError: z.boolean().optional(),
+  error: z
+    .object({
+      phase: z.string().min(1).max(64),
+      code: z.string().min(1).max(128),
+      message: z.string().min(1).max(16_384),
+      nodeId: z.string().min(1).optional(),
+      occurredAt: z.iso.datetime().optional(),
+    })
+    .optional(),
 });
 
 /**

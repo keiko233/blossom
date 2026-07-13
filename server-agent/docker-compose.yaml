@@ -28,8 +28,16 @@ services:
       # trace | debug | info | warn | error
       AGENT_LOG_LEVEL: ${AGENT_LOG_LEVEL:-info}
 
+    volumes:
+      # Persists the last-known-good config so an invalid future candidate can
+      # never strand the host after an agent/container restart.
+      - agent-state:/var/lib/blossom-agent
+
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  agent-state:

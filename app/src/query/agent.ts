@@ -1,9 +1,13 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import type { z } from "zod";
 
 import { db } from "@/db";
 import { subscription } from "@/db/plan-schema";
 import { node, server, type Server } from "@/db/proxy-schema";
 import { trafficRecord, type NewTrafficRecord } from "@/db/traffic-schema";
+import type { heartbeatSchema } from "@/orpc/proxy/schema";
+
+type AgentHeartbeat = z.infer<typeof heartbeatSchema>;
 
 export async function findAgentServerByTokenHash(
   tokenHash: string,
@@ -25,11 +29,99 @@ export async function listEnabledServerNodes(serverId: string) {
 
 export async function updateAgentHeartbeat(
   serverId: string,
-  agentVersion: string | undefined,
+  input: AgentHeartbeat,
 ): Promise<void> {
+  const hasStatus =
+    input.runtimeState !== undefined ||
+    input.configState !== undefined ||
+    input.observedRevision !== undefined ||
+    input.appliedRevision !== undefined ||
+    input.error !== undefined ||
+    input.clearError !== undefined;
+  const error = input.error;
+  const sanitizeMessage = (message: string) =>
+    [...message]
+      .filter((character) => {
+        const code = character.charCodeAt(0);
+        return (
+          code === 9 ||
+          code === 10 ||
+          code === 13 ||
+          (code >= 32 && code !== 127)
+        );
+      })
+      .join("")
+      .replace(/\/tmp\/[^\s:]+/g, "<config>")
+      .replace(
+        /("[^"]*(?:password|token|secret|private_key)[^"]*"\s*:\s*")[^"]*/gi,
+        "$1<redacted>",
+      )
+      .slice(0, 4096);
+
   await db
     .update(server)
-    .set({ lastSeenAt: new Date(), agentVersion })
+    .set({
+      lastSeenAt: new Date(),
+      ...(input.agentVersion !== undefined
+        ? { agentVersion: input.agentVersion }
+        : {}),
+      ...(input.singBoxVersion !== undefined
+        ? { singBoxVersion: input.singBoxVersion }
+        : {}),
+      ...(input.runtimeState !== undefined
+        ? { runtimeState: input.runtimeState }
+        : {}),
+      ...(input.configState !== undefined
+        ? { configState: input.configState }
+        : {}),
+      ...(input.observedRevision !== undefined
+        ? { observedRevision: input.observedRevision }
+        : {}),
+      ...(input.appliedRevision !== undefined
+        ? { appliedRevision: input.appliedRevision }
+        : {}),
+      ...(input.clearActiveNodeIds
+        ? { activeNodeIds: [] }
+        : input.activeNodeIds !== undefined
+          ? { activeNodeIds: input.activeNodeIds }
+          : {}),
+      ...(hasStatus ? { statusReportedAt: new Date() } : {}),
+      ...(!hasStatus
+        ? {
+            runtimeState: "unknown" as const,
+            configState: "unknown" as const,
+            activeNodeIds: [],
+            statusReportedAt: null,
+            lastErrorPhase: null,
+            lastErrorCode: null,
+            lastErrorMessage: null,
+            lastErrorNodeId: null,
+            lastErrorAt: null,
+          }
+        : {}),
+      ...(input.appliedAt !== undefined
+        ? { lastAppliedAt: new Date(input.appliedAt) }
+        : {}),
+      ...(input.clearError
+        ? {
+            lastErrorPhase: null,
+            lastErrorCode: null,
+            lastErrorMessage: null,
+            lastErrorNodeId: null,
+            lastErrorAt: null,
+          }
+        : error === undefined
+          ? {}
+          : {
+              lastErrorPhase: error.phase,
+              lastErrorCode: error.code,
+              lastErrorMessage: sanitizeMessage(error.message),
+              lastErrorNodeId: error.nodeId ?? null,
+              lastErrorAt: error.occurredAt
+                ? new Date(error.occurredAt)
+                : new Date(),
+            }),
+    })
     .where(eq(server.id, serverId));
 }
 

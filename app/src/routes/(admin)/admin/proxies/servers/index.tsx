@@ -35,6 +35,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toastManager } from "@/components/ui/toast";
+import { deriveServerHealth } from "@/lib/agent-status";
 import { m } from "@/paraglide/messages";
 import {
   deleteServer,
@@ -50,18 +51,6 @@ export const Route = createFileRoute("/(admin)/admin/proxies/servers/")({
   component: RouteComponent,
 });
 
-// A server's agent is considered online if it heartbeated within this window.
-const ONLINE_THRESHOLD_MS = 2 * 60 * 1000;
-
-function isOnline(server: ServerListItem): boolean {
-  if (!server.lastSeenAt) {
-    return false;
-  }
-  return (
-    Date.now() - new Date(server.lastSeenAt).getTime() < ONLINE_THRESHOLD_MS
-  );
-}
-
 const columnHelper = createColumnHelper<ServerListItem>();
 
 function RouteComponent(): React.ReactElement {
@@ -71,6 +60,7 @@ function RouteComponent(): React.ReactElement {
   const { data: servers, isPending } = useQuery({
     queryKey: SERVERS_QUERY_KEY,
     queryFn: () => listServers(),
+    refetchInterval: 15_000,
   });
 
   const invalidate = () =>
@@ -210,21 +200,41 @@ function RouteComponent(): React.ReactElement {
             </Badge>
           );
         }
-        const online = isOnline(server);
+        const health = deriveServerHealth(server);
+        const label = {
+          agent_offline: m.admin_proxies_servers_status_offline(),
+          runtime_error: m.admin_proxies_servers_status_runtime_error(),
+          config_error: m.admin_proxies_servers_status_config_error(),
+          degraded: m.admin_proxies_servers_status_degraded(),
+          online: m.admin_proxies_servers_status_online(),
+          unknown: m.admin_proxies_servers_status_unknown(),
+          disabled: m.admin_proxies_servers_status_disabled(),
+        }[health];
+        const dotClass =
+          health === "online"
+            ? "bg-emerald-500"
+            : health === "degraded" || health === "unknown"
+              ? "bg-amber-500"
+              : "bg-red-500";
         return (
-          <Badge variant="outline">
-            <span
-              aria-hidden="true"
-              className={
-                online
-                  ? "size-1.5 rounded-full bg-emerald-500"
-                  : "size-1.5 rounded-full bg-red-500"
-              }
-            />
-            {online
-              ? m.admin_proxies_servers_status_online()
-              : m.admin_proxies_servers_status_offline()}
-          </Badge>
+          <div className="flex max-w-80 flex-col items-start gap-1">
+            <Badge
+              variant="outline"
+              title={server.lastErrorMessage ?? undefined}
+            >
+              <span
+                aria-hidden="true"
+                className={`size-1.5 rounded-full ${dotClass}`}
+              />
+              {label}
+            </Badge>
+            {server.lastErrorMessage &&
+            ["degraded", "config_error", "runtime_error"].includes(health) ? (
+              <span className="line-clamp-2 text-xs text-destructive">
+                {server.lastErrorMessage}
+              </span>
+            ) : null}
+          </div>
         );
       },
     }),

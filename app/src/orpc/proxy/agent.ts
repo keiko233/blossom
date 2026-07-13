@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 
 import type { NewTrafficRecord } from "@/db/traffic-schema";
@@ -53,6 +53,29 @@ const agentProcedure = base.use(async ({ context, next }) => {
   return next({ context: { ...context, server: row } });
 });
 
+async function compileAgentServerConfig(serverId: string, enabled: boolean) {
+  const nodes = enabled ? await listEnabledServerNodes(serverId) : [];
+  const perNodeUsers = await Promise.all(
+    nodes.map(async (n) => {
+      const subs = await getNodeActiveSubscriptions(n.id);
+      return subs
+        .map((sub) => buildInboundUser(n, sub))
+        .filter((user): user is NonNullable<typeof user> => user !== null);
+    }),
+  );
+  const built: NodeInbound[] = nodes.map((n, i) => ({
+    node: n,
+    users: perNodeUsers[i]!,
+  }));
+  const config = compileServerConfig({ inbounds: built });
+  return {
+    config,
+    materializedNodeIds: built
+      .filter(({ users }) => users.length > 0)
+      .map(({ node }) => node.id),
+  };
+}
+
 /**
  * Returns the full sing-box config JSON for the calling agent's server: every
  * enabled inbound on the server, each populated with the subscriptions that are
@@ -81,29 +104,56 @@ export const getAgentConfig = agentProcedure
     // are skipped here so only live inbounds are compiled. Order by id for a
     // stable `inbounds` array so identical entitlement snapshots never produce a
     // spurious config diff that would re-hot-reload the agent.
-    const nodes = context.server.enabled
-      ? await listEnabledServerNodes(context.server.id)
-      : [];
+    return (
+      await compileAgentServerConfig(context.server.id, context.server.enabled)
+    ).config;
+  });
 
-    // Fetch each node's active subscriptions in parallel — N concurrent queries
-    // rather than N sequential — but preserve the (id-ordered) `nodes` order in
-    // the resulting `built` array so the compiled config is deterministic.
-    const perNodeUsers = await Promise.all(
-      nodes.map(async (n) => {
-        const subs = await getNodeActiveSubscriptions(n.id);
-        return subs
-          .map((sub) => buildInboundUser(n, sub))
-          .filter((user): user is NonNullable<typeof user> => user !== null);
-      }),
+const agentConfigV2Output = z.object({
+  apiVersion: z.literal(2),
+  agent: z.object({
+    configPollIntervalSeconds: z.number().int(),
+    heartbeatIntervalSeconds: z.number().int(),
+  }),
+  singbox: z.object({
+    revision: z.string(),
+    materializedNodeIds: z.array(z.string()),
+    config: z.looseObject({}),
+  }),
+  // Reserved for future idempotent control-plane instructions. V2 agents keep
+  // this as loose JSON and ignore action types they do not understand.
+  actions: z.array(
+    z.looseObject({
+      id: z.string(),
+      type: z.string(),
+    }),
+  ),
+});
+
+export const getAgentConfigV2 = agentProcedure
+  .route({
+    method: "GET",
+    path: "/agent/config/v2",
+    operationId: "getAgentConfigV2",
+  })
+  .output(agentConfigV2Output)
+  .handler(async ({ context }) => {
+    const { config, materializedNodeIds } = await compileAgentServerConfig(
+      context.server.id,
+      context.server.enabled,
     );
-    const built: NodeInbound[] = nodes.map((n, i) => ({
-      node: n,
-      users: perNodeUsers[i]!,
-    }));
-
-    // compileServerConfig drops inbounds whose users array is empty, so nodes
-    // with no currently-entitled subscriptions never enter the running config.
-    return compileServerConfig({ inbounds: built });
+    const revision = `sha256:${createHash("sha256")
+      .update(JSON.stringify(config))
+      .digest("hex")}`;
+    return {
+      apiVersion: 2 as const,
+      agent: {
+        configPollIntervalSeconds: context.server.configPollIntervalSeconds,
+        heartbeatIntervalSeconds: context.server.heartbeatIntervalSeconds,
+      },
+      singbox: { revision, materializedNodeIds, config },
+      actions: [],
+    };
   });
 
 export const agentHeartbeat = agentProcedure
@@ -115,7 +165,7 @@ export const agentHeartbeat = agentProcedure
   .input(heartbeatSchema)
   .output(z.object({ ok: z.boolean() }))
   .handler(async ({ context, input }) => {
-    await updateAgentHeartbeat(context.server.id, input.agentVersion);
+    await updateAgentHeartbeat(context.server.id, input);
     return { ok: true };
   });
 

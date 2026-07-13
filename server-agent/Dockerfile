@@ -41,5 +41,8 @@ COPY --from=agent   /server-agent /usr/local/bin/server-agent
 
 # The agent resolves sing-box via PATH when no explicit path is given.
 ENV AGENT_SING_BOX_PATH=/usr/local/bin/sing-box
+ENV AGENT_STATE_DIR=/var/lib/blossom-agent
+
+VOLUME ["/var/lib/blossom-agent"]
 
 ENTRYPOINT ["server-agent"]

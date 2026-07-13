@@ -18,7 +18,7 @@
     "db:push": "drizzle-kit push",
     "db:pull": "drizzle-kit pull",
     "db:studio": "drizzle-kit studio",
-    "agent:spec": "curl -fsS http://localhost:3000/api/spec.json -o server-agent/openapi/spec-3.1.json && openapi-down-convert --input server-agent/openapi/spec-3.1.json --output server-agent/openapi/spec.json"
+    "agent:spec": "curl -fsS http://localhost:3000/api/spec.json -o ../server-agent/openapi/spec-3.1.json && openapi-down-convert --input ../server-agent/openapi/spec-3.1.json --output ../server-agent/openapi/spec.json"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
