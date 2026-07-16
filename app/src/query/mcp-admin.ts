@@ -24,13 +24,14 @@ export const getMcpAdminOverview = createServerFn({ method: "GET" }).handler(
     ] = await Promise.all([
       db
         .select({
+          id: oauthClient.id,
           clientId: oauthClient.clientId,
           name: oauthClient.name,
           uri: oauthClient.uri,
           disabled: oauthClient.disabled,
           scopes: oauthClient.scopes,
           redirectUris: oauthClient.redirectUris,
-          isPublic: oauthClient.isPublic,
+          isPublic: oauthClient.public,
           requirePKCE: oauthClient.requirePKCE,
           tokenEndpointAuthMethod: oauthClient.tokenEndpointAuthMethod,
           createdAt: oauthClient.createdAt,
@@ -40,6 +41,7 @@ export const getMcpAdminOverview = createServerFn({ method: "GET" }).handler(
         .limit(100),
       db
         .select({
+          id: oauthConsent.id,
           clientId: oauthConsent.clientId,
           clientName: oauthClient.name,
           userId: oauthConsent.userId,

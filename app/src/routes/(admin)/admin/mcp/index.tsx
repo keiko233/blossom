@@ -106,7 +106,7 @@ function ClientsTable({ clients }: { clients: Client[] }) {
       </TableHeader>
       <TableBody>
         {clients.map((client) => (
-          <TableRow key={client.clientId}>
+          <TableRow key={client.id}>
             <TableCell>
               <div className="flex max-w-72 flex-col gap-0.5">
                 <span className="font-medium">
@@ -168,9 +168,7 @@ function ConsentsTable({ consents }: { consents: Consent[] }) {
       </TableHeader>
       <TableBody>
         {consents.map((consent) => (
-          <TableRow
-            key={`${consent.clientId}:${consent.userId ?? String(consent.createdAt)}`}
-          >
+          <TableRow key={consent.id}>
             <TableCell>
               <div className="flex flex-col gap-0.5">
                 <span className="font-medium">

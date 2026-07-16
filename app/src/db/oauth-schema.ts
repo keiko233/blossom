@@ -12,7 +12,8 @@ import { session, user } from "./auth-schema";
 export const oauthClient = pgTable(
   "oauth_client",
   {
-    clientId: text("client_id").primaryKey(),
+    id: text("id").primaryKey(),
+    clientId: text("client_id").notNull().unique(),
     clientSecret: text("client_secret"),
     disabled: boolean("disabled").default(false),
     skipConsent: boolean("skip_consent"),
@@ -38,7 +39,7 @@ export const oauthClient = pgTable(
     tokenEndpointAuthMethod: text("token_endpoint_auth_method"),
     grantTypes: jsonb("grant_types").$type<string[]>(),
     responseTypes: jsonb("response_types").$type<string[]>(),
-    isPublic: boolean("public"),
+    public: boolean("public"),
     type: text("type"),
     requirePKCE: boolean("require_pkce"),
     referenceId: text("reference_id"),
@@ -55,7 +56,8 @@ export type NewOAuthClient = typeof oauthClient.$inferInsert;
 export const oauthAccessToken = pgTable(
   "oauth_access_token",
   {
-    token: text("token").primaryKey(),
+    id: text("id").primaryKey(),
+    token: text("token").unique(),
     clientId: text("client_id")
       .notNull()
       .references(() => oauthClient.clientId, {
@@ -68,7 +70,9 @@ export const oauthAccessToken = pgTable(
       onDelete: "cascade",
     }),
     referenceId: text("reference_id"),
-    refreshId: text("refresh_id"),
+    refreshId: text("refresh_id").references(() => oauthRefreshToken.id, {
+      onDelete: "cascade",
+    }),
     expiresAt: timestamp("expires_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     scopes: jsonb("scopes").$type<string[]>().notNull(),
@@ -87,7 +91,8 @@ export type NewOAuthAccessToken = typeof oauthAccessToken.$inferInsert;
 export const oauthRefreshToken = pgTable(
   "oauth_refresh_token",
   {
-    token: text("token").primaryKey(),
+    id: text("id").primaryKey(),
+    token: text("token").notNull().unique(),
     clientId: text("client_id")
       .notNull()
       .references(() => oauthClient.clientId, {
@@ -121,6 +126,7 @@ export type NewOAuthRefreshToken = typeof oauthRefreshToken.$inferInsert;
 export const oauthConsent = pgTable(
   "oauth_consent",
   {
+    id: text("id").primaryKey(),
     clientId: text("client_id")
       .notNull()
       .references(() => oauthClient.clientId, {
