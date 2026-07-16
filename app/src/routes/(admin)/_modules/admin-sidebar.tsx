@@ -1,4 +1,5 @@
 import { Link, useLocation } from "@tanstack/react-router";
+import { PlugIcon } from "lucide-react";
 import type { ComponentProps } from "react";
 import DashboardLine from "~icons/mingcute/dashboard-3-line";
 import UserLine from "~icons/mingcute/user-3-line";
@@ -56,6 +57,17 @@ export function AdminSidebar({ user, ...props }: AdminSidebarProps) {
           {/* <SidebarGroupLabel>Management</SidebarGroupLabel> */}
           <SidebarMenu>
             <NavProxies />
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                isActive={pathname.startsWith("/admin/mcp")}
+                render={
+                  <Link to="/admin/mcp">
+                    <PlugIcon />
+                    <span>{m.admin_nav_mcp()}</span>
+                  </Link>
+                }
+              />
+            </SidebarMenuItem>
             <SidebarMenuItem>
               <SidebarMenuButton
                 isActive={pathname.startsWith("/admin/plans")}

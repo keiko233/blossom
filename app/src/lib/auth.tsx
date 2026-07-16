@@ -1,8 +1,10 @@
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
+import { oauthProvider } from "@better-auth/oauth-provider";
 import { createServerFn, createServerOnlyFn } from "@tanstack/react-start";
 import { getRequestHeaders } from "@tanstack/react-start/server";
 import { betterAuth } from "better-auth";
 import { admin, magicLink } from "better-auth/plugins";
+import { jwt } from "better-auth/plugins/jwt";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
 
 import { db } from "@/db";
@@ -25,7 +27,10 @@ const buildSocialProviders = createServerOnlyFn(() => {
 const buildAuth = createServerOnlyFn(() => {
   const env = getServerEnv();
 
+  const mcpResourceUrl = `${env.BETTER_AUTH_URL.replace(/\/$/, "")}/api/mcp`;
+
   return betterAuth({
+    baseURL: env.BETTER_AUTH_URL,
     database: drizzleAdapter(db, {
       provider: "pg",
       schema,
@@ -75,6 +80,28 @@ const buildAuth = createServerOnlyFn(() => {
             );
           }
         },
+      }),
+      jwt({
+        jwt: {
+          expirationTime: "15m",
+        },
+      }),
+      oauthProvider({
+        loginPage: "/auth/login",
+        consentPage: "/auth/mcp-consent",
+        silenceWarnings: {
+          oauthAuthServerConfig: true,
+        },
+        scopes: ["blossom:mcp:read", "blossom:mcp:write"],
+        allowDynamicClientRegistration: true,
+        allowUnauthenticatedClientRegistration: true,
+        clientRegistrationDefaultScopes: ["blossom:mcp:read"],
+        clientRegistrationAllowedScopes: ["blossom:mcp:write"],
+        accessTokenExpiresIn: 600,
+        codeExpiresIn: 600,
+        grantTypes: ["authorization_code", "refresh_token"],
+        disableJwtPlugin: false,
+        validAudiences: [mcpResourceUrl],
       }),
       tanstackStartCookies(),
     ],

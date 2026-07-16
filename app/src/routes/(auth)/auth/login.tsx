@@ -31,6 +31,12 @@ import { authClient } from "@/lib/auth-client";
 import { emailSignInSchema } from "@/lib/auth-schema";
 import { m } from "@/paraglide/messages";
 
+function useOAuthCallback(): string {
+  const search = typeof window !== "undefined" ? window.location.search : "";
+  if (!search.includes("client_id=")) return "/dashboard";
+  return `/api/auth/oauth2/authorize${search}`;
+}
+
 export const Route = createFileRoute("/(auth)/auth/login")({
   beforeLoad: async () => {
     const socialProviders = await getSocialProviders();
@@ -44,17 +50,17 @@ export const Route = createFileRoute("/(auth)/auth/login")({
 
 const SignInWithGithubButton = () => {
   const [isPending, setIsPending] = useState(false);
+  const callbackURL = useOAuthCallback();
 
   const handleClick = useLockFn(async () => {
     setIsPending(true);
     try {
       await authClient.signIn.social({
         provider: "github",
-        callbackURL: "/dashboard",
+        callbackURL,
       });
     } catch (error) {
       console.error(error);
-      // only set isPending to false if there was an error, otherwise the page will redirect
       setIsPending(false);
     }
   });
@@ -74,17 +80,17 @@ const SignInWithGithubButton = () => {
 
 const SignInWithGoogleButton = () => {
   const [isPending, setIsPending] = useState(false);
+  const callbackURL = useOAuthCallback();
 
   const handleClick = useLockFn(async () => {
     setIsPending(true);
     try {
       await authClient.signIn.social({
         provider: "google",
-        callbackURL: "/dashboard",
+        callbackURL,
       });
     } catch (error) {
       console.error(error);
-      // only set isPending to false if there was an error, otherwise the page will redirect
       setIsPending(false);
     }
   });
@@ -106,6 +112,7 @@ function RouteComponent() {
   const { socialProviders } = Route.useRouteContext();
 
   const navigate = useNavigate();
+  const callbackURL = useOAuthCallback();
 
   const form = useForm({
     defaultValues: {
@@ -120,14 +127,18 @@ function RouteComponent() {
         const result = await emailSignIn({
           data: {
             ...value,
-            callbackURL: "/dashboard",
+            callbackURL,
           },
         });
 
         if (result) {
-          await navigate({
-            to: "/dashboard",
-          });
+          if (callbackURL.startsWith("/api/auth/oauth2/authorize")) {
+            window.location.assign(callbackURL);
+          } else {
+            await navigate({
+              to: "/dashboard",
+            });
+          }
         }
       } catch {
         toastManager.add({

@@ -103,6 +103,27 @@ pnpm --filter @blossom/app agent:spec
 
 See `server-agent/.env.example` for agent runtime configuration.
 
+## MCP API
+
+The app exposes a Model Context Protocol API at `/api/mcp` for external MCP clients. It allows authenticated administrators to manage users, nodes, servers, plans, and subscriptions through MCP tools.
+
+### OAuth authentication
+
+MCP clients connect using OAuth 2.0 authorization code flow with PKCE. OAuth discovery is available at `/.well-known/oauth-authorization-server`; the issuer-path alias is `/.well-known/oauth-authorization-server/api/auth`, and protected-resource metadata is at `/.well-known/oauth-protected-resource/api/mcp`. After authorizing, the client receives an access token scoped to the MCP API.
+
+### Scopes
+
+| Scope | Permission |
+|---|---|
+| `blossom:mcp:read` | Read resources (users, nodes, servers, plans, subscriptions) and search/get sing-box documentation |
+| `blossom:mcp:write` | Write operations (ban/unban users, set roles, create/update/delete nodes, update/delete servers, manage subscriptions) |
+
+Write tools require explicit `confirm: true` and are recorded in the audit log.
+
+### Admin consent
+
+Admin users can review and approve MCP client connections at `/auth/mcp-consent`. This endpoint lists requested scopes and allows the admin to grant or deny access.
+
 ## Learn more
 
 - [TanStack Start](https://tanstack.com/start)

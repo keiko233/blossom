@@ -11,8 +11,11 @@ import { Route as userRouteRouteImport } from './routes/(user)/route'
 import { Route as authRouteRouteImport } from './routes/(auth)/route'
 import { Route as adminRouteRouteImport } from './routes/(admin)/route'
 import { Route as staticIndexRouteImport } from './routes/(static)/index'
+import { Route as ApiMcpRouteImport } from './routes/api/mcp'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as ApiSplatRouteImport } from './routes/api/$'
+import { Route as DotwellKnownOauthProtectedResourceRouteImport } from './routes/[.]well-known.oauth-protected-resource'
+import { Route as DotwellKnownOauthAuthorizationServerRouteImport } from './routes/[.]well-known.oauth-authorization-server'
 import { Route as userDashboardRouteRouteImport } from './routes/(user)/dashboard/route'
 import { Route as adminAdminRouteRouteImport } from './routes/(admin)/admin/route'
 import { Route as userWelcomeIndexRouteImport } from './routes/(user)/welcome/index'
@@ -22,14 +25,19 @@ import { Route as ApiSubTokenRouteImport } from './routes/api/sub/$token'
 import { Route as ApiRpcSplatRouteImport } from './routes/api/rpc/$'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as authAuthSignupRouteImport } from './routes/(auth)/auth/signup'
+import { Route as authAuthMcpConsentRouteImport } from './routes/(auth)/auth/mcp-consent'
 import { Route as authAuthLoginRouteImport } from './routes/(auth)/auth/login'
 import { Route as authAuthForgotRouteImport } from './routes/(auth)/auth/forgot'
 import { Route as adminAdminUsersRouteRouteImport } from './routes/(admin)/admin/users/route'
 import { Route as adminAdminProxiesRouteRouteImport } from './routes/(admin)/admin/proxies/route'
 import { Route as adminAdminPlansRouteRouteImport } from './routes/(admin)/admin/plans/route'
+import { Route as adminAdminMcpRouteRouteImport } from './routes/(admin)/admin/mcp/route'
 import { Route as userDashboardSubscriptionsIndexRouteImport } from './routes/(user)/dashboard/subscriptions/index'
 import { Route as adminAdminUsersIndexRouteImport } from './routes/(admin)/admin/users/index'
 import { Route as adminAdminPlansIndexRouteImport } from './routes/(admin)/admin/plans/index'
+import { Route as adminAdminMcpIndexRouteImport } from './routes/(admin)/admin/mcp/index'
+import { Route as DotwellKnownOauthProtectedResourceApiMcpRouteImport } from './routes/[.]well-known.oauth-protected-resource.api.mcp'
+import { Route as DotwellKnownOauthAuthorizationServerApiAuthRouteImport } from './routes/[.]well-known.oauth-authorization-server.api.auth'
 import { Route as adminAdminUsersUserIdRouteImport } from './routes/(admin)/admin/users/$userId'
 import { Route as adminAdminPlansNewRouteImport } from './routes/(admin)/admin/plans/new'
 import { Route as adminAdminPlansPlanIdRouteImport } from './routes/(admin)/admin/plans/$planId'
@@ -64,6 +72,11 @@ const staticIndexRoute = staticIndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiMcpRoute = ApiMcpRouteImport.update({
+  id: '/api/mcp',
+  path: '/api/mcp',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiHealthRoute = ApiHealthRouteImport.update({
   id: '/api/health',
   path: '/api/health',
@@ -74,6 +87,18 @@ const ApiSplatRoute = ApiSplatRouteImport.update({
   path: '/api/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DotwellKnownOauthProtectedResourceRoute =
+  DotwellKnownOauthProtectedResourceRouteImport.update({
+    id: '/.well-known/oauth-protected-resource',
+    path: '/.well-known/oauth-protected-resource',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const DotwellKnownOauthAuthorizationServerRoute =
+  DotwellKnownOauthAuthorizationServerRouteImport.update({
+    id: '/.well-known/oauth-authorization-server',
+    path: '/.well-known/oauth-authorization-server',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const userDashboardRouteRoute = userDashboardRouteRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
@@ -119,6 +144,11 @@ const authAuthSignupRoute = authAuthSignupRouteImport.update({
   path: '/auth/signup',
   getParentRoute: () => authRouteRoute,
 } as any)
+const authAuthMcpConsentRoute = authAuthMcpConsentRouteImport.update({
+  id: '/auth/mcp-consent',
+  path: '/auth/mcp-consent',
+  getParentRoute: () => authRouteRoute,
+} as any)
 const authAuthLoginRoute = authAuthLoginRouteImport.update({
   id: '/auth/login',
   path: '/auth/login',
@@ -144,6 +174,11 @@ const adminAdminPlansRouteRoute = adminAdminPlansRouteRouteImport.update({
   path: '/plans',
   getParentRoute: () => adminAdminRouteRoute,
 } as any)
+const adminAdminMcpRouteRoute = adminAdminMcpRouteRouteImport.update({
+  id: '/mcp',
+  path: '/mcp',
+  getParentRoute: () => adminAdminRouteRoute,
+} as any)
 const userDashboardSubscriptionsIndexRoute =
   userDashboardSubscriptionsIndexRouteImport.update({
     id: '/subscriptions/',
@@ -160,6 +195,23 @@ const adminAdminPlansIndexRoute = adminAdminPlansIndexRouteImport.update({
   path: '/',
   getParentRoute: () => adminAdminPlansRouteRoute,
 } as any)
+const adminAdminMcpIndexRoute = adminAdminMcpIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => adminAdminMcpRouteRoute,
+} as any)
+const DotwellKnownOauthProtectedResourceApiMcpRoute =
+  DotwellKnownOauthProtectedResourceApiMcpRouteImport.update({
+    id: '/api/mcp',
+    path: '/api/mcp',
+    getParentRoute: () => DotwellKnownOauthProtectedResourceRoute,
+  } as any)
+const DotwellKnownOauthAuthorizationServerApiAuthRoute =
+  DotwellKnownOauthAuthorizationServerApiAuthRouteImport.update({
+    id: '/api/auth',
+    path: '/api/auth',
+    getParentRoute: () => DotwellKnownOauthAuthorizationServerRoute,
+  } as any)
 const adminAdminUsersUserIdRoute = adminAdminUsersUserIdRouteImport.update({
   id: '/$userId',
   path: '/$userId',
@@ -257,14 +309,19 @@ const adminAdminProxiesGroupsGroupIdRoute =
 export interface FileRoutesByFullPath {
   '/admin': typeof adminAdminRouteRouteWithChildren
   '/dashboard': typeof userDashboardRouteRouteWithChildren
+  '/.well-known/oauth-authorization-server': typeof DotwellKnownOauthAuthorizationServerRouteWithChildren
+  '/.well-known/oauth-protected-resource': typeof DotwellKnownOauthProtectedResourceRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/mcp': typeof ApiMcpRoute
   '/': typeof staticIndexRoute
+  '/admin/mcp': typeof adminAdminMcpRouteRouteWithChildren
   '/admin/plans': typeof adminAdminPlansRouteRouteWithChildren
   '/admin/proxies': typeof adminAdminProxiesRouteRouteWithChildren
   '/admin/users': typeof adminAdminUsersRouteRouteWithChildren
   '/auth/forgot': typeof authAuthForgotRoute
   '/auth/login': typeof authAuthLoginRoute
+  '/auth/mcp-consent': typeof authAuthMcpConsentRoute
   '/auth/signup': typeof authAuthSignupRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/rpc/$': typeof ApiRpcSplatRoute
@@ -278,6 +335,9 @@ export interface FileRoutesByFullPath {
   '/admin/plans/$planId': typeof adminAdminPlansPlanIdRoute
   '/admin/plans/new': typeof adminAdminPlansNewRoute
   '/admin/users/$userId': typeof adminAdminUsersUserIdRoute
+  '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
+  '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
+  '/admin/mcp/': typeof adminAdminMcpIndexRoute
   '/admin/plans/': typeof adminAdminPlansIndexRoute
   '/admin/users/': typeof adminAdminUsersIndexRoute
   '/dashboard/subscriptions/': typeof userDashboardSubscriptionsIndexRoute
@@ -293,12 +353,16 @@ export interface FileRoutesByFullPath {
   '/admin/proxies/servers/': typeof adminAdminProxiesServersIndexRoute
 }
 export interface FileRoutesByTo {
+  '/.well-known/oauth-authorization-server': typeof DotwellKnownOauthAuthorizationServerRouteWithChildren
+  '/.well-known/oauth-protected-resource': typeof DotwellKnownOauthProtectedResourceRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/mcp': typeof ApiMcpRoute
   '/': typeof staticIndexRoute
   '/admin/proxies': typeof adminAdminProxiesRouteRouteWithChildren
   '/auth/forgot': typeof authAuthForgotRoute
   '/auth/login': typeof authAuthLoginRoute
+  '/auth/mcp-consent': typeof authAuthMcpConsentRoute
   '/auth/signup': typeof authAuthSignupRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/rpc/$': typeof ApiRpcSplatRoute
@@ -309,6 +373,9 @@ export interface FileRoutesByTo {
   '/admin/plans/$planId': typeof adminAdminPlansPlanIdRoute
   '/admin/plans/new': typeof adminAdminPlansNewRoute
   '/admin/users/$userId': typeof adminAdminUsersUserIdRoute
+  '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
+  '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
+  '/admin/mcp': typeof adminAdminMcpIndexRoute
   '/admin/plans': typeof adminAdminPlansIndexRoute
   '/admin/users': typeof adminAdminUsersIndexRoute
   '/dashboard/subscriptions': typeof userDashboardSubscriptionsIndexRoute
@@ -330,14 +397,19 @@ export interface FileRoutesById {
   '/(user)': typeof userRouteRouteWithChildren
   '/(admin)/admin': typeof adminAdminRouteRouteWithChildren
   '/(user)/dashboard': typeof userDashboardRouteRouteWithChildren
+  '/.well-known/oauth-authorization-server': typeof DotwellKnownOauthAuthorizationServerRouteWithChildren
+  '/.well-known/oauth-protected-resource': typeof DotwellKnownOauthProtectedResourceRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/mcp': typeof ApiMcpRoute
   '/(static)/': typeof staticIndexRoute
+  '/(admin)/admin/mcp': typeof adminAdminMcpRouteRouteWithChildren
   '/(admin)/admin/plans': typeof adminAdminPlansRouteRouteWithChildren
   '/(admin)/admin/proxies': typeof adminAdminProxiesRouteRouteWithChildren
   '/(admin)/admin/users': typeof adminAdminUsersRouteRouteWithChildren
   '/(auth)/auth/forgot': typeof authAuthForgotRoute
   '/(auth)/auth/login': typeof authAuthLoginRoute
+  '/(auth)/auth/mcp-consent': typeof authAuthMcpConsentRoute
   '/(auth)/auth/signup': typeof authAuthSignupRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/rpc/$': typeof ApiRpcSplatRoute
@@ -351,6 +423,9 @@ export interface FileRoutesById {
   '/(admin)/admin/plans/$planId': typeof adminAdminPlansPlanIdRoute
   '/(admin)/admin/plans/new': typeof adminAdminPlansNewRoute
   '/(admin)/admin/users/$userId': typeof adminAdminUsersUserIdRoute
+  '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
+  '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
+  '/(admin)/admin/mcp/': typeof adminAdminMcpIndexRoute
   '/(admin)/admin/plans/': typeof adminAdminPlansIndexRoute
   '/(admin)/admin/users/': typeof adminAdminUsersIndexRoute
   '/(user)/dashboard/subscriptions/': typeof userDashboardSubscriptionsIndexRoute
@@ -370,14 +445,19 @@ export interface FileRouteTypes {
   fullPaths:
     | '/admin'
     | '/dashboard'
+    | '/.well-known/oauth-authorization-server'
+    | '/.well-known/oauth-protected-resource'
     | '/api/$'
     | '/api/health'
+    | '/api/mcp'
     | '/'
+    | '/admin/mcp'
     | '/admin/plans'
     | '/admin/proxies'
     | '/admin/users'
     | '/auth/forgot'
     | '/auth/login'
+    | '/auth/mcp-consent'
     | '/auth/signup'
     | '/api/auth/$'
     | '/api/rpc/$'
@@ -391,6 +471,9 @@ export interface FileRouteTypes {
     | '/admin/plans/$planId'
     | '/admin/plans/new'
     | '/admin/users/$userId'
+    | '/.well-known/oauth-authorization-server/api/auth'
+    | '/.well-known/oauth-protected-resource/api/mcp'
+    | '/admin/mcp/'
     | '/admin/plans/'
     | '/admin/users/'
     | '/dashboard/subscriptions/'
@@ -406,12 +489,16 @@ export interface FileRouteTypes {
     | '/admin/proxies/servers/'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/.well-known/oauth-authorization-server'
+    | '/.well-known/oauth-protected-resource'
     | '/api/$'
     | '/api/health'
+    | '/api/mcp'
     | '/'
     | '/admin/proxies'
     | '/auth/forgot'
     | '/auth/login'
+    | '/auth/mcp-consent'
     | '/auth/signup'
     | '/api/auth/$'
     | '/api/rpc/$'
@@ -422,6 +509,9 @@ export interface FileRouteTypes {
     | '/admin/plans/$planId'
     | '/admin/plans/new'
     | '/admin/users/$userId'
+    | '/.well-known/oauth-authorization-server/api/auth'
+    | '/.well-known/oauth-protected-resource/api/mcp'
+    | '/admin/mcp'
     | '/admin/plans'
     | '/admin/users'
     | '/dashboard/subscriptions'
@@ -442,14 +532,19 @@ export interface FileRouteTypes {
     | '/(user)'
     | '/(admin)/admin'
     | '/(user)/dashboard'
+    | '/.well-known/oauth-authorization-server'
+    | '/.well-known/oauth-protected-resource'
     | '/api/$'
     | '/api/health'
+    | '/api/mcp'
     | '/(static)/'
+    | '/(admin)/admin/mcp'
     | '/(admin)/admin/plans'
     | '/(admin)/admin/proxies'
     | '/(admin)/admin/users'
     | '/(auth)/auth/forgot'
     | '/(auth)/auth/login'
+    | '/(auth)/auth/mcp-consent'
     | '/(auth)/auth/signup'
     | '/api/auth/$'
     | '/api/rpc/$'
@@ -463,6 +558,9 @@ export interface FileRouteTypes {
     | '/(admin)/admin/plans/$planId'
     | '/(admin)/admin/plans/new'
     | '/(admin)/admin/users/$userId'
+    | '/.well-known/oauth-authorization-server/api/auth'
+    | '/.well-known/oauth-protected-resource/api/mcp'
+    | '/(admin)/admin/mcp/'
     | '/(admin)/admin/plans/'
     | '/(admin)/admin/users/'
     | '/(user)/dashboard/subscriptions/'
@@ -482,8 +580,11 @@ export interface RootRouteChildren {
   adminRouteRoute: typeof adminRouteRouteWithChildren
   authRouteRoute: typeof authRouteRouteWithChildren
   userRouteRoute: typeof userRouteRouteWithChildren
+  DotwellKnownOauthAuthorizationServerRoute: typeof DotwellKnownOauthAuthorizationServerRouteWithChildren
+  DotwellKnownOauthProtectedResourceRoute: typeof DotwellKnownOauthProtectedResourceRouteWithChildren
   ApiSplatRoute: typeof ApiSplatRoute
   ApiHealthRoute: typeof ApiHealthRoute
+  ApiMcpRoute: typeof ApiMcpRoute
   staticIndexRoute: typeof staticIndexRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiRpcSplatRoute: typeof ApiRpcSplatRoute
@@ -520,6 +621,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof staticIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/mcp': {
+      id: '/api/mcp'
+      path: '/api/mcp'
+      fullPath: '/api/mcp'
+      preLoaderRoute: typeof ApiMcpRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/health': {
       id: '/api/health'
       path: '/api/health'
@@ -532,6 +640,20 @@ declare module '@tanstack/react-router' {
       path: '/api/$'
       fullPath: '/api/$'
       preLoaderRoute: typeof ApiSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/.well-known/oauth-protected-resource': {
+      id: '/.well-known/oauth-protected-resource'
+      path: '/.well-known/oauth-protected-resource'
+      fullPath: '/.well-known/oauth-protected-resource'
+      preLoaderRoute: typeof DotwellKnownOauthProtectedResourceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/.well-known/oauth-authorization-server': {
+      id: '/.well-known/oauth-authorization-server'
+      path: '/.well-known/oauth-authorization-server'
+      fullPath: '/.well-known/oauth-authorization-server'
+      preLoaderRoute: typeof DotwellKnownOauthAuthorizationServerRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/(user)/dashboard': {
@@ -597,6 +719,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof authAuthSignupRouteImport
       parentRoute: typeof authRouteRoute
     }
+    '/(auth)/auth/mcp-consent': {
+      id: '/(auth)/auth/mcp-consent'
+      path: '/auth/mcp-consent'
+      fullPath: '/auth/mcp-consent'
+      preLoaderRoute: typeof authAuthMcpConsentRouteImport
+      parentRoute: typeof authRouteRoute
+    }
     '/(auth)/auth/login': {
       id: '/(auth)/auth/login'
       path: '/auth/login'
@@ -632,6 +761,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof adminAdminPlansRouteRouteImport
       parentRoute: typeof adminAdminRouteRoute
     }
+    '/(admin)/admin/mcp': {
+      id: '/(admin)/admin/mcp'
+      path: '/mcp'
+      fullPath: '/admin/mcp'
+      preLoaderRoute: typeof adminAdminMcpRouteRouteImport
+      parentRoute: typeof adminAdminRouteRoute
+    }
     '/(user)/dashboard/subscriptions/': {
       id: '/(user)/dashboard/subscriptions/'
       path: '/subscriptions'
@@ -652,6 +788,27 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin/plans/'
       preLoaderRoute: typeof adminAdminPlansIndexRouteImport
       parentRoute: typeof adminAdminPlansRouteRoute
+    }
+    '/(admin)/admin/mcp/': {
+      id: '/(admin)/admin/mcp/'
+      path: '/'
+      fullPath: '/admin/mcp/'
+      preLoaderRoute: typeof adminAdminMcpIndexRouteImport
+      parentRoute: typeof adminAdminMcpRouteRoute
+    }
+    '/.well-known/oauth-protected-resource/api/mcp': {
+      id: '/.well-known/oauth-protected-resource/api/mcp'
+      path: '/api/mcp'
+      fullPath: '/.well-known/oauth-protected-resource/api/mcp'
+      preLoaderRoute: typeof DotwellKnownOauthProtectedResourceApiMcpRouteImport
+      parentRoute: typeof DotwellKnownOauthProtectedResourceRoute
+    }
+    '/.well-known/oauth-authorization-server/api/auth': {
+      id: '/.well-known/oauth-authorization-server/api/auth'
+      path: '/api/auth'
+      fullPath: '/.well-known/oauth-authorization-server/api/auth'
+      preLoaderRoute: typeof DotwellKnownOauthAuthorizationServerApiAuthRouteImport
+      parentRoute: typeof DotwellKnownOauthAuthorizationServerRoute
     }
     '/(admin)/admin/users/$userId': {
       id: '/(admin)/admin/users/$userId'
@@ -768,6 +925,17 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface adminAdminMcpRouteRouteChildren {
+  adminAdminMcpIndexRoute: typeof adminAdminMcpIndexRoute
+}
+
+const adminAdminMcpRouteRouteChildren: adminAdminMcpRouteRouteChildren = {
+  adminAdminMcpIndexRoute: adminAdminMcpIndexRoute,
+}
+
+const adminAdminMcpRouteRouteWithChildren =
+  adminAdminMcpRouteRoute._addFileChildren(adminAdminMcpRouteRouteChildren)
+
 interface adminAdminPlansRouteRouteChildren {
   adminAdminPlansPlanIdRoute: typeof adminAdminPlansPlanIdRoute
   adminAdminPlansNewRoute: typeof adminAdminPlansNewRoute
@@ -875,6 +1043,7 @@ const adminAdminUsersRouteRouteWithChildren =
   adminAdminUsersRouteRoute._addFileChildren(adminAdminUsersRouteRouteChildren)
 
 interface adminAdminRouteRouteChildren {
+  adminAdminMcpRouteRoute: typeof adminAdminMcpRouteRouteWithChildren
   adminAdminPlansRouteRoute: typeof adminAdminPlansRouteRouteWithChildren
   adminAdminProxiesRouteRoute: typeof adminAdminProxiesRouteRouteWithChildren
   adminAdminUsersRouteRoute: typeof adminAdminUsersRouteRouteWithChildren
@@ -882,6 +1051,7 @@ interface adminAdminRouteRouteChildren {
 }
 
 const adminAdminRouteRouteChildren: adminAdminRouteRouteChildren = {
+  adminAdminMcpRouteRoute: adminAdminMcpRouteRouteWithChildren,
   adminAdminPlansRouteRoute: adminAdminPlansRouteRouteWithChildren,
   adminAdminProxiesRouteRoute: adminAdminProxiesRouteRouteWithChildren,
   adminAdminUsersRouteRoute: adminAdminUsersRouteRouteWithChildren,
@@ -907,12 +1077,14 @@ const adminRouteRouteWithChildren = adminRouteRoute._addFileChildren(
 interface authRouteRouteChildren {
   authAuthForgotRoute: typeof authAuthForgotRoute
   authAuthLoginRoute: typeof authAuthLoginRoute
+  authAuthMcpConsentRoute: typeof authAuthMcpConsentRoute
   authAuthSignupRoute: typeof authAuthSignupRoute
 }
 
 const authRouteRouteChildren: authRouteRouteChildren = {
   authAuthForgotRoute: authAuthForgotRoute,
   authAuthLoginRoute: authAuthLoginRoute,
+  authAuthMcpConsentRoute: authAuthMcpConsentRoute,
   authAuthSignupRoute: authAuthSignupRoute,
 }
 
@@ -947,12 +1119,47 @@ const userRouteRouteWithChildren = userRouteRoute._addFileChildren(
   userRouteRouteChildren,
 )
 
+interface DotwellKnownOauthAuthorizationServerRouteChildren {
+  DotwellKnownOauthAuthorizationServerApiAuthRoute: typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
+}
+
+const DotwellKnownOauthAuthorizationServerRouteChildren: DotwellKnownOauthAuthorizationServerRouteChildren =
+  {
+    DotwellKnownOauthAuthorizationServerApiAuthRoute:
+      DotwellKnownOauthAuthorizationServerApiAuthRoute,
+  }
+
+const DotwellKnownOauthAuthorizationServerRouteWithChildren =
+  DotwellKnownOauthAuthorizationServerRoute._addFileChildren(
+    DotwellKnownOauthAuthorizationServerRouteChildren,
+  )
+
+interface DotwellKnownOauthProtectedResourceRouteChildren {
+  DotwellKnownOauthProtectedResourceApiMcpRoute: typeof DotwellKnownOauthProtectedResourceApiMcpRoute
+}
+
+const DotwellKnownOauthProtectedResourceRouteChildren: DotwellKnownOauthProtectedResourceRouteChildren =
+  {
+    DotwellKnownOauthProtectedResourceApiMcpRoute:
+      DotwellKnownOauthProtectedResourceApiMcpRoute,
+  }
+
+const DotwellKnownOauthProtectedResourceRouteWithChildren =
+  DotwellKnownOauthProtectedResourceRoute._addFileChildren(
+    DotwellKnownOauthProtectedResourceRouteChildren,
+  )
+
 const rootRouteChildren: RootRouteChildren = {
   adminRouteRoute: adminRouteRouteWithChildren,
   authRouteRoute: authRouteRouteWithChildren,
   userRouteRoute: userRouteRouteWithChildren,
+  DotwellKnownOauthAuthorizationServerRoute:
+    DotwellKnownOauthAuthorizationServerRouteWithChildren,
+  DotwellKnownOauthProtectedResourceRoute:
+    DotwellKnownOauthProtectedResourceRouteWithChildren,
   ApiSplatRoute: ApiSplatRoute,
   ApiHealthRoute: ApiHealthRoute,
+  ApiMcpRoute: ApiMcpRoute,
   staticIndexRoute: staticIndexRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiRpcSplatRoute: ApiRpcSplatRoute,
