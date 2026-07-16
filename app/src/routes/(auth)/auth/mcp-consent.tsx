@@ -160,6 +160,10 @@ function RouteComponent() {
             <li>
               <code>blossom:mcp:write</code> — write access to admin data
             </li>
+            <li>
+              <code>offline_access</code> — keep the agent connected by
+              refreshing expired access tokens
+            </li>
           </ul>
         </div>
 
