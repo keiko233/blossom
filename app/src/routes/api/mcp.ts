@@ -1,22 +1,18 @@
-import { mcpHandler as oauthMcpHandler } from "@better-auth/oauth-provider";
 import { createFileRoute } from "@tanstack/react-router";
 import { createMcpHandler } from "mcp-handler";
 import { z } from "zod";
 
+import { getAuth } from "@/lib/auth";
 import { getServerEnv } from "@/lib/env";
+import { createMcpOAuthHandler } from "@/lib/mcp-auth";
 import { createMCPClient } from "@/orpc/mcp";
-import {
-  getActorFromExtra,
-  sanitizeError,
-  type AuthInfo,
-} from "@/orpc/mcp/auth-context";
+import { getActorFromExtra, sanitizeError } from "@/orpc/mcp/auth-context";
 
 function buildHandler(): (req: Request) => Promise<Response> {
   const env = getServerEnv();
   const origin = env.BETTER_AUTH_URL.replace(/\/$/, "");
   const issuer = `${origin}/api/auth`;
   const audience = `${origin}/api/mcp`;
-  const jwksUrl = `${origin}/api/auth/jwks`;
 
   const rawMcpHandler = createMcpHandler(
     async (server) => {
@@ -486,37 +482,13 @@ function buildHandler(): (req: Request) => Promise<Response> {
     { basePath: "/api" },
   );
 
-  return oauthMcpHandler(
-    {
-      verifyOptions: { audience, issuer },
-      jwksUrl,
-    },
-    async (req, jwt) => {
-      const scopes = Array.isArray(jwt.scope)
-        ? jwt.scope
-        : typeof jwt.scope === "string"
-          ? jwt.scope.split(" ")
-          : [];
-
-      (req as Request & { auth?: AuthInfo }).auth = {
-        token: (req.headers.get("Authorization") ?? "").replace(
-          /^Bearer\s+/i,
-          "",
-        ),
-        clientId: ((jwt.client_id ?? jwt.azp) as string) ?? "",
-        scopes,
-        expiresAt: jwt.exp as number | undefined,
-        extra: { ...jwt, sub: jwt.sub, scopes },
-      };
-
-      return rawMcpHandler(req);
-    },
-    {
-      resourceMetadataMappings: {
-        [audience]: `${origin}/.well-known/oauth-protected-resource`,
-      },
-    },
-  );
+  return createMcpOAuthHandler({
+    origin,
+    audience,
+    issuer,
+    getJwks: () => getAuth().api.getJwks(),
+    handler: rawMcpHandler,
+  });
 }
 
 export const Route = createFileRoute("/api/mcp")({
