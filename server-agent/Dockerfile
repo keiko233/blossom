@@ -1,15 +1,20 @@
 # syntax=docker/dockerfile:1
 
-# ── Stage 1: build sing-box from source with the v2ray-api extension ──────────
-# The agent drives sing-box's v2ray API (grpc) for stats/reload, so the binary
-# must be compiled with `with_v2ray_api`; the release tarballs don't ship it.
+# ── Stage 1: build a full-featured sing-box from source ───────────────
+# Start with the upstream full non-CGO build tags for this exact sing-box
+# release, then add v2ray-api because the agent uses it for traffic stats.
 FROM golang:alpine AS singbox
 RUN apk add --no-cache git build-base
-ENV CGO_ENABLED=0 GOBIN=/out
+ENV CGO_ENABLED=0
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go install -v -tags with_v2ray_api github.com/sagernet/sing-box/cmd/sing-box@latest
-# -> /out/sing-box
+    module_json="$(go mod download -json github.com/sagernet/sing-box@latest)" && \
+    sing_box_version="$(printf '%s\n' "${module_json}" | sed -n 's/^[[:space:]]*"Version": "\([^"]*\)",$/\1/p')" && \
+    module_dir="$(printf '%s\n' "${module_json}" | sed -n 's/^[[:space:]]*"Dir": "\([^"]*\)",$/\1/p')" && \
+    test -n "${sing_box_version}" && test -n "${module_dir}" && \
+    build_tags="$(cat "${module_dir}/release/DEFAULT_BUILD_TAGS_OTHERS"),with_v2ray_api" && \
+    make -C "${module_dir}" install PREFIX=/out TAGS="${build_tags}" VERSION="${sing_box_version}"
+# -> /out/bin/sing-box
 
 # ── Stage 2: build the Rust agent against musl (fully static) ─────────────────
 FROM rust:alpine AS agent
@@ -36,7 +41,7 @@ FROM alpine:latest
 # ca-certificates for TLS to the blossom API; tzdata since sing-box logs local time.
 RUN apk add --no-cache ca-certificates tzdata
 
-COPY --from=singbox /out/sing-box /usr/local/bin/sing-box
+COPY --from=singbox /out/bin/sing-box /usr/local/bin/sing-box
 COPY --from=agent   /server-agent /usr/local/bin/server-agent
 
 # The agent resolves sing-box via PATH when no explicit path is given.
