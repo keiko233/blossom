@@ -8,6 +8,7 @@ export function AppShellHeader({ children }: PropsWithChildren) {
   return (
     <header
       className={cn(
+        "sticky top-0 z-10 w-full bg-background",
         "flex h-16 shrink-0 items-center gap-2",
         "border-b border-border",
         "transition-[width,height] ease-linear",

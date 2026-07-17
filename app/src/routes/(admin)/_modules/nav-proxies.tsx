@@ -27,6 +27,10 @@ const items = [
     url: "/admin/proxies/nodes",
   },
   {
+    name: m.admin_nav_proxies_item_certificates(),
+    url: "/admin/proxies/certificates",
+  },
+  {
     name: m.admin_nav_proxies_item_groups(),
     url: "/admin/proxies/groups",
   },

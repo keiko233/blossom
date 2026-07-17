@@ -8,9 +8,13 @@ import {
 import { toastManager } from "@/components/ui/toast";
 import type { JsonValue } from "@/orpc/proxy/schema";
 import {
+  isNodeRealityEnabled,
+  isNodeTlsEnabled,
   NODE_PROTOCOLS,
   type NodeProtocol,
+  protocolSupportsTls,
   settingsSchemaFor,
+  withoutManagedCertificateTlsFields,
 } from "@/orpc/proxy/sing-box-registry";
 import { m } from "@/paraglide/messages";
 import { createNode, NODES_QUERY_KEY, updateNode } from "@/query/nodes";
@@ -23,6 +27,9 @@ export interface NodeFormValues {
   tags: string;
   enabled: boolean;
   serverId: string;
+  tlsMode: "managed" | "manual";
+  certificateId: string;
+  tlsServerName: string;
   // Address override. Empty string means "no override": send `null` to the
   // backend so the node falls back to its server's address.
   address: string;
@@ -51,6 +58,9 @@ function defaultValues(node: NodeDetail | undefined): NodeFormValues {
     tags: (node?.tags ?? []).join(", "),
     enabled: node?.enabled ?? true,
     serverId: node?.serverId ?? "",
+    tlsMode: node?.certificateId ? "managed" : "manual",
+    certificateId: node?.certificateId ?? "",
+    tlsServerName: node?.tlsServerName ?? "",
     address: node?.address ?? "",
     listenPort: node?.listenPort ?? 443,
     protocol,
@@ -59,7 +69,16 @@ function defaultValues(node: NodeDetail | undefined): NodeFormValues {
 }
 
 function toPayload(v: NodeFormValues) {
-  const pruned = pruneSettings(v.settings, settingsSchemaFor(v.protocol)) as
+  const usesManagedCertificate =
+    v.tlsMode === "managed" &&
+    protocolSupportsTls(v.protocol) &&
+    isNodeTlsEnabled(v.settings) &&
+    !isNodeRealityEnabled(v.settings) &&
+    Boolean(v.certificateId);
+  const settings = usesManagedCertificate
+    ? withoutManagedCertificateTlsFields(v.settings)
+    : structuredClone(v.settings);
+  const pruned = pruneSettings(settings, settingsSchemaFor(v.protocol)) as
     | Record<string, JsonValue>
     | undefined;
   return {
@@ -71,6 +90,8 @@ function toPayload(v: NodeFormValues) {
       .filter(Boolean),
     enabled: v.enabled,
     serverId: v.serverId,
+    certificateId: usesManagedCertificate ? v.certificateId : null,
+    tlsServerName: usesManagedCertificate ? v.tlsServerName || null : null,
     // Empty override → null (fall back to server.address). A non-empty string
     // is the per-node override. `updateNode` distinguishes undefined (leave
     // alone) from null (clear); we never want to leave it alone on save.

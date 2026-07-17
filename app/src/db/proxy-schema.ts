@@ -9,7 +9,10 @@ import {
   timestamp,
   unique,
 } from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
+import { z } from "zod";
 
+import { isValidCertificateDomain } from "@/lib/certificate-domain";
 import type { JsonValue, NodeProtocol } from "@/orpc/proxy/schema";
 
 export type AgentRuntimeState =
@@ -98,6 +101,85 @@ export const server = pgTable(
 export type Server = typeof server.$inferSelect;
 export type NewServer = typeof server.$inferInsert;
 
+export const CERTIFICATE_KINDS = ["acme", "self_signed"] as const;
+export const CERTIFICATE_DNS_MODES = ["cloudflare", "manual"] as const;
+
+export type CertificateKind = (typeof CERTIFICATE_KINDS)[number];
+export type CertificateDnsMode = (typeof CERTIFICATE_DNS_MODES)[number];
+export type CertificateInstanceState =
+  | "pending"
+  | "issuing"
+  | "waiting_dns"
+  | "active"
+  | "renewing"
+  | "error"
+  | "expired";
+
+/** Global certificate policy and issuance state, independent from servers. */
+export const managedCertificate = pgTable(
+  "managed_certificate",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    kind: text("kind").$type<CertificateKind>().notNull(),
+    domains: jsonb("domains").$type<string[]>().notNull(),
+    acmeEmail: text("acme_email"),
+    acmeStaging: boolean("acme_staging").default(false).notNull(),
+    dnsMode: text("dns_mode").$type<CertificateDnsMode>(),
+    selfSignedValidityDays: integer("self_signed_validity_days")
+      .default(365)
+      .notNull(),
+    renewalDaysBeforeExpiry: integer("renewal_days_before_expiry")
+      .default(30)
+      .notNull(),
+    state: text("state")
+      .$type<CertificateInstanceState>()
+      .default("pending")
+      .notNull(),
+    desiredGeneration: integer("desired_generation").default(1).notNull(),
+    activeMaterialVersion: integer("active_material_version"),
+    notBefore: timestamp("not_before"),
+    notAfter: timestamp("not_after"),
+    fingerprintSha256: text("fingerprint_sha256"),
+    challenge:
+      jsonb("challenge").$type<
+        Array<{ name: string; type: "TXT"; value: string }>
+      >(),
+    challengeApprovedAt: timestamp("challenge_approved_at"),
+    issuanceStateCiphertext: text("issuance_state_ciphertext"),
+    issuanceLeaseExpiresAt: timestamp("issuance_lease_expires_at"),
+    issuanceAttemptAt: timestamp("issuance_attempt_at"),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [index("managed_certificate_kind_idx").on(table.kind)],
+);
+
+const certificateDomainSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .refine(isValidCertificateDomain, "Invalid DNS name");
+
+export const managedCertificateInsertSchema = createInsertSchema(
+  managedCertificate,
+  {
+    name: (schema) => schema.trim().min(1).max(128),
+    kind: z.enum(CERTIFICATE_KINDS),
+    domains: z.array(certificateDomainSchema).min(1).max(100),
+    acmeEmail: z.email().optional(),
+    dnsMode: z.enum(CERTIFICATE_DNS_MODES).optional(),
+    selfSignedValidityDays: z.number().int().min(1).max(3650).default(365),
+    renewalDaysBeforeExpiry: z.number().int().min(1).max(90).default(30),
+  },
+);
+
+export type ManagedCertificate = typeof managedCertificate.$inferSelect;
+
 /**
  * A proxy node is one sing-box inbound on a server. Node-level metadata lives
  * in columns; the protocol configuration is a native sing-box inbound fragment
@@ -128,6 +210,13 @@ export const node = pgTable(
     listenPort: integer("listen_port").notNull(),
 
     protocol: text("protocol").$type<NodeProtocol>().notNull(),
+    // Managed certificate selection. Null keeps legacy inline/path/acme TLS
+    // settings untouched for backwards compatibility.
+    certificateId: text("certificate_id").references(
+      () => managedCertificate.id,
+      { onDelete: "restrict" },
+    ),
+    tlsServerName: text("tls_server_name"),
     // Native sing-box inbound fragment for this protocol, minus the fields the
     // compiler injects (type/tag/listen/listen_port/users). Validated against the
     // sing-box schema for `protocol` on write.
@@ -156,6 +245,61 @@ export const node = pgTable(
 
 export type Node = typeof node.$inferSelect;
 export type NewNode = typeof node.$inferInsert;
+
+/** Certificates that a server is allowed to install and use. */
+export const certificateServer = pgTable(
+  "certificate_server",
+  {
+    certificateId: text("certificate_id")
+      .notNull()
+      .references(() => managedCertificate.id, { onDelete: "cascade" }),
+    serverId: text("server_id")
+      .notNull()
+      .references(() => server.id, { onDelete: "cascade" }),
+    enabled: boolean("enabled").default(true).notNull(),
+    state: text("state")
+      .$type<CertificateInstanceState>()
+      .default("pending")
+      .notNull(),
+    desiredGeneration: integer("desired_generation").default(1).notNull(),
+    appliedGeneration: integer("applied_generation"),
+    lastError: text("last_error"),
+    lastActionId: text("last_action_id"),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.certificateId, table.serverId] }),
+    index("certificate_server_server_idx").on(table.serverId),
+    index("certificate_server_state_idx").on(table.state),
+  ],
+);
+
+/** Encrypted certificate versions issued once by the control plane. */
+export const certificateMaterial = pgTable(
+  "certificate_material",
+  {
+    id: text("id").primaryKey(),
+    certificateId: text("certificate_id")
+      .notNull()
+      .references(() => managedCertificate.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    certificateCiphertext: text("certificate_ciphertext").notNull(),
+    privateKeyCiphertext: text("private_key_ciphertext").notNull(),
+    notBefore: timestamp("not_before").notNull(),
+    notAfter: timestamp("not_after").notNull(),
+    fingerprintSha256: text("fingerprint_sha256").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique("certificate_material_version_unique").on(
+      table.certificateId,
+      table.version,
+    ),
+  ],
+);
 
 /**
  * A proxy group bundles nodes for access control. Nodes are not directly usable

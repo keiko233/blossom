@@ -378,6 +378,119 @@
         }
       }
     },
+    "/agent/certificates/events": {
+      "post": {
+        "operationId": "reportCertificateEvent",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "actionId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "certificateId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "generation": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "state": {
+                    "enum": [
+                      "issuing",
+                      "waiting_dns",
+                      "active",
+                      "renewing",
+                      "error",
+                      "expired",
+                      "removed"
+                    ],
+                    "type": "string"
+                  },
+                  "notBefore": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "notAfter": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "fingerprintSha256": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "challenge": {
+                    "type": "array",
+                    "maxItems": 200,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 512
+                        },
+                        "type": {
+                          "enum": [
+                            "TXT"
+                          ]
+                        },
+                        "value": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "type",
+                        "value"
+                      ]
+                    }
+                  },
+                  "error": {
+                    "type": "string",
+                    "maxLength": 4096
+                  }
+                },
+                "required": [
+                  "actionId",
+                  "certificateId",
+                  "generation",
+                  "state"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/agent/traffic": {
       "post": {
         "operationId": "reportAgentTraffic",

@@ -34,6 +34,9 @@ export const serverEnvSchema = z.object({
           "BETTER_AUTH_URL must use https:// in production (localhost http is allowed for development)",
       },
     ),
+  CERTIFICATE_MASTER_KEY: z.string().optional(),
+  CLOUDFLARE_DNS_API_TOKEN: z.string().optional(),
+  CLOUDFLARE_DNS_ZONE_ID: z.string().optional(),
 });
 
 export const clientEnvSchema = z.object({

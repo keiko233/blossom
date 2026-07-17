@@ -39,6 +39,7 @@ function makeResolved(
       address: "example.com",
     },
     address: "example.com",
+    certificateKind: null,
     ...overrides,
   };
 }
@@ -139,6 +140,31 @@ describe("buildClashConfig", () => {
         }),
       ],
     });
+  });
+
+  it("ignores stale managed certificates when TLS is disabled or unsupported", () => {
+    const disabledTls = makeResolved(
+      "vless",
+      { tls: { enabled: false } },
+      { certificateKind: "self_signed" },
+    );
+    disabledTls.node.certificateId = "cert-1";
+    disabledTls.node.tlsServerName = "example.com";
+    const unsupported = makeResolved(
+      "shadowsocks",
+      { method: "aes-256-gcm" },
+      { certificateKind: "self_signed" },
+    );
+    unsupported.node.certificateId = "cert-2";
+
+    const { config } = buildClashConfig([disabledTls, unsupported], {
+      credentials,
+    });
+    const proxies = (config as { proxies: Record<string, unknown>[] }).proxies;
+    expect(proxies[0]).not.toHaveProperty("tls");
+    expect(proxies[0]).not.toHaveProperty("skip-cert-verify");
+    expect(proxies[1]).not.toHaveProperty("tls");
+    expect(proxies[1]).not.toHaveProperty("skip-cert-verify");
   });
 
   it("prefixes the server PSK for shadowsocks 2022 methods", () => {

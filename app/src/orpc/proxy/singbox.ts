@@ -1,6 +1,11 @@
 import { Configuration } from "@black-duty/sing-box-schema";
 
 import type { Node } from "@/db/proxy-schema";
+import {
+  isNodeRealityEnabled,
+  isNodeTlsEnabled,
+  protocolSupportsTls,
+} from "@/orpc/proxy/sing-box-registry";
 
 /**
  * Compiles a server's nodes into a single complete sing-box config. The agent
@@ -97,9 +102,29 @@ export function compileServerConfig(options: CompileOptions): SingboxConfig {
 }
 
 function buildInbound(node: Node, users: SingboxUser[]): Json {
+  const settings = { ...node.settings } as Json;
+  if (
+    node.certificateId &&
+    protocolSupportsTls(node.protocol) &&
+    isNodeTlsEnabled(node.settings) &&
+    !isNodeRealityEnabled(node.settings)
+  ) {
+    const previousTls =
+      typeof settings.tls === "object" &&
+      settings.tls !== null &&
+      !Array.isArray(settings.tls)
+        ? (settings.tls as Json)
+        : {};
+    settings.tls = {
+      ...previousTls,
+      ...(node.tlsServerName ? { server_name: node.tlsServerName } : {}),
+      certificate_path: `/var/lib/blossom-agent/certificates/${node.certificateId}/current/fullchain.pem`,
+      key_path: `/var/lib/blossom-agent/certificates/${node.certificateId}/current/private-key.pem`,
+    };
+  }
   // Managed fields override anything in the stored fragment.
   return {
-    ...node.settings,
+    ...settings,
     type: node.protocol,
     tag: `node-${node.id}`,
     listen: "::",

@@ -14,6 +14,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+use crate::certificate::CertificateManager;
 use crate::client::Client;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +50,7 @@ struct PersistedState {
 
 pub struct ConfigManager {
     client: Client,
+    certificate_manager: CertificateManager,
     state_dir: PathBuf,
     active_path: PathBuf,
     candidate_path: PathBuf,
@@ -95,8 +97,10 @@ impl ConfigManager {
         }
         let v2ray_listen = read_v2ray_listen(&active_path);
 
+        let certificate_manager = CertificateManager::new(client.clone(), &state_dir)?;
         Ok(Self {
             client,
+            certificate_manager,
             state_dir,
             active_path,
             candidate_path,
@@ -157,6 +161,12 @@ impl ConfigManager {
             heartbeat_interval_seconds: document.agent.heartbeat_interval_seconds.clamp(5, 300)
                 as u64,
         };
+
+        // Certificate actions must complete before the candidate configuration is
+        // checked or promoted because managed TLS paths are referenced by sing-box.
+        self.certificate_manager
+            .reconcile(&document.actions)
+            .await?;
 
         if self.observed_revision.as_deref() == Some(document.singbox.revision.as_str())
             || (self.active_path.exists()

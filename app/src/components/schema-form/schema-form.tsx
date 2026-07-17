@@ -19,6 +19,7 @@ export interface SchemaFormProps {
   schema: AnyZod;
   /** Form path the settings object lives under, e.g. "settings". */
   namePrefix: string;
+  hiddenFields?: ReadonlySet<string>;
 }
 
 /**
@@ -31,6 +32,7 @@ export function SchemaForm({
   form,
   schema,
   namePrefix,
+  hiddenFields,
 }: SchemaFormProps): React.ReactElement {
   const shape = objectShape(unwrap(schema).inner) ?? {};
   const entries = Object.entries(shape);
@@ -47,6 +49,7 @@ export function SchemaForm({
           name={`${namePrefix}.${key}`}
           schema={child}
           labelKey={key}
+          hiddenFields={hiddenFields}
         />
       ))}
 
@@ -59,6 +62,7 @@ export function SchemaForm({
               name={`${namePrefix}.${key}`}
               schema={child}
               labelKey={key}
+              hiddenFields={hiddenFields}
             />
           ))}
         </AdvancedGroup>
@@ -85,6 +89,7 @@ export function schemaSections(
   form: SchemaFormApi,
   schema: AnyZod,
   namePrefix: string,
+  hiddenFields?: ReadonlySet<string>,
 ): SchemaSection[] {
   const shape = objectShape(unwrap(schema).inner) ?? {};
   const entries = Object.entries(shape);
@@ -109,6 +114,7 @@ export function schemaSections(
               name={`${namePrefix}.${key}`}
               schema={child}
               labelKey={key}
+              hiddenFields={hiddenFields}
             />
           ))}
         </div>
@@ -128,6 +134,7 @@ export function schemaSections(
           schema={child}
           labelKey={key}
           variant="flat"
+          hiddenFields={hiddenFields}
         />
       ),
     });
@@ -146,6 +153,7 @@ export function schemaSections(
               name={`${namePrefix}.${key}`}
               schema={child}
               labelKey={key}
+              hiddenFields={hiddenFields}
             />
           ))}
         </div>

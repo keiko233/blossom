@@ -4,7 +4,14 @@ import { db } from "@/db";
 import { user } from "@/db/auth-schema";
 import { planGroup, subscription } from "@/db/plan-schema";
 import type { Subscription } from "@/db/plan-schema";
-import { node, nodeGroup, server, type Node } from "@/db/proxy-schema";
+import {
+  managedCertificate,
+  node,
+  nodeGroup,
+  server,
+  type CertificateKind,
+  type Node,
+} from "@/db/proxy-schema";
 
 /**
  * Minimal, never-secret-bearing summary of the server a node lives on. Only
@@ -33,13 +40,19 @@ export interface ResolvedNode {
   server: ServerSummary;
   /** Final client-facing address: per-node override or server fallback. */
   address: string;
+  certificateKind: CertificateKind | null;
 }
 
-function resolve(nodeRow: Node, serverRow: ServerSummary): ResolvedNode {
+function resolve(
+  nodeRow: Node,
+  serverRow: ServerSummary,
+  certificateKind: CertificateKind | null,
+): ResolvedNode {
   return {
     node: nodeRow,
     server: serverRow,
     address: nodeRow.address ?? serverRow.address,
+    certificateKind,
   };
 }
 
@@ -81,12 +94,14 @@ export async function getSubscriptionAccessibleNodes(
         name: server.name,
         address: server.address,
       },
+      certificateKind: managedCertificate.kind,
     })
     .from(subscription)
     .innerJoin(planGroup, eq(planGroup.planId, subscription.planId))
     .innerJoin(nodeGroup, eq(nodeGroup.groupId, planGroup.groupId))
     .innerJoin(node, eq(node.id, nodeGroup.nodeId))
     .innerJoin(server, eq(server.id, node.serverId))
+    .leftJoin(managedCertificate, eq(managedCertificate.id, node.certificateId))
     .where(
       and(
         eq(subscription.id, subscriptionId),
@@ -96,8 +111,8 @@ export async function getSubscriptionAccessibleNodes(
     );
 
   const byId = new Map<string, ResolvedNode>();
-  for (const { node: n, server: s } of rows) {
-    byId.set(n.id, resolve(n, s));
+  for (const { node: n, server: s, certificateKind } of rows) {
+    byId.set(n.id, resolve(n, s, certificateKind));
   }
   return [...byId.values()];
 }
@@ -124,12 +139,14 @@ export async function getUserAccessibleNodes(
         name: server.name,
         address: server.address,
       },
+      certificateKind: managedCertificate.kind,
     })
     .from(subscription)
     .innerJoin(planGroup, eq(planGroup.planId, subscription.planId))
     .innerJoin(nodeGroup, eq(nodeGroup.groupId, planGroup.groupId))
     .innerJoin(node, eq(node.id, nodeGroup.nodeId))
     .innerJoin(server, eq(server.id, node.serverId))
+    .leftJoin(managedCertificate, eq(managedCertificate.id, node.certificateId))
     .where(
       and(
         eq(subscription.userId, userId),
@@ -143,8 +160,8 @@ export async function getUserAccessibleNodes(
   // Dedupe in JS: DISTINCT over jsonb columns is awkward, and overlapping
   // groups across plans produce duplicates.
   const byId = new Map<string, ResolvedNode>();
-  for (const { node: n, server: s } of rows) {
-    byId.set(n.id, resolve(n, s));
+  for (const { node: n, server: s, certificateKind } of rows) {
+    byId.set(n.id, resolve(n, s, certificateKind));
   }
   return [...byId.values()];
 }

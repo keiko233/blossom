@@ -53,6 +53,22 @@ export const MANAGED_FIELDS = [
   "users",
 ] as const;
 
+/** Certificate material is always selected from the certificate service. */
+export const MANAGED_CERTIFICATE_MATERIAL_TLS_FIELDS = [
+  "certificate",
+  "certificate_path",
+  "key",
+  "key_path",
+  "acme",
+  "certificate_provider",
+] as const;
+
+/** TLS values owned by the certificate service once a node selects a certificate. */
+export const MANAGED_CERTIFICATE_TLS_FIELDS = [
+  "server_name",
+  ...MANAGED_CERTIFICATE_MATERIAL_TLS_FIELDS,
+] as const;
+
 /**
  * A protocol is a "node" if it is a real user-facing proxy server: it listens on a
  * port (`listen_port`) and accepts per-user credentials (`users`). This excludes
@@ -116,4 +132,55 @@ export function settingsSchemaFor(protocol: string): ZodObjectLike {
     }
   }
   return schema.omit(mask) as ZodObjectLike;
+}
+
+/** Whether this inbound protocol exposes sing-box's server-side TLS block. */
+export function protocolSupportsTls(protocol: string): boolean {
+  const schema = INBOUND_BY_TYPE[protocol];
+  return Boolean(schema && "tls" in schema.def.shape);
+}
+
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** Managed certificate material is meaningful only for explicitly enabled TLS. */
+export function isNodeTlsEnabled(settings: Record<string, unknown>): boolean {
+  return objectValue(settings.tls)?.enabled === true;
+}
+
+/** Reality owns its own key exchange and is mutually exclusive with X.509 material. */
+export function isNodeRealityEnabled(
+  settings: Record<string, unknown>,
+): boolean {
+  const tls = objectValue(settings.tls);
+  return objectValue(tls?.reality)?.enabled === true;
+}
+
+/** Remove inline/path certificate settings so only the managed columns are authoritative. */
+export function withoutManagedCertificateTlsFields(
+  settings: Record<string, unknown>,
+): Record<string, unknown> {
+  const sanitized = withoutCertificateMaterialTlsFields(settings);
+  const tls = objectValue(sanitized.tls);
+  if (tls) {
+    delete tls.server_name;
+  }
+  return sanitized;
+}
+
+/** Remove every raw certificate/key source while retaining non-material TLS options. */
+function withoutCertificateMaterialTlsFields(
+  settings: Record<string, unknown>,
+): Record<string, unknown> {
+  const sanitized = structuredClone(settings);
+  const tls = objectValue(sanitized.tls);
+  if (tls) {
+    for (const key of MANAGED_CERTIFICATE_MATERIAL_TLS_FIELDS) {
+      delete tls[key];
+    }
+  }
+  return sanitized;
 }

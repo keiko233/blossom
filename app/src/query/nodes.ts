@@ -1,10 +1,19 @@
 import { createServerFn } from "@tanstack/react-start";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
 import { db } from "@/db";
-import { node } from "@/db/proxy-schema";
-import { server } from "@/db/proxy-schema";
+import {
+  certificateMaterial,
+  certificateServer,
+  managedCertificate,
+  node,
+  server,
+} from "@/db/proxy-schema";
+import {
+  certificateCoversDomain,
+  isCertificateCurrentlyUsable,
+} from "@/lib/certificate-domain";
 import { ensureAdmin } from "@/lib/ensure-admin";
 import {
   createNodeSchema,
@@ -12,6 +21,12 @@ import {
   parseNodeSettings,
   updateNodeSchema,
 } from "@/orpc/proxy/schema";
+import {
+  isNodeRealityEnabled,
+  isNodeTlsEnabled,
+  protocolSupportsTls,
+  withoutManagedCertificateTlsFields,
+} from "@/orpc/proxy/sing-box-registry";
 
 /** TanStack Query key for the admin node list. */
 export const NODES_QUERY_KEY = ["admin", "nodes"] as const;
@@ -33,6 +48,8 @@ export interface NodeListItem {
   resolvedAddress: string;
   listenPort: number;
   protocol: string;
+  certificateId: string | null;
+  tlsServerName: string | null;
   settings: Record<string, unknown>;
   serverSummary: {
     id: string;
@@ -93,6 +110,8 @@ export const listNodes = createServerFn({ method: "GET" }).handler(async () => {
     resolvedAddress: resolveAddress(n, s),
     listenPort: n.listenPort,
     protocol: n.protocol,
+    certificateId: n.certificateId,
+    tlsServerName: n.tlsServerName,
     settings: n.settings,
     serverSummary: {
       id: s.id,
@@ -138,6 +157,8 @@ export const getNode = createServerFn({ method: "GET" })
       resolvedAddress: resolveAddress(n, s),
       listenPort: n.listenPort,
       protocol: n.protocol,
+      certificateId: n.certificateId,
+      tlsServerName: n.tlsServerName,
       settings: n.settings,
       serverSummary: {
         id: s.id,
@@ -165,6 +186,15 @@ export const createNode = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     await ensureAdmin();
 
+    await validateManagedCertificateSelection(
+      data.serverId,
+      data.certificateId,
+      data.tlsServerName,
+      data.enabled,
+      data.protocol,
+      data.settings,
+    );
+
     // No agent token is minted here — the owning server holds it.
     const [row] = await db
       .insert(node)
@@ -180,8 +210,17 @@ export const createNode = createServerFn({ method: "POST" })
         address: data.address ?? null,
         listenPort: data.listenPort,
         protocol: data.protocol,
+        certificateId: data.certificateId ?? null,
+        tlsServerName: data.tlsServerName ?? null,
         // Strictly re-validate the fragment against the sing-box schema for this protocol.
-        settings: parseNodeSettings(data.protocol, data.settings),
+        settings: parseNodeSettings(
+          data.protocol,
+          sanitizeCertificateSettings(
+            data.protocol,
+            data.settings,
+            data.certificateId,
+          ),
+        ),
       })
       .returning();
 
@@ -192,26 +231,48 @@ export const updateNode = createServerFn({ method: "POST" })
   .validator(updateNodeSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
-    const { id, protocol, settings, address, ...rest } = data;
+    const {
+      id,
+      protocol,
+      settings,
+      address,
+      certificateId,
+      tlsServerName,
+      ...rest
+    } = data;
+
+    const [existingNode] = await db.select().from(node).where(eq(node.id, id));
+    if (!existingNode) throw new Error("Not found");
+    const effectiveCertificateId =
+      certificateId === undefined ? existingNode.certificateId : certificateId;
+    const effectiveProtocol = protocol ?? existingNode.protocol;
+    const effectiveSettings = settings ?? existingNode.settings;
+    await validateManagedCertificateSelection(
+      data.serverId ?? existingNode.serverId,
+      effectiveCertificateId,
+      tlsServerName === undefined ? existingNode.tlsServerName : tlsServerName,
+      data.enabled ?? existingNode.enabled,
+      effectiveProtocol,
+      effectiveSettings,
+    );
 
     // Validating settings needs the effective protocol (may be unchanged on edit).
     let settingsUpdate:
       | Record<string, never>
       | { settings: ReturnType<typeof parseNodeSettings> } = {};
-    if (settings !== undefined) {
-      let effectiveProtocol = protocol;
-      if (!effectiveProtocol) {
-        const [existing] = await db
-          .select({ protocol: node.protocol })
-          .from(node)
-          .where(eq(node.id, id));
-        if (!existing) {
-          throw new Error("Not found");
-        }
-        effectiveProtocol = existing.protocol;
-      }
+    if (
+      settings !== undefined ||
+      (certificateId !== undefined && Boolean(effectiveCertificateId))
+    ) {
       settingsUpdate = {
-        settings: parseNodeSettings(effectiveProtocol, settings),
+        settings: parseNodeSettings(
+          effectiveProtocol,
+          sanitizeCertificateSettings(
+            effectiveProtocol,
+            effectiveSettings,
+            effectiveCertificateId,
+          ),
+        ),
       };
     }
 
@@ -227,6 +288,8 @@ export const updateNode = createServerFn({ method: "POST" })
       .set({
         ...rest,
         ...(protocol ? { protocol } : {}),
+        ...(certificateId !== undefined ? { certificateId } : {}),
+        ...(tlsServerName !== undefined ? { tlsServerName } : {}),
         ...settingsUpdate,
         ...addressUpdate,
       })
@@ -238,6 +301,85 @@ export const updateNode = createServerFn({ method: "POST" })
     }
     return row;
   });
+
+function sanitizeCertificateSettings(
+  protocol: string,
+  settings: Record<string, unknown>,
+  certificateId: string | null | undefined,
+): Record<string, unknown> {
+  if (!protocolSupportsTls(protocol) || !isNodeTlsEnabled(settings)) {
+    return settings;
+  }
+  return certificateId
+    ? withoutManagedCertificateTlsFields(settings)
+    : settings;
+}
+
+async function validateManagedCertificateSelection(
+  serverId: string,
+  certificateId: string | null | undefined,
+  tlsServerName: string | null | undefined,
+  enabled: boolean,
+  protocol: string,
+  settings: Record<string, unknown>,
+): Promise<void> {
+  if (!certificateId) return;
+  if (!protocolSupportsTls(protocol)) {
+    throw new Error("This protocol does not support TLS certificates");
+  }
+  if (!isNodeTlsEnabled(settings)) {
+    throw new Error(
+      "TLS must be enabled before selecting a managed certificate",
+    );
+  }
+  if (isNodeRealityEnabled(settings)) {
+    throw new Error("Reality cannot be combined with a managed certificate");
+  }
+  const [bound] = await db
+    .select({
+      certificate: managedCertificate,
+      materialId: certificateMaterial.id,
+    })
+    .from(certificateServer)
+    .innerJoin(
+      managedCertificate,
+      eq(managedCertificate.id, certificateServer.certificateId),
+    )
+    .leftJoin(
+      certificateMaterial,
+      and(
+        eq(certificateMaterial.certificateId, managedCertificate.id),
+        eq(
+          certificateMaterial.version,
+          managedCertificate.activeMaterialVersion,
+        ),
+      ),
+    )
+    .where(
+      and(
+        eq(certificateServer.certificateId, certificateId),
+        eq(certificateServer.serverId, serverId),
+        eq(certificateServer.enabled, true),
+      ),
+    );
+  if (!bound)
+    throw new Error("Certificate is not bound to the selected server");
+  if (
+    !tlsServerName ||
+    !certificateCoversDomain(bound.certificate.domains, tlsServerName)
+  ) {
+    throw new Error("TLS server name is not covered by the certificate");
+  }
+  // The agent installs certificate actions before validating and applying the
+  // sing-box config returned in the same poll. A pending server binding is
+  // therefore usable as long as the control plane has valid active material.
+  if (
+    enabled &&
+    !isCertificateCurrentlyUsable(bound.certificate, bound.materialId !== null)
+  ) {
+    throw new Error("An enabled node requires a valid issued certificate");
+  }
+}
 
 export const deleteNode = createServerFn({ method: "POST" })
   .validator(nodeIdSchema)

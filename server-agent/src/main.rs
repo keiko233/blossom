@@ -5,6 +5,7 @@
 //! A server owns one agent token and one running sing-box process; each "node"
 //! on that server is compiled as one inbound inside that single config.
 
+mod certificate;
 mod client;
 mod config;
 mod process;
@@ -57,7 +58,11 @@ struct Args {
     sing_box_path: Option<PathBuf>,
 
     /// Durable directory for the active and last-known-good sing-box configs.
-    #[arg(long, default_value = "./.blossom-agent", env = "AGENT_STATE_DIR")]
+    #[arg(
+        long,
+        default_value = "/var/lib/blossom-agent",
+        env = "AGENT_STATE_DIR"
+    )]
     state_dir: PathBuf,
 }
 
@@ -73,6 +78,7 @@ fn parse_level(level: &str) -> tracing::Level {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let args = Args::parse();
     tracing_subscriber::fmt()
         .with_max_level(parse_level(&args.log_level))

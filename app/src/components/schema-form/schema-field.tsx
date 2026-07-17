@@ -75,6 +75,8 @@ export interface SchemaFieldProps {
   defaultOpen?: boolean;
   /** Presentation for group fields. Nested groups always fall back to `card`. */
   variant?: GroupVariant;
+  /** Exact form paths omitted because a higher-level service owns their values. */
+  hiddenFields?: ReadonlySet<string>;
 }
 
 /**
@@ -163,7 +165,11 @@ export function SchemaField({
   labelKey,
   defaultOpen,
   variant = "card",
+  hiddenFields,
 }: SchemaFieldProps): React.ReactElement | null {
+  if (hiddenFields?.has(name)) {
+    return null;
+  }
   const { inner, isOptional } = unwrap(schema);
   const kind = typeOf(inner);
   const label = humanizeKey(labelKey);
@@ -181,6 +187,7 @@ export function SchemaField({
         defaultOpen={defaultOpen}
         variant={variant}
         optional={isOptional}
+        hiddenFields={hiddenFields}
       />
     );
   }
@@ -197,6 +204,7 @@ export function SchemaField({
         help={meta.help}
         defaultOpen={defaultOpen}
         variant={variant}
+        hiddenFields={hiddenFields}
       />
     );
   }
@@ -214,6 +222,7 @@ export function SchemaField({
           help={meta.help}
           defaultOpen={defaultOpen}
           variant={variant}
+          hiddenFields={hiddenFields}
         />
       );
     }
@@ -435,6 +444,7 @@ function ObjectGroup({
   defaultOpen,
   variant,
   optional,
+  hiddenFields,
 }: {
   form: SchemaFormApi;
   name: string;
@@ -444,6 +454,7 @@ function ObjectGroup({
   defaultOpen?: boolean;
   variant?: GroupVariant;
   optional: boolean;
+  hiddenFields?: ReadonlySet<string>;
 }): React.ReactElement {
   const shape = objectShape(inner) ?? {};
   if (optional) {
@@ -477,6 +488,7 @@ function ObjectGroup({
                       name={`${name}.${key}`}
                       schema={child}
                       labelKey={key}
+                      hiddenFields={hiddenFields}
                     />
                   ))
                 : null}
@@ -500,6 +512,7 @@ function ObjectGroup({
           name={`${name}.${key}`}
           schema={child}
           labelKey={key}
+          hiddenFields={hiddenFields}
         />
       ))}
     </GroupShell>
@@ -514,6 +527,7 @@ function DiscriminatedGroup({
   help,
   defaultOpen,
   variant,
+  hiddenFields,
 }: {
   form: SchemaFormApi;
   name: string;
@@ -522,6 +536,7 @@ function DiscriminatedGroup({
   help?: string;
   defaultOpen?: boolean;
   variant?: GroupVariant;
+  hiddenFields?: ReadonlySet<string>;
 }): React.ReactElement {
   const values = Object.keys(du.byValue);
   return (
@@ -565,6 +580,7 @@ function DiscriminatedGroup({
                     name={`${name}.${key}`}
                     schema={child}
                     labelKey={key}
+                    hiddenFields={hiddenFields}
                   />
                 ))}
             </>
@@ -583,6 +599,7 @@ function RepeatableGroup({
   help,
   defaultOpen,
   variant,
+  hiddenFields,
 }: {
   form: SchemaFormApi;
   name: string;
@@ -591,6 +608,7 @@ function RepeatableGroup({
   help?: string;
   defaultOpen?: boolean;
   variant?: GroupVariant;
+  hiddenFields?: ReadonlySet<string>;
 }): React.ReactElement {
   const shape = objectShape(unwrap(element).inner) ?? {};
   return (
@@ -628,6 +646,7 @@ function RepeatableGroup({
                       name={`${name}[${index}].${key}`}
                       schema={child}
                       labelKey={key}
+                      hiddenFields={hiddenFields}
                     />
                   ))}
                 </div>

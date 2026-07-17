@@ -12,10 +12,18 @@ import {
   recordAgentTraffic,
   updateAgentHeartbeat,
 } from "@/query/agent";
+import {
+  getCertificateAgentContext,
+  recordCertificateAgentEvent,
+} from "@/query/certificate-agent";
 import { getNodeActiveSubscriptions } from "@/query/subscription-access";
 
 import { base } from "../base";
-import { heartbeatSchema, trafficReportSchema } from "./schema";
+import {
+  certificateEventSchema,
+  heartbeatSchema,
+  trafficReportSchema,
+} from "./schema";
 import { compileServerConfig, type NodeInbound } from "./singbox";
 import { buildInboundUser } from "./singbox-users";
 import { resolveReportedTrafficUser } from "./traffic-user-codec";
@@ -130,6 +138,45 @@ const agentConfigV2Output = z.object({
   ),
 });
 
+type CertificateAgentContext = Awaited<
+  ReturnType<typeof getCertificateAgentContext>
+>[number];
+
+function certificateActionFor(
+  item: CertificateAgentContext,
+  serverId: string,
+): ({ id: string; type: string } & Record<string, unknown>) | null {
+  const { certificate, binding, material } = item;
+  const activeGeneration = certificate.activeMaterialVersion;
+  if (!binding.enabled) {
+    const generation = binding.appliedGeneration ?? binding.desiredGeneration;
+    return {
+      id: `certificate:${certificate.id}:${serverId}:${generation}:remove`,
+      certificateId: certificate.id,
+      generation,
+      domains: certificate.domains,
+      type: "certificate.remove",
+    };
+  }
+  if (
+    binding.enabled &&
+    material &&
+    activeGeneration !== null &&
+    binding.appliedGeneration !== activeGeneration
+  ) {
+    return {
+      id: `certificate:${certificate.id}:${serverId}:${activeGeneration}:install`,
+      certificateId: certificate.id,
+      generation: activeGeneration,
+      domains: certificate.domains,
+      type: "certificate.install",
+      material,
+    };
+  }
+
+  return null;
+}
+
 export const getAgentConfigV2 = agentProcedure
   .route({
     method: "GET",
@@ -138,12 +185,28 @@ export const getAgentConfigV2 = agentProcedure
   })
   .output(agentConfigV2Output)
   .handler(async ({ context }) => {
-    const { config, materializedNodeIds } = await compileAgentServerConfig(
-      context.server.id,
-      context.server.enabled,
+    const [{ config, materializedNodeIds }, certificateContext] =
+      await Promise.all([
+        compileAgentServerConfig(context.server.id, context.server.enabled),
+        getCertificateAgentContext(context.server.id),
+      ]);
+    const actions = certificateContext
+      .map((item) => certificateActionFor(item, context.server.id))
+      .filter(
+        (
+          action,
+        ): action is { id: string; type: string } & Record<string, unknown> =>
+          action !== null,
+      );
+    const certificateRevisions = certificateContext.map(
+      ({ certificate, binding }) => ({
+        id: certificate.id,
+        desiredGeneration: binding.desiredGeneration,
+        appliedGeneration: binding.appliedGeneration,
+      }),
     );
     const revision = `sha256:${createHash("sha256")
-      .update(JSON.stringify(config))
+      .update(JSON.stringify({ config, certificateRevisions }))
       .digest("hex")}`;
     return {
       apiVersion: 2 as const,
@@ -152,8 +215,21 @@ export const getAgentConfigV2 = agentProcedure
         heartbeatIntervalSeconds: context.server.heartbeatIntervalSeconds,
       },
       singbox: { revision, materializedNodeIds, config },
-      actions: [],
+      actions,
     };
+  });
+
+export const reportCertificateEvent = agentProcedure
+  .route({
+    method: "POST",
+    path: "/agent/certificates/events",
+    operationId: "reportCertificateEvent",
+  })
+  .input(certificateEventSchema)
+  .output(z.object({ ok: z.boolean() }))
+  .handler(async ({ context, input }) => {
+    await recordCertificateAgentEvent(context.server.id, input);
+    return { ok: true };
   });
 
 export const agentHeartbeat = agentProcedure

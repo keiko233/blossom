@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { managedCertificateInsertSchema } from "@/db/proxy-schema";
+
 import {
   isNodeProtocol,
   NODE_PROTOCOLS,
@@ -33,6 +35,7 @@ const serverMetaSchema = z.object({
   address: z.string().min(1),
   configPollIntervalSeconds: z.number().int().min(5).max(86_400).default(60),
   heartbeatIntervalSeconds: z.number().int().min(5).max(300).default(30),
+  certificateIds: z.array(z.string().min(1)).default([]),
 });
 
 export const createServerSchema = serverMetaSchema;
@@ -73,6 +76,8 @@ const nodeMetaSchema = z.object({
   address: z.string().min(1).nullable().optional(),
   listenPort: z.number().int().min(1).max(65535),
   protocol: protocolSchema,
+  certificateId: z.string().min(1).nullable().optional(),
+  tlsServerName: z.string().min(1).nullable().optional(),
   settings: settingsSchema,
 });
 
@@ -125,6 +130,58 @@ export type CreateGroupInput = z.infer<typeof createGroupSchema>;
 export type UpdateGroupInput = z.infer<typeof updateGroupSchema>;
 
 export const groupIdSchema = z.object({ id: z.string().min(1) });
+
+// --- Managed certificates ---------------------------------------------------
+
+const certificatePolicyBaseSchema = managedCertificateInsertSchema.pick({
+  name: true,
+  kind: true,
+  domains: true,
+  acmeEmail: true,
+  acmeStaging: true,
+  selfSignedValidityDays: true,
+  renewalDaysBeforeExpiry: true,
+});
+
+export const createCertificateSchema = certificatePolicyBaseSchema;
+export const updateCertificateSchema = certificatePolicyBaseSchema
+  .partial()
+  .extend({
+    id: z.string().min(1),
+  });
+export const certificateIdSchema = z.object({ id: z.string().min(1) });
+
+export const certificateEventSchema = z.object({
+  actionId: z.string().min(1),
+  certificateId: z.string().min(1),
+  generation: z.number().int().min(1),
+  state: z.enum([
+    "issuing",
+    "waiting_dns",
+    "active",
+    "renewing",
+    "error",
+    "expired",
+    "removed",
+  ]),
+  notBefore: z.iso.datetime().optional(),
+  notAfter: z.iso.datetime().optional(),
+  fingerprintSha256: z.string().max(256).optional(),
+  challenge: z
+    .array(
+      z.object({
+        name: z.string().min(1).max(512),
+        type: z.literal("TXT"),
+        value: z.string().min(1).max(2048),
+      }),
+    )
+    .max(200)
+    .optional(),
+  error: z.string().max(4096).optional(),
+});
+
+export type CreateCertificateInput = z.infer<typeof createCertificateSchema>;
+export type UpdateCertificateInput = z.infer<typeof updateCertificateSchema>;
 
 // --- Agent -----------------------------------------------------------------
 

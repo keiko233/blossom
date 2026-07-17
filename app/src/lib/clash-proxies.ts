@@ -1,6 +1,11 @@
 import { createPrivateKey, createPublicKey } from "node:crypto";
 
 import type { JsonValue } from "@/orpc/proxy/schema";
+import {
+  isNodeRealityEnabled,
+  isNodeTlsEnabled,
+  protocolSupportsTls,
+} from "@/orpc/proxy/sing-box-registry";
 import { passwordFor } from "@/orpc/proxy/singbox-users";
 import type { ResolvedNode } from "@/query/subscription-access";
 
@@ -596,5 +601,43 @@ export function nodeToClashProxy(
   if (!builder) {
     return null;
   }
-  return builder(resolved, credentials);
+  let effective = resolved;
+  const usesManagedCertificate = Boolean(
+    resolved.node.certificateId &&
+    protocolSupportsTls(resolved.node.protocol) &&
+    isNodeTlsEnabled(resolved.node.settings) &&
+    !isNodeRealityEnabled(resolved.node.settings),
+  );
+  if (usesManagedCertificate) {
+    const previousTls =
+      typeof resolved.node.settings.tls === "object" &&
+      resolved.node.settings.tls !== null &&
+      !Array.isArray(resolved.node.settings.tls)
+        ? (resolved.node.settings.tls as Record<string, JsonValue>)
+        : {};
+    effective = {
+      ...resolved,
+      node: {
+        ...resolved.node,
+        settings: {
+          ...resolved.node.settings,
+          tls: {
+            ...previousTls,
+            ...(resolved.node.tlsServerName
+              ? { server_name: resolved.node.tlsServerName }
+              : {}),
+          },
+        },
+      },
+    };
+  }
+  const proxy = builder(effective, credentials);
+  if (
+    proxy &&
+    usesManagedCertificate &&
+    resolved.certificateKind === "self_signed"
+  ) {
+    proxy["skip-cert-verify"] = true;
+  }
+  return proxy;
 }

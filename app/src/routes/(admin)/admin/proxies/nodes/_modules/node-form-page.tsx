@@ -33,11 +33,15 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs";
 import {
+  isNodeRealityEnabled,
+  isNodeTlsEnabled,
+  MANAGED_CERTIFICATE_TLS_FIELDS,
   NODE_PROTOCOLS,
   type NodeProtocol,
   settingsSchemaFor,
 } from "@/orpc/proxy/sing-box-registry";
 import { m } from "@/paraglide/messages";
+import { CERTIFICATES_QUERY_KEY, listCertificates } from "@/query/certificates";
 import type { NodeDetail } from "@/query/nodes";
 import { listServers, SERVERS_QUERY_KEY } from "@/query/servers";
 
@@ -60,6 +64,10 @@ export function NodeFormPage({ node }: NodeFormPageProps): React.ReactElement {
   const { data: servers, isPending: isServersPending } = useQuery({
     queryKey: SERVERS_QUERY_KEY,
     queryFn: () => listServers(),
+  });
+  const { data: certificates } = useQuery({
+    queryKey: CERTIFICATES_QUERY_KEY,
+    queryFn: () => listCertificates(),
   });
 
   const formController = useNodeFormController({
@@ -149,15 +157,24 @@ export function NodeFormPage({ node }: NodeFormPageProps): React.ReactElement {
           </Button>
           <form.Subscribe
             selector={(s) => ({
+              certificateId: s.values.certificateId,
               isSubmitting: s.isSubmitting,
               serverId: s.values.serverId,
+              settings: s.values.settings,
+              tlsMode: s.values.tlsMode,
             })}
           >
-            {({ isSubmitting, serverId }) => (
+            {({ certificateId, isSubmitting, serverId, settings, tlsMode }) => (
               <Button
                 type="submit"
                 form="node-form"
-                disabled={isSubmitting || !serverId}
+                disabled={
+                  isSubmitting ||
+                  !serverId ||
+                  (tlsMode === "managed" &&
+                    isNodeTlsEnabled(settings) &&
+                    !certificateId)
+                }
               >
                 {m.admin_proxies_nodes_form_save()}
               </Button>
@@ -178,12 +195,29 @@ export function NodeFormPage({ node }: NodeFormPageProps): React.ReactElement {
         {/* One tab strip: the hand-written node metadata, then a tab per settings
             section (Basic settings, Tls, Multiplex…) derived from the protocol's
             sing-box schema. Subscribing to `protocol` keeps that set in sync. */}
-        <form.Subscribe selector={(s) => s.values.protocol}>
-          {(protocol) => {
+        <form.Subscribe
+          selector={(s) => ({
+            certificateId: s.values.certificateId,
+            protocol: s.values.protocol,
+            tlsMode: s.values.tlsMode,
+          })}
+        >
+          {({ protocol, tlsMode }) => {
+            const managedTlsFields = new Set(
+              MANAGED_CERTIFICATE_TLS_FIELDS.map(
+                (key) => `settings.tls.${key}`,
+              ),
+            );
             const sections = schemaSections(
               form,
               settingsSchemaFor(protocol),
               "settings",
+            );
+            const managedSections = schemaSections(
+              form,
+              settingsSchemaFor(protocol),
+              "settings",
+              managedTlsFields,
             );
             return (
               <Tabs
@@ -243,7 +277,14 @@ export function NodeFormPage({ node }: NodeFormPageProps): React.ReactElement {
                           </FieldLabel>
                           <Select
                             value={field.state.value}
-                            onValueChange={(v) => field.handleChange(v ?? "")}
+                            onValueChange={(v) => {
+                              const nextServerId = v ?? "";
+                              if (nextServerId !== field.state.value) {
+                                form.setFieldValue("certificateId", "");
+                                form.setFieldValue("tlsServerName", "");
+                              }
+                              field.handleChange(nextServerId);
+                            }}
                           >
                             <SelectTrigger>
                               <SelectValue
@@ -351,6 +392,9 @@ export function NodeFormPage({ node }: NodeFormPageProps): React.ReactElement {
                                 "settings",
                                 settingsDefaults(next),
                               );
+                              form.setFieldValue("certificateId", "");
+                              form.setFieldValue("tlsServerName", "");
+                              form.setFieldValue("tlsMode", "manual");
                             }}
                           >
                             <SelectTrigger>
@@ -385,8 +429,136 @@ export function NodeFormPage({ node }: NodeFormPageProps): React.ReactElement {
                 {/* Protocol settings — one tab per section of the sing-box schema. */}
                 {sections.map((s) => (
                   <TabsPanel key={s.id} value={s.id} keepMounted>
-                    <div className="rounded-xl border bg-card p-4 shadow-xs">
-                      {s.node}
+                    <div className="flex flex-col gap-4 rounded-xl border bg-card p-4 shadow-xs">
+                      {s.id === "settings.tls" ? (
+                        <form.Subscribe
+                          selector={(state) => ({
+                            serverId: state.values.serverId,
+                            settings: state.values.settings,
+                          })}
+                        >
+                          {({ serverId, settings }) => {
+                            if (
+                              !isNodeTlsEnabled(settings) ||
+                              isNodeRealityEnabled(settings)
+                            ) {
+                              return s.node;
+                            }
+                            const available = (certificates ?? []).filter(
+                              (certificate) =>
+                                certificate.servers.some(
+                                  (item) => item.serverId === serverId,
+                                ),
+                            );
+                            const managedNode = managedSections.find(
+                              (section) => section.id === s.id,
+                            )?.node;
+                            return (
+                              <Tabs
+                                value={tlsMode}
+                                onValueChange={(value) => {
+                                  const mode = value as "managed" | "manual";
+                                  form.setFieldValue("tlsMode", mode);
+                                  if (mode === "manual") {
+                                    form.setFieldValue("certificateId", "");
+                                    form.setFieldValue("tlsServerName", "");
+                                  }
+                                }}
+                                className="gap-4"
+                              >
+                                <TabsList>
+                                  <TabsTab value="managed">
+                                    {m.admin_proxies_nodes_tls_mode_managed()}
+                                  </TabsTab>
+                                  <TabsTab value="manual">
+                                    {m.admin_proxies_nodes_tls_mode_manual()}
+                                  </TabsTab>
+                                </TabsList>
+                                <TabsPanel value="managed">
+                                  <div className="space-y-4">
+                                    <div className="grid gap-3 rounded-lg border bg-muted/20 p-3 sm:grid-cols-2">
+                                      <form.Field name="certificateId">
+                                        {(field) => (
+                                          <Field>
+                                            <FieldLabel>
+                                              {m.admin_proxies_nodes_field_certificate()}
+                                            </FieldLabel>
+                                            <Select
+                                              value={field.state.value}
+                                              onValueChange={(id) => {
+                                                field.handleChange(id ?? "");
+                                                const selected = available.find(
+                                                  (item) => item.id === id,
+                                                );
+                                                form.setFieldValue(
+                                                  "tlsServerName",
+                                                  selected?.domains[0] ?? "",
+                                                );
+                                              }}
+                                            >
+                                              <SelectTrigger>
+                                                <SelectValue
+                                                  placeholder={m.admin_proxies_nodes_field_certificate_placeholder()}
+                                                />
+                                              </SelectTrigger>
+                                              <SelectPopup>
+                                                {available.map(
+                                                  (certificate) => (
+                                                    <SelectItem
+                                                      key={certificate.id}
+                                                      value={certificate.id}
+                                                    >
+                                                      {certificate.name} ·{" "}
+                                                      {certificate.domains.join(
+                                                        ", ",
+                                                      )}
+                                                    </SelectItem>
+                                                  ),
+                                                )}
+                                              </SelectPopup>
+                                            </Select>
+                                            <p className="text-xs text-muted-foreground">
+                                              {m.admin_proxies_nodes_field_certificate_managed_help()}
+                                            </p>
+                                          </Field>
+                                        )}
+                                      </form.Field>
+                                      <form.Field name="tlsServerName">
+                                        {(field) => (
+                                          <Field>
+                                            <FieldLabel>
+                                              {m.admin_proxies_nodes_field_tls_server_name()}
+                                            </FieldLabel>
+                                            <Input
+                                              value={field.state.value}
+                                              disabled={
+                                                !form.store.state.values
+                                                  .certificateId
+                                              }
+                                              onValueChange={(value) =>
+                                                field.handleChange(value)
+                                              }
+                                            />
+                                          </Field>
+                                        )}
+                                      </form.Field>
+                                    </div>
+                                    {managedNode}
+                                  </div>
+                                </TabsPanel>
+                                <TabsPanel value="manual">
+                                  <p className="mb-4 text-xs text-muted-foreground">
+                                    {m.admin_proxies_nodes_tls_mode_manual_help()}
+                                  </p>
+                                  {s.node}
+                                </TabsPanel>
+                              </Tabs>
+                            );
+                          }}
+                        </form.Subscribe>
+                      ) : (
+                        s.node
+                      )}
                     </div>
                   </TabsPanel>
                 ))}

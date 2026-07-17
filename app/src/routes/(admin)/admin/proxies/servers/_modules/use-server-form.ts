@@ -13,6 +13,7 @@ export interface ServerFormValues {
   address: string;
   configPollIntervalSeconds: number;
   heartbeatIntervalSeconds: number;
+  certificateIds: string[];
 }
 
 function defaultValues(server?: ServerDTO): ServerFormValues {
@@ -23,6 +24,7 @@ function defaultValues(server?: ServerDTO): ServerFormValues {
     address: server?.address ?? "",
     configPollIntervalSeconds: server?.configPollIntervalSeconds ?? 60,
     heartbeatIntervalSeconds: server?.heartbeatIntervalSeconds ?? 30,
+    certificateIds: server?.certificateIds ?? [],
   };
 }
 
@@ -34,6 +36,7 @@ function toPayload(v: ServerFormValues) {
     address: v.address,
     configPollIntervalSeconds: v.configPollIntervalSeconds,
     heartbeatIntervalSeconds: v.heartbeatIntervalSeconds,
+    certificateIds: v.certificateIds,
   };
 }
 

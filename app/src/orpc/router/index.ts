@@ -2,6 +2,7 @@ import {
   agentHeartbeat,
   getAgentConfig,
   getAgentConfigV2,
+  reportCertificateEvent,
   reportAgentTraffic,
 } from "../proxy/agent";
 import { addTodo, listTodos } from "./todos";
@@ -15,6 +16,7 @@ export default {
     getConfig: getAgentConfig,
     getConfigV2: getAgentConfigV2,
     heartbeat: agentHeartbeat,
+    reportCertificateEvent,
     reportTraffic: reportAgentTraffic,
   },
 };
