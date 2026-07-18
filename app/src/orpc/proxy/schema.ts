@@ -181,8 +181,42 @@ export const certificateEventSchema = z.object({
   error: z.string().max(4096).optional(),
 });
 
+export const createImportedCertificateSchema = z.object({
+  name: z.string().trim().min(1).max(128),
+  fullchainPem: z
+    .string()
+    .min(1)
+    .max(1024 * 1024),
+  privateKeyPem: z
+    .string()
+    .min(1)
+    .max(256 * 1024),
+});
+
+export const replaceImportedCertificateMaterialSchema = z.object({
+  certificateId: z.string().min(1),
+  fullchainPem: z
+    .string()
+    .min(1)
+    .max(1024 * 1024),
+  privateKeyPem: z
+    .string()
+    .min(1)
+    .max(256 * 1024),
+});
+
+export const certificateMaterialActionSchema = z.object({
+  certificateId: z.string().min(1),
+});
+
 export type CreateCertificateInput = z.infer<typeof createCertificateSchema>;
 export type UpdateCertificateInput = z.infer<typeof updateCertificateSchema>;
+export type CreateImportedCertificateInput = z.infer<
+  typeof createImportedCertificateSchema
+>;
+export type ReplaceImportedCertificateMaterialInput = z.infer<
+  typeof replaceImportedCertificateMaterialSchema
+>;
 
 // --- Agent -----------------------------------------------------------------
 

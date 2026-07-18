@@ -101,7 +101,7 @@ export const server = pgTable(
 export type Server = typeof server.$inferSelect;
 export type NewServer = typeof server.$inferInsert;
 
-export const CERTIFICATE_KINDS = ["acme", "self_signed"] as const;
+export const CERTIFICATE_KINDS = ["acme", "self_signed", "imported"] as const;
 export const CERTIFICATE_DNS_MODES = ["cloudflare", "manual"] as const;
 export const ACME_PROVIDERS = ["letsencrypt", "zerossl"] as const;
 
@@ -115,7 +115,8 @@ export type CertificateInstanceState =
   | "active"
   | "renewing"
   | "error"
-  | "expired";
+  | "expired"
+  | "not_yet_valid";
 
 /** Global certificate policy and issuance state, independent from servers. */
 export const managedCertificate = pgTable(
@@ -144,6 +145,7 @@ export const managedCertificate = pgTable(
       .notNull(),
     desiredGeneration: integer("desired_generation").default(1).notNull(),
     activeMaterialVersion: integer("active_material_version"),
+    pendingMaterialVersion: integer("pending_material_version"),
     notBefore: timestamp("not_before"),
     notAfter: timestamp("not_after"),
     fingerprintSha256: text("fingerprint_sha256"),
@@ -175,7 +177,7 @@ export const managedCertificateInsertSchema = createInsertSchema(
   managedCertificate,
   {
     name: (schema) => schema.trim().min(1).max(128),
-    kind: z.enum(CERTIFICATE_KINDS),
+    kind: z.enum(["acme", "self_signed"]),
     domains: z.array(certificateDomainSchema).min(1).max(100),
     acmeEmail: z.email().optional(),
     acmeProvider: z.enum(ACME_PROVIDERS).default("letsencrypt"),
@@ -295,6 +297,7 @@ export const certificateMaterial = pgTable(
     version: integer("version").notNull(),
     certificateCiphertext: text("certificate_ciphertext").notNull(),
     privateKeyCiphertext: text("private_key_ciphertext").notNull(),
+    domains: jsonb("domains").$type<string[]>().notNull(),
     notBefore: timestamp("not_before").notNull(),
     notAfter: timestamp("not_after").notNull(),
     fingerprintSha256: text("fingerprint_sha256").notNull(),

@@ -3,10 +3,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import {
   CopyIcon,
+  FileKeyIcon,
+  LinkIcon,
   PlusIcon,
   RefreshCwIcon,
   ShieldCheckIcon,
   Trash2Icon,
+  UploadIcon,
 } from "lucide-react";
 import { useState } from "react";
 import { z } from "zod";
@@ -33,18 +36,21 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { toastManager } from "@/components/ui/toast";
-import { isValidCertificateDomain } from "@/lib/certificate-domain";
 import { m } from "@/paraglide/messages";
 import {
+  activatePendingImportedCertificate,
   CERTIFICATE_CAPABILITY_QUERY_KEY,
   CERTIFICATES_QUERY_KEY,
   continueCertificateDnsChallenge,
   createCertificate,
+  importCertificate,
   deleteCertificate,
+  discardPendingImportedCertificate,
   getCertificateCapability,
   listCertificates,
   reconcileCertificates,
   renewCertificate,
+  replaceImportedCertificate,
 } from "@/query/certificates";
 
 export const Route = createFileRoute("/(admin)/admin/proxies/certificates/")({
@@ -69,17 +75,42 @@ function FieldErrors({ errors }: { errors: readonly unknown[] }) {
   return message ? <p className="text-xs text-destructive">{message}</p> : null;
 }
 
+function exportUrl(
+  certificateId: string,
+  part: "fullchain" | "private-key",
+): string {
+  return `/api/admin/certificates/${encodeURIComponent(certificateId)}/export/${part}`;
+}
+
+const MAX_FULLCHAIN_BYTES = 1024 * 1024;
+const MAX_PRIVATE_KEY_BYTES = 256 * 1024;
+
+function isFile(value: unknown): value is File {
+  return typeof File !== "undefined" && value instanceof File;
+}
+
+const pemFileSchema = (maximumBytes: number) =>
+  z
+    .custom<File>(isFile, m.admin_certificates_validation_file_required())
+    .refine(
+      (file) => file.size <= maximumBytes,
+      m.admin_certificates_validation_file_too_large(),
+    );
+
 function CertificatesPage() {
   const queryClient = useQueryClient();
-  const [sheetOpen, setSheetOpen] = useState(false);
-  const formSchema = z.object({
+  const [issueSheetOpen, setIssueSheetOpen] = useState(false);
+  const [importSheetOpen, setImportSheetOpen] = useState(false);
+  const [replaceTarget, setReplaceTarget] = useState<string | null>(null);
+
+  const issueFormSchema = z.object({
     name: z.string().trim().min(1, m.admin_certificates_validation_required()),
     domains: z
       .string()
       .trim()
       .min(1, m.admin_certificates_validation_domain())
       .refine(
-        (value) => splitDomains(value).every(isValidCertificateDomain),
+        (value) => splitDomains(value).every(isValidIssueDomain),
         m.admin_certificates_validation_domain(),
       ),
     kind: z.enum(["acme", "self_signed"]),
@@ -89,13 +120,42 @@ function CertificatesPage() {
       z.email(m.admin_certificates_validation_email()),
     ]),
   });
-  type FormValues = z.infer<typeof formSchema>;
-  const formDefaultValues: FormValues = {
+  type IssueFormValues = z.infer<typeof issueFormSchema>;
+  const issueFormDefaultValues: IssueFormValues = {
     name: "",
     domains: "",
     kind: "acme",
     acmeProvider: "letsencrypt",
     email: "",
+  };
+
+  const importFormSchema = z.object({
+    name: z.string().trim().min(1, m.admin_certificates_validation_required()),
+    fullchainFile: pemFileSchema(MAX_FULLCHAIN_BYTES),
+    privateKeyFile: pemFileSchema(MAX_PRIVATE_KEY_BYTES),
+  });
+  type ImportFormValues = {
+    name: string;
+    fullchainFile: File | null;
+    privateKeyFile: File | null;
+  };
+  const importFormDefaultValues: ImportFormValues = {
+    name: "",
+    fullchainFile: null,
+    privateKeyFile: null,
+  };
+
+  const replaceFormSchema = z.object({
+    fullchainFile: pemFileSchema(MAX_FULLCHAIN_BYTES),
+    privateKeyFile: pemFileSchema(MAX_PRIVATE_KEY_BYTES),
+  });
+  type ReplaceFormValues = {
+    fullchainFile: File | null;
+    privateKeyFile: File | null;
+  };
+  const replaceFormDefaultValues: ReplaceFormValues = {
+    fullchainFile: null,
+    privateKeyFile: null,
   };
 
   const { data: certificates = [] } = useQuery({
@@ -124,8 +184,9 @@ function CertificatesPage() {
       });
     }
   };
+
   const createMutation = useMutation({
-    mutationFn: (values: FormValues) =>
+    mutationFn: (values: IssueFormValues) =>
       createCertificate({
         data: {
           name: values.name,
@@ -152,19 +213,94 @@ function CertificatesPage() {
         title: m.admin_certificates_operation_error({ error: String(error) }),
       }),
   });
-  const form = useForm({
-    defaultValues: formDefaultValues,
-    validators: { onSubmit: formSchema },
+  const issueForm = useForm({
+    defaultValues: issueFormDefaultValues,
+    validators: { onSubmit: issueFormSchema },
     onSubmit: async ({ value }) => {
       await createMutation.mutateAsync(value);
-      form.reset();
-      setSheetOpen(false);
+      issueForm.reset();
+      setIssueSheetOpen(false);
+    },
+  });
+
+  const importMutation = useMutation({
+    mutationFn: async (values: ImportFormValues) => {
+      if (!values.fullchainFile || !values.privateKeyFile) return;
+      return importCertificate({
+        data: {
+          name: values.name,
+          fullchainPem: await values.fullchainFile.text(),
+          privateKeyPem: await values.privateKeyFile.text(),
+        },
+      });
+    },
+    onSuccess: async () => {
+      await refresh();
+      toastManager.add({
+        type: "success",
+        title: m.admin_certificates_imported(),
+      });
+    },
+    onError: (error) =>
+      toastManager.add({
+        type: "error",
+        title: m.admin_certificates_operation_error({ error: String(error) }),
+      }),
+  });
+  const importForm = useForm({
+    defaultValues: importFormDefaultValues,
+    validators: { onSubmit: importFormSchema },
+    onSubmit: async ({ value }) => {
+      await importMutation.mutateAsync(value);
+      importForm.reset();
+      setImportSheetOpen(false);
+    },
+  });
+
+  const replaceMutation = useMutation({
+    mutationFn: async (
+      values: ReplaceFormValues & { certificateId: string },
+    ) => {
+      if (!values.fullchainFile || !values.privateKeyFile) return;
+      return replaceImportedCertificate({
+        data: {
+          certificateId: values.certificateId,
+          fullchainPem: await values.fullchainFile.text(),
+          privateKeyPem: await values.privateKeyFile.text(),
+        },
+      });
+    },
+    onSuccess: async () => {
+      await refresh();
+      toastManager.add({
+        type: "success",
+        title: m.admin_certificates_replaced(),
+      });
+    },
+    onError: (error) =>
+      toastManager.add({
+        type: "error",
+        title: m.admin_certificates_operation_error({ error: String(error) }),
+      }),
+  });
+  const replaceForm = useForm({
+    defaultValues: replaceFormDefaultValues,
+    validators: { onSubmit: replaceFormSchema },
+    onSubmit: async ({ value }) => {
+      if (!replaceTarget) return;
+      await replaceMutation.mutateAsync({
+        certificateId: replaceTarget,
+        ...value,
+      });
+      replaceForm.reset();
+      setReplaceTarget(null);
     },
   });
 
   const kindLabels = {
     acme: m.admin_certificates_kind_acme(),
     self_signed: m.admin_certificates_kind_self_signed(),
+    imported: m.admin_certificates_kind_imported(),
   };
   const acmeProviderLabels = {
     letsencrypt: m.admin_certificates_provider_letsencrypt(),
@@ -178,6 +314,7 @@ function CertificatesPage() {
     renewing: m.admin_certificates_state_renewing(),
     error: m.admin_certificates_state_error(),
     expired: m.admin_certificates_state_expired(),
+    not_yet_valid: m.admin_certificates_state_not_yet_valid(),
   };
 
   return (
@@ -191,194 +328,327 @@ function CertificatesPage() {
             {m.admin_certificates_description()}
           </p>
         </div>
-        <Sheet
-          open={sheetOpen}
-          onOpenChange={(open) => {
-            if (createMutation.isPending) return;
-            setSheetOpen(open);
-            if (!open) form.reset();
-          }}
-        >
-          <SheetTrigger render={<Button />}>
-            <PlusIcon />
-            {m.admin_certificates_create_title()}
-          </SheetTrigger>
-          <SheetContent variant="inset">
-            <SheetHeader>
-              <SheetTitle>{m.admin_certificates_create_title()}</SheetTitle>
-              <SheetDescription>
-                {m.admin_certificates_create_description()}
-              </SheetDescription>
-            </SheetHeader>
-            <form
-              className="flex min-h-0 flex-1 flex-col"
-              onSubmit={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                void form.handleSubmit();
-              }}
-            >
-              <SheetPanel className="space-y-4">
-                <form.Field name="name">
-                  {(field) => (
-                    <div>
-                      <Input
+        <div className="flex gap-2">
+          <Sheet
+            open={issueSheetOpen}
+            onOpenChange={(open) => {
+              if (createMutation.isPending) return;
+              setIssueSheetOpen(open);
+              if (!open) issueForm.reset();
+            }}
+          >
+            <SheetTrigger render={<Button variant="outline" />}>
+              <PlusIcon />
+              {m.admin_certificates_create_title()}
+            </SheetTrigger>
+            <SheetContent variant="inset">
+              <SheetHeader>
+                <SheetTitle>{m.admin_certificates_create_title()}</SheetTitle>
+                <SheetDescription>
+                  {m.admin_certificates_create_description()}
+                </SheetDescription>
+              </SheetHeader>
+              <form
+                className="flex min-h-0 flex-1 flex-col"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void issueForm.handleSubmit();
+                }}
+              >
+                <SheetPanel className="space-y-4">
+                  <issueForm.Field name="name">
+                    {(field) => (
+                      <div>
+                        <Input
+                          value={field.state.value}
+                          onValueChange={field.handleChange}
+                          onBlur={field.handleBlur}
+                          placeholder={m.admin_certificates_name_placeholder()}
+                        />
+                        <FieldErrors errors={field.state.meta.errors} />
+                      </div>
+                    )}
+                  </issueForm.Field>
+                  <issueForm.Field name="domains">
+                    {(field) => (
+                      <div>
+                        <Input
+                          value={field.state.value}
+                          onValueChange={field.handleChange}
+                          onBlur={field.handleBlur}
+                          placeholder={m.admin_certificates_domains_placeholder()}
+                        />
+                        <FieldErrors errors={field.state.meta.errors} />
+                      </div>
+                    )}
+                  </issueForm.Field>
+                  <issueForm.Field name="kind">
+                    {(field) => (
+                      <Select
                         value={field.state.value}
-                        onValueChange={field.handleChange}
-                        onBlur={field.handleBlur}
-                        placeholder={m.admin_certificates_name_placeholder()}
-                      />
-                      <FieldErrors errors={field.state.meta.errors} />
-                    </div>
-                  )}
-                </form.Field>
-                <form.Field name="domains">
-                  {(field) => (
-                    <div>
-                      <Input
-                        value={field.state.value}
-                        onValueChange={field.handleChange}
-                        onBlur={field.handleBlur}
-                        placeholder={m.admin_certificates_domains_placeholder()}
-                      />
-                      <FieldErrors errors={field.state.meta.errors} />
-                    </div>
-                  )}
-                </form.Field>
-                <form.Field name="kind">
-                  {(field) => (
-                    <Select
-                      value={field.state.value}
-                      onValueChange={(value) =>
-                        value && field.handleChange(value as FormValues["kind"])
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectPopup>
-                        <SelectItem value="acme">{kindLabels.acme}</SelectItem>
-                        <SelectItem value="self_signed">
-                          {kindLabels.self_signed}
-                        </SelectItem>
-                      </SelectPopup>
-                    </Select>
-                  )}
-                </form.Field>
-                <form.Subscribe selector={(state) => state.values.kind}>
-                  {(kind) =>
-                    kind === "acme" ? (
-                      <>
-                        <form.Field name="acmeProvider">
-                          {(field) => (
-                            <Select
-                              value={field.state.value}
-                              onValueChange={(value) =>
-                                value &&
-                                field.handleChange(
-                                  value as FormValues["acmeProvider"],
-                                )
-                              }
-                            >
-                              <SelectTrigger>
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectPopup>
-                                <SelectItem value="letsencrypt">
-                                  {acmeProviderLabels.letsencrypt}
-                                </SelectItem>
-                                <SelectItem value="zerossl">
-                                  {acmeProviderLabels.zerossl}
-                                </SelectItem>
-                              </SelectPopup>
-                            </Select>
-                          )}
-                        </form.Field>
-                        <form.Subscribe
-                          selector={(state) => state.values.acmeProvider}
-                        >
-                          {(provider) =>
-                            provider === "letsencrypt" ? (
-                              <p className="rounded-lg border border-amber-500/32 bg-amber-500/8 p-3 text-xs">
-                                {m.admin_certificates_letsencrypt_workers_notice()}
-                              </p>
-                            ) : (
-                              <p
-                                className={
-                                  capability?.acmeProviders.zerossl.available
-                                    ? "rounded-lg border bg-muted/32 p-3 text-xs text-muted-foreground"
-                                    : "rounded-lg border border-amber-500/32 bg-amber-500/8 p-3 text-xs"
+                        onValueChange={(value) =>
+                          value &&
+                          field.handleChange(value as IssueFormValues["kind"])
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectPopup>
+                          <SelectItem value="acme">
+                            {kindLabels.acme}
+                          </SelectItem>
+                          <SelectItem value="self_signed">
+                            {kindLabels.self_signed}
+                          </SelectItem>
+                        </SelectPopup>
+                      </Select>
+                    )}
+                  </issueForm.Field>
+                  <issueForm.Subscribe selector={(state) => state.values.kind}>
+                    {(kind) =>
+                      kind === "acme" ? (
+                        <>
+                          <issueForm.Field name="acmeProvider">
+                            {(field) => (
+                              <Select
+                                value={field.state.value}
+                                onValueChange={(value) =>
+                                  value &&
+                                  field.handleChange(
+                                    value as IssueFormValues["acmeProvider"],
+                                  )
                                 }
                               >
-                                {capability?.acmeProviders.zerossl.available
-                                  ? m.admin_certificates_zerossl_env_configured_notice()
-                                  : capability?.acmeProviders.zerossl.incomplete
-                                    ? m.admin_certificates_zerossl_env_incomplete_notice()
-                                    : m.admin_certificates_zerossl_env_missing_notice()}
-                              </p>
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectPopup>
+                                  <SelectItem value="letsencrypt">
+                                    {acmeProviderLabels.letsencrypt}
+                                  </SelectItem>
+                                  <SelectItem value="zerossl">
+                                    {acmeProviderLabels.zerossl}
+                                  </SelectItem>
+                                </SelectPopup>
+                              </Select>
+                            )}
+                          </issueForm.Field>
+                          <issueForm.Subscribe
+                            selector={(state) => state.values.acmeProvider}
+                          >
+                            {(provider) =>
+                              provider === "letsencrypt" ? (
+                                <p className="rounded-lg border border-amber-500/32 bg-amber-500/8 p-3 text-xs">
+                                  {m.admin_certificates_letsencrypt_workers_notice()}
+                                </p>
+                              ) : (
+                                <p
+                                  className={
+                                    capability?.acmeProviders.zerossl.available
+                                      ? "rounded-lg border bg-muted/32 p-3 text-xs text-muted-foreground"
+                                      : "rounded-lg border border-amber-500/32 bg-amber-500/8 p-3 text-xs"
+                                  }
+                                >
+                                  {capability?.acmeProviders.zerossl.available
+                                    ? m.admin_certificates_zerossl_env_configured_notice()
+                                    : capability?.acmeProviders.zerossl
+                                          .incomplete
+                                      ? m.admin_certificates_zerossl_env_incomplete_notice()
+                                      : m.admin_certificates_zerossl_env_missing_notice()}
+                                </p>
+                              )
+                            }
+                          </issueForm.Subscribe>
+                          <issueForm.Field name="email">
+                            {(field) => (
+                              <div>
+                                <Input
+                                  type="email"
+                                  value={field.state.value}
+                                  onValueChange={field.handleChange}
+                                  onBlur={field.handleBlur}
+                                  placeholder={m.admin_certificates_email_placeholder()}
+                                />
+                                <FieldErrors errors={field.state.meta.errors} />
+                              </div>
+                            )}
+                          </issueForm.Field>
+                          <p className="rounded-lg border bg-muted/32 p-3 text-xs text-muted-foreground">
+                            {capability?.automatic
+                              ? m.admin_certificates_dns_automatic_notice()
+                              : m.admin_certificates_dns_manual_notice()}
+                          </p>
+                        </>
+                      ) : null
+                    }
+                  </issueForm.Subscribe>
+                </SheetPanel>
+                <SheetFooter>
+                  <SheetClose
+                    disabled={createMutation.isPending}
+                    render={<Button type="button" variant="outline" />}
+                  >
+                    {m.admin_certificates_cancel()}
+                  </SheetClose>
+                  <issueForm.Subscribe
+                    selector={(state) => ({
+                      acmeProvider: state.values.acmeProvider,
+                      domains: state.values.domains,
+                      isSubmitting: state.isSubmitting,
+                      kind: state.values.kind,
+                      name: state.values.name,
+                    })}
+                  >
+                    {({ acmeProvider, domains, isSubmitting, kind, name }) => (
+                      <Button
+                        type="submit"
+                        disabled={
+                          isSubmitting ||
+                          !name ||
+                          !domains ||
+                          (kind === "acme" &&
+                            acmeProvider === "zerossl" &&
+                            capability?.acmeProviders.zerossl.available ===
+                              false)
+                        }
+                      >
+                        {m.admin_certificates_create()}
+                      </Button>
+                    )}
+                  </issueForm.Subscribe>
+                </SheetFooter>
+              </form>
+            </SheetContent>
+          </Sheet>
+
+          <Sheet
+            open={importSheetOpen}
+            onOpenChange={(open) => {
+              if (importMutation.isPending) return;
+              setImportSheetOpen(open);
+              if (!open) importForm.reset();
+            }}
+          >
+            <SheetTrigger render={<Button />}>
+              <UploadIcon />
+              {m.admin_certificates_import_title()}
+            </SheetTrigger>
+            <SheetContent variant="inset">
+              <SheetHeader>
+                <SheetTitle>{m.admin_certificates_import_title()}</SheetTitle>
+                <SheetDescription>
+                  {m.admin_certificates_import_description()}
+                </SheetDescription>
+              </SheetHeader>
+              <form
+                className="flex min-h-0 flex-1 flex-col"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void importForm.handleSubmit();
+                }}
+              >
+                <SheetPanel className="space-y-4">
+                  <importForm.Field name="name">
+                    {(field) => (
+                      <div>
+                        <Input
+                          value={field.state.value}
+                          onValueChange={field.handleChange}
+                          onBlur={field.handleBlur}
+                          placeholder={m.admin_certificates_name_placeholder()}
+                        />
+                        <FieldErrors errors={field.state.meta.errors} />
+                      </div>
+                    )}
+                  </importForm.Field>
+                  <importForm.Field name="fullchainFile">
+                    {(field) => (
+                      <div>
+                        <label className="mb-1 block text-sm font-medium">
+                          {m.admin_certificates_fullchain_file()}
+                        </label>
+                        <Input
+                          nativeInput
+                          type="file"
+                          accept=".pem,application/x-pem-file,text/plain"
+                          onChange={(event) =>
+                            field.handleChange(
+                              event.currentTarget.files?.[0] ?? null,
                             )
                           }
-                        </form.Subscribe>
-                        <form.Field name="email">
-                          {(field) => (
-                            <div>
-                              <Input
-                                type="email"
-                                value={field.state.value}
-                                onValueChange={field.handleChange}
-                                onBlur={field.handleBlur}
-                                placeholder={m.admin_certificates_email_placeholder()}
-                              />
-                              <FieldErrors errors={field.state.meta.errors} />
-                            </div>
-                          )}
-                        </form.Field>
-                        <p className="rounded-lg border bg-muted/32 p-3 text-xs text-muted-foreground">
-                          {capability?.automatic
-                            ? m.admin_certificates_dns_automatic_notice()
-                            : m.admin_certificates_dns_manual_notice()}
-                        </p>
-                      </>
-                    ) : null
-                  }
-                </form.Subscribe>
-              </SheetPanel>
-              <SheetFooter>
-                <SheetClose
-                  disabled={createMutation.isPending}
-                  render={<Button type="button" variant="outline" />}
-                >
-                  {m.admin_certificates_cancel()}
-                </SheetClose>
-                <form.Subscribe
-                  selector={(state) => ({
-                    acmeProvider: state.values.acmeProvider,
-                    domains: state.values.domains,
-                    isSubmitting: state.isSubmitting,
-                    kind: state.values.kind,
-                    name: state.values.name,
-                  })}
-                >
-                  {({ acmeProvider, domains, isSubmitting, kind, name }) => (
-                    <Button
-                      type="submit"
-                      disabled={
-                        isSubmitting ||
-                        !name ||
-                        !domains ||
-                        (kind === "acme" &&
-                          acmeProvider === "zerossl" &&
-                          capability?.acmeProviders.zerossl.available === false)
-                      }
-                    >
-                      {m.admin_certificates_create()}
-                    </Button>
-                  )}
-                </form.Subscribe>
-              </SheetFooter>
-            </form>
-          </SheetContent>
-        </Sheet>
+                          onBlur={field.handleBlur}
+                        />
+                        <FieldErrors errors={field.state.meta.errors} />
+                      </div>
+                    )}
+                  </importForm.Field>
+                  <importForm.Field name="privateKeyFile">
+                    {(field) => (
+                      <div>
+                        <label className="mb-1 block text-sm font-medium">
+                          {m.admin_certificates_private_key_file()}
+                        </label>
+                        <Input
+                          nativeInput
+                          type="file"
+                          accept=".pem,application/x-pem-file,text/plain"
+                          onChange={(event) =>
+                            field.handleChange(
+                              event.currentTarget.files?.[0] ?? null,
+                            )
+                          }
+                          onBlur={field.handleBlur}
+                        />
+                        <FieldErrors errors={field.state.meta.errors} />
+                      </div>
+                    )}
+                  </importForm.Field>
+                  <p className="rounded-lg border border-amber-500/32 bg-amber-500/8 p-3 text-xs">
+                    {m.admin_certificates_import_warning()}
+                  </p>
+                </SheetPanel>
+                <SheetFooter>
+                  <SheetClose
+                    disabled={importMutation.isPending}
+                    render={<Button type="button" variant="outline" />}
+                  >
+                    {m.admin_certificates_cancel()}
+                  </SheetClose>
+                  <importForm.Subscribe
+                    selector={(state) => ({
+                      isSubmitting: state.isSubmitting,
+                      name: state.values.name,
+                      fullchainFile: state.values.fullchainFile,
+                      privateKeyFile: state.values.privateKeyFile,
+                    })}
+                  >
+                    {({
+                      isSubmitting,
+                      name,
+                      fullchainFile,
+                      privateKeyFile,
+                    }) => (
+                      <Button
+                        type="submit"
+                        disabled={
+                          isSubmitting ||
+                          !name ||
+                          !fullchainFile ||
+                          !privateKeyFile
+                        }
+                      >
+                        {m.admin_certificates_import()}
+                      </Button>
+                    )}
+                  </importForm.Subscribe>
+                </SheetFooter>
+              </form>
+            </SheetContent>
+          </Sheet>
+        </div>
       </header>
 
       {capability?.incomplete ? (
@@ -410,20 +680,81 @@ function CertificatesPage() {
                 <p className="mt-1 font-mono text-xs text-muted-foreground">
                   {certificate.domains.join(", ")}
                 </p>
+                {certificate.fingerprintSha256 ? (
+                  <p className="mt-0.5 font-mono text-xs text-muted-foreground">
+                    {certificate.fingerprintSha256}
+                  </p>
+                ) : null}
               </div>
-              <div className="flex gap-1">
+              <div className="flex flex-wrap gap-1">
                 {certificate.activeMaterialVersion !== null ? (
+                  <>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      render={
+                        <a
+                          href={exportUrl(certificate.id, "fullchain")}
+                          download
+                        />
+                      }
+                    >
+                      <LinkIcon />
+                      {m.admin_certificates_download_fullchain()}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      render={
+                        <a
+                          href={exportUrl(certificate.id, "private-key")}
+                          download
+                        />
+                      }
+                    >
+                      <FileKeyIcon />
+                      {m.admin_certificates_download_private_key()}
+                    </Button>
+                    {certificate.kind !== "imported" ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          void runOperation(
+                            renewCertificate({ data: { id: certificate.id } }),
+                          )
+                        }
+                      >
+                        <RefreshCwIcon />
+                        {m.admin_certificates_renew()}
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          replaceForm.reset();
+                          setReplaceTarget(certificate.id);
+                        }}
+                      >
+                        <UploadIcon />
+                        {m.admin_certificates_replace()}
+                      </Button>
+                    )}
+                  </>
+                ) : null}
+                {certificate.kind === "imported" &&
+                certificate.activeMaterialVersion === null ? (
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() =>
-                      void runOperation(
-                        renewCertificate({ data: { id: certificate.id } }),
-                      )
-                    }
+                    onClick={() => {
+                      replaceForm.reset();
+                      setReplaceTarget(certificate.id);
+                    }}
                   >
-                    <RefreshCwIcon />
-                    {m.admin_certificates_renew()}
+                    <UploadIcon />
+                    {m.admin_certificates_replace()}
                   </Button>
                 ) : null}
                 <Button
@@ -440,6 +771,70 @@ function CertificatesPage() {
                 </Button>
               </div>
             </div>
+
+            {certificate.pendingMaterial ? (
+              <div className="mt-3 rounded-lg border border-amber-500/32 bg-amber-500/8 p-3">
+                <p className="mb-2 text-sm font-medium">
+                  {m.admin_certificates_pending_title()}
+                </p>
+                <p className="font-mono text-xs text-muted-foreground">
+                  {certificate.pendingMaterial.domains.join(", ")}
+                </p>
+                <p className="font-mono text-xs text-muted-foreground">
+                  {certificate.pendingMaterial.fingerprintSha256}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {m.admin_certificates_pending_validity({
+                    notBefore:
+                      certificate.pendingMaterial.notBefore.toISOString(),
+                    notAfter:
+                      certificate.pendingMaterial.notAfter.toISOString(),
+                  })}
+                </p>
+                <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">
+                  {certificate.pendingMaterial.notBefore.getTime() > Date.now()
+                    ? m.admin_certificates_pending_reason_not_yet_valid()
+                    : m.admin_certificates_pending_reason_expired()}
+                </p>
+                <p className="mt-2 text-xs text-destructive">
+                  {m.admin_certificates_pending_risk_warning()}
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      if (
+                        !window.confirm(
+                          m.admin_certificates_pending_activation_confirm(),
+                        )
+                      ) {
+                        return;
+                      }
+                      void runOperation(
+                        activatePendingImportedCertificate({
+                          data: { certificateId: certificate.id },
+                        }),
+                      );
+                    }}
+                  >
+                    {m.admin_certificates_activate()}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      void runOperation(
+                        discardPendingImportedCertificate({
+                          data: { certificateId: certificate.id },
+                        }),
+                      )
+                    }
+                  >
+                    {m.admin_certificates_discard()}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
 
             {certificate.challenge?.length ? (
               <div className="mt-3 rounded-lg border p-3">
@@ -502,6 +897,119 @@ function CertificatesPage() {
           </article>
         ))}
       </section>
+
+      <Sheet
+        open={replaceTarget !== null}
+        onOpenChange={(open) => {
+          if (replaceMutation.isPending) return;
+          if (!open) {
+            replaceForm.reset();
+            setReplaceTarget(null);
+          }
+        }}
+      >
+        <SheetContent variant="inset">
+          <SheetHeader>
+            <SheetTitle>{m.admin_certificates_replace_title()}</SheetTitle>
+            <SheetDescription>
+              {m.admin_certificates_replace_description()}
+            </SheetDescription>
+          </SheetHeader>
+          <form
+            className="flex min-h-0 flex-1 flex-col"
+            onSubmit={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              void replaceForm.handleSubmit();
+            }}
+          >
+            <SheetPanel className="space-y-4">
+              <replaceForm.Field name="fullchainFile">
+                {(field) => (
+                  <div>
+                    <label className="mb-1 block text-sm font-medium">
+                      {m.admin_certificates_fullchain_file()}
+                    </label>
+                    <Input
+                      nativeInput
+                      type="file"
+                      accept=".pem,application/x-pem-file,text/plain"
+                      onChange={(event) =>
+                        field.handleChange(
+                          event.currentTarget.files?.[0] ?? null,
+                        )
+                      }
+                      onBlur={field.handleBlur}
+                    />
+                    <FieldErrors errors={field.state.meta.errors} />
+                  </div>
+                )}
+              </replaceForm.Field>
+              <replaceForm.Field name="privateKeyFile">
+                {(field) => (
+                  <div>
+                    <label className="mb-1 block text-sm font-medium">
+                      {m.admin_certificates_private_key_file()}
+                    </label>
+                    <Input
+                      nativeInput
+                      type="file"
+                      accept=".pem,application/x-pem-file,text/plain"
+                      onChange={(event) =>
+                        field.handleChange(
+                          event.currentTarget.files?.[0] ?? null,
+                        )
+                      }
+                      onBlur={field.handleBlur}
+                    />
+                    <FieldErrors errors={field.state.meta.errors} />
+                  </div>
+                )}
+              </replaceForm.Field>
+              <p className="rounded-lg border border-amber-500/32 bg-amber-500/8 p-3 text-xs">
+                {m.admin_certificates_replace_warning()}
+              </p>
+            </SheetPanel>
+            <SheetFooter>
+              <SheetClose
+                disabled={replaceMutation.isPending}
+                render={<Button type="button" variant="outline" />}
+              >
+                {m.admin_certificates_cancel()}
+              </SheetClose>
+              <replaceForm.Subscribe
+                selector={(state) => ({
+                  isSubmitting: state.isSubmitting,
+                  fullchainFile: state.values.fullchainFile,
+                  privateKeyFile: state.values.privateKeyFile,
+                })}
+              >
+                {({ isSubmitting, fullchainFile, privateKeyFile }) => (
+                  <Button
+                    type="submit"
+                    disabled={isSubmitting || !fullchainFile || !privateKeyFile}
+                  >
+                    {m.admin_certificates_replace()}
+                  </Button>
+                )}
+              </replaceForm.Subscribe>
+            </SheetFooter>
+          </form>
+        </SheetContent>
+      </Sheet>
     </div>
   );
+}
+
+function isValidIssueDomain(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (
+    !/^(?:\*\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  const topLevelDomain = normalized.slice(normalized.lastIndexOf(".") + 1);
+  return /[a-z]/.test(topLevelDomain);
 }

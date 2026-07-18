@@ -158,6 +158,7 @@ async function persistMaterial(
         material.privateKeyPem,
         `certificate:${id}:private-key`,
       ),
+      domains: policy.domains,
       notBefore: material.notBefore,
       notAfter: material.notAfter,
       fingerprintSha256: material.fingerprintSha256,
@@ -510,6 +511,25 @@ export async function advanceCertificateIssuance(
 
   for (const selectedPolicy of policies) {
     let policy = selectedPolicy;
+    if (policy.kind === "imported") {
+      if (policy.notBefore !== null && policy.notAfter !== null) {
+        const now = Date.now();
+        const state =
+          now < policy.notBefore.getTime()
+            ? "not_yet_valid"
+            : now >= policy.notAfter.getTime()
+              ? "expired"
+              : policy.activeMaterialVersion === null
+                ? "pending"
+                : "active";
+        if (policy.state === state) continue;
+        await db
+          .update(managedCertificate)
+          .set({ state })
+          .where(eq(managedCertificate.id, policy.id));
+      }
+      continue;
+    }
     if (policy.kind === "acme" && policy.issuanceStateCiphertext === null) {
       const dnsMode = getCertificateDnsCapability().automatic
         ? "cloudflare"
