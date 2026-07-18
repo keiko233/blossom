@@ -102,6 +102,8 @@ function CertificatesPage() {
   const [issueSheetOpen, setIssueSheetOpen] = useState(false);
   const [importSheetOpen, setImportSheetOpen] = useState(false);
   const [replaceTarget, setReplaceTarget] = useState<string | null>(null);
+  const [pendingOperation, setPendingOperation] = useState<string | null>(null);
+  const [copyingRecord, setCopyingRecord] = useState<string | null>(null);
 
   const issueFormSchema = z.object({
     name: z.string().trim().min(1, m.admin_certificates_validation_required()),
@@ -173,15 +175,31 @@ function CertificatesPage() {
 
   const refresh = () =>
     queryClient.invalidateQueries({ queryKey: CERTIFICATES_QUERY_KEY });
-  const runOperation = async (operation: Promise<unknown>) => {
+  const runOperation = async (
+    key: string,
+    operation: () => Promise<unknown>,
+  ) => {
+    if (pendingOperation) return;
+    setPendingOperation(key);
     try {
-      await operation;
+      await operation();
       await refresh();
     } catch (error) {
       toastManager.add({
         type: "error",
         title: m.admin_certificates_operation_error({ error: String(error) }),
       });
+    } finally {
+      setPendingOperation(null);
+    }
+  };
+  const copyRecord = async (key: string, text: string) => {
+    if (copyingRecord) return;
+    setCopyingRecord(key);
+    try {
+      await navigator.clipboard.writeText(text);
+    } finally {
+      setCopyingRecord(null);
     }
   };
 
@@ -505,7 +523,6 @@ function CertificatesPage() {
                       <Button
                         type="submit"
                         disabled={
-                          isSubmitting ||
                           !name ||
                           !domains ||
                           (kind === "acme" &&
@@ -513,6 +530,7 @@ function CertificatesPage() {
                             capability?.acmeProviders.zerossl.available ===
                               false)
                         }
+                        loading={isSubmitting}
                       >
                         {m.admin_certificates_create()}
                       </Button>
@@ -633,12 +651,8 @@ function CertificatesPage() {
                     }) => (
                       <Button
                         type="submit"
-                        disabled={
-                          isSubmitting ||
-                          !name ||
-                          !fullchainFile ||
-                          !privateKeyFile
-                        }
+                        disabled={!name || !fullchainFile || !privateKeyFile}
+                        loading={isSubmitting}
                       >
                         {m.admin_certificates_import()}
                       </Button>
@@ -719,9 +733,13 @@ function CertificatesPage() {
                       <Button
                         size="sm"
                         variant="outline"
+                        disabled={pendingOperation !== null}
+                        loading={pendingOperation === `renew:${certificate.id}`}
                         onClick={() =>
-                          void runOperation(
-                            renewCertificate({ data: { id: certificate.id } }),
+                          void runOperation(`renew:${certificate.id}`, () =>
+                            renewCertificate({
+                              data: { id: certificate.id },
+                            }),
                           )
                         }
                       >
@@ -761,8 +779,10 @@ function CertificatesPage() {
                   size="icon"
                   variant="ghost"
                   aria-label={m.admin_certificates_delete()}
+                  disabled={pendingOperation !== null}
+                  loading={pendingOperation === `delete:${certificate.id}`}
                   onClick={() =>
-                    void runOperation(
+                    void runOperation(`delete:${certificate.id}`, () =>
                       deleteCertificate({ data: { id: certificate.id } }),
                     )
                   }
@@ -802,6 +822,8 @@ function CertificatesPage() {
                 <div className="mt-2 flex gap-2">
                   <Button
                     size="sm"
+                    disabled={pendingOperation !== null}
+                    loading={pendingOperation === `activate:${certificate.id}`}
                     onClick={() => {
                       if (
                         !window.confirm(
@@ -810,7 +832,7 @@ function CertificatesPage() {
                       ) {
                         return;
                       }
-                      void runOperation(
+                      void runOperation(`activate:${certificate.id}`, () =>
                         activatePendingImportedCertificate({
                           data: { certificateId: certificate.id },
                         }),
@@ -822,8 +844,10 @@ function CertificatesPage() {
                   <Button
                     size="sm"
                     variant="outline"
+                    disabled={pendingOperation !== null}
+                    loading={pendingOperation === `discard:${certificate.id}`}
                     onClick={() =>
-                      void runOperation(
+                      void runOperation(`discard:${certificate.id}`, () =>
                         discardPendingImportedCertificate({
                           data: { certificateId: certificate.id },
                         }),
@@ -841,33 +865,43 @@ function CertificatesPage() {
                 <p className="mb-2 text-sm font-medium">
                   {m.admin_certificates_dns_records_title()}
                 </p>
-                {certificate.challenge.map((record) => (
-                  <div
-                    key={`${record.name}:${record.value}`}
-                    className="mt-2 flex items-start gap-2 rounded-md bg-muted/32 p-2 font-mono text-xs"
-                  >
-                    <span className="min-w-0 flex-1 break-all">
-                      TXT {record.name} {record.value}
-                    </span>
-                    <Button
-                      size="icon-sm"
-                      variant="ghost"
-                      onClick={() =>
-                        void navigator.clipboard.writeText(
-                          `TXT\t${record.name}\t${record.value}`,
-                        )
-                      }
+                {certificate.challenge.map((record) => {
+                  const copyKey = `${certificate.id}:${record.name}:${record.value}`;
+                  return (
+                    <div
+                      key={`${record.name}:${record.value}`}
+                      className="mt-2 flex items-start gap-2 rounded-md bg-muted/32 p-2 font-mono text-xs"
                     >
-                      <CopyIcon />
-                    </Button>
-                  </div>
-                ))}
+                      <span className="min-w-0 flex-1 break-all">
+                        TXT {record.name} {record.value}
+                      </span>
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        disabled={copyingRecord !== null}
+                        loading={copyingRecord === copyKey}
+                        onClick={() =>
+                          void copyRecord(
+                            copyKey,
+                            `TXT\t${record.name}\t${record.value}`,
+                          )
+                        }
+                      >
+                        <CopyIcon />
+                      </Button>
+                    </div>
+                  );
+                })}
                 {certificate.state === "waiting_dns" ? (
                   <Button
                     className="mt-3"
                     size="sm"
+                    disabled={pendingOperation !== null}
+                    loading={
+                      pendingOperation === `continue-dns:${certificate.id}`
+                    }
                     onClick={() =>
-                      void runOperation(
+                      void runOperation(`continue-dns:${certificate.id}`, () =>
                         continueCertificateDnsChallenge({
                           data: { id: certificate.id },
                         }),
@@ -987,7 +1021,8 @@ function CertificatesPage() {
                 {({ isSubmitting, fullchainFile, privateKeyFile }) => (
                   <Button
                     type="submit"
-                    disabled={isSubmitting || !fullchainFile || !privateKeyFile}
+                    disabled={!fullchainFile || !privateKeyFile}
+                    loading={isSubmitting}
                   >
                     {m.admin_certificates_replace()}
                   </Button>

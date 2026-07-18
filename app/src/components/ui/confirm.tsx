@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { createCallable } from "react-call";
 
 import {
@@ -23,6 +24,8 @@ export interface ConfirmProps {
   cancelLabel: string;
   /** Style the confirm action as destructive (e.g. delete). */
   destructive?: boolean;
+  /** Run the confirmed action before closing so progress stays visible. */
+  onConfirm?: () => Promise<unknown>;
 }
 
 /**
@@ -33,35 +36,68 @@ export interface ConfirmProps {
  * base-ui plays its exit animation before react-call unmounts the item.
  */
 export const Confirm = createCallable<ConfirmProps, boolean>(
-  ({ call, title, description, confirmLabel, cancelLabel, destructive }) => (
-    <AlertDialog
-      open={!call.ended}
-      onOpenChange={(open) => {
-        if (!open && !call.ended) {
-          call.end(false);
-        }
-      }}
-    >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>{title}</AlertDialogTitle>
-          {description ? (
-            <AlertDialogDescription>{description}</AlertDialogDescription>
-          ) : null}
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogClose render={<Button variant="ghost" />}>
-            {cancelLabel}
-          </AlertDialogClose>
-          <Button
-            variant={destructive ? "destructive" : "default"}
-            onClick={() => call.end(true)}
-          >
-            {confirmLabel}
-          </Button>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  ),
+  ({
+    call,
+    title,
+    description,
+    confirmLabel,
+    cancelLabel,
+    destructive,
+    onConfirm,
+  }) => {
+    const [isConfirming, setIsConfirming] = useState(false);
+
+    const confirm = async () => {
+      if (!onConfirm) {
+        call.end(true);
+        return;
+      }
+
+      setIsConfirming(true);
+      try {
+        await onConfirm();
+        call.end(true);
+      } catch {
+        // The action owns error reporting. Keep the dialog open for a retry.
+      } finally {
+        setIsConfirming(false);
+      }
+    };
+
+    return (
+      <AlertDialog
+        open={!call.ended}
+        onOpenChange={(open) => {
+          if (!open && !call.ended && !isConfirming) {
+            call.end(false);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{title}</AlertDialogTitle>
+            {description ? (
+              <AlertDialogDescription>{description}</AlertDialogDescription>
+            ) : null}
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose
+              disabled={isConfirming}
+              render={<Button variant="ghost" />}
+            >
+              {cancelLabel}
+            </AlertDialogClose>
+            <Button
+              loading={isConfirming}
+              variant={destructive ? "destructive" : "default"}
+              onClick={() => void confirm()}
+            >
+              {confirmLabel}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    );
+  },
   EXIT_MS,
 );

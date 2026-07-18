@@ -19,7 +19,6 @@ import {
 } from "@/components/ui/field";
 import { Form } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import Ring from "@/components/ui/ring";
 import { toastManager } from "@/components/ui/toast";
 import { emailSignUp } from "@/lib/auth";
 import { emailSignUpSchema } from "@/lib/auth-schema";
@@ -75,12 +74,8 @@ function RouteComponent() {
 
           <form.Subscribe selector={(state) => state.isSubmitting}>
             {(isSubmitting) => (
-              <Button className="w-full" type="submit" disabled={isSubmitting}>
-                {isSubmitting ? (
-                  <Ring className="shrink-0" />
-                ) : (
-                  m.auth_signup_button()
-                )}
+              <Button className="w-full" type="submit" loading={isSubmitting}>
+                {m.auth_signup_button()}
               </Button>
             )}
           </form.Subscribe>

@@ -1,4 +1,5 @@
 import { CopyIcon } from "lucide-react";
+import { useState } from "react";
 import { createCallable } from "react-call";
 
 import { Button } from "@/components/ui/button";
@@ -23,12 +24,19 @@ export interface CredentialDialogProps {
 }
 
 function CopyRow({ label, value }: { label: string; value: string }) {
+  const [isCopying, setIsCopying] = useState(false);
+
   const copy = async () => {
-    await navigator.clipboard.writeText(value);
-    toastManager.add({
-      type: "success",
-      title: m.admin_users_credentials_copied(),
-    });
+    setIsCopying(true);
+    try {
+      await navigator.clipboard.writeText(value);
+      toastManager.add({
+        type: "success",
+        title: m.admin_users_credentials_copied(),
+      });
+    } finally {
+      setIsCopying(false);
+    }
   };
 
   return (
@@ -43,6 +51,7 @@ function CopyRow({ label, value }: { label: string; value: string }) {
           variant="secondary"
           size="icon"
           aria-label="Copy"
+          loading={isCopying}
           onClick={() => void copy()}
         >
           <CopyIcon />

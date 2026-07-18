@@ -9,6 +9,7 @@ import {
   ScrollTextIcon,
 } from "lucide-react";
 import type React from "react";
+import { useState } from "react";
 
 import {
   SubscriptionQuotaUsage,
@@ -65,6 +66,9 @@ function RouteComponent(): React.ReactElement {
   const { userId } = Route.useParams();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const [copyingSubscriptionId, setCopyingSubscriptionId] = useState<
+    string | null
+  >(null);
 
   const detailQueryKey = [...USERS_QUERY_KEY, userId] as const;
   const { data: detail, isPending } = useQuery({
@@ -125,15 +129,11 @@ function RouteComponent(): React.ReactElement {
 
   const resetMutation = useMutation({
     mutationFn: (id: string) => resetSubscriptionCredentials({ data: { id } }),
-    onSuccess: async (row) => {
+    onSuccess: async () => {
       await invalidate();
       toastManager.add({
         type: "success",
         title: m.admin_users_subs_toast_reset(),
-      });
-      await CredentialDialog.call({
-        uuid: row.credentialUuid,
-        password: row.credentialPassword,
       });
     },
     onError,
@@ -141,24 +141,20 @@ function RouteComponent(): React.ReactElement {
 
   const refreshLinkMutation = useMutation({
     mutationFn: (id: string) => refreshSubscriptionToken({ data: { id } }),
-    onSuccess: async (row) => {
+    onSuccess: async () => {
       await invalidate();
       toastManager.add({
         type: "success",
         title: m.admin_users_subs_toast_link_refreshed(),
-      });
-      await SubscriptionLinkDialog.call({
-        url: `${window.location.origin}/api/sub/${row.token}`,
       });
     },
     onError,
   });
 
   const requestAssign = async () => {
-    const planId = await AssignPlanDialog.call();
-    if (planId) {
-      assignMutation.mutate(planId);
-    }
+    await AssignPlanDialog.call({
+      onAssign: (planId) => assignMutation.mutateAsync(planId),
+    });
   };
 
   const requestEdit = async (sub: {
@@ -166,60 +162,77 @@ function RouteComponent(): React.ReactElement {
     status: SubscriptionStatus;
     expiresAt: Date;
   }) => {
-    const result = await EditSubscriptionDialog.call({
+    await EditSubscriptionDialog.call({
       status: sub.status,
       expiresAt: sub.expiresAt,
+      onSave: (result) => updateMutation.mutateAsync({ id: sub.id, ...result }),
     });
-    if (result) {
-      updateMutation.mutate({ id: sub.id, ...result });
-    }
   };
 
   const requestDelete = async (subscriptionId: string) => {
-    const confirmed = await Confirm.call({
+    await Confirm.call({
       title: m.admin_users_subs_delete_title(),
       description: m.admin_users_subs_delete_description(),
       confirmLabel: m.admin_users_subs_action_delete(),
       cancelLabel: m.admin_users_form_cancel(),
       destructive: true,
+      onConfirm: () => deleteMutation.mutateAsync(subscriptionId),
     });
-    if (confirmed) {
-      deleteMutation.mutate(subscriptionId);
-    }
   };
 
   const requestReset = async (subscriptionId: string) => {
-    const confirmed = await Confirm.call({
+    let credentials:
+      | { credentialUuid: string; credentialPassword: string }
+      | undefined;
+    await Confirm.call({
       title: m.admin_users_subs_reset_title(),
       description: m.admin_users_subs_reset_description(),
       confirmLabel: m.admin_users_subs_action_reset_credentials(),
       cancelLabel: m.admin_users_form_cancel(),
       destructive: true,
+      onConfirm: async () => {
+        credentials = await resetMutation.mutateAsync(subscriptionId);
+      },
     });
-    if (confirmed) {
-      resetMutation.mutate(subscriptionId);
+    if (credentials) {
+      await CredentialDialog.call({
+        uuid: credentials.credentialUuid,
+        password: credentials.credentialPassword,
+      });
     }
   };
 
-  const requestCopyLink = async (sub: { token: string }) => {
+  const requestCopyLink = async (sub: { id: string; token: string }) => {
+    setCopyingSubscriptionId(sub.id);
     const url = `${window.location.origin}/api/sub/${sub.token}`;
-    await navigator.clipboard.writeText(url);
-    toastManager.add({
-      type: "success",
-      title: m.admin_users_subs_link_copied(),
-    });
+    try {
+      await navigator.clipboard.writeText(url);
+      toastManager.add({
+        type: "success",
+        title: m.admin_users_subs_link_copied(),
+      });
+    } finally {
+      setCopyingSubscriptionId(null);
+    }
   };
 
   const requestRefreshLink = async (subscriptionId: string) => {
-    const confirmed = await Confirm.call({
+    let token: string | undefined;
+    await Confirm.call({
       title: m.admin_users_subs_refresh_link_title(),
       description: m.admin_users_subs_refresh_link_description(),
       confirmLabel: m.admin_users_subs_action_refresh_link(),
       cancelLabel: m.admin_users_form_cancel(),
       destructive: true,
+      onConfirm: async () => {
+        const row = await refreshLinkMutation.mutateAsync(subscriptionId);
+        token = row.token;
+      },
     });
-    if (confirmed) {
-      refreshLinkMutation.mutate(subscriptionId);
+    if (token) {
+      await SubscriptionLinkDialog.call({
+        url: `${window.location.origin}/api/sub/${token}`,
+      });
     }
   };
 
@@ -309,7 +322,13 @@ function RouteComponent(): React.ReactElement {
           </div>
           <Menu>
             <MenuTrigger
-              render={<Button size="icon" variant="ghost" />}
+              render={
+                <Button
+                  loading={actions.pendingUserId === user.id}
+                  size="icon"
+                  variant="ghost"
+                />
+              }
               aria-label="Actions"
             >
               <EllipsisIcon />
@@ -344,7 +363,10 @@ function RouteComponent(): React.ReactElement {
           <h2 className="font-heading text-base font-semibold">
             {m.admin_users_subs_title()}
           </h2>
-          <Button onClick={() => void requestAssign()}>
+          <Button
+            loading={assignMutation.isPending}
+            onClick={() => void requestAssign()}
+          >
             <PlusIcon />
             {m.admin_users_subs_assign()}
           </Button>
@@ -385,7 +407,23 @@ function RouteComponent(): React.ReactElement {
                     <div className="flex justify-end">
                       <Menu>
                         <MenuTrigger
-                          render={<Button size="icon" variant="ghost" />}
+                          render={
+                            <Button
+                              loading={
+                                (updateMutation.isPending &&
+                                  updateMutation.variables?.id === sub.id) ||
+                                (deleteMutation.isPending &&
+                                  deleteMutation.variables === sub.id) ||
+                                (resetMutation.isPending &&
+                                  resetMutation.variables === sub.id) ||
+                                (refreshLinkMutation.isPending &&
+                                  refreshLinkMutation.variables === sub.id) ||
+                                copyingSubscriptionId === sub.id
+                              }
+                              size="icon"
+                              variant="ghost"
+                            />
+                          }
                           aria-label="Actions"
                         >
                           <EllipsisIcon />

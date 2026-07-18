@@ -82,7 +82,7 @@ export function PlanFormPage({ plan }: PlanFormPageProps): React.ReactElement {
           </Button>
           <form.Subscribe selector={(s) => s.isSubmitting}>
             {(isSubmitting) => (
-              <Button type="submit" form="plan-form" disabled={isSubmitting}>
+              <Button type="submit" form="plan-form" loading={isSubmitting}>
                 {m.admin_plans_form_save()}
               </Button>
             )}

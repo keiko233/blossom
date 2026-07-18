@@ -8,6 +8,7 @@ import {
   UsersIcon,
 } from "lucide-react";
 import type React from "react";
+import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -61,12 +62,17 @@ function ScopeList({ scopes }: { scopes: string[] | null }) {
 }
 
 function ConnectionRow({ label, value }: { label: string; value: string }) {
+  const [isCopying, setIsCopying] = useState(false);
+
   const copy = async () => {
+    setIsCopying(true);
     try {
       await navigator.clipboard.writeText(value);
       toastManager.add({ type: "success", title: m.admin_mcp_copied() });
     } catch {
       toastManager.add({ type: "error", title: m.admin_mcp_copy_failed() });
+    } finally {
+      setIsCopying(false);
     }
   };
 
@@ -78,6 +84,7 @@ function ConnectionRow({ label, value }: { label: string; value: string }) {
       </code>
       <Button
         aria-label={m.admin_mcp_copy()}
+        loading={isCopying}
         onClick={() => void copy()}
         size="icon"
         variant="ghost"

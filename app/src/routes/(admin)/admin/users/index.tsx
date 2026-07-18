@@ -138,7 +138,13 @@ function RouteComponent(): React.ReactElement {
           <div className="flex justify-end">
             <Menu>
               <MenuTrigger
-                render={<Button size="icon" variant="ghost" />}
+                render={
+                  <Button
+                    loading={actions.pendingUserId === user.id}
+                    size="icon"
+                    variant="ghost"
+                  />
+                }
                 aria-label="Actions"
               >
                 <EllipsisIcon />

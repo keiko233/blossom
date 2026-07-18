@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { CopyIcon } from "lucide-react";
+import { useState } from "react";
 
 import {
   SubscriptionQuotaUsage,
@@ -43,7 +44,7 @@ export const Route = createFileRoute("/(user)/dashboard/subscriptions/")({
 function RouteComponent() {
   const { user } = Route.useRouteContext();
 
-  const { data, isPending, error, refetch } = useQuery({
+  const { data, isFetching, isPending, error, refetch } = useQuery({
     queryKey: currentUserQueryKey(user.id),
     queryFn: () => getCurrentUser(),
   });
@@ -64,7 +65,7 @@ function RouteComponent() {
           <AlertTitle>{m.user_subscriptions_error()}</AlertTitle>
           <AlertDescription>{m.user_subscriptions_error()}</AlertDescription>
         </Alert>
-        <Button onClick={() => void refetch()}>
+        <Button loading={isFetching} onClick={() => void refetch()}>
           {m.user_subscriptions_error_retry()}
         </Button>
       </div>
@@ -116,11 +117,13 @@ interface SubscriptionCardProps {
 }
 
 function SubscriptionCard({ subscription: sub }: SubscriptionCardProps) {
+  const [isCopying, setIsCopying] = useState(false);
   const effectiveStatus = getEffectiveSubscriptionStatus(sub);
   const usable = isSubscriptionUsable(sub);
 
   const handleCopy = async () => {
     if (!usable) return;
+    setIsCopying(true);
     const url = buildSubscriptionUrl(sub.token, window.location.origin);
     try {
       await navigator.clipboard.writeText(url);
@@ -133,6 +136,8 @@ function SubscriptionCard({ subscription: sub }: SubscriptionCardProps) {
         type: "error",
         title: m.user_subscriptions_copy_url_error(),
       });
+    } finally {
+      setIsCopying(false);
     }
   };
 
@@ -176,6 +181,7 @@ function SubscriptionCard({ subscription: sub }: SubscriptionCardProps) {
           <Button
             className="w-full"
             disabled={!usable}
+            loading={isCopying}
             onClick={() => void handleCopy()}
             aria-describedby={!usable ? `copy-help-${sub.id}` : undefined}
           >

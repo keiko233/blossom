@@ -8,6 +8,7 @@ import {
 } from "@tanstack/react-table";
 import { EllipsisIcon, PlusIcon, ServerIcon } from "lucide-react";
 import type React from "react";
+import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -56,6 +57,7 @@ const columnHelper = createColumnHelper<ServerListItem>();
 function RouteComponent(): React.ReactElement {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const [copyingServerId, setCopyingServerId] = useState<string | null>(null);
 
   const { data: servers, isPending } = useQuery({
     queryKey: SERVERS_QUERY_KEY,
@@ -116,16 +118,14 @@ function RouteComponent(): React.ReactElement {
       return;
     }
 
-    const confirmed = await Confirm.call({
+    await Confirm.call({
       title: m.admin_proxies_servers_delete_title(),
       description: m.admin_proxies_servers_delete_description(),
       confirmLabel: m.admin_proxies_servers_action_delete(),
       cancelLabel: m.admin_proxies_servers_form_cancel(),
       destructive: true,
+      onConfirm: () => deleteMutation.mutateAsync(server.id),
     });
-    if (confirmed) {
-      deleteMutation.mutate(server.id);
-    }
   };
 
   const openCreate = () => void navigate({ to: "/admin/proxies/servers/new" });
@@ -137,6 +137,7 @@ function RouteComponent(): React.ReactElement {
     });
 
   const copyAgentInfo = async (server: ServerListItem) => {
+    setCopyingServerId(server.id);
     const info = JSON.stringify(
       {
         serverId: server.id,
@@ -146,11 +147,15 @@ function RouteComponent(): React.ReactElement {
       null,
       2,
     );
-    await navigator.clipboard.writeText(info);
-    toastManager.add({
-      type: "success",
-      title: m.admin_proxies_servers_toast_copied(),
-    });
+    try {
+      await navigator.clipboard.writeText(info);
+      toastManager.add({
+        type: "success",
+        title: m.admin_proxies_servers_toast_copied(),
+      });
+    } finally {
+      setCopyingServerId(null);
+    }
   };
 
   const columns = [
@@ -247,7 +252,19 @@ function RouteComponent(): React.ReactElement {
           <div className="flex justify-end">
             <Menu>
               <MenuTrigger
-                render={<Button size="icon" variant="ghost" />}
+                render={
+                  <Button
+                    loading={
+                      (deleteMutation.isPending &&
+                        deleteMutation.variables === server.id) ||
+                      (regenMutation.isPending &&
+                        regenMutation.variables === server.id) ||
+                      copyingServerId === server.id
+                    }
+                    size="icon"
+                    variant="ghost"
+                  />
+                }
                 aria-label="Actions"
               >
                 <EllipsisIcon />

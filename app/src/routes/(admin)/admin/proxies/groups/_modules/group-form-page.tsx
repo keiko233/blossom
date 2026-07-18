@@ -81,7 +81,7 @@ export function GroupFormPage({
           </Button>
           <form.Subscribe selector={(s) => s.isSubmitting}>
             {(isSubmitting) => (
-              <Button type="submit" form="group-form" disabled={isSubmitting}>
+              <Button type="submit" form="group-form" loading={isSubmitting}>
                 {m.admin_proxies_groups_form_save()}
               </Button>
             )}

@@ -22,7 +22,6 @@ import {
 } from "@/components/ui/field";
 import { Form } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import Ring from "@/components/ui/ring";
 import { Separator } from "@/components/ui/separator";
 import { toastManager } from "@/components/ui/toast";
 import { useLockFn } from "@/hooks/use-lock-fn";
@@ -66,12 +65,8 @@ const SignInWithGithubButton = () => {
   });
 
   return (
-    <Button variant="secondary" onClick={handleClick} disabled={isPending}>
-      {isPending ? (
-        <Ring className="shrink-0" />
-      ) : (
-        <GithubLine className="shrink-0" />
-      )}
+    <Button variant="secondary" onClick={handleClick} loading={isPending}>
+      <GithubLine className="shrink-0" />
 
       <span>{m.auth_sign_in_with_github()}</span>
     </Button>
@@ -96,12 +91,8 @@ const SignInWithGoogleButton = () => {
   });
 
   return (
-    <Button variant="secondary" onClick={handleClick} disabled={isPending}>
-      {isPending ? (
-        <Ring className="shrink-0" />
-      ) : (
-        <GoogleLine className="shrink-0" />
-      )}
+    <Button variant="secondary" onClick={handleClick} loading={isPending}>
+      <GoogleLine className="shrink-0" />
 
       <span>{m.auth_sign_in_with_google()}</span>
     </Button>
@@ -202,12 +193,8 @@ function RouteComponent() {
 
           <form.Subscribe selector={(state) => state.isSubmitting}>
             {(isSubmitting) => (
-              <Button className="w-full" type="submit" disabled={isSubmitting}>
-                {isSubmitting ? (
-                  <Ring className="shrink-0" />
-                ) : (
-                  m.auth_login_button()
-                )}
+              <Button className="w-full" type="submit" loading={isSubmitting}>
+                {m.auth_login_button()}
               </Button>
             )}
           </form.Subscribe>

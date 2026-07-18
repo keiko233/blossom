@@ -26,25 +26,42 @@ import { listPlans, PLANS_QUERY_KEY } from "@/query/plans";
 const EXIT_MS = 200;
 
 /**
- * Plan picker for assigning a subscription: resolves with the chosen plan id,
- * or null when dismissed. The caller runs the actual mutation so cache
- * invalidation stays on the page.
+ * Plan picker for assigning a subscription. It runs the caller's mutation and
+ * stays open with a loading state until the request finishes.
  */
-export const AssignPlanDialog = createCallable<void, string | null>(
-  ({ call }) => {
+export interface AssignPlanDialogProps {
+  onAssign: (planId: string) => Promise<unknown>;
+}
+
+export const AssignPlanDialog = createCallable<AssignPlanDialogProps, void>(
+  ({ call, onAssign }) => {
     const [planId, setPlanId] = React.useState<string | null>(null);
+    const [isSubmitting, setIsSubmitting] = React.useState(false);
 
     const { data: plans } = useQuery({
       queryKey: PLANS_QUERY_KEY,
       queryFn: () => listPlans(),
     });
 
+    const submit = async () => {
+      if (!planId) return;
+      setIsSubmitting(true);
+      try {
+        await onAssign(planId);
+        call.end();
+      } catch {
+        // The mutation reports the error. Leave the dialog open for retrying.
+      } finally {
+        setIsSubmitting(false);
+      }
+    };
+
     return (
       <Dialog
         open={!call.ended}
         onOpenChange={(open) => {
-          if (!open && !call.ended) {
-            call.end(null);
+          if (!open && !call.ended && !isSubmitting) {
+            call.end();
           }
         }}
       >
@@ -82,10 +99,17 @@ export const AssignPlanDialog = createCallable<void, string | null>(
             </Field>
           </div>
           <DialogFooter>
-            <DialogClose render={<Button variant="ghost" />}>
+            <DialogClose
+              disabled={isSubmitting}
+              render={<Button variant="ghost" />}
+            >
               {m.admin_users_form_cancel()}
             </DialogClose>
-            <Button disabled={!planId} onClick={() => call.end(planId)}>
+            <Button
+              disabled={!planId}
+              loading={isSubmitting}
+              onClick={() => void submit()}
+            >
               {m.admin_users_assign_confirm()}
             </Button>
           </DialogFooter>

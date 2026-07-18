@@ -27,6 +27,7 @@ const EXIT_MS = 200;
 export interface EditSubscriptionProps {
   status: SubscriptionStatus;
   expiresAt: Date;
+  onSave: (result: EditSubscriptionResult) => Promise<unknown>;
 }
 
 export interface EditSubscriptionResult {
@@ -55,32 +56,41 @@ function toLocalInputValue(date: Date): string {
 }
 
 /**
- * Edits a subscription's status and expiry: resolves with the new values or
- * null when dismissed. The caller runs the mutation.
+ * Edits a subscription's status and expiry and keeps the dialog open while the
+ * caller's mutation runs.
  */
 export const EditSubscriptionDialog = createCallable<
   EditSubscriptionProps,
-  EditSubscriptionResult | null
->(({ call, status: initialStatus, expiresAt: initialExpiresAt }) => {
+  void
+>(({ call, status: initialStatus, expiresAt: initialExpiresAt, onSave }) => {
   const [status, setStatus] = React.useState<SubscriptionStatus>(initialStatus);
   const [expiresAt, setExpiresAt] = React.useState(() =>
     toLocalInputValue(new Date(initialExpiresAt)),
   );
+  const [isSubmitting, setIsSubmitting] = React.useState(false);
 
-  const submit = () => {
+  const submit = async () => {
     const parsed = new Date(expiresAt);
     if (Number.isNaN(parsed.getTime())) {
       return;
     }
-    call.end({ status, expiresAt: parsed.toISOString() });
+    setIsSubmitting(true);
+    try {
+      await onSave({ status, expiresAt: parsed.toISOString() });
+      call.end();
+    } catch {
+      // The mutation reports the error. Leave the dialog open for retrying.
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
     <Dialog
       open={!call.ended}
       onOpenChange={(open) => {
-        if (!open && !call.ended) {
-          call.end(null);
+        if (!open && !call.ended && !isSubmitting) {
+          call.end();
         }
       }}
     >
@@ -121,10 +131,15 @@ export const EditSubscriptionDialog = createCallable<
           </Field>
         </div>
         <DialogFooter>
-          <DialogClose render={<Button variant="ghost" />}>
+          <DialogClose
+            disabled={isSubmitting}
+            render={<Button variant="ghost" />}
+          >
             {m.admin_users_form_cancel()}
           </DialogClose>
-          <Button onClick={submit}>{m.admin_users_subs_edit_confirm()}</Button>
+          <Button loading={isSubmitting} onClick={() => void submit()}>
+            {m.admin_users_subs_edit_confirm()}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

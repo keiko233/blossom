@@ -85,16 +85,14 @@ function RouteComponent(): React.ReactElement {
   });
 
   const requestDelete = async (node: NodeListItem) => {
-    const confirmed = await Confirm.call({
+    await Confirm.call({
       title: m.admin_proxies_nodes_delete_title(),
       description: m.admin_proxies_nodes_delete_description(),
       confirmLabel: m.admin_proxies_nodes_action_delete(),
       cancelLabel: m.admin_proxies_nodes_form_cancel(),
       destructive: true,
+      onConfirm: () => deleteMutation.mutateAsync(node.id),
     });
-    if (confirmed) {
-      deleteMutation.mutate(node.id);
-    }
   };
 
   const openCreate = () => void navigate({ to: "/admin/proxies/nodes/new" });
@@ -250,7 +248,16 @@ function RouteComponent(): React.ReactElement {
           <div className="flex justify-end">
             <Menu>
               <MenuTrigger
-                render={<Button size="icon" variant="ghost" />}
+                render={
+                  <Button
+                    loading={
+                      deleteMutation.isPending &&
+                      deleteMutation.variables === node.id
+                    }
+                    size="icon"
+                    variant="ghost"
+                  />
+                }
                 aria-label="Actions"
               >
                 <EllipsisIcon />

@@ -78,7 +78,7 @@ export function ServerFormPage({
           </Button>
           <form.Subscribe selector={(s) => s.isSubmitting}>
             {(isSubmitting) => (
-              <Button type="submit" form="server-form" disabled={isSubmitting}>
+              <Button type="submit" form="server-form" loading={isSubmitting}>
                 {m.admin_proxies_servers_form_save()}
               </Button>
             )}

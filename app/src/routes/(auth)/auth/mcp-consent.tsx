@@ -10,7 +10,6 @@ import {
   CardPanel,
   CardTitle,
 } from "@/components/ui/card";
-import Ring from "@/components/ui/ring";
 import { getSession } from "@/lib/auth";
 import { isLoopbackUrl } from "@/lib/oauth-callback";
 
@@ -32,16 +31,17 @@ export const Route = createFileRoute("/(auth)/auth/mcp-consent")({
 });
 
 function RouteComponent() {
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pendingDecision, setPendingDecision] = useState<boolean | null>(null);
   const [callbackUrl, setCallbackUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [isCopying, setIsCopying] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const oauthQuery =
     typeof window !== "undefined" ? window.location.search.slice(1) : "";
 
   const handleDecision = async (accept: boolean) => {
-    setIsSubmitting(true);
+    setPendingDecision(accept);
     setErrorMessage(null);
     try {
       const response = await fetch("/api/auth/oauth2/consent", {
@@ -68,7 +68,7 @@ function RouteComponent() {
 
       if (accept && isLoopbackUrl(redirectUri)) {
         setCallbackUrl(redirectUri);
-        setIsSubmitting(false);
+        setPendingDecision(null);
         return;
       }
       window.location.href = redirectUri;
@@ -76,17 +76,20 @@ function RouteComponent() {
       setErrorMessage(
         error instanceof Error ? error.message : "Authorization failed",
       );
-      setIsSubmitting(false);
+      setPendingDecision(null);
     }
   };
 
   const copyCallbackUrl = async () => {
     if (!callbackUrl) return;
+    setIsCopying(true);
     try {
       await navigator.clipboard.writeText(callbackUrl);
       setCopied(true);
     } catch {
       setErrorMessage("Could not copy the callback URL");
+    } finally {
+      setIsCopying(false);
     }
   };
 
@@ -114,7 +117,11 @@ function RouteComponent() {
           ) : null}
 
           <div className="flex flex-col gap-2 sm:flex-row">
-            <Button className="flex-1" onClick={() => void copyCallbackUrl()}>
+            <Button
+              className="flex-1"
+              loading={isCopying}
+              onClick={() => void copyCallbackUrl()}
+            >
               {copied ? <CheckIcon /> : <CopyIcon />}
               {copied ? "Callback URL copied" : "Copy callback URL"}
             </Button>
@@ -181,15 +188,17 @@ function RouteComponent() {
           <Button
             className="flex-1"
             onClick={() => handleDecision(true)}
-            disabled={isSubmitting}
+            disabled={pendingDecision !== null}
+            loading={pendingDecision === true}
           >
-            {isSubmitting ? <Ring className="shrink-0" /> : "Approve"}
+            Approve
           </Button>
           <Button
             className="flex-1"
             variant="secondary"
             onClick={() => handleDecision(false)}
-            disabled={isSubmitting}
+            disabled={pendingDecision !== null}
+            loading={pendingDecision === false}
           >
             Deny
           </Button>

@@ -30,27 +30,41 @@ export interface BanUserResult {
   expiresInDays?: number;
 }
 
+export interface BanUserDialogProps {
+  onBan: (result: BanUserResult) => Promise<unknown>;
+}
+
 /**
- * Collects ban parameters: resolves with reason/duration or null when
- * dismissed. The caller runs the mutation.
+ * Collects ban parameters and keeps the dialog open while the caller's
+ * mutation runs.
  */
-export const BanUserDialog = createCallable<void, BanUserResult | null>(
-  ({ call }) => {
+export const BanUserDialog = createCallable<BanUserDialogProps, void>(
+  ({ call, onBan }) => {
     const [reason, setReason] = React.useState("");
     const [days, setDays] = React.useState(0);
+    const [isSubmitting, setIsSubmitting] = React.useState(false);
 
-    const submit = () =>
-      call.end({
-        reason: reason.trim() || undefined,
-        expiresInDays: days > 0 ? days : undefined,
-      });
+    const submit = async () => {
+      setIsSubmitting(true);
+      try {
+        await onBan({
+          reason: reason.trim() || undefined,
+          expiresInDays: days > 0 ? days : undefined,
+        });
+        call.end();
+      } catch {
+        // The mutation reports the error. Leave the dialog open for retrying.
+      } finally {
+        setIsSubmitting(false);
+      }
+    };
 
     return (
       <Dialog
         open={!call.ended}
         onOpenChange={(open) => {
-          if (!open && !call.ended) {
-            call.end(null);
+          if (!open && !call.ended && !isSubmitting) {
+            call.end();
           }
         }}
       >
@@ -82,10 +96,17 @@ export const BanUserDialog = createCallable<void, BanUserResult | null>(
             </Field>
           </div>
           <DialogFooter>
-            <DialogClose render={<Button variant="ghost" />}>
+            <DialogClose
+              disabled={isSubmitting}
+              render={<Button variant="ghost" />}
+            >
               {m.admin_users_form_cancel()}
             </DialogClose>
-            <Button variant="destructive" onClick={submit}>
+            <Button
+              loading={isSubmitting}
+              variant="destructive"
+              onClick={() => void submit()}
+            >
               {m.admin_users_ban_confirm()}
             </Button>
           </DialogFooter>

@@ -79,16 +79,14 @@ function RouteComponent(): React.ReactElement {
   });
 
   const requestDelete = async (plan: PlanListItem) => {
-    const confirmed = await Confirm.call({
+    await Confirm.call({
       title: m.admin_plans_delete_title(),
       description: m.admin_plans_delete_description(),
       confirmLabel: m.admin_plans_action_delete(),
       cancelLabel: m.admin_plans_form_cancel(),
       destructive: true,
+      onConfirm: () => deleteMutation.mutateAsync(plan.id),
     });
-    if (confirmed) {
-      deleteMutation.mutate(plan.id);
-    }
   };
 
   const openCreate = () => void navigate({ to: "/admin/plans/new" });
@@ -177,7 +175,16 @@ function RouteComponent(): React.ReactElement {
           <div className="flex justify-end">
             <Menu>
               <MenuTrigger
-                render={<Button size="icon" variant="ghost" />}
+                render={
+                  <Button
+                    loading={
+                      deleteMutation.isPending &&
+                      deleteMutation.variables === plan.id
+                    }
+                    size="icon"
+                    variant="ghost"
+                  />
+                }
                 aria-label="Actions"
               >
                 <EllipsisIcon />

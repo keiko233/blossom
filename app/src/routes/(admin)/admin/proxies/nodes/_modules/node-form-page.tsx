@@ -169,12 +169,12 @@ export function NodeFormPage({ node }: NodeFormPageProps): React.ReactElement {
                 type="submit"
                 form="node-form"
                 disabled={
-                  isSubmitting ||
                   !serverId ||
                   (tlsMode === "managed" &&
                     isNodeTlsEnabled(settings) &&
                     !certificateId)
                 }
+                loading={isSubmitting}
               >
                 {m.admin_proxies_nodes_form_save()}
               </Button>

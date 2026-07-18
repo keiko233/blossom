@@ -34,7 +34,7 @@ export const Route = createFileRoute("/(user)/dashboard/")({
 function RouteComponent() {
   const { user } = Route.useRouteContext();
 
-  const { data, isPending, error, refetch } = useQuery({
+  const { data, isFetching, isPending, error, refetch } = useQuery({
     queryKey: currentUserQueryKey(user.id),
     queryFn: () => getCurrentUser(),
   });
@@ -55,7 +55,7 @@ function RouteComponent() {
           <AlertTitle>{m.user_dashboard_error()}</AlertTitle>
           <AlertDescription>{m.user_dashboard_error()}</AlertDescription>
         </Alert>
-        <Button onClick={() => void refetch()}>
+        <Button loading={isFetching} onClick={() => void refetch()}>
           {m.user_dashboard_error_retry()}
         </Button>
       </div>

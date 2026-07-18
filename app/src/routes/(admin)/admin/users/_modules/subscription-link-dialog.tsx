@@ -1,4 +1,5 @@
 import { CopyIcon } from "lucide-react";
+import { useState } from "react";
 import { createCallable } from "react-call";
 
 import { Button } from "@/components/ui/button";
@@ -24,12 +25,19 @@ export const SubscriptionLinkDialog = createCallable<
   SubscriptionLinkDialogProps,
   void
 >(({ call, url }) => {
+  const [isCopying, setIsCopying] = useState(false);
+
   const copy = async () => {
-    await navigator.clipboard.writeText(url);
-    toastManager.add({
-      type: "success",
-      title: m.admin_users_subs_link_copied(),
-    });
+    setIsCopying(true);
+    try {
+      await navigator.clipboard.writeText(url);
+      toastManager.add({
+        type: "success",
+        title: m.admin_users_subs_link_copied(),
+      });
+    } finally {
+      setIsCopying(false);
+    }
   };
 
   return (
@@ -62,6 +70,7 @@ export const SubscriptionLinkDialog = createCallable<
                 variant="secondary"
                 size="icon"
                 aria-label="Copy"
+                loading={isCopying}
                 onClick={() => void copy()}
               >
                 <CopyIcon />

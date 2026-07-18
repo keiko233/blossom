@@ -1,4 +1,5 @@
 import { CopyIcon } from "lucide-react";
+import { useState } from "react";
 import { createCallable } from "react-call";
 
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,7 @@ export interface TokenRevealProps {
  */
 export const TokenRevealDialog = createCallable<TokenRevealProps, void>(
   ({ call, token }) => {
+    const [copying, setCopying] = useState<"token" | "command" | null>(null);
     // Callable components only mount on client-side .call(), so window is safe.
     const dockerCommand = [
       "docker run -d --name blossom-agent",
@@ -45,9 +47,18 @@ export const TokenRevealDialog = createCallable<TokenRevealProps, void>(
       "ghcr.io/keiko233/blossom/server-agent:latest",
     ].join(" ");
 
-    const copy = async (text: string, title: string) => {
-      await navigator.clipboard.writeText(text);
-      toastManager.add({ type: "success", title });
+    const copy = async (
+      target: "token" | "command",
+      text: string,
+      title: string,
+    ) => {
+      setCopying(target);
+      try {
+        await navigator.clipboard.writeText(text);
+        toastManager.add({ type: "success", title });
+      } finally {
+        setCopying(null);
+      }
     };
 
     return (
@@ -76,8 +87,14 @@ export const TokenRevealDialog = createCallable<TokenRevealProps, void>(
                 variant="secondary"
                 size="icon"
                 aria-label="Copy"
+                disabled={copying !== null}
+                loading={copying === "token"}
                 onClick={() =>
-                  void copy(token, m.admin_proxies_servers_toast_token_copied())
+                  void copy(
+                    "token",
+                    token,
+                    m.admin_proxies_servers_toast_token_copied(),
+                  )
                 }
               >
                 <CopyIcon />
@@ -96,8 +113,11 @@ export const TokenRevealDialog = createCallable<TokenRevealProps, void>(
                   variant="secondary"
                   size="icon"
                   aria-label="Copy"
+                  disabled={copying !== null}
+                  loading={copying === "command"}
                   onClick={() =>
                     void copy(
+                      "command",
                       dockerCommand,
                       m.admin_proxies_servers_toast_command_copied(),
                     )

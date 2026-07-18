@@ -62,10 +62,10 @@ export function useUserActions(onChanged: () => Promise<unknown>) {
   });
 
   const requestBan = async (user: TargetUser) => {
-    const params = await BanUserDialog.call();
-    if (params) {
-      banMutation.mutate({ userId: user.id, ...params });
-    }
+    await BanUserDialog.call({
+      onBan: (params) =>
+        banMutation.mutateAsync({ userId: user.id, ...params }),
+    });
   };
 
   const toggleRole = (user: TargetUser) => {
@@ -79,5 +79,12 @@ export function useUserActions(onChanged: () => Promise<unknown>) {
     requestBan,
     unban: (user: TargetUser) => unbanMutation.mutate(user.id),
     toggleRole,
+    pendingUserId: banMutation.isPending
+      ? banMutation.variables?.userId
+      : unbanMutation.isPending
+        ? unbanMutation.variables
+        : roleMutation.isPending
+          ? roleMutation.variables?.userId
+          : undefined,
   };
 }

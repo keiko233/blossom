@@ -67,19 +67,23 @@ function RouteComponent(): React.ReactElement {
         title: m.admin_proxies_groups_toast_deleted(),
       });
     },
+    onError: () => {
+      toastManager.add({
+        type: "error",
+        title: m.admin_proxies_groups_toast_error(),
+      });
+    },
   });
 
   const requestDelete = async (group: GroupListItem) => {
-    const confirmed = await Confirm.call({
+    await Confirm.call({
       title: m.admin_proxies_groups_delete_title(),
       description: m.admin_proxies_groups_delete_description(),
       confirmLabel: m.admin_proxies_groups_action_delete(),
       cancelLabel: m.admin_proxies_groups_form_cancel(),
       destructive: true,
+      onConfirm: () => deleteMutation.mutateAsync(group.id),
     });
-    if (confirmed) {
-      deleteMutation.mutate(group.id);
-    }
   };
 
   const openCreate = () => void navigate({ to: "/admin/proxies/groups/new" });
@@ -132,7 +136,16 @@ function RouteComponent(): React.ReactElement {
           <div className="flex justify-end">
             <Menu>
               <MenuTrigger
-                render={<Button size="icon" variant="ghost" />}
+                render={
+                  <Button
+                    loading={
+                      deleteMutation.isPending &&
+                      deleteMutation.variables === group.id
+                    }
+                    size="icon"
+                    variant="ghost"
+                  />
+                }
                 aria-label="Actions"
               >
                 <EllipsisIcon />
