@@ -83,6 +83,7 @@ function CertificatesPage() {
         m.admin_certificates_validation_domain(),
       ),
     kind: z.enum(["acme", "self_signed"]),
+    acmeProvider: z.enum(["letsencrypt", "zerossl"]),
     email: z.union([
       z.literal(""),
       z.email(m.admin_certificates_validation_email()),
@@ -93,6 +94,7 @@ function CertificatesPage() {
     name: "",
     domains: "",
     kind: "acme",
+    acmeProvider: "letsencrypt",
     email: "",
   };
 
@@ -129,6 +131,7 @@ function CertificatesPage() {
           name: values.name,
           domains: splitDomains(values.domains),
           kind: values.kind,
+          acmeProvider: values.acmeProvider,
           acmeEmail:
             values.kind === "acme" && values.email ? values.email : undefined,
           acmeStaging: false,
@@ -162,6 +165,10 @@ function CertificatesPage() {
   const kindLabels = {
     acme: m.admin_certificates_kind_acme(),
     self_signed: m.admin_certificates_kind_self_signed(),
+  };
+  const acmeProviderLabels = {
+    letsencrypt: m.admin_certificates_provider_letsencrypt(),
+    zerossl: m.admin_certificates_provider_zerossl(),
   };
   const stateLabels = {
     pending: m.admin_certificates_state_pending(),
@@ -262,6 +269,56 @@ function CertificatesPage() {
                   {(kind) =>
                     kind === "acme" ? (
                       <>
+                        <form.Field name="acmeProvider">
+                          {(field) => (
+                            <Select
+                              value={field.state.value}
+                              onValueChange={(value) =>
+                                value &&
+                                field.handleChange(
+                                  value as FormValues["acmeProvider"],
+                                )
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectPopup>
+                                <SelectItem value="letsencrypt">
+                                  {acmeProviderLabels.letsencrypt}
+                                </SelectItem>
+                                <SelectItem value="zerossl">
+                                  {acmeProviderLabels.zerossl}
+                                </SelectItem>
+                              </SelectPopup>
+                            </Select>
+                          )}
+                        </form.Field>
+                        <form.Subscribe
+                          selector={(state) => state.values.acmeProvider}
+                        >
+                          {(provider) =>
+                            provider === "letsencrypt" ? (
+                              <p className="rounded-lg border border-amber-500/32 bg-amber-500/8 p-3 text-xs">
+                                {m.admin_certificates_letsencrypt_workers_notice()}
+                              </p>
+                            ) : (
+                              <p
+                                className={
+                                  capability?.acmeProviders.zerossl.available
+                                    ? "rounded-lg border bg-muted/32 p-3 text-xs text-muted-foreground"
+                                    : "rounded-lg border border-amber-500/32 bg-amber-500/8 p-3 text-xs"
+                                }
+                              >
+                                {capability?.acmeProviders.zerossl.available
+                                  ? m.admin_certificates_zerossl_env_configured_notice()
+                                  : capability?.acmeProviders.zerossl.incomplete
+                                    ? m.admin_certificates_zerossl_env_incomplete_notice()
+                                    : m.admin_certificates_zerossl_env_missing_notice()}
+                              </p>
+                            )
+                          }
+                        </form.Subscribe>
                         <form.Field name="email">
                           {(field) => (
                             <div>
@@ -295,15 +352,24 @@ function CertificatesPage() {
                 </SheetClose>
                 <form.Subscribe
                   selector={(state) => ({
+                    acmeProvider: state.values.acmeProvider,
                     domains: state.values.domains,
                     isSubmitting: state.isSubmitting,
+                    kind: state.values.kind,
                     name: state.values.name,
                   })}
                 >
-                  {({ domains, isSubmitting, name }) => (
+                  {({ acmeProvider, domains, isSubmitting, kind, name }) => (
                     <Button
                       type="submit"
-                      disabled={isSubmitting || !name || !domains}
+                      disabled={
+                        isSubmitting ||
+                        !name ||
+                        !domains ||
+                        (kind === "acme" &&
+                          acmeProvider === "zerossl" &&
+                          capability?.acmeProviders.zerossl.available === false)
+                      }
                     >
                       {m.admin_certificates_create()}
                     </Button>
@@ -333,7 +399,9 @@ function CertificatesPage() {
                   <ShieldCheckIcon className="size-4" />
                   <h2 className="font-medium">{certificate.name}</h2>
                   <Badge variant="outline">
-                    {kindLabels[certificate.kind]}
+                    {certificate.kind === "acme"
+                      ? acmeProviderLabels[certificate.acmeProvider]
+                      : kindLabels[certificate.kind]}
                   </Badge>
                   <Badge variant="outline">
                     {stateLabels[certificate.state]}

@@ -10,6 +10,7 @@ import {
   server,
 } from "@/db/proxy-schema";
 import {
+  getCertificateAcmeProviderCapabilities,
   advanceCertificateIssuance,
   getCertificateDnsCapability,
 } from "@/lib/certificate-issuance";
@@ -29,7 +30,10 @@ export const getCertificateCapability = createServerFn({
   method: "GET",
 }).handler(async () => {
   await ensureAdmin();
-  return getCertificateDnsCapability();
+  return {
+    ...getCertificateDnsCapability(),
+    acmeProviders: getCertificateAcmeProviderCapabilities(),
+  };
 });
 
 export const listCertificates = createServerFn({ method: "GET" }).handler(
@@ -42,6 +46,7 @@ export const listCertificates = createServerFn({ method: "GET" }).handler(
         kind: managedCertificate.kind,
         domains: managedCertificate.domains,
         acmeEmail: managedCertificate.acmeEmail,
+        acmeProvider: managedCertificate.acmeProvider,
         acmeStaging: managedCertificate.acmeStaging,
         dnsMode: managedCertificate.dnsMode,
         state: managedCertificate.state,
@@ -89,6 +94,15 @@ export const createCertificate = createServerFn({ method: "POST" })
   .validator(createCertificateSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
+    if (data.kind === "acme") {
+      const capability =
+        getCertificateAcmeProviderCapabilities()[data.acmeProvider];
+      if (!capability.available) {
+        throw new Error(
+          `${data.acmeProvider} requires deployment environment variables: ${capability.requiredEnv.join(", ")}`,
+        );
+      }
+    }
     const id = randomUUID();
     const dnsCapability = getCertificateDnsCapability();
     const [created] = await db
@@ -100,6 +114,7 @@ export const createCertificate = createServerFn({ method: "POST" })
         domains: [...new Set(data.domains.map((name) => name.toLowerCase()))],
         acmeEmail:
           data.kind === "acme" && data.acmeEmail ? data.acmeEmail : null,
+        acmeProvider: data.kind === "acme" ? data.acmeProvider : "letsencrypt",
         acmeStaging: data.kind === "acme" && data.acmeStaging,
         dnsMode:
           data.kind === "acme"

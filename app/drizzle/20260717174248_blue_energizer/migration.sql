@@ -1,0 +1,1 @@
+ALTER TABLE "managed_certificate" ADD COLUMN "acme_provider" text DEFAULT 'letsencrypt' NOT NULL;

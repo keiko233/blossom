@@ -138,6 +138,7 @@ const certificatePolicyBaseSchema = managedCertificateInsertSchema.pick({
   kind: true,
   domains: true,
   acmeEmail: true,
+  acmeProvider: true,
   acmeStaging: true,
   selfSignedValidityDays: true,
   renewalDaysBeforeExpiry: true,

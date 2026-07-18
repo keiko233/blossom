@@ -103,9 +103,11 @@ export type NewServer = typeof server.$inferInsert;
 
 export const CERTIFICATE_KINDS = ["acme", "self_signed"] as const;
 export const CERTIFICATE_DNS_MODES = ["cloudflare", "manual"] as const;
+export const ACME_PROVIDERS = ["letsencrypt", "zerossl"] as const;
 
 export type CertificateKind = (typeof CERTIFICATE_KINDS)[number];
 export type CertificateDnsMode = (typeof CERTIFICATE_DNS_MODES)[number];
+export type AcmeProvider = (typeof ACME_PROVIDERS)[number];
 export type CertificateInstanceState =
   | "pending"
   | "issuing"
@@ -124,6 +126,10 @@ export const managedCertificate = pgTable(
     kind: text("kind").$type<CertificateKind>().notNull(),
     domains: jsonb("domains").$type<string[]>().notNull(),
     acmeEmail: text("acme_email"),
+    acmeProvider: text("acme_provider")
+      .$type<AcmeProvider>()
+      .default("letsencrypt")
+      .notNull(),
     acmeStaging: boolean("acme_staging").default(false).notNull(),
     dnsMode: text("dns_mode").$type<CertificateDnsMode>(),
     selfSignedValidityDays: integer("self_signed_validity_days")
@@ -172,6 +178,7 @@ export const managedCertificateInsertSchema = createInsertSchema(
     kind: z.enum(CERTIFICATE_KINDS),
     domains: z.array(certificateDomainSchema).min(1).max(100),
     acmeEmail: z.email().optional(),
+    acmeProvider: z.enum(ACME_PROVIDERS).default("letsencrypt"),
     dnsMode: z.enum(CERTIFICATE_DNS_MODES).optional(),
     selfSignedValidityDays: z.number().int().min(1).max(3650).default(365),
     renewalDaysBeforeExpiry: z.number().int().min(1).max(90).default(30),

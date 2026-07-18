@@ -17,6 +17,12 @@ import {
   certificateServer,
   managedCertificate,
 } from "@/db/proxy-schema";
+import type { AcmeProvider } from "@/db/proxy-schema";
+import {
+  ACME_PROVIDER_ENV_REQUIREMENTS,
+  acmeDirectory,
+  isLetsEncryptDirectoryTlsFailure,
+} from "@/lib/acme-directory";
 import {
   decryptCertificateSecret,
   encryptCertificateSecret,
@@ -36,6 +42,7 @@ interface CloudflareRecord {
 }
 
 interface AcmeState {
+  directoryUrl?: string;
   accountKeyPem: string;
   accountUrl: string;
   order: Parameters<acme.Client["getOrder"]>[0];
@@ -49,6 +56,11 @@ interface AcmeState {
   submittedCount: number;
   phase: "dns_creating" | "prepared" | "submitted" | "finalized";
   preparedAt: string;
+}
+
+interface AcmeConfiguration {
+  directoryUrl: string;
+  externalAccountBinding?: { kid: string; hmacKey: string };
 }
 
 const LEASE_MS = 25_000;
@@ -69,6 +81,28 @@ export function getCertificateDnsCapability(): {
   const hasToken = Boolean(env.CLOUDFLARE_DNS_API_TOKEN);
   const hasZone = Boolean(env.CLOUDFLARE_DNS_ZONE_ID);
   return { automatic: hasToken && hasZone, incomplete: hasToken !== hasZone };
+}
+
+export function getCertificateAcmeProviderCapabilities(): Record<
+  AcmeProvider,
+  { available: boolean; incomplete: boolean; requiredEnv: readonly string[] }
+> {
+  const env = getServerEnv();
+  const zeroSslValues = [env.ACME_EAB_KID, env.ACME_EAB_HMAC_KEY];
+  const zeroSslConfigured = zeroSslValues.filter(Boolean).length;
+  return {
+    letsencrypt: {
+      available: true,
+      incomplete: false,
+      requiredEnv: ACME_PROVIDER_ENV_REQUIREMENTS.letsencrypt,
+    },
+    zerossl: {
+      available: zeroSslConfigured === zeroSslValues.length,
+      incomplete:
+        zeroSslConfigured > 0 && zeroSslConfigured < zeroSslValues.length,
+      requiredEnv: ACME_PROVIDER_ENV_REQUIREMENTS.zerossl,
+    },
+  };
 }
 
 function cloudflareConfig(): { token: string; zoneId: string } {
@@ -249,24 +283,52 @@ async function cleanupCloudflare(records: CloudflareRecord[]) {
 
 function acmeClient(policy: CertificatePolicy, state: AcmeState) {
   return new acme.Client({
-    directoryUrl: policy.acmeStaging
-      ? acme.directory.letsencrypt.staging
-      : acme.directory.letsencrypt.production,
+    directoryUrl:
+      state.directoryUrl ??
+      acmeDirectory(policy.acmeProvider, policy.acmeStaging),
     accountKey: state.accountKeyPem,
     accountUrl: state.accountUrl,
     backoffAttempts: 1,
   });
 }
 
-async function prepareAcme(policy: CertificatePolicy): Promise<AcmeState> {
+function acmeConfiguration(policy: CertificatePolicy): AcmeConfiguration {
+  if (policy.acmeProvider === "letsencrypt") {
+    return {
+      directoryUrl: acmeDirectory("letsencrypt", policy.acmeStaging),
+    };
+  }
+
+  const env = getServerEnv();
+  const eabKid = env.ACME_EAB_KID;
+  const eabHmacKey = env.ACME_EAB_HMAC_KEY;
+  if (!eabKid || !eabHmacKey) {
+    throw new Error(
+      "ZeroSSL requires ACME_EAB_KID and ACME_EAB_HMAC_KEY in the deployment environment",
+    );
+  }
+
+  return {
+    directoryUrl: acmeDirectory("zerossl", false),
+    externalAccountBinding: {
+      kid: eabKid,
+      hmacKey: eabHmacKey,
+    },
+  };
+}
+
+async function prepareAcmeWithDirectory(
+  policy: CertificatePolicy,
+  configuration: AcmeConfiguration,
+): Promise<AcmeState> {
+  const { directoryUrl, externalAccountBinding } = configuration;
   const accountKey = (
     await acme.crypto.createPrivateEcdsaKey("P-256")
   ).toString();
   const client = new acme.Client({
-    directoryUrl: policy.acmeStaging
-      ? acme.directory.letsencrypt.staging
-      : acme.directory.letsencrypt.production,
+    directoryUrl,
     accountKey,
+    externalAccountBinding,
     backoffAttempts: 1,
   });
   await client.createAccount({
@@ -301,6 +363,7 @@ async function prepareAcme(policy: CertificatePolicy): Promise<AcmeState> {
     }),
   );
   return {
+    directoryUrl,
     accountKeyPem: accountKey,
     accountUrl: client.getAccountUrl(),
     order,
@@ -312,6 +375,19 @@ async function prepareAcme(policy: CertificatePolicy): Promise<AcmeState> {
     phase: policy.dnsMode === "cloudflare" ? "dns_creating" : "prepared",
     preparedAt: new Date().toISOString(),
   };
+}
+
+async function prepareAcme(policy: CertificatePolicy): Promise<AcmeState> {
+  const configuration = acmeConfiguration(policy);
+  try {
+    return await prepareAcmeWithDirectory(policy, configuration);
+  } catch (error) {
+    if (!isLetsEncryptDirectoryTlsFailure(error)) throw error;
+    throw new Error(
+      "Cloudflare Workers cannot use Let's Encrypt ACME (HTTP 525). Create the certificate with ZeroSSL instead.",
+      { cause: error },
+    );
+  }
 }
 
 async function saveAcmeState(

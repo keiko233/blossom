@@ -35,6 +35,8 @@ export const serverEnvSchema = z.object({
       },
     ),
   CERTIFICATE_MASTER_KEY: z.string().optional(),
+  ACME_EAB_KID: z.string().optional(),
+  ACME_EAB_HMAC_KEY: z.string().optional(),
   CLOUDFLARE_DNS_API_TOKEN: z.string().optional(),
   CLOUDFLARE_DNS_ZONE_ID: z.string().optional(),
 });

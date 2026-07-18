@@ -2,7 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "blossom",
   "compatibility_date": "2025-09-02",
-  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "compatibility_flags": ["nodejs_compat"],
   "main": "@tanstack/react-start/server-entry",
   // Preserve dashboard-managed plaintext vars across `wrangler deploy`
   "keep_vars": true,
