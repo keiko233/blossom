@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
   CopyIcon,
@@ -11,6 +11,10 @@ import {
 import type React from "react";
 import { useState } from "react";
 
+import {
+  PageHeader,
+  PageHeaderTitle,
+} from "@/components/app-shell/page-header";
 import {
   SubscriptionQuotaUsage,
   SubscriptionStatusBadge,
@@ -65,7 +69,6 @@ export const Route = createFileRoute("/(admin)/admin/users/$userId")({
 function RouteComponent(): React.ReactElement {
   const { userId } = Route.useParams();
   const queryClient = useQueryClient();
-  const navigate = useNavigate();
   const [copyingSubscriptionId, setCopyingSubscriptionId] = useState<
     string | null
   >(null);
@@ -257,14 +260,13 @@ function RouteComponent(): React.ReactElement {
     <div className="flex flex-col gap-6 p-4">
       {/* User header card */}
       <div className="flex flex-col gap-4 rounded-xl border bg-card p-4 shadow-xs">
-        <div className="flex items-start justify-between gap-3">
+        <PageHeader className="items-start gap-3">
           <div className="flex items-center gap-3">
             <Button
-              type="button"
               variant="ghost"
               size="icon"
               aria-label={m.admin_users_action_view()}
-              onClick={() => void navigate({ to: "/admin/users" })}
+              render={<Link to="/admin/users" />}
             >
               <ArrowLeftIcon />
             </Button>
@@ -276,9 +278,7 @@ function RouteComponent(): React.ReactElement {
             </Avatar>
             <div className="flex flex-col gap-1">
               <div className="flex items-center gap-2">
-                <span className="font-heading text-lg font-semibold">
-                  {user.name}
-                </span>
+                <PageHeaderTitle>{user.name}</PageHeaderTitle>
                 {user.role === "admin" ? (
                   <Badge>{m.admin_users_role_admin()}</Badge>
                 ) : null}
@@ -354,7 +354,7 @@ function RouteComponent(): React.ReactElement {
               )}
             </MenuPopup>
           </Menu>
-        </div>
+        </PageHeader>
       </div>
 
       {/* Subscriptions */}

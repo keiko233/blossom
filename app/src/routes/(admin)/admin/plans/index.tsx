@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import {
   createColumnHelper,
   flexRender,
@@ -9,6 +9,10 @@ import {
 import { EllipsisIcon, PackageIcon, PlusIcon } from "lucide-react";
 import type React from "react";
 
+import {
+  PageHeader,
+  PageHeaderTitle,
+} from "@/components/app-shell/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Confirm } from "@/components/ui/confirm";
@@ -88,8 +92,6 @@ function RouteComponent(): React.ReactElement {
       onConfirm: () => deleteMutation.mutateAsync(plan.id),
     });
   };
-
-  const openCreate = () => void navigate({ to: "/admin/plans/new" });
 
   const openEdit = (plan: PlanListItem) =>
     void navigate({
@@ -216,15 +218,13 @@ function RouteComponent(): React.ReactElement {
 
   return (
     <div className="flex flex-col gap-4 p-4">
-      <div className="flex items-center justify-between">
-        <h1 className="font-heading text-lg font-semibold">
-          {m.admin_nav_plans()}
-        </h1>
-        <Button onClick={openCreate}>
+      <PageHeader>
+        <PageHeaderTitle>{m.admin_nav_plans()}</PageHeaderTitle>
+        <Button render={<Link to="/admin/plans/new" />}>
           <PlusIcon />
           {m.admin_plans_add()}
         </Button>
-      </div>
+      </PageHeader>
 
       {isPending ? (
         <div className="flex justify-center py-16">
@@ -268,7 +268,7 @@ function RouteComponent(): React.ReactElement {
             </EmptyMedia>
             <EmptyTitle>{m.admin_plans_empty_title()}</EmptyTitle>
           </EmptyHeader>
-          <Button onClick={openCreate}>
+          <Button render={<Link to="/admin/plans/new" />}>
             <PlusIcon />
             {m.admin_plans_add()}
           </Button>

@@ -9,6 +9,10 @@ import {
 import { EllipsisIcon, UsersIcon } from "lucide-react";
 import type React from "react";
 
+import {
+  PageHeader,
+  PageHeaderTitle,
+} from "@/components/app-shell/page-header";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -187,11 +191,9 @@ function RouteComponent(): React.ReactElement {
 
   return (
     <div className="flex flex-col gap-4 p-4">
-      <div className="flex items-center justify-between">
-        <h1 className="font-heading text-lg font-semibold">
-          {m.admin_nav_users()}
-        </h1>
-      </div>
+      <PageHeader>
+        <PageHeaderTitle>{m.admin_nav_users()}</PageHeaderTitle>
+      </PageHeader>
 
       {isPending ? (
         <div className="flex justify-center py-16">

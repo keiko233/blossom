@@ -14,6 +14,10 @@ import {
 import { useState } from "react";
 import { z } from "zod";
 
+import {
+  PageHeader,
+  PageHeaderTitle,
+} from "@/components/app-shell/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -337,15 +341,10 @@ function CertificatesPage() {
 
   return (
     <div className="space-y-6 p-4">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="font-heading text-2xl font-semibold">
-            {m.admin_certificates_title()}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {m.admin_certificates_description()}
-          </p>
-        </div>
+      <PageHeader className="flex-wrap items-start gap-3">
+        <PageHeaderTitle className="text-2xl">
+          {m.admin_certificates_title()}
+        </PageHeaderTitle>
         <div className="flex gap-2">
           <Sheet
             open={issueSheetOpen}
@@ -663,7 +662,7 @@ function CertificatesPage() {
             </SheetContent>
           </Sheet>
         </div>
-      </header>
+      </PageHeader>
 
       {capability?.incomplete ? (
         <p className="rounded-lg border border-amber-500/32 bg-amber-500/8 p-3 text-sm">

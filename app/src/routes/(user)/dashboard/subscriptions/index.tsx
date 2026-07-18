@@ -4,6 +4,10 @@ import { CopyIcon } from "lucide-react";
 import { useState } from "react";
 
 import {
+  PageHeader,
+  PageHeaderTitle,
+} from "@/components/app-shell/page-header";
+import {
   SubscriptionQuotaUsage,
   SubscriptionStatusBadge,
 } from "@/components/subscriptions";
@@ -89,9 +93,11 @@ function RouteComponent() {
 
   return (
     <div className="flex flex-col gap-6 p-4">
-      <h1 className="font-heading text-2xl font-semibold">
-        {m.user_subscriptions_title()}
-      </h1>
+      <PageHeader>
+        <PageHeaderTitle className="text-2xl">
+          {m.user_subscriptions_title()}
+        </PageHeaderTitle>
+      </PageHeader>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {subscriptions.map((sub) => (

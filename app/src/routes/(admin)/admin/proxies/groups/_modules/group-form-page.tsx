@@ -1,8 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { ArrowLeftIcon } from "lucide-react";
 import * as React from "react";
 
+import {
+  PageHeader,
+  PageHeaderTitle,
+} from "@/components/app-shell/page-header";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,
@@ -58,25 +62,24 @@ export function GroupFormPage({
 
   return (
     <div className="flex flex-col">
-      <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b bg-background/80 px-4 py-3 backdrop-blur">
+      <PageHeader className="sticky top-0 z-10 gap-3 border-b bg-background/80 px-4 py-3 backdrop-blur">
         <div className="flex items-center gap-3">
           <Button
-            type="button"
             variant="ghost"
             size="icon"
             aria-label={m.admin_proxies_groups_form_back()}
-            onClick={goToList}
+            render={<Link to={GROUPS_LIST} />}
           >
             <ArrowLeftIcon />
           </Button>
-          <h1 className="font-heading text-lg font-semibold">
+          <PageHeaderTitle>
             {isEdit
               ? m.admin_proxies_groups_form_edit_title()
               : m.admin_proxies_groups_form_create_title()}
-          </h1>
+          </PageHeaderTitle>
         </div>
         <div className="flex items-center gap-2">
-          <Button type="button" variant="ghost" onClick={goToList}>
+          <Button variant="ghost" render={<Link to={GROUPS_LIST} />}>
             {m.admin_proxies_groups_form_cancel()}
           </Button>
           <form.Subscribe selector={(s) => s.isSubmitting}>
@@ -87,7 +90,7 @@ export function GroupFormPage({
             )}
           </form.Subscribe>
         </div>
-      </header>
+      </PageHeader>
 
       <form
         id="group-form"

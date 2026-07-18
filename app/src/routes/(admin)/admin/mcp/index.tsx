@@ -10,6 +10,10 @@ import {
 import type React from "react";
 import { useState } from "react";
 
+import {
+  PageHeader,
+  PageHeaderTitle,
+} from "@/components/app-shell/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -320,20 +324,13 @@ function RouteComponent(): React.ReactElement {
 
   return (
     <div className="flex flex-col gap-4 p-4">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="font-heading text-lg font-semibold">
-            {m.admin_mcp_title()}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {m.admin_mcp_description()}
-          </p>
-        </div>
+      <PageHeader className="gap-4">
+        <PageHeaderTitle>{m.admin_mcp_title()}</PageHeaderTitle>
         <Badge variant="success">
           <span className="size-1.5 rounded-full bg-emerald-500" />
           {m.admin_mcp_enabled()}
         </Badge>
-      </div>
+      </PageHeader>
 
       <Card>
         <CardHeader>

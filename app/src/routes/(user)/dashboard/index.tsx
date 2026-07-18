@@ -3,6 +3,10 @@ import { Link, createFileRoute } from "@tanstack/react-router";
 import { AlertTriangleIcon } from "lucide-react";
 
 import {
+  PageHeader,
+  PageHeaderTitle,
+} from "@/components/app-shell/page-header";
+import {
   SubscriptionQuotaUsage,
   SubscriptionTrafficTable,
 } from "@/components/subscriptions";
@@ -82,9 +86,11 @@ function RouteComponent() {
 
   return (
     <div className="flex flex-col gap-6 p-4">
-      <h1 className="font-heading text-2xl font-semibold">
-        {m.user_dashboard_title()}
-      </h1>
+      <PageHeader>
+        <PageHeaderTitle className="text-2xl">
+          {m.user_dashboard_title()}
+        </PageHeaderTitle>
+      </PageHeader>
 
       {activeSubscriptions.length === 0 && (
         <Alert>
