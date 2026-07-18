@@ -26,7 +26,9 @@ const resolveDriver = (): DatabaseDriver => {
 
 export type Database = NeonHttpDatabase | NodePgDatabase;
 
+export const databaseDriver = resolveDriver();
+
 export const db: Database =
-  resolveDriver() === DatabaseDriver.NeonHttp
+  databaseDriver === DatabaseDriver.NeonHttp
     ? drizzleNeonHttp(serverEnv.DATABASE_URL)
     : drizzleNodePg(serverEnv.DATABASE_URL);

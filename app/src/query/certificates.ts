@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { and, asc, eq, inArray, notInArray } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
-import { db } from "@/db";
+import { db, databaseDriver } from "@/db";
 import {
   certificateMaterial,
   certificateServer,
@@ -30,6 +30,7 @@ import {
   type ParsedCertificateMaterial,
 } from "@/lib/certificate-material";
 import { ensureAdmin } from "@/lib/ensure-admin";
+import { supportsInteractiveTransactions } from "@/lib/env-schema";
 import {
   certificateIdSchema,
   certificateMaterialActionSchema,
@@ -266,29 +267,33 @@ export const continueCertificateDnsChallenge = createServerFn({
 type ManagedCertificateRow = typeof managedCertificate.$inferSelect;
 
 async function withCertificateTransaction<T>(
-  callback: (tx: typeof db) => Promise<T>,
+  callback: (tx: typeof db, rowLock: boolean) => Promise<T>,
 ): Promise<T> {
-  if ("transaction" in db && typeof db.transaction === "function") {
+  if (supportsInteractiveTransactions(databaseDriver)) {
     return (
       db as unknown as {
         transaction: <Result>(
           run: (tx: typeof db) => Promise<Result>,
         ) => Promise<Result>;
       }
-    ).transaction(callback);
+    ).transaction((tx) => callback(tx, true));
   }
-  return callback(db);
+  // neon-http exposes transaction() in Drizzle's common surface, but calling
+  // it throws at runtime. Keep the same parent-first, reference-safe ordering
+  // used by the other multi-statement mutations in this app.
+  return callback(db, false);
 }
 
 async function lockCertificate(
   tx: typeof db,
   certificateId: string,
+  rowLock: boolean,
 ): Promise<ManagedCertificateRow | undefined> {
-  const rows = await tx
+  const query = tx
     .select()
     .from(managedCertificate)
-    .where(eq(managedCertificate.id, certificateId))
-    .for("update");
+    .where(eq(managedCertificate.id, certificateId));
+  const rows = rowLock ? await query.for("update") : await query;
   return rows[0];
 }
 
@@ -349,8 +354,8 @@ async function runImportedMaterialReplace(
   certificateId: string,
   parsed: ParsedCertificateMaterial,
 ): Promise<{ activeVersion: number | null; pendingVersion: number | null }> {
-  const runInTx = async (tx: typeof db) => {
-    const policy = await lockCertificate(tx, certificateId);
+  const runInTx = async (tx: typeof db, rowLock: boolean) => {
+    const policy = await lockCertificate(tx, certificateId, rowLock);
     if (!policy) throw new Error("Certificate not found");
     assertImportedCertificateKind(policy.kind);
 
@@ -490,8 +495,8 @@ export const activatePendingImportedCertificate = createServerFn({
   .validator(certificateMaterialActionSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
-    const runInTx = async (tx: typeof db) => {
-      const policy = await lockCertificate(tx, data.certificateId);
+    const runInTx = async (tx: typeof db, rowLock: boolean) => {
+      const policy = await lockCertificate(tx, data.certificateId, rowLock);
       if (!policy) throw new Error("Certificate not found");
       assertImportedCertificateKind(policy.kind);
       if (policy.pendingMaterialVersion === null) {
@@ -550,8 +555,8 @@ export const discardPendingImportedCertificate = createServerFn({
   .validator(certificateMaterialActionSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
-    const runInTx = async (tx: typeof db) => {
-      const policy = await lockCertificate(tx, data.certificateId);
+    const runInTx = async (tx: typeof db, rowLock: boolean) => {
+      const policy = await lockCertificate(tx, data.certificateId, rowLock);
       if (!policy) throw new Error("Certificate not found");
       assertImportedCertificateKind(policy.kind);
       if (policy.pendingMaterialVersion === null) {

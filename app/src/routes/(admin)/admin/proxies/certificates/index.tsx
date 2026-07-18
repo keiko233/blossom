@@ -239,7 +239,11 @@ function CertificatesPage() {
     defaultValues: issueFormDefaultValues,
     validators: { onSubmit: issueFormSchema },
     onSubmit: async ({ value }) => {
-      await createMutation.mutateAsync(value);
+      try {
+        await createMutation.mutateAsync(value);
+      } catch {
+        return;
+      }
       issueForm.reset();
       setIssueSheetOpen(false);
     },
@@ -273,7 +277,11 @@ function CertificatesPage() {
     defaultValues: importFormDefaultValues,
     validators: { onSubmit: importFormSchema },
     onSubmit: async ({ value }) => {
-      await importMutation.mutateAsync(value);
+      try {
+        await importMutation.mutateAsync(value);
+      } catch {
+        return;
+      }
       importForm.reset();
       setImportSheetOpen(false);
     },
@@ -310,10 +318,14 @@ function CertificatesPage() {
     validators: { onSubmit: replaceFormSchema },
     onSubmit: async ({ value }) => {
       if (!replaceTarget) return;
-      await replaceMutation.mutateAsync({
-        certificateId: replaceTarget,
-        ...value,
-      });
+      try {
+        await replaceMutation.mutateAsync({
+          certificateId: replaceTarget,
+          ...value,
+        });
+      } catch {
+        return;
+      }
       replaceForm.reset();
       setReplaceTarget(null);
     },

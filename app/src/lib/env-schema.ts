@@ -5,6 +5,12 @@ export enum DatabaseDriver {
   NodePg = "node-postgres",
 }
 
+export function supportsInteractiveTransactions(
+  driver: DatabaseDriver,
+): boolean {
+  return driver === DatabaseDriver.NodePg;
+}
+
 export const serverEnvSchema = z.object({
   APP_NAME: z.string().optional().default("Blossom"),
   DATABASE_URL: z.string(),
