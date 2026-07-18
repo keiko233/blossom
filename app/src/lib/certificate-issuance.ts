@@ -1,12 +1,3 @@
-import "reflect-metadata";
-import {
-  ExtendedKeyUsageExtension,
-  KeyUsageFlags,
-  KeyUsagesExtension,
-  PemConverter,
-  SubjectAlternativeNameExtension,
-  X509CertificateGenerator,
-} from "@peculiar/x509";
 import * as acme from "acme-client";
 import { and, desc, eq, isNull, lt, notInArray, or } from "drizzle-orm";
 import { createHash, randomUUID, webcrypto } from "node:crypto";
@@ -116,10 +107,6 @@ function cloudflareConfig(): { token: string; zoneId: string } {
   };
 }
 
-function pemPrivateKey(raw: ArrayBuffer): string {
-  return PemConverter.encode(raw, "PRIVATE KEY");
-}
-
 function issuanceAad(certificateId: string): string {
   return `certificate:${certificateId}:issuance`;
 }
@@ -202,6 +189,18 @@ async function persistMaterial(
 }
 
 async function issueSelfSigned(policy: CertificatePolicy) {
+  // Cloudflare's Rolldown build can initialize @peculiar/x509 (and tsyringe)
+  // before a sibling side-effect import. Load the polyfill in a completed
+  // dynamic import first so metadata is always installed before x509 runs.
+  await import("reflect-metadata");
+  const {
+    ExtendedKeyUsageExtension,
+    KeyUsageFlags,
+    KeyUsagesExtension,
+    PemConverter,
+    SubjectAlternativeNameExtension,
+    X509CertificateGenerator,
+  } = await import("@peculiar/x509");
   const algorithm = { name: "ECDSA", namedCurve: "P-256" } as const;
   const keys = await webcrypto.subtle.generateKey(algorithm, true, [
     "sign",
@@ -235,7 +234,7 @@ async function issueSelfSigned(policy: CertificatePolicy) {
   const privateKey = await webcrypto.subtle.exportKey("pkcs8", keys.privateKey);
   await persistMaterial(policy, {
     certificatePem: certificate.toString("pem"),
-    privateKeyPem: pemPrivateKey(privateKey),
+    privateKeyPem: PemConverter.encode(privateKey, "PRIVATE KEY"),
     notBefore,
     notAfter,
     fingerprintSha256: createHash("sha256")

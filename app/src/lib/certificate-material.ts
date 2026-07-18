@@ -1,4 +1,4 @@
-import {
+import type {
   SubjectAlternativeNameExtension,
   X509Certificate,
 } from "@peculiar/x509";
@@ -71,7 +71,10 @@ function chainPem(certs: X509Certificate[]): string {
   return certs.map((cert) => cert.toString("pem")).join("");
 }
 
-function parseChain(chainPemValue: string): X509Certificate[] {
+function parseChain(
+  chainPemValue: string,
+  Certificate: typeof X509Certificate,
+): X509Certificate[] {
   if (Buffer.byteLength(chainPemValue, "utf8") > MAX_CHAIN_BYTES) {
     throw new Error("Certificate chain exceeds 1 MiB limit");
   }
@@ -80,7 +83,7 @@ function parseChain(chainPemValue: string): X509Certificate[] {
     .filter((block) => block.label === "CERTIFICATE")
     .map((block) => {
       try {
-        return new X509Certificate(Buffer.from(block.body, "base64"));
+        return new Certificate(Buffer.from(block.body, "base64"));
       } catch {
         throw new Error("Malformed certificate PEM block");
       }
@@ -135,9 +138,12 @@ function parsePrivateKey(privateKeyPemValue: string): {
   return { keyObject, normalizedPem };
 }
 
-function extractDnsNames(cert: X509Certificate): string[] {
+function extractDnsNames(
+  cert: X509Certificate,
+  SanExtension: typeof SubjectAlternativeNameExtension,
+): string[] {
   const names = new Set<string>();
-  const sanExtension = cert.getExtension(SubjectAlternativeNameExtension);
+  const sanExtension = cert.getExtension(SanExtension);
   if (sanExtension) {
     for (const entry of sanExtension.names.items) {
       if (entry.type === "dns") {
@@ -211,13 +217,18 @@ export async function parseCertificateMaterial(
   chainPemValue: string,
   privateKeyPemValue: string,
 ): Promise<ParsedCertificateMaterial> {
-  const certs = parseChain(chainPemValue);
+  // Keep x509 lazy for the same reason as the issuer: Cloudflare's production
+  // bundle must finish installing reflect-metadata before tsyringe initializes.
+  await import("reflect-metadata");
+  const { SubjectAlternativeNameExtension, X509Certificate } =
+    await import("@peculiar/x509");
+  const certs = parseChain(chainPemValue, X509Certificate);
   const { keyObject, normalizedPem } = parsePrivateKey(privateKeyPemValue);
 
   await verifyChainOrder(certs);
 
   const leaf = certs[0]!;
-  const domains = extractDnsNames(leaf);
+  const domains = extractDnsNames(leaf, SubjectAlternativeNameExtension);
   if (domains.length === 0) {
     throw new Error("Leaf certificate has no DNS subject alternative names");
   }
