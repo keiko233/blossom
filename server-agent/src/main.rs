@@ -236,6 +236,7 @@ async fn sync_config(
                         status.error = None;
                     }
                     Err(e) => {
+                        error!("failed to start existing sing-box config: {e}");
                         status.error = Some(ReportedError {
                             phase: "startup",
                             code: "SINGBOX_START_FAILED",
@@ -254,6 +255,10 @@ async fn sync_config(
 
     if let Err(e) = check_config(bin, config.candidate_path()).await {
         let message = e.to_string();
+        error!(
+            revision = %candidate.revision,
+            "sing-box candidate config rejected: {message}"
+        );
         status.config_state = "rejected";
         status.error = Some(ReportedError {
             phase: "preflight",
@@ -266,6 +271,10 @@ async fn sync_config(
     }
 
     if let Err(e) = config.promote_candidate() {
+        error!(
+            revision = %candidate.revision,
+            "failed to promote sing-box candidate config: {e}"
+        );
         status.config_state = "apply_failed";
         status.error = Some(ReportedError {
             phase: "promote",
@@ -290,6 +299,10 @@ async fn sync_config(
     };
 
     if let Err(e) = apply_result {
+        error!(
+            revision = %candidate.revision,
+            "failed to apply sing-box candidate config: {e}"
+        );
         let _ = config.rollback();
         status.config_state = "apply_failed";
         status.error = Some(ReportedError {
@@ -312,6 +325,11 @@ async fn sync_config(
         info!("sing-box config {} applied", candidate.revision);
     } else {
         let rolled_back = config.rollback()?;
+        error!(
+            revision = %candidate.revision,
+            rolled_back,
+            "sing-box candidate failed its health check"
+        );
         status.config_state = "apply_failed";
         status.error = Some(ReportedError {
             phase: "health",

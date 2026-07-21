@@ -19,6 +19,7 @@ import {
 import { getNodeActiveSubscriptions } from "@/query/subscription-access";
 
 import { base } from "../base";
+import { certificateActionFor } from "./certificate-actions";
 import {
   certificateEventSchema,
   heartbeatSchema,
@@ -137,45 +138,6 @@ const agentConfigV2Output = z.object({
     }),
   ),
 });
-
-type CertificateAgentContext = Awaited<
-  ReturnType<typeof getCertificateAgentContext>
->[number];
-
-function certificateActionFor(
-  item: CertificateAgentContext,
-  serverId: string,
-): ({ id: string; type: string } & Record<string, unknown>) | null {
-  const { certificate, binding, material } = item;
-  const activeGeneration = certificate.activeMaterialVersion;
-  if (!binding.enabled) {
-    const generation = binding.appliedGeneration ?? binding.desiredGeneration;
-    return {
-      id: `certificate:${certificate.id}:${serverId}:${generation}:remove`,
-      certificateId: certificate.id,
-      generation,
-      domains: certificate.domains,
-      type: "certificate.remove",
-    };
-  }
-  if (
-    binding.enabled &&
-    material &&
-    activeGeneration !== null &&
-    binding.appliedGeneration !== activeGeneration
-  ) {
-    return {
-      id: `certificate:${certificate.id}:${serverId}:${activeGeneration}:install`,
-      certificateId: certificate.id,
-      generation: activeGeneration,
-      domains: certificate.domains,
-      type: "certificate.install",
-      material,
-    };
-  }
-
-  return null;
-}
 
 export const getAgentConfigV2 = agentProcedure
   .route({

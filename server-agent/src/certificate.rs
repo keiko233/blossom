@@ -25,6 +25,8 @@ struct CertificateAction {
     domains: Vec<String>,
     #[serde(default)]
     material: Option<InstallMaterial>,
+    #[serde(default)]
+    report_required: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,13 +75,27 @@ impl CertificateManager {
                     action_id = %action.id,
                     "certificate action failed: {error:#}"
                 );
-                self.report(
-                    &action,
-                    "error",
-                    None,
-                    Some(sanitize_error(&error.to_string())),
-                )
-                .await?;
+                if let Err(report_error) = self
+                    .report(
+                        &action,
+                        "error",
+                        None,
+                        Some(sanitize_error(&error.to_string())),
+                    )
+                    .await
+                {
+                    warn!(
+                        certificate_id = %action.certificate_id,
+                        action_id = %action.id,
+                        "failed to report certificate action error: {report_error:#}"
+                    );
+                }
+                return Err(error).with_context(|| {
+                    format!(
+                        "certificate action {} failed; refusing to apply config",
+                        action.id
+                    )
+                });
             }
         }
         Ok(())
@@ -93,8 +109,16 @@ impl CertificateManager {
                     .as_ref()
                     .ok_or_else(|| anyhow!("install action has no material"))?;
                 validate_material(material, &action.domains)?;
-                self.install(action, material)?;
-                self.report(action, "active", Some(material), None).await
+                let current = self.root.join(&action.certificate_id).join("current");
+                let material_changed = !installed_material_matches(&current, material);
+                if material_changed {
+                    self.install(action, material)?;
+                }
+                if material_changed || action.report_required {
+                    self.report(action, "active", Some(material), None).await
+                } else {
+                    Ok(())
+                }
             }
             "certificate.remove" => {
                 let dir = self.root.join(&action.certificate_id);
@@ -157,6 +181,13 @@ impl CertificateManager {
             .map_err(|error| anyhow!("failed to report certificate event: {error}"))?;
         Ok(())
     }
+}
+
+fn installed_material_matches(current: &Path, material: &InstallMaterial) -> bool {
+    std::fs::read(current.join("fullchain.pem"))
+        .is_ok_and(|bytes| bytes == material.certificate_pem.as_bytes())
+        && std::fs::read(current.join("private-key.pem"))
+            .is_ok_and(|bytes| bytes == material.private_key_pem.as_bytes())
 }
 
 fn validate_material(material: &InstallMaterial, domains: &[String]) -> Result<()> {
@@ -270,4 +301,50 @@ fn sanitize_error(value: &str) -> String {
         .chars()
         .take(4096)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use chrono::{TimeZone, Utc};
+
+    use super::{InstallMaterial, installed_material_matches};
+
+    fn material() -> InstallMaterial {
+        InstallMaterial {
+            certificate_pem: "certificate".into(),
+            private_key_pem: "private-key".into(),
+            not_before: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+            not_after: Utc.timestamp_opt(2_000_000_000, 0).unwrap(),
+            fingerprint_sha256: "fingerprint".into(),
+        }
+    }
+
+    #[test]
+    fn missing_current_material_needs_repair() {
+        let missing = std::env::temp_dir().join("blossom-agent-missing-certificate-test");
+        assert!(!installed_material_matches(&missing, &material()));
+    }
+
+    #[test]
+    fn matching_current_material_is_idempotent() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let current = std::env::temp_dir().join(format!(
+            "blossom-agent-certificate-test-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::write(current.join("fullchain.pem"), "certificate").unwrap();
+        std::fs::write(current.join("private-key.pem"), "private-key").unwrap();
+
+        assert!(installed_material_matches(&current, &material()));
+
+        std::fs::write(current.join("fullchain.pem"), "different").unwrap();
+        assert!(!installed_material_matches(&current, &material()));
+        std::fs::remove_dir_all(current).unwrap();
+    }
 }
