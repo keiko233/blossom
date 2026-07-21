@@ -51,7 +51,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.4.0",
-    "drizzle-orm": "1.0.0-rc.4",
+    "drizzle-orm": "1.0.0-rc.4-de6c356",
     "drizzle-zod": "^0.8.3",
     "filesize": "^11.0.22",
     "lodash-es": "^4.18.1",
