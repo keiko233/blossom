@@ -1,21 +1,24 @@
 //! Fetches the server's combined multi-inbound sing-box config from the blossom
-//! API and materialises it on disk. The config is otherwise treated as opaque
-//! JSON — the control plane has already validated it and injected the
-//! `experimental.v2ray_api` hooks, so the agent only diffs and writes, never
-//! interprets, with one exception: it reads `experimental.v2ray_api.listen` to
-//! find the stats endpoint.
+//! API and materialises it on disk. The control plane validates the config; the
+//! agent only interprets the two pieces it owns locally: the v2ray API listen
+//! address and managed-certificate paths. The latter are normalized to the
+//! configured state directory so stale inline material can never override files
+//! the agent has validated and installed.
 
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::certificate::CertificateManager;
 use crate::client::Client;
+
+const CONTROL_PLANE_CERTIFICATE_ROOT: &str = "/var/lib/blossom-agent/certificates";
+const MANAGED_TLS_INLINE_FIELDS: [&str; 4] = ["certificate", "key", "acme", "certificate_provider"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AgentPolicy {
@@ -152,7 +155,7 @@ impl ConfigManager {
             .get_agent_config_v2()
             .await
             .map_err(|e| anyhow::anyhow!("failed to fetch config: {e}"))?;
-        let document = response.into_inner();
+        let mut document = response.into_inner();
         let policy = AgentPolicy {
             config_poll_interval_seconds: document
                 .agent
@@ -182,6 +185,16 @@ impl ConfigManager {
             return Ok(FetchStatus::Unchanged(policy));
         }
         self.observed_revision = Some(document.singbox.revision.clone());
+        let normalized =
+            normalize_managed_certificate_tls(&mut document.singbox.config, &self.state_dir)?;
+        for item in normalized {
+            info!(
+                inbound_index = item.inbound_index,
+                certificate_id = %item.certificate_id,
+                removed_fields = ?item.removed_fields,
+                "normalized managed certificate TLS input"
+            );
+        }
         let v2ray_listen = extract_v2ray_listen(&document.singbox.config);
 
         let serialized = serde_json::to_vec_pretty(&document.singbox.config)
@@ -289,11 +302,241 @@ fn is_applied_revision(
     active_config_exists && applied_revision == Some(fetched_revision)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ManagedTlsNormalization {
+    inbound_index: usize,
+    certificate_id: String,
+    removed_fields: Vec<&'static str>,
+}
+
+fn normalize_managed_certificate_tls(
+    config: &mut serde_json::Map<String, serde_json::Value>,
+    state_dir: &Path,
+) -> Result<Vec<ManagedTlsNormalization>> {
+    let Some(inbounds) = config
+        .get_mut("inbounds")
+        .and_then(|value| value.as_array_mut())
+    else {
+        return Ok(Vec::new());
+    };
+    let local_root = state_dir.join("certificates");
+    let control_plane_root = Path::new(CONTROL_PLANE_CERTIFICATE_ROOT);
+    let mut normalized = Vec::new();
+
+    for (inbound_index, inbound) in inbounds.iter_mut().enumerate() {
+        let Some(tls) = inbound
+            .as_object_mut()
+            .and_then(|inbound| inbound.get_mut("tls"))
+            .and_then(|tls| tls.as_object_mut())
+        else {
+            continue;
+        };
+        let certificate_path = tls
+            .get("certificate_path")
+            .and_then(|value| value.as_str())
+            .map(str::to_owned);
+        let key_path = tls
+            .get("key_path")
+            .and_then(|value| value.as_str())
+            .map(str::to_owned);
+        let certificate_id = certificate_path
+            .as_deref()
+            .map(|path| {
+                parse_managed_material_path(path, &local_root, control_plane_root, "fullchain.pem")
+            })
+            .transpose()?
+            .flatten();
+        let key_certificate_id = key_path
+            .as_deref()
+            .map(|path| {
+                parse_managed_material_path(
+                    path,
+                    &local_root,
+                    control_plane_root,
+                    "private-key.pem",
+                )
+            })
+            .transpose()?
+            .flatten();
+
+        let certificate_id = match (certificate_id, key_certificate_id) {
+            (None, None) => continue,
+            (Some(certificate_id), Some(key_certificate_id))
+                if certificate_id == key_certificate_id =>
+            {
+                certificate_id
+            }
+            (certificate_id, key_certificate_id) => {
+                bail!(
+                    "inbound[{inbound_index}] managed certificate/key paths do not identify the same certificate: certificate={certificate_id:?}, key={key_certificate_id:?}"
+                );
+            }
+        };
+
+        let mut removed_fields = Vec::new();
+        for field in MANAGED_TLS_INLINE_FIELDS {
+            if tls.remove(field).is_some() {
+                removed_fields.push(field);
+            }
+        }
+        let current = local_root.join(&certificate_id).join("current");
+        tls.insert(
+            "certificate_path".into(),
+            serde_json::Value::String(current.join("fullchain.pem").to_string_lossy().into_owned()),
+        );
+        tls.insert(
+            "key_path".into(),
+            serde_json::Value::String(
+                current
+                    .join("private-key.pem")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        );
+        normalized.push(ManagedTlsNormalization {
+            inbound_index,
+            certificate_id,
+            removed_fields,
+        });
+    }
+    Ok(normalized)
+}
+
+fn parse_managed_material_path(
+    value: &str,
+    local_root: &Path,
+    control_plane_root: &Path,
+    expected_file: &str,
+) -> Result<Option<String>> {
+    let path = Path::new(value);
+    let relative = match path.strip_prefix(local_root) {
+        Ok(relative) => Some(relative),
+        Err(_) => path.strip_prefix(control_plane_root).ok(),
+    };
+    let Some(relative) = relative else {
+        return Ok(None);
+    };
+    let components = relative.components().collect::<Vec<_>>();
+    let [
+        std::path::Component::Normal(certificate_id),
+        std::path::Component::Normal(current),
+        std::path::Component::Normal(file),
+    ] = components.as_slice()
+    else {
+        bail!("invalid managed certificate path: {value}");
+    };
+    if *current != "current" || *file != expected_file {
+        bail!("invalid managed certificate path: {value}");
+    }
+    let certificate_id = certificate_id
+        .to_str()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("invalid managed certificate id in path: {value}"))?;
+    Ok(Some(certificate_id.to_owned()))
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use serde_json::json;
 
-    use super::{extract_v2ray_listen, is_applied_revision};
+    use super::{
+        ManagedTlsNormalization, extract_v2ray_listen, is_applied_revision,
+        normalize_managed_certificate_tls,
+    };
+
+    #[test]
+    fn managed_tls_removes_inline_material_and_uses_local_state_dir() {
+        let mut config = json!({
+            "inbounds": [{
+                "type": "vless",
+                "tls": {
+                    "enabled": true,
+                    "certificate": ["stale-certificate"],
+                    "certificate_path": "/var/lib/blossom-agent/certificates/cert-1/current/fullchain.pem",
+                    "key": ["stale-key"],
+                    "key_path": "/var/lib/blossom-agent/certificates/cert-1/current/private-key.pem",
+                    "acme": { "domain": ["legacy.example.com"] },
+                    "certificate_provider": "legacy"
+                }
+            }]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let normalized =
+            normalize_managed_certificate_tls(&mut config, Path::new("/custom/blossom-state"))
+                .unwrap();
+
+        assert_eq!(
+            normalized,
+            vec![ManagedTlsNormalization {
+                inbound_index: 0,
+                certificate_id: "cert-1".into(),
+                removed_fields: vec!["certificate", "key", "acme", "certificate_provider"],
+            }]
+        );
+        let tls = config["inbounds"][0]["tls"].as_object().unwrap();
+        assert_eq!(
+            tls["certificate_path"],
+            "/custom/blossom-state/certificates/cert-1/current/fullchain.pem"
+        );
+        assert_eq!(
+            tls["key_path"],
+            "/custom/blossom-state/certificates/cert-1/current/private-key.pem"
+        );
+        for field in ["certificate", "key", "acme", "certificate_provider"] {
+            assert!(!tls.contains_key(field));
+        }
+    }
+
+    #[test]
+    fn manual_tls_paths_are_not_modified() {
+        let mut config = json!({
+            "inbounds": [{
+                "tls": {
+                    "enabled": true,
+                    "certificate": ["manual-certificate"],
+                    "certificate_path": "/etc/sing-box/fullchain.pem",
+                    "key": ["manual-key"],
+                    "key_path": "/etc/sing-box/private-key.pem"
+                }
+            }]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let original = config.clone();
+
+        assert!(
+            normalize_managed_certificate_tls(&mut config, Path::new("/custom/state"))
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(config, original);
+    }
+
+    #[test]
+    fn mismatched_managed_certificate_paths_are_rejected() {
+        let mut config = json!({
+            "inbounds": [{
+                "tls": {
+                    "certificate_path": "/var/lib/blossom-agent/certificates/cert-1/current/fullchain.pem",
+                    "key_path": "/var/lib/blossom-agent/certificates/cert-2/current/private-key.pem"
+                }
+            }]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let error = normalize_managed_certificate_tls(&mut config, Path::new("/custom/state"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("do not identify the same certificate"));
+    }
 
     #[test]
     fn observed_but_unapplied_revision_must_be_retried() {

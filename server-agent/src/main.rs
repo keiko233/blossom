@@ -255,15 +255,17 @@ async fn sync_config(
 
     if let Err(e) = check_config(bin, config.candidate_path()).await {
         let message = e.to_string();
+        let node_id = node_id_from_error(&message, &candidate);
         error!(
             revision = %candidate.revision,
+            node_id = node_id.as_deref().unwrap_or("unknown"),
             "sing-box candidate config rejected: {message}"
         );
         status.config_state = "rejected";
         status.error = Some(ReportedError {
             phase: "preflight",
             code: "SINGBOX_CONFIG_INVALID",
-            node_id: node_id_from_error(&message, &candidate),
+            node_id,
             message,
             occurred_at: Utc::now(),
         });

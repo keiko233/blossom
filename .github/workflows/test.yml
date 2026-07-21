@@ -52,3 +52,9 @@ jobs:
 
       - name: Run tests
         run: cargo test --locked
+
+      - name: Build server agent image
+        run: docker build -t blossom/server-agent:managed-tls-test .
+
+      - name: Test managed TLS lifecycle
+        run: scripts/test-managed-tls-docker.sh blossom/server-agent:managed-tls-test
