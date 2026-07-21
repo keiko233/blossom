@@ -164,7 +164,19 @@ describe("compileServerConfig", () => {
     const enabled = makeNode("n1", "vless");
     enabled.certificateId = "cert-1";
     enabled.tlsServerName = "edge.example.com";
-    enabled.settings = { tls: { enabled: true } };
+    enabled.settings = {
+      tls: {
+        enabled: true,
+        // Historical rows can retain these service-owned values. sing-box
+        // prefers non-empty inline material over certificate_path/key_path.
+        certificate: ["stale-non-pem-certificate"],
+        certificate_path: "/legacy/fullchain.pem",
+        key: ["stale-non-pem-key"],
+        key_path: "/legacy/private-key.pem",
+        acme: { domain: ["legacy.example.com"] },
+        certificate_provider: "legacy",
+      },
+    };
 
     const config = compileServerConfig({
       inbounds: [
@@ -183,6 +195,10 @@ describe("compileServerConfig", () => {
       key_path:
         "/var/lib/blossom-agent/certificates/cert-1/current/private-key.pem",
     });
+    expect(config.inbounds[0]?.tls).not.toHaveProperty("certificate");
+    expect(config.inbounds[0]?.tls).not.toHaveProperty("key");
+    expect(config.inbounds[0]?.tls).not.toHaveProperty("acme");
+    expect(config.inbounds[0]?.tls).not.toHaveProperty("certificate_provider");
 
     const disabled = makeNode("n2", "vless");
     disabled.certificateId = "cert-1";

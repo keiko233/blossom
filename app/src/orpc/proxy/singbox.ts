@@ -5,6 +5,7 @@ import {
   isNodeRealityEnabled,
   isNodeTlsEnabled,
   protocolSupportsTls,
+  withoutManagedCertificateTlsFields,
 } from "@/orpc/proxy/sing-box-registry";
 
 /**
@@ -102,13 +103,21 @@ export function compileServerConfig(options: CompileOptions): SingboxConfig {
 }
 
 function buildInbound(node: Node, users: SingboxUser[]): Json {
-  const settings = { ...node.settings } as Json;
-  if (
-    node.certificateId &&
+  const certificateId = node.certificateId;
+  const usesManagedCertificate =
+    certificateId !== null &&
     protocolSupportsTls(node.protocol) &&
     isNodeTlsEnabled(node.settings) &&
-    !isNodeRealityEnabled(node.settings)
-  ) {
+    !isNodeRealityEnabled(node.settings);
+  // Sanitize again at the compiler boundary. Older rows may still contain
+  // inline certificate/key values that sing-box gives precedence over paths,
+  // even though current create/update handlers remove those fields on write.
+  const settings = (
+    usesManagedCertificate
+      ? withoutManagedCertificateTlsFields(node.settings)
+      : { ...node.settings }
+  ) as Json;
+  if (usesManagedCertificate) {
     const previousTls =
       typeof settings.tls === "object" &&
       settings.tls !== null &&
@@ -118,8 +127,8 @@ function buildInbound(node: Node, users: SingboxUser[]): Json {
     settings.tls = {
       ...previousTls,
       ...(node.tlsServerName ? { server_name: node.tlsServerName } : {}),
-      certificate_path: `/var/lib/blossom-agent/certificates/${node.certificateId}/current/fullchain.pem`,
-      key_path: `/var/lib/blossom-agent/certificates/${node.certificateId}/current/private-key.pem`,
+      certificate_path: `/var/lib/blossom-agent/certificates/${certificateId}/current/fullchain.pem`,
+      key_path: `/var/lib/blossom-agent/certificates/${certificateId}/current/private-key.pem`,
     };
   }
   // Managed fields override anything in the stored fragment.
