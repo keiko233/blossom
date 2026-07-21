@@ -168,11 +168,16 @@ impl ConfigManager {
             .reconcile(&document.actions)
             .await?;
 
-        if self.observed_revision.as_deref() == Some(document.singbox.revision.as_str())
-            || (self.active_path.exists()
-                && self.persisted.applied_revision.as_deref()
-                    == Some(document.singbox.revision.as_str()))
-        {
+        // Observing a revision is not the same as applying it. A candidate may
+        // have failed preflight or startup because a certificate/dependency was
+        // temporarily unavailable; treating that revision as unchanged leaves
+        // the agent heartbeating forever without a sing-box process. Only a
+        // revision backed by the committed active config can be skipped.
+        if is_applied_revision(
+            self.active_path.exists(),
+            self.persisted.applied_revision.as_deref(),
+            &document.singbox.revision,
+        ) {
             self.observed_revision = Some(document.singbox.revision);
             return Ok(FetchStatus::Unchanged(policy));
         }
@@ -276,11 +281,36 @@ fn extract_v2ray_listen(config: &serde_json::Map<String, serde_json::Value>) -> 
         .map(String::from)
 }
 
+fn is_applied_revision(
+    active_config_exists: bool,
+    applied_revision: Option<&str>,
+    fetched_revision: &str,
+) -> bool {
+    active_config_exists && applied_revision == Some(fetched_revision)
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::extract_v2ray_listen;
+    use super::{extract_v2ray_listen, is_applied_revision};
+
+    #[test]
+    fn observed_but_unapplied_revision_must_be_retried() {
+        assert!(!is_applied_revision(false, None, "revision-1"));
+        assert!(!is_applied_revision(
+            false,
+            Some("revision-1"),
+            "revision-1"
+        ));
+        assert!(!is_applied_revision(true, None, "revision-1"));
+    }
+
+    #[test]
+    fn committed_active_revision_is_unchanged() {
+        assert!(is_applied_revision(true, Some("revision-1"), "revision-1"));
+        assert!(!is_applied_revision(true, Some("revision-1"), "revision-2"));
+    }
 
     #[test]
     fn extracts_listen_when_present() {
