@@ -142,7 +142,7 @@ importers:
         version: 1.1.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(next@16.2.10(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))
       meta-json-schema:
         specifier: ^1.19.27
-        version: 1.19.27
+        version: 1.19.29
       ms:
         specifier: ^2.1.3
         version: 2.1.3
@@ -5617,9 +5617,9 @@ packages:
     resolution: {integrity: sha512-8q7VEgMJW4J8tcfVPy8g09NcQwZdbwFEqhe/WZkoIzjn/3TGDwtOCYtXGxA3O8tPzpczCCDgv+P2P5y00ZJOOg==}
     engines: {node: '>= 8'}
 
-  meta-json-schema@1.19.27:
-    resolution: {integrity: sha512-o/0G25JL42VXN0KGr34BEuDwAMmx8mZeeeXeZZufET47IyQDD2QCfsh4c3Q+htQWwnh7D1BtBK947hLakjlhew==}
-    engines: {node: '>=22', pnpm: '>=10'}
+  meta-json-schema@1.19.29:
+    resolution: {integrity: sha512-WWvLCweTYQHMpbf6ZC3d5aVA8XLDEHbn3jZZks4wi0TlnWXoxO2uIY5kb+xn4CjhM4J+g5WToQDNJmCNbliwvw==}
+    engines: {node: '>=22.12.0', pnpm: '>=10'}
 
   micromatch@4.0.8:
     resolution: {integrity: sha512-PXwfBhYu0hBCPw8Dn0E+WDYb7af3dSLVWKi3HGv84IdF4TyFoC0ysxFd0Goxw7nSv4T/PzEJQxsYsEiFCKo2BA==}
@@ -12723,7 +12723,7 @@ snapshots:
 
   merge2@1.4.1: {}
 
-  meta-json-schema@1.19.27: {}
+  meta-json-schema@1.19.29: {}
 
   micromatch@4.0.8:
     dependencies:
