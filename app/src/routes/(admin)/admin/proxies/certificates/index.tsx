@@ -350,6 +350,12 @@ function CertificatesPage() {
     expired: m.admin_certificates_state_expired(),
     not_yet_valid: m.admin_certificates_state_not_yet_valid(),
   };
+  const deployLabels = {
+    pending: m.admin_certificates_deploy_pending(),
+    installed: m.admin_certificates_deploy_installed(),
+    in_use: m.admin_certificates_deploy_in_use(),
+    error: m.admin_certificates_deploy_error(),
+  };
 
   return (
     <div className="space-y-6 p-4">
@@ -931,12 +937,39 @@ function CertificatesPage() {
               </p>
             ) : null}
             {certificate.servers.length > 0 ? (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {certificate.servers.map((binding) => (
-                  <Badge key={binding.serverId} variant="outline">
-                    {binding.server.name} · {stateLabels[binding.state]}
-                  </Badge>
-                ))}
+              <div className="mt-3 space-y-2">
+                <p className="text-sm font-medium">
+                  {m.admin_certificates_deployment_title()}
+                </p>
+                {certificate.servers.map((binding) => {
+                  const deployment = binding.deploymentStatus;
+                  const variant =
+                    deployment.status === "error"
+                      ? "destructive"
+                      : deployment.status === "in_use"
+                        ? "default"
+                        : "outline";
+                  return (
+                    <div
+                      key={binding.serverId}
+                      className="flex items-center gap-2 rounded-lg border bg-muted/20 p-2"
+                    >
+                      <span className="min-w-0 flex-1 truncate text-sm">
+                        {binding.server.name}
+                      </span>
+                      <Badge variant={variant}>
+                        {deployLabels[deployment.status]}
+                      </Badge>
+                      {deployment.status === "error" &&
+                      (deployment.phase || deployment.message) ? (
+                        <span className="min-w-0 flex-1 truncate text-xs text-destructive">
+                          {deployment.phase ? `${deployment.phase}: ` : ""}
+                          {deployment.message}
+                        </span>
+                      ) : null}
+                    </div>
+                  );
+                })}
               </div>
             ) : null}
           </article>

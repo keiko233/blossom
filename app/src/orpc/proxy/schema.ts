@@ -35,7 +35,6 @@ const serverMetaSchema = z.object({
   address: z.string().min(1),
   configPollIntervalSeconds: z.number().int().min(5).max(86_400).default(60),
   heartbeatIntervalSeconds: z.number().int().min(5).max(300).default(30),
-  certificateIds: z.array(z.string().min(1)).default([]),
 });
 
 export const createServerSchema = serverMetaSchema;
@@ -152,35 +151,6 @@ export const updateCertificateSchema = certificatePolicyBaseSchema
   });
 export const certificateIdSchema = z.object({ id: z.string().min(1) });
 
-export const certificateEventSchema = z.object({
-  actionId: z.string().min(1),
-  certificateId: z.string().min(1),
-  generation: z.number().int().min(1),
-  state: z.enum([
-    "issuing",
-    "waiting_dns",
-    "active",
-    "renewing",
-    "error",
-    "expired",
-    "removed",
-  ]),
-  notBefore: z.iso.datetime().optional(),
-  notAfter: z.iso.datetime().optional(),
-  fingerprintSha256: z.string().max(256).optional(),
-  challenge: z
-    .array(
-      z.object({
-        name: z.string().min(1).max(512),
-        type: z.literal("TXT"),
-        value: z.string().min(1).max(2048),
-      }),
-    )
-    .max(200)
-    .optional(),
-  error: z.string().max(4096).optional(),
-});
-
 export const createImportedCertificateSchema = z.object({
   name: z.string().trim().min(1).max(128),
   fullchainPem: z
@@ -220,7 +190,25 @@ export type ReplaceImportedCertificateMaterialInput = z.infer<
 
 // --- Agent -----------------------------------------------------------------
 
+/**
+ * One certificate a server-agent has material for. Reported on every heartbeat
+ * so the control plane can acknowledge installs truthfully and stale-safely.
+ * `installed` means the agent wrote the material locally; `inUse` means the
+ * material is actually serving (loaded by sing-box / referenced by a listener).
+ */
+export const certificateDeploymentSchema = z.object({
+  certificateId: z.string().min(1),
+  generation: z.number().int().min(1),
+  fingerprintSha256: z.string().min(1).max(256),
+  installed: z.boolean(),
+  inUse: z.boolean(),
+  errorPhase: z.string().min(1).max(64).optional(),
+  errorMessage: z.string().min(1).max(16_384).optional(),
+});
+
 export const heartbeatSchema = z.object({
+  agentBuildId: z.string().min(1).max(256),
+  agentCapabilities: z.array(z.string().min(1)).max(1024),
   agentVersion: z.string().optional(),
   singBoxVersion: z.string().optional(),
   runtimeState: z
@@ -256,7 +244,58 @@ export const heartbeatSchema = z.object({
       occurredAt: z.iso.datetime().optional(),
     })
     .optional(),
+  certificateDeployments: z.array(certificateDeploymentSchema).max(10_000),
 });
+
+/**
+ * One managed TLS binding: an enabled node whose inbound serves a managed
+ * certificate. `generation` is the certificate material version the node is
+ * expected to serve; the agent matches this against `certificateArtifacts` and
+ * reports progress back through heartbeat `certificateDeployments`.
+ */
+export const managedTlsBindingSchema = z.object({
+  nodeId: z.string().min(1),
+  inboundTag: z.string().min(1),
+  certificateId: z.string().min(1),
+  generation: z.number().int().min(1),
+  serverName: z.string().nullable(),
+});
+
+/**
+ * Certificate material the agent is allowed to install on the calling server,
+ * plus the fingerprint used for acknowledgement matching. PEM bytes are carried
+ * only here (never hashed into the revision — the fingerprint stands in).
+ */
+export const certificateArtifactSchema = z.object({
+  certificateId: z.string().min(1),
+  generation: z.number().int().min(1),
+  domains: z.array(z.string().min(1)),
+  fingerprintSha256: z.string().min(1).max(256),
+  notBefore: z.string(),
+  notAfter: z.string(),
+  certificatePem: z.string().min(1),
+  privateKeyPem: z.string().min(1),
+});
+
+/**
+ * V3 agent desired-state document. Fully typed except the sing-box base config
+ * object itself, which the agent treats as opaque JSON.
+ */
+export const agentConfigV3OutputSchema = z.object({
+  apiVersion: z.literal(3),
+  agent: z.object({
+    configPollIntervalSeconds: z.number().int(),
+    heartbeatIntervalSeconds: z.number().int(),
+  }),
+  desiredRevision: z.string().min(1),
+  materializedNodeIds: z.array(z.string().min(1)),
+  singboxConfig: z.looseObject({}),
+  managedTlsBindings: z.array(managedTlsBindingSchema),
+  certificateArtifacts: z.array(certificateArtifactSchema),
+});
+
+export type AgentConfigV3Output = z.infer<typeof agentConfigV3OutputSchema>;
+export type CertificateDeployment = z.infer<typeof certificateDeploymentSchema>;
 
 /**
  * Traffic deltas the agent reads from sing-box's v2ray_api stats and reports

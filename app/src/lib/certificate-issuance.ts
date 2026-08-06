@@ -19,6 +19,7 @@ import {
   encryptCertificateSecret,
 } from "@/lib/certificate-crypto";
 import { getServerEnv } from "@/lib/env";
+import { BINDING_GENERATION_RESET_WRITE } from "@/lib/node-certificate-binding";
 
 type CertificatePolicy = typeof managedCertificate.$inferSelect;
 
@@ -184,7 +185,10 @@ async function persistMaterial(
     .where(eq(managedCertificate.id, policy.id));
   await db
     .update(certificateServer)
-    .set({ desiredGeneration: version, state: "pending", lastError: null })
+    .set({
+      desiredGeneration: version,
+      ...BINDING_GENERATION_RESET_WRITE,
+    })
     .where(eq(certificateServer.certificateId, policy.id));
 }
 

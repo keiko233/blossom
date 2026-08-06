@@ -66,99 +66,9 @@
   },
   "openapi": "3.0.3",
   "paths": {
-    "/listTodos": {
-      "post": {
-        "operationId": "listTodos",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {},
-                    {
-                      "not": {}
-                    }
-                  ]
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/addTodo": {
-      "post": {
-        "operationId": "addTodo",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "name": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "name"
-                ]
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {},
-                    {
-                      "not": {}
-                    }
-                  ]
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/agent/config": {
+    "/agent/config/v3": {
       "get": {
-        "operationId": "getAgentConfig",
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {}
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/agent/config/v2": {
-      "get": {
-        "operationId": "getAgentConfigV2",
+        "operationId": "getAgentConfigV3",
         "responses": {
           "200": {
             "description": "OK",
@@ -169,7 +79,7 @@
                   "properties": {
                     "apiVersion": {
                       "enum": [
-                        2
+                        3
                       ]
                     },
                     "agent": {
@@ -191,54 +101,125 @@
                         "heartbeatIntervalSeconds"
                       ]
                     },
-                    "singbox": {
-                      "type": "object",
-                      "properties": {
-                        "revision": {
-                          "type": "string"
-                        },
-                        "materializedNodeIds": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          }
-                        },
-                        "config": {
-                          "type": "object",
-                          "additionalProperties": {}
-                        }
-                      },
-                      "required": [
-                        "revision",
-                        "materializedNodeIds",
-                        "config"
-                      ]
+                    "desiredRevision": {
+                      "type": "string",
+                      "minLength": 1
                     },
-                    "actions": {
+                    "materializedNodeIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "singboxConfig": {
+                      "type": "object",
+                      "additionalProperties": {}
+                    },
+                    "managedTlsBindings": {
                       "type": "array",
                       "items": {
                         "type": "object",
                         "properties": {
-                          "id": {
-                            "type": "string"
+                          "nodeId": {
+                            "type": "string",
+                            "minLength": 1
                           },
-                          "type": {
-                            "type": "string"
+                          "inboundTag": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "certificateId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "generation": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "serverName": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
-                          "id",
-                          "type"
-                        ],
-                        "additionalProperties": {}
+                          "nodeId",
+                          "inboundTag",
+                          "certificateId",
+                          "generation",
+                          "serverName"
+                        ]
+                      }
+                    },
+                    "certificateArtifacts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "certificateId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "generation": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "domains": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "fingerprintSha256": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 256
+                          },
+                          "notBefore": {
+                            "type": "string"
+                          },
+                          "notAfter": {
+                            "type": "string"
+                          },
+                          "certificatePem": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "privateKeyPem": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "certificateId",
+                          "generation",
+                          "domains",
+                          "fingerprintSha256",
+                          "notBefore",
+                          "notAfter",
+                          "certificatePem",
+                          "privateKeyPem"
+                        ]
                       }
                     }
                   },
                   "required": [
                     "apiVersion",
                     "agent",
-                    "singbox",
-                    "actions"
+                    "desiredRevision",
+                    "materializedNodeIds",
+                    "singboxConfig",
+                    "managedTlsBindings",
+                    "certificateArtifacts"
                   ]
                 }
               }
@@ -257,6 +238,19 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "agentBuildId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "agentCapabilities": {
+                    "type": "array",
+                    "maxItems": 1024,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
                   "agentVersion": {
                     "type": "string"
                   },
@@ -350,120 +344,58 @@
                       "code",
                       "message"
                     ]
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "ok": {
-                      "type": "boolean"
-                    }
                   },
-                  "required": [
-                    "ok"
-                  ]
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/agent/certificates/events": {
-      "post": {
-        "operationId": "reportCertificateEvent",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "actionId": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "certificateId": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "generation": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 9007199254740991
-                  },
-                  "state": {
-                    "enum": [
-                      "issuing",
-                      "waiting_dns",
-                      "active",
-                      "renewing",
-                      "error",
-                      "expired",
-                      "removed"
-                    ],
-                    "type": "string"
-                  },
-                  "notBefore": {
-                    "type": "string",
-                    "format": "date-time"
-                  },
-                  "notAfter": {
-                    "type": "string",
-                    "format": "date-time"
-                  },
-                  "fingerprintSha256": {
-                    "type": "string",
-                    "maxLength": 256
-                  },
-                  "challenge": {
+                  "certificateDeployments": {
                     "type": "array",
-                    "maxItems": 200,
+                    "maxItems": 10000,
                     "items": {
                       "type": "object",
                       "properties": {
-                        "name": {
+                        "certificateId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "generation": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "fingerprintSha256": {
                           "type": "string",
                           "minLength": 1,
-                          "maxLength": 512
+                          "maxLength": 256
                         },
-                        "type": {
-                          "enum": [
-                            "TXT"
-                          ]
+                        "installed": {
+                          "type": "boolean"
                         },
-                        "value": {
+                        "inUse": {
+                          "type": "boolean"
+                        },
+                        "errorPhase": {
                           "type": "string",
                           "minLength": 1,
-                          "maxLength": 2048
+                          "maxLength": 64
+                        },
+                        "errorMessage": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 16384
                         }
                       },
                       "required": [
-                        "name",
-                        "type",
-                        "value"
+                        "certificateId",
+                        "generation",
+                        "fingerprintSha256",
+                        "installed",
+                        "inUse"
                       ]
                     }
-                  },
-                  "error": {
-                    "type": "string",
-                    "maxLength": 4096
                   }
                 },
                 "required": [
-                  "actionId",
-                  "certificateId",
-                  "generation",
-                  "state"
+                  "agentBuildId",
+                  "agentCapabilities",
+                  "certificateDeployments"
                 ]
               }
             }

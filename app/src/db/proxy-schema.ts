@@ -56,6 +56,14 @@ export const server = pgTable(
     agentTokenPrefix: text("agent_token_prefix").notNull(),
     lastSeenAt: timestamp("last_seen_at"),
     agentVersion: text("agent_version"),
+    // Build identity and capability surface reported by the agent on every
+    // heartbeat. `agentBuildId` is a stable build tag; `agentCapabilities`
+    // drives which V3 contract features the control plane may rely on.
+    agentBuildId: text("agent_build_id"),
+    agentCapabilities: jsonb("agent_capabilities")
+      .$type<string[]>()
+      .default([])
+      .notNull(),
     configPollIntervalSeconds: integer("config_poll_interval_seconds")
       .default(60)
       .notNull(),
@@ -219,8 +227,9 @@ export const node = pgTable(
     listenPort: integer("listen_port").notNull(),
 
     protocol: text("protocol").$type<NodeProtocol>().notNull(),
-    // Managed certificate selection. Null keeps legacy inline/path/acme TLS
-    // settings untouched for backwards compatibility.
+    // Managed certificate selection. Raw X.509 material (certificate/key/path/
+    // acme) and the raw `server_name` are never stored in `settings` — the
+    // certificate service and this explicit SNI field own them.
     certificateId: text("certificate_id").references(
       () => managedCertificate.id,
       { onDelete: "restrict" },
@@ -272,6 +281,16 @@ export const certificateServer = pgTable(
       .notNull(),
     desiredGeneration: integer("desired_generation").default(1).notNull(),
     appliedGeneration: integer("applied_generation"),
+    // Truthful, stale-safe acknowledgement state reported by the agent via
+    // heartbeat `certificateDeployments`. `installedGeneration`/fingerprint/at
+    // record which material the agent has written locally; `inUseAt` marks the
+    // moment the binding started actively serving it. `appliedGeneration` and
+    // `state` become "active" only while a matching deployment is in use.
+    installedGeneration: integer("installed_generation"),
+    installedFingerprintSha256: text("installed_fingerprint_sha256"),
+    installedAt: timestamp("installed_at"),
+    inUseAt: timestamp("in_use_at"),
+    lastErrorPhase: text("last_error_phase"),
     lastError: text("last_error"),
     lastActionId: text("last_action_id"),
     updatedAt: timestamp("updated_at")

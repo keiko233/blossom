@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull, lt, or } from "drizzle-orm";
+import { and, asc, eq, gt, isNull, lt, or } from "drizzle-orm";
 
 import { db } from "@/db";
 import { user } from "@/db/auth-schema";
@@ -206,7 +206,11 @@ export async function getNodeActiveSubscriptions(
           lt(subscription.trafficUsedBytes, subscription.trafficQuotaBytes),
         ),
       ),
-    );
+    )
+    // Deterministic user ordering: the compiled sing-box `users` array feeds
+    // the V3 desired revision, so identical entitlement snapshots must produce
+    // byte-identical output regardless of query plan.
+    .orderBy(asc(subscription.id));
 
   // Overlapping groups across plans produce duplicate rows; dedupe by id.
   const byId = new Map<string, Subscription>();

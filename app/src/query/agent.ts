@@ -65,6 +65,12 @@ export async function updateAgentHeartbeat(
       ...(input.agentVersion !== undefined
         ? { agentVersion: input.agentVersion }
         : {}),
+      ...(input.agentBuildId !== undefined
+        ? { agentBuildId: input.agentBuildId }
+        : {}),
+      ...(input.agentCapabilities !== undefined
+        ? { agentCapabilities: input.agentCapabilities }
+        : {}),
       ...(input.singBoxVersion !== undefined
         ? { singBoxVersion: input.singBoxVersion }
         : {}),

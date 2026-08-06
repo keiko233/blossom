@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { objectShape, unwrap } from "@/components/schema-form/introspect";
 import type { Node } from "@/db/proxy-schema";
 
-import { withoutManagedCertificateTlsFields } from "./sing-box-registry";
+import { settingsSchemaFor, withoutNodeTlsMaterial } from "./sing-box-registry";
 import { compileServerConfig, type NodeInbound } from "./singbox";
 import { encodeTrafficUser } from "./traffic-user-codec";
 
@@ -27,9 +28,29 @@ function makeNode(id: string, protocol: string): Node {
 }
 
 describe("compileServerConfig", () => {
+  it("exposes the TLS `enabled` gate and the service-owned material fields in the vless schema", () => {
+    // The form introspects `settingsSchemaFor(protocol).shape.tls`: `enabled`
+    // is the dependency gate rendered by the TLS panel, and the material fields
+    // must exist in the raw schema so hiding them is meaningful.
+    const shape = objectShape(
+      unwrap(settingsSchemaFor("vless").shape.tls).inner,
+    ) as Record<string, unknown>;
+    expect(shape.enabled).toBeDefined();
+    for (const key of [
+      "server_name",
+      "certificate",
+      "certificate_path",
+      "key",
+      "key_path",
+      "acme",
+    ]) {
+      expect(shape[key]).toBeDefined();
+    }
+  });
+
   it("removes certificate-service-owned TLS fields while preserving node TLS options", () => {
     expect(
-      withoutManagedCertificateTlsFields({
+      withoutNodeTlsMaterial({
         tls: {
           enabled: true,
           server_name: "legacy.example.com",
@@ -50,6 +71,48 @@ describe("compileServerConfig", () => {
         min_version: "1.2",
       },
     });
+  });
+
+  it("strips X.509 material from a TLS node even without a managed certificate", () => {
+    const manual = makeNode("manual", "vless");
+    manual.certificateId = null;
+    manual.settings = {
+      tls: {
+        enabled: true,
+        server_name: "manual.example.com",
+        certificate_path: "/etc/sing-box/manual-fullchain.pem",
+        key_path: "/etc/sing-box/manual-private-key.pem",
+        min_version: "1.2",
+      },
+    };
+
+    const config = compileServerConfig({
+      inbounds: [
+        {
+          node: manual,
+          users: [{ name: encodeTrafficUser("manual", "s1"), uuid: UUID_A }],
+        },
+      ],
+    }) as unknown as { inbounds: { tls: Record<string, unknown> }[] };
+
+    // Manual node X.509 is gone: material and the raw server_name are never
+    // emitted from settings. Only the explicit SNI column may inject one, and
+    // this node has none.
+    expect(config.inbounds[0]?.tls).toMatchObject({
+      enabled: true,
+      min_version: "1.2",
+    });
+    for (const key of [
+      "server_name",
+      "certificate",
+      "key",
+      "certificate_path",
+      "key_path",
+      "acme",
+      "certificate_provider",
+    ]) {
+      expect(config.inbounds[0]?.tls).not.toHaveProperty(key);
+    }
   });
 
   it("compiles one inbound per node, each with its own tag", () => {
@@ -160,15 +223,18 @@ describe("compileServerConfig", () => {
     expect(config.experimental).toBeUndefined();
   });
 
-  it("injects managed certificate paths only when the protocol TLS block is enabled", () => {
+  it("emits no certificate material or paths in the base config for managed TLS nodes", () => {
     const enabled = makeNode("n1", "vless");
     enabled.certificateId = "cert-1";
     enabled.tlsServerName = "edge.example.com";
     enabled.settings = {
       tls: {
         enabled: true,
-        // Historical rows can retain these service-owned values. sing-box
-        // prefers non-empty inline material over certificate_path/key_path.
+        min_version: "1.2",
+        alpn: ["h2"],
+        // Historical rows can retain service-owned values. sing-box prefers
+        // non-empty inline material over certificate_path/key_path; the V3
+        // compiler must strip all of them from the base config.
         certificate: ["stale-non-pem-certificate"],
         certificate_path: "/legacy/fullchain.pem",
         key: ["stale-non-pem-key"],
@@ -190,19 +256,33 @@ describe("compileServerConfig", () => {
     expect(config.inbounds[0]?.tls).toMatchObject({
       enabled: true,
       server_name: "edge.example.com",
-      certificate_path:
-        "/var/lib/blossom-agent/certificates/cert-1/current/fullchain.pem",
-      key_path:
-        "/var/lib/blossom-agent/certificates/cert-1/current/private-key.pem",
+      min_version: "1.2",
+      alpn: ["h2"],
     });
-    expect(config.inbounds[0]?.tls).not.toHaveProperty("certificate");
-    expect(config.inbounds[0]?.tls).not.toHaveProperty("key");
-    expect(config.inbounds[0]?.tls).not.toHaveProperty("acme");
-    expect(config.inbounds[0]?.tls).not.toHaveProperty("certificate_provider");
+    for (const key of [
+      "certificate",
+      "key",
+      "certificate_path",
+      "key_path",
+      "acme",
+      "certificate_provider",
+    ]) {
+      expect(config.inbounds[0]?.tls).not.toHaveProperty(key);
+    }
+    // The control plane must never emit agent-side certificate install paths.
+    expect(JSON.stringify(config)).not.toContain(
+      "/var/lib/blossom-agent/certificates",
+    );
 
     const disabled = makeNode("n2", "vless");
     disabled.certificateId = "cert-1";
-    disabled.settings = { tls: { enabled: false } };
+    disabled.settings = {
+      tls: {
+        enabled: false,
+        certificate_path: "/stale/fullchain.pem",
+        key_path: "/stale/private-key.pem",
+      },
+    };
     const disabledConfig = compileServerConfig({
       inbounds: [
         {
@@ -214,37 +294,7 @@ describe("compileServerConfig", () => {
     expect(disabledConfig.inbounds[0]?.tls).not.toHaveProperty(
       "certificate_path",
     );
-  });
-
-  it("preserves the complete sing-box TLS material in manual mode", () => {
-    const manual = makeNode("manual", "vless");
-    manual.certificateId = null;
-    manual.settings = {
-      tls: {
-        enabled: true,
-        server_name: "manual.example.com",
-        certificate_path: "/etc/sing-box/manual-fullchain.pem",
-        key_path: "/etc/sing-box/manual-private-key.pem",
-        min_version: "1.2",
-      },
-    };
-
-    const config = compileServerConfig({
-      inbounds: [
-        {
-          node: manual,
-          users: [{ name: encodeTrafficUser("manual", "s1"), uuid: UUID_A }],
-        },
-      ],
-    }) as unknown as { inbounds: { tls: Record<string, unknown> }[] };
-
-    expect(config.inbounds[0]?.tls).toMatchObject({
-      enabled: true,
-      server_name: "manual.example.com",
-      certificate_path: "/etc/sing-box/manual-fullchain.pem",
-      key_path: "/etc/sing-box/manual-private-key.pem",
-      min_version: "1.2",
-    });
+    expect(disabledConfig.inbounds[0]?.tls).not.toHaveProperty("key_path");
   });
 
   it("does not add TLS to a protocol whose schema has no TLS block", () => {

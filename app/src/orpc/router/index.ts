@@ -1,22 +1,15 @@
 import {
   agentHeartbeat,
-  getAgentConfig,
-  getAgentConfigV2,
-  reportCertificateEvent,
+  getAgentConfigV3,
   reportAgentTraffic,
 } from "../proxy/agent";
-import { addTodo, listTodos } from "./todos";
 
 export default {
-  listTodos,
-  addTodo,
   // Public agent surface (per-server token auth). Admin operations are server
   // functions, deliberately not exposed here.
   agent: {
-    getConfig: getAgentConfig,
-    getConfigV2: getAgentConfigV2,
+    getConfigV3: getAgentConfigV3,
     heartbeat: agentHeartbeat,
-    reportCertificateEvent,
     reportTraffic: reportAgentTraffic,
   },
 };

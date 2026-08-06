@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
 import type { NewTrafficRecord } from "@/db/traffic-schema";
@@ -13,19 +13,26 @@ import {
   updateAgentHeartbeat,
 } from "@/query/agent";
 import {
+  applyAgentCertificateDeployments,
   getCertificateAgentContext,
-  recordCertificateAgentEvent,
 } from "@/query/certificate-agent";
 import { getNodeActiveSubscriptions } from "@/query/subscription-access";
 
 import { base } from "../base";
-import { certificateActionFor } from "./certificate-actions";
 import {
-  certificateEventSchema,
+  agentConfigV3OutputSchema,
   heartbeatSchema,
   trafficReportSchema,
 } from "./schema";
-import { compileServerConfig, type NodeInbound } from "./singbox";
+import {
+  buildCertificateArtifacts,
+  buildGenerationByCertificateId,
+  buildManagedTlsBindings,
+  compileServerConfig,
+  computeDesiredRevision,
+  filterCertificateArtifactsForBindings,
+  type NodeInbound,
+} from "./singbox";
 import { buildInboundUser } from "./singbox-users";
 import { resolveReportedTrafficUser } from "./traffic-user-codec";
 
@@ -76,122 +83,83 @@ async function compileAgentServerConfig(serverId: string, enabled: boolean) {
     node: n,
     users: perNodeUsers[i]!,
   }));
+  const materialized = built.filter(({ users }) => users.length > 0);
   const config = compileServerConfig({ inbounds: built });
   return {
     config,
-    materializedNodeIds: built
-      .filter(({ users }) => users.length > 0)
-      .map(({ node }) => node.id),
+    materializedNodes: materialized.map(({ node }) => node),
+    materializedNodeIds: materialized.map(({ node }) => node.id),
   };
 }
 
 /**
- * Returns the full sing-box config JSON for the calling agent's server: every
- * enabled inbound on the server, each populated with the subscriptions that are
- * currently entitled to that node. A server whose `enabled` is false (or that
- * has no enabled nodes) still receives a valid config — one with an empty
- * `inbounds` array and the `v2ray_api` hook kept on — so the agent tears down
- * the previous configuration on next pull. Expiry, bans, quota exhaustion, and
- * credential resets all take effect here: the agent's next config pull no
- * longer contains (or contains new) credentials.
+ * Returns the full V3 agent desired state for the calling agent's server: the
+ * complete sing-box base config (every enabled inbound populated with the
+ * subscriptions currently entitled to that node), the managed TLS bindings the
+ * agent must provision certificates for, the certificate artifacts it may
+ * install, and a `desiredRevision` that changes exactly when that desired
+ * state changes. A disabled server (or one with no enabled nodes) still
+ * receives a valid config — with an empty `inbounds` array and the `v2ray_api`
+ * hook kept on — so the agent tears down the previous configuration on next
+ * pull. Expiry, bans, quota exhaustion, and credential resets all take effect
+ * here: the agent's next pull no longer contains (or contains new) credentials.
  *
- * The explicit route/operationId/output metadata keeps the generated OpenAPI
- * spec consumable by progenitor (the agent's Rust client codegen): progenitor
- * names methods after operationIds and needs a response schema. The output is a
- * loose object on purpose — the agent treats the config as opaque JSON.
+ * The base sing-box config never carries certificate material or on-disk
+ * certificate paths; `managedTlsBindings` + `certificateArtifacts` describe
+ * the certificate work the agent must do. Everything except the sing-box base
+ * config object is fully typed by Zod for the generated OpenAPI spec consumed
+ * by progenitor (the agent's Rust client codegen).
  */
-export const getAgentConfig = agentProcedure
+export const getAgentConfigV3 = agentProcedure
   .route({
     method: "GET",
-    path: "/agent/config",
-    operationId: "getAgentConfig",
+    path: "/agent/config/v3",
+    operationId: "getAgentConfigV3",
   })
-  .output(z.looseObject({}))
+  .output(agentConfigV3OutputSchema)
   .handler(async ({ context }) => {
-    // A disabled server is still authenticated and heartbeated; its config has
-    // no inbounds so the agent stops serving traffic. Nodes that are disabled
-    // are skipped here so only live inbounds are compiled. Order by id for a
-    // stable `inbounds` array so identical entitlement snapshots never produce a
-    // spurious config diff that would re-hot-reload the agent.
-    return (
-      await compileAgentServerConfig(context.server.id, context.server.enabled)
-    ).config;
-  });
+    const [
+      { config, materializedNodes, materializedNodeIds },
+      certificateContext,
+    ] = await Promise.all([
+      compileAgentServerConfig(context.server.id, context.server.enabled),
+      getCertificateAgentContext(context.server.id),
+    ]);
 
-const agentConfigV2Output = z.object({
-  apiVersion: z.literal(2),
-  agent: z.object({
-    configPollIntervalSeconds: z.number().int(),
-    heartbeatIntervalSeconds: z.number().int(),
-  }),
-  singbox: z.object({
-    revision: z.string(),
-    materializedNodeIds: z.array(z.string()),
-    config: z.looseObject({}),
-  }),
-  // Reserved for future idempotent control-plane instructions. V2 agents keep
-  // this as loose JSON and ignore action types they do not understand.
-  actions: z.array(
-    z.looseObject({
-      id: z.string(),
-      type: z.string(),
-    }),
-  ),
-});
+    // Desired generation per certificate as seen by this server, derived only
+    // from enabled bindings so a node never looks managed without a matching
+    // artifact.
+    const generationByCertificateId =
+      buildGenerationByCertificateId(certificateContext);
 
-export const getAgentConfigV2 = agentProcedure
-  .route({
-    method: "GET",
-    path: "/agent/config/v2",
-    operationId: "getAgentConfigV2",
-  })
-  .output(agentConfigV2Output)
-  .handler(async ({ context }) => {
-    const [{ config, materializedNodeIds }, certificateContext] =
-      await Promise.all([
-        compileAgentServerConfig(context.server.id, context.server.enabled),
-        getCertificateAgentContext(context.server.id),
-      ]);
-    const actions = certificateContext
-      .map((item) => certificateActionFor(item, context.server.id))
-      .filter(
-        (
-          action,
-        ): action is { id: string; type: string } & Record<string, unknown> =>
-          action !== null,
-      );
-    const certificateRevisions = certificateContext.map(
-      ({ certificate, binding }) => ({
-        id: certificate.id,
-        desiredGeneration: binding.desiredGeneration,
-        appliedGeneration: binding.appliedGeneration,
-      }),
+    const managedTlsBindings = buildManagedTlsBindings(
+      materializedNodes,
+      generationByCertificateId,
     );
-    const revision = `sha256:${createHash("sha256")
-      .update(JSON.stringify({ config, certificateRevisions }))
-      .digest("hex")}`;
+    const certificateArtifacts = filterCertificateArtifactsForBindings(
+      buildCertificateArtifacts(certificateContext),
+      managedTlsBindings,
+    );
+
+    const desiredRevision = computeDesiredRevision(
+      config,
+      managedTlsBindings,
+      certificateArtifacts,
+      materializedNodeIds,
+    );
+
     return {
-      apiVersion: 2 as const,
+      apiVersion: 3 as const,
       agent: {
         configPollIntervalSeconds: context.server.configPollIntervalSeconds,
         heartbeatIntervalSeconds: context.server.heartbeatIntervalSeconds,
       },
-      singbox: { revision, materializedNodeIds, config },
-      actions,
+      desiredRevision,
+      materializedNodeIds,
+      singboxConfig: config,
+      managedTlsBindings,
+      certificateArtifacts,
     };
-  });
-
-export const reportCertificateEvent = agentProcedure
-  .route({
-    method: "POST",
-    path: "/agent/certificates/events",
-    operationId: "reportCertificateEvent",
-  })
-  .input(certificateEventSchema)
-  .output(z.object({ ok: z.boolean() }))
-  .handler(async ({ context, input }) => {
-    await recordCertificateAgentEvent(context.server.id, input);
-    return { ok: true };
   });
 
 export const agentHeartbeat = agentProcedure
@@ -204,6 +172,10 @@ export const agentHeartbeat = agentProcedure
   .output(z.object({ ok: z.boolean() }))
   .handler(async ({ context, input }) => {
     await updateAgentHeartbeat(context.server.id, input);
+    await applyAgentCertificateDeployments(
+      context.server.id,
+      input.certificateDeployments,
+    );
     return { ok: true };
   });
 

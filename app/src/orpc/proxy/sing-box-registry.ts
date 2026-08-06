@@ -53,7 +53,12 @@ export const MANAGED_FIELDS = [
   "users",
 ] as const;
 
-/** Certificate material is always selected from the certificate service. */
+/**
+ * Raw X.509 material fields sing-box's inbound TLS block can carry. Manual
+ * node X.509 ownership is removed: these values are never user-editable, never
+ * stored, and always stripped from the stored `settings` fragment and the
+ * compiled config. The certificate service is the only source of this material.
+ */
 export const MANAGED_CERTIFICATE_MATERIAL_TLS_FIELDS = [
   "certificate",
   "certificate_path",
@@ -63,7 +68,12 @@ export const MANAGED_CERTIFICATE_MATERIAL_TLS_FIELDS = [
   "certificate_provider",
 ] as const;
 
-/** TLS values owned by the certificate service once a node selects a certificate. */
+/**
+ * TLS values owned by the control plane rather than the raw schema: the X.509
+ * material above plus `server_name`, which is an explicit managed SNI field
+ * (`node.tlsServerName`) rather than a schema field. All of these are hidden
+ * from the generated form and stripped from settings on every write.
+ */
 export const MANAGED_CERTIFICATE_TLS_FIELDS = [
   "server_name",
   ...MANAGED_CERTIFICATE_MATERIAL_TLS_FIELDS,
@@ -159,20 +169,11 @@ export function isNodeRealityEnabled(
   return objectValue(tls?.reality)?.enabled === true;
 }
 
-/** Remove inline/path certificate settings so only the managed columns are authoritative. */
-export function withoutManagedCertificateTlsFields(
-  settings: Record<string, unknown>,
-): Record<string, unknown> {
-  const sanitized = withoutCertificateMaterialTlsFields(settings);
-  const tls = objectValue(sanitized.tls);
-  if (tls) {
-    delete tls.server_name;
-  }
-  return sanitized;
-}
-
-/** Remove every raw certificate/key source while retaining non-material TLS options. */
-function withoutCertificateMaterialTlsFields(
+/**
+ * Remove every raw certificate/key source (inline PEM, path, acme) while
+ * retaining non-material TLS options.
+ */
+export function withoutCertificateMaterialTlsFields(
   settings: Record<string, unknown>,
 ): Record<string, unknown> {
   const sanitized = structuredClone(settings);
@@ -181,6 +182,23 @@ function withoutCertificateMaterialTlsFields(
     for (const key of MANAGED_CERTIFICATE_MATERIAL_TLS_FIELDS) {
       delete tls[key];
     }
+  }
+  return sanitized;
+}
+
+/**
+ * The node-level TLS settings never carry X.509 material or a raw `server_name`:
+ * the certificate service and the explicit SNI field own those values. Always
+ * strips them, whether or not a managed certificate is selected, so
+ * historical/manual material cannot survive a node write or the compiler.
+ */
+export function withoutNodeTlsMaterial(
+  settings: Record<string, unknown>,
+): Record<string, unknown> {
+  const sanitized = withoutCertificateMaterialTlsFields(settings);
+  const tls = objectValue(sanitized.tls);
+  if (tls) {
+    delete tls.server_name;
   }
   return sanitized;
 }

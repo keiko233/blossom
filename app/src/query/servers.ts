@@ -1,15 +1,9 @@
 import { createServerFn } from "@tanstack/react-start";
-import { and, count, desc, eq, inArray } from "drizzle-orm";
+import { count, desc, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
 import { db } from "@/db";
-import {
-  certificateServer,
-  managedCertificate,
-  node,
-  server,
-  type Server,
-} from "@/db/proxy-schema";
+import { node, server, type Server } from "@/db/proxy-schema";
 import { generateAgentToken } from "@/lib/agent-token";
 import { ensureAdmin } from "@/lib/ensure-admin";
 import {
@@ -25,140 +19,37 @@ export const SERVERS_QUERY_KEY = ["admin", "servers"] as const;
  * Server row as served to the admin UI. `agentTokenHash` is deliberately
  * omitted: only the non-secret `prefix` is exposed for display. The plaintext
  * token is returned exactly once on create/reset (see `createServer` /
- * `regenerateServerToken`).
+ * `regenerateServerToken`). Certificate bindings are internal deployment state
+ * derived from node use and never carried on the server DTO.
  */
-export type ServerDTO = Omit<Server, "agentTokenHash"> & {
-  certificateIds?: string[];
-};
+export type ServerDTO = Omit<Server, "agentTokenHash">;
 
 /** Server summary joined with the live child-node count for the list UI. */
 export interface ServerListItem extends ServerDTO {
   nodeCount: number;
 }
 
-function toDTO(row: Server, certificateIds: string[] = []): ServerDTO {
+function toDTO(row: Server): ServerDTO {
   const { agentTokenHash: _agentTokenHash, ...rest } = row;
-  return { ...rest, certificateIds };
-}
-
-async function certificateIdsByServer(): Promise<Map<string, string[]>> {
-  const rows = await db
-    .select({
-      serverId: certificateServer.serverId,
-      certificateId: certificateServer.certificateId,
-      enabled: certificateServer.enabled,
-    })
-    .from(certificateServer);
-  const result = new Map<string, string[]>();
-  for (const row of rows) {
-    if (!row.enabled) continue;
-    result.set(row.serverId, [
-      ...(result.get(row.serverId) ?? []),
-      row.certificateId,
-    ]);
-  }
-  return result;
-}
-
-async function validateCertificateIds(certificateIds: string[]) {
-  if (certificateIds.length === 0) return;
-  const rows = await db
-    .select({ id: managedCertificate.id })
-    .from(managedCertificate)
-    .where(inArray(managedCertificate.id, certificateIds));
-  if (rows.length !== certificateIds.length) {
-    throw new Error("One or more certificates do not exist");
-  }
-}
-
-async function syncServerCertificates(serverId: string, ids: string[]) {
-  const certificateIds = [...new Set(ids)];
-  await validateCertificateIds(certificateIds);
-  const current = await db
-    .select({
-      certificateId: certificateServer.certificateId,
-      enabled: certificateServer.enabled,
-    })
-    .from(certificateServer)
-    .where(eq(certificateServer.serverId, serverId));
-  const currentIds = new Set(current.map((item) => item.certificateId));
-  const used = await db
-    .select({ certificateId: node.certificateId })
-    .from(node)
-    .where(eq(node.serverId, serverId));
-  const allowed = new Set(certificateIds);
-  if (
-    used.some((item) => item.certificateId && !allowed.has(item.certificateId))
-  ) {
-    throw new Error("A certificate still assigned to a node cannot be removed");
-  }
-  const removed = current.filter(
-    (item) => item.enabled && !allowed.has(item.certificateId),
-  );
-  const removing = removed.map((item) => item.certificateId);
-  if (removing.length > 0) {
-    await db
-      .update(certificateServer)
-      .set({ enabled: false, state: "pending", lastError: null })
-      .where(
-        and(
-          eq(certificateServer.serverId, serverId),
-          inArray(certificateServer.certificateId, removing),
-        ),
-      );
-  }
-  const reenabled = current
-    .filter((item) => !item.enabled && allowed.has(item.certificateId))
-    .map((item) => item.certificateId);
-  if (reenabled.length > 0) {
-    await db
-      .update(certificateServer)
-      .set({ enabled: true, state: "pending", lastError: null })
-      .where(
-        and(
-          eq(certificateServer.serverId, serverId),
-          inArray(certificateServer.certificateId, reenabled),
-        ),
-      );
-  }
-  const added = certificateIds.filter(
-    (certificateId) => !currentIds.has(certificateId),
-  );
-  if (added.length > 0) {
-    const certificates = await db
-      .select({
-        id: managedCertificate.id,
-        generation: managedCertificate.desiredGeneration,
-      })
-      .from(managedCertificate)
-      .where(inArray(managedCertificate.id, added));
-    await db.insert(certificateServer).values(
-      certificates.map((certificate) => ({
-        serverId,
-        certificateId: certificate.id,
-        desiredGeneration: certificate.generation,
-      })),
-    );
-  }
+  return rest;
 }
 
 export const listServers = createServerFn({ method: "GET" }).handler(
   async () => {
     await ensureAdmin();
-    const [servers, nodeCounts, certificateIds] = await Promise.all([
+    const [servers, nodeCounts] = await Promise.all([
       db.select().from(server).orderBy(desc(server.createdAt)),
       db
         .select({ serverId: node.serverId, count: count() })
         .from(node)
         .groupBy(node.serverId),
-      certificateIdsByServer(),
     ]);
 
     const countByServer = new Map(
       nodeCounts.map((row) => [row.serverId, row.count]),
     );
     const result: ServerListItem[] = servers.map((row) => ({
-      ...toDTO(row, certificateIds.get(row.id) ?? []),
+      ...toDTO(row),
       nodeCount: countByServer.get(row.id) ?? 0,
     }));
     return result;
@@ -173,8 +64,7 @@ export const getServer = createServerFn({ method: "GET" })
     if (!row) {
       throw new Error("Not found");
     }
-    const certificateIds = await certificateIdsByServer();
-    return toDTO(row, certificateIds.get(row.id) ?? []);
+    return toDTO(row);
   });
 
 export const createServer = createServerFn({ method: "POST" })
@@ -183,28 +73,25 @@ export const createServer = createServerFn({ method: "POST" })
     await ensureAdmin();
     const credential = generateAgentToken();
 
-    const { certificateIds, ...serverData } = data;
-    await validateCertificateIds(certificateIds);
     const [row] = await db
       .insert(server)
       .values({
         id: randomUUID(),
-        ...serverData,
+        ...data,
         agentTokenHash: credential.hash,
         agentTokenPrefix: credential.prefix,
       })
       .returning();
-    await syncServerCertificates(row!.id, certificateIds);
 
     // Plaintext token is returned once here and never persisted.
-    return { server: toDTO(row!, certificateIds), token: credential.token };
+    return { server: toDTO(row!), token: credential.token };
   });
 
 export const updateServer = createServerFn({ method: "POST" })
   .validator(updateServerSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
-    const { id, certificateIds, ...rest } = data;
+    const { id, ...rest } = data;
 
     const [row] = await db
       .update(server)
@@ -215,11 +102,7 @@ export const updateServer = createServerFn({ method: "POST" })
     if (!row) {
       throw new Error("Not found");
     }
-    if (certificateIds !== undefined) {
-      await syncServerCertificates(id, certificateIds);
-    }
-    const bindings = await certificateIdsByServer();
-    return toDTO(row, bindings.get(id) ?? []);
+    return toDTO(row);
   });
 
 /**

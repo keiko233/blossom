@@ -1,4 +1,3 @@
-import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { ArrowLeftIcon } from "lucide-react";
 import type React from "react";
@@ -8,7 +7,6 @@ import {
   PageHeaderTitle,
 } from "@/components/app-shell/page-header";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -21,7 +19,6 @@ import {
 } from "@/components/ui/number-field";
 import { Switch } from "@/components/ui/switch";
 import { m } from "@/paraglide/messages";
-import { CERTIFICATES_QUERY_KEY, listCertificates } from "@/query/certificates";
 import type { ServerDTO } from "@/query/servers";
 
 import { TokenRevealDialog } from "./token-reveal-dialog";
@@ -39,10 +36,6 @@ export function ServerFormPage({
 }: ServerFormPageProps): React.ReactElement {
   const navigate = useNavigate();
   const isEdit = Boolean(server);
-  const { data: certificates = [] } = useQuery({
-    queryKey: CERTIFICATES_QUERY_KEY,
-    queryFn: () => listCertificates(),
-  });
 
   const goToList = () => void navigate({ to: SERVERS_LIST });
 
@@ -202,59 +195,6 @@ export function ServerFormPage({
                   />
                   <Label>{m.admin_proxies_servers_field_enabled()}</Label>
                 </div>
-              )}
-            </form.Field>
-
-            <form.Field name="certificateIds">
-              {(field) => (
-                <Field>
-                  <FieldLabel>
-                    {m.admin_proxies_servers_field_certificates()}
-                  </FieldLabel>
-                  <p className="text-xs text-muted-foreground">
-                    {m.admin_proxies_servers_field_certificates_help()}
-                  </p>
-                  <div className="grid gap-2 rounded-lg border p-3 sm:grid-cols-2">
-                    {certificates.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">
-                        {m.admin_proxies_servers_field_certificates_empty()}
-                      </p>
-                    ) : (
-                      certificates.map((certificate) => {
-                        const checked = field.state.value.includes(
-                          certificate.id,
-                        );
-                        return (
-                          <label
-                            key={certificate.id}
-                            className="flex cursor-pointer items-start gap-2 rounded-md p-2 hover:bg-muted/48"
-                          >
-                            <Checkbox
-                              checked={checked}
-                              onCheckedChange={(next) =>
-                                field.handleChange(
-                                  next
-                                    ? [...field.state.value, certificate.id]
-                                    : field.state.value.filter(
-                                        (id) => id !== certificate.id,
-                                      ),
-                                )
-                              }
-                            />
-                            <span className="min-w-0 text-sm">
-                              <span className="block font-medium">
-                                {certificate.name}
-                              </span>
-                              <span className="block truncate text-xs text-muted-foreground">
-                                {certificate.domains.join(", ")}
-                              </span>
-                            </span>
-                          </label>
-                        );
-                      })
-                    )}
-                  </div>
-                </Field>
               )}
             </form.Field>
           </div>

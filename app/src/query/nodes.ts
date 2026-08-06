@@ -1,8 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, ne } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
-import { db } from "@/db";
+import { db, databaseDriver } from "@/db";
 import {
   certificateMaterial,
   certificateServer,
@@ -15,6 +15,15 @@ import {
   isCertificateCurrentlyUsable,
 } from "@/lib/certificate-domain";
 import { ensureAdmin } from "@/lib/ensure-admin";
+import { supportsInteractiveTransactions } from "@/lib/env-schema";
+import {
+  BINDING_DISABLE_WRITE,
+  bindingUpsertWrite,
+  isNewlyActivatedBinding,
+  planBindingUpsert,
+  shouldDisableBinding,
+  type BindingUpsertPlan,
+} from "@/lib/node-certificate-binding";
 import {
   createNodeSchema,
   nodeIdSchema,
@@ -25,7 +34,7 @@ import {
   isNodeRealityEnabled,
   isNodeTlsEnabled,
   protocolSupportsTls,
-  withoutManagedCertificateTlsFields,
+  withoutNodeTlsMaterial,
 } from "@/orpc/proxy/sing-box-registry";
 
 /** TanStack Query key for the admin node list. */
@@ -181,49 +190,242 @@ export const getNode = createServerFn({ method: "GET" })
     } satisfies NodeDetail;
   });
 
+// --- Managed TLS binding lifecycle ------------------------------------------
+//
+// `certificate_server` is internal deployment state derived from node use.
+// Selecting a certificate on a node ("bind and use") enables the
+// `(certificateId, serverId)` row at the certificate's current desired
+// generation with pending acknowledgement; when the node moves away, disables
+// managed TLS, is deleted, or switches server/certificate, the old binding is
+// disabled only when no other node on that server still uses the certificate.
+// node-postgres runs the whole transition in a real interactive transaction;
+// neon-http has none, so it uses reference-safe sequential ordering plus
+// evidence-based compensation for a newly created/re-enabled binding if node
+// persistence fails.
+
+type DbHandle = typeof db;
+
+async function withNodeTransaction<T>(
+  run: (tx: DbHandle) => Promise<T>,
+): Promise<T> {
+  if (supportsInteractiveTransactions(databaseDriver)) {
+    return (
+      db as unknown as {
+        transaction: <Result>(
+          callback: (tx: DbHandle) => Promise<Result>,
+        ) => Promise<Result>;
+      }
+    ).transaction(run);
+  }
+  // neon-http exposes transaction() in Drizzle's common surface, but calling it
+  // throws at runtime. Keep the same parent-first, reference-safe ordering used
+  // by the other multi-statement mutations in this app.
+  return run(db);
+}
+
+/** Whether a node actually serves a managed certificate given its protocol + settings. */
+function nodeUsesManagedCertificate(
+  protocol: string,
+  settings: Record<string, unknown>,
+): boolean {
+  return (
+    protocolSupportsTls(protocol) &&
+    isNodeTlsEnabled(settings) &&
+    !isNodeRealityEnabled(settings)
+  );
+}
+
+async function loadBinding(
+  tx: DbHandle,
+  certificateId: string,
+  serverId: string,
+) {
+  const [row] = await tx
+    .select()
+    .from(certificateServer)
+    .where(
+      and(
+        eq(certificateServer.certificateId, certificateId),
+        eq(certificateServer.serverId, serverId),
+      ),
+    );
+  return row ?? null;
+}
+
+/** The certificate's current desired generation, plus the existing binding row. */
+async function planBindingForNode(
+  tx: DbHandle,
+  serverId: string,
+  certificateId: string,
+): Promise<BindingUpsertPlan> {
+  const [policy] = await tx
+    .select({ desiredGeneration: managedCertificate.desiredGeneration })
+    .from(managedCertificate)
+    .where(eq(managedCertificate.id, certificateId));
+  if (!policy) throw new Error("Certificate not found");
+  const binding = await loadBinding(tx, certificateId, serverId);
+  return planBindingUpsert(binding, policy.desiredGeneration);
+}
+
+async function upsertBinding(
+  tx: DbHandle,
+  plan: BindingUpsertPlan,
+  certificateId: string,
+  serverId: string,
+): Promise<void> {
+  if (plan.kind === "noop") return;
+  await tx
+    .insert(certificateServer)
+    .values({ certificateId, serverId, ...bindingUpsertWrite(plan) })
+    .onConflictDoUpdate({
+      target: [certificateServer.certificateId, certificateServer.serverId],
+      set: bindingUpsertWrite(plan),
+    });
+}
+
+/** Precise count of other nodes on the server that actually serve the certificate. */
+async function countNodesUsingCertificate(
+  tx: DbHandle,
+  serverId: string,
+  certificateId: string,
+  excludingNodeId?: string,
+): Promise<number> {
+  const rows = await tx
+    .select({ protocol: node.protocol, settings: node.settings })
+    .from(node)
+    .where(
+      and(
+        eq(node.serverId, serverId),
+        eq(node.certificateId, certificateId),
+        ...(excludingNodeId ? [ne(node.id, excludingNodeId)] : []),
+      ),
+    );
+  return rows.filter((row) =>
+    nodeUsesManagedCertificate(row.protocol, row.settings),
+  ).length;
+}
+
+/** Disables the binding only if no other node on the server still uses it. */
+async function maybeDisableBinding(
+  tx: DbHandle,
+  certificateId: string,
+  serverId: string,
+  excludingNodeId: string,
+): Promise<void> {
+  const binding = await loadBinding(tx, certificateId, serverId);
+  const others = await countNodesUsingCertificate(
+    tx,
+    serverId,
+    certificateId,
+    excludingNodeId,
+  );
+  if (!shouldDisableBinding(binding, others)) return;
+  await tx
+    .update(certificateServer)
+    .set({ ...BINDING_DISABLE_WRITE })
+    .where(
+      and(
+        eq(certificateServer.certificateId, certificateId),
+        eq(certificateServer.serverId, serverId),
+      ),
+    );
+}
+
+/**
+ * neon-http compensation: a newly created or re-enabled binding was already
+ * written when node persistence failed. Re-check node references before
+ * disabling so a concurrent node that legitimately uses the certificate on the
+ * same server is never harmed; otherwise disable the row we just activated.
+ */
+async function compensateBindingAfterNodeFailure(
+  certificateId: string | null | undefined,
+  serverId: string | null | undefined,
+  plan: BindingUpsertPlan | null,
+): Promise<void> {
+  if (!certificateId || !serverId) return;
+  if (!isNewlyActivatedBinding(plan)) return;
+  const stillUsed =
+    (await countNodesUsingCertificate(db, serverId, certificateId)) > 0;
+  if (stillUsed) return;
+  await db
+    .update(certificateServer)
+    .set({ ...BINDING_DISABLE_WRITE })
+    .where(
+      and(
+        eq(certificateServer.certificateId, certificateId),
+        eq(certificateServer.serverId, serverId),
+      ),
+    );
+}
+
 export const createNode = createServerFn({ method: "POST" })
   .validator(createNodeSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
 
     await validateManagedCertificateSelection(
-      data.serverId,
       data.certificateId,
       data.tlsServerName,
-      data.enabled,
       data.protocol,
       data.settings,
     );
 
-    // No agent token is minted here — the owning server holds it.
-    const [row] = await db
-      .insert(node)
-      .values({
-        id: randomUUID(),
-        name: data.name,
-        remark: data.remark,
-        tags: data.tags,
-        enabled: data.enabled,
-        serverId: data.serverId,
-        // `null` IS a valid override ("use server.address"); only `undefined`
-        // should fall back to the schema default (empty {}).
-        address: data.address ?? null,
-        listenPort: data.listenPort,
-        protocol: data.protocol,
-        certificateId: data.certificateId ?? null,
-        tlsServerName: data.tlsServerName ?? null,
-        // Strictly re-validate the fragment against the sing-box schema for this protocol.
-        settings: parseNodeSettings(
-          data.protocol,
-          sanitizeCertificateSettings(
-            data.protocol,
-            data.settings,
-            data.certificateId,
-          ),
-        ),
-      })
-      .returning();
+    const id = randomUUID();
+    let pendingPlan: BindingUpsertPlan | null = null;
 
+    const run = async (tx: DbHandle) => {
+      if (data.certificateId) {
+        const plan = await planBindingForNode(
+          tx,
+          data.serverId,
+          data.certificateId,
+        );
+        pendingPlan = plan;
+        await upsertBinding(tx, plan, data.certificateId, data.serverId);
+      }
+      const [row] = await tx
+        .insert(node)
+        .values({
+          id,
+          name: data.name,
+          remark: data.remark,
+          tags: data.tags,
+          enabled: data.enabled,
+          serverId: data.serverId,
+          // `null` IS a valid override ("use server.address"); only `undefined`
+          // should fall back to the schema default (empty {}).
+          address: data.address ?? null,
+          listenPort: data.listenPort,
+          protocol: data.protocol,
+          certificateId: data.certificateId ?? null,
+          tlsServerName: data.tlsServerName ?? null,
+          // Strictly re-validate the fragment against the sing-box schema for
+          // this protocol, after stripping X.509 material + raw server_name.
+          settings: parseNodeSettings(
+            data.protocol,
+            withoutNodeTlsMaterial(data.settings),
+          ),
+        })
+        .returning();
+      if (!row) throw new Error("Failed to create node");
+      return row;
+    };
+
+    let row;
+    if (supportsInteractiveTransactions(databaseDriver)) {
+      row = await withNodeTransaction(run);
+    } else {
+      try {
+        row = await run(db);
+      } catch (error) {
+        await compensateBindingAfterNodeFailure(
+          data.certificateId,
+          data.serverId,
+          pendingPlan,
+        );
+        throw error;
+      }
+    }
     return { node: row };
   });
 
@@ -247,79 +449,137 @@ export const updateNode = createServerFn({ method: "POST" })
       certificateId === undefined ? existingNode.certificateId : certificateId;
     const effectiveProtocol = protocol ?? existingNode.protocol;
     const effectiveSettings = settings ?? existingNode.settings;
+    const effectiveServerId = data.serverId ?? existingNode.serverId;
+    const effectiveTlsServerName =
+      tlsServerName === undefined ? existingNode.tlsServerName : tlsServerName;
     await validateManagedCertificateSelection(
-      data.serverId ?? existingNode.serverId,
       effectiveCertificateId,
-      tlsServerName === undefined ? existingNode.tlsServerName : tlsServerName,
-      data.enabled ?? existingNode.enabled,
+      effectiveTlsServerName,
       effectiveProtocol,
       effectiveSettings,
     );
 
-    // Validating settings needs the effective protocol (may be unchanged on edit).
-    let settingsUpdate:
-      | Record<string, never>
-      | { settings: ReturnType<typeof parseNodeSettings> } = {};
-    if (
-      settings !== undefined ||
-      (certificateId !== undefined && Boolean(effectiveCertificateId))
-    ) {
-      settingsUpdate = {
-        settings: parseNodeSettings(
-          effectiveProtocol,
-          sanitizeCertificateSettings(
-            effectiveProtocol,
-            effectiveSettings,
-            effectiveCertificateId,
-          ),
-        ),
-      };
-    }
+    const usesCertificate = (
+      certificateId: string | null,
+      protocol: string,
+      settings: Record<string, unknown>,
+    ) =>
+      Boolean(certificateId) && nodeUsesManagedCertificate(protocol, settings);
 
-    // `undefined` => leave address alone; `null` => explicitly drop override and
-    // fall back to server.address; string => set override.
+    // The binding the node is moving to (if any) and the one it may be leaving.
+    const oldUses = usesCertificate(
+      existingNode.certificateId,
+      existingNode.protocol,
+      existingNode.settings,
+    );
+    const newUses = usesCertificate(
+      effectiveCertificateId,
+      effectiveProtocol,
+      effectiveSettings,
+    );
+    const newBinding = newUses
+      ? { certificateId: effectiveCertificateId!, serverId: effectiveServerId }
+      : null;
+    const oldBinding =
+      oldUses && existingNode.certificateId
+        ? {
+            certificateId: existingNode.certificateId,
+            serverId: existingNode.serverId,
+          }
+        : null;
+    const bindingChanged =
+      !newBinding ||
+      !oldBinding ||
+      newBinding.certificateId !== oldBinding.certificateId ||
+      newBinding.serverId !== oldBinding.serverId;
+
+    // Always re-sanitize and re-normalize the stored fragment: historical or
+    // manually-entered X.509 material must never survive an edit.
+    const sanitizedSettings = parseNodeSettings(
+      effectiveProtocol,
+      withoutNodeTlsMaterial(effectiveSettings),
+    );
+
+    // `undefined` => leave address alone; `null` => explicitly drop override
+    // and fall back to server.address; string => set override.
     const addressUpdate =
       address === undefined
         ? {}
         : { address: address === null ? null : address };
 
-    const [row] = await db
-      .update(node)
-      .set({
-        ...rest,
-        ...(protocol ? { protocol } : {}),
-        ...(certificateId !== undefined ? { certificateId } : {}),
-        ...(tlsServerName !== undefined ? { tlsServerName } : {}),
-        ...settingsUpdate,
-        ...addressUpdate,
-      })
-      .where(eq(node.id, id))
-      .returning();
+    let pendingPlan: BindingUpsertPlan | null = null;
+    let nodePersisted = false;
 
-    if (!row) {
-      throw new Error("Not found");
+    const run = async (tx: DbHandle) => {
+      if (newBinding) {
+        const plan = await planBindingForNode(
+          tx,
+          newBinding.serverId,
+          newBinding.certificateId,
+        );
+        pendingPlan = plan;
+        await upsertBinding(
+          tx,
+          plan,
+          newBinding.certificateId,
+          newBinding.serverId,
+        );
+      }
+      const [row] = await tx
+        .update(node)
+        .set({
+          ...rest,
+          ...(protocol ? { protocol } : {}),
+          ...(certificateId !== undefined ? { certificateId } : {}),
+          ...(tlsServerName !== undefined ? { tlsServerName } : {}),
+          settings: sanitizedSettings,
+          ...addressUpdate,
+        })
+        .where(eq(node.id, id))
+        .returning();
+      if (!row) {
+        throw new Error("Not found");
+      }
+      nodePersisted = true;
+      if (oldBinding && bindingChanged) {
+        await maybeDisableBinding(
+          tx,
+          oldBinding.certificateId,
+          oldBinding.serverId,
+          id,
+        );
+      }
+      return row;
+    };
+
+    if (supportsInteractiveTransactions(databaseDriver)) {
+      return withNodeTransaction(run);
     }
-    return row;
+    try {
+      return await run(db);
+    } catch (error) {
+      if (!nodePersisted) {
+        await compensateBindingAfterNodeFailure(
+          newBinding?.certificateId,
+          newBinding?.serverId,
+          pendingPlan,
+        );
+      }
+      throw error;
+    }
   });
 
-function sanitizeCertificateSettings(
-  protocol: string,
-  settings: Record<string, unknown>,
-  certificateId: string | null | undefined,
-): Record<string, unknown> {
-  if (!protocolSupportsTls(protocol) || !isNodeTlsEnabled(settings)) {
-    return settings;
-  }
-  return certificateId
-    ? withoutManagedCertificateTlsFields(settings)
-    : settings;
-}
-
+/**
+ * Server-side validation before a node binds a certificate. The certificate
+ * selection is no longer restricted to pre-authorized server bindings: any
+ * currently usable/issued certificate may be selected, and the bind-and-use
+ * write enables the deployment row itself. Validates protocol TLS support,
+ * TLS being enabled, Reality mutual exclusivity, certificate usability (issued
+ * material within its validity window) and SNI domain coverage.
+ */
 async function validateManagedCertificateSelection(
-  serverId: string,
   certificateId: string | null | undefined,
   tlsServerName: string | null | undefined,
-  enabled: boolean,
   protocol: string,
   settings: Record<string, unknown>,
 ): Promise<void> {
@@ -335,16 +595,12 @@ async function validateManagedCertificateSelection(
   if (isNodeRealityEnabled(settings)) {
     throw new Error("Reality cannot be combined with a managed certificate");
   }
-  const [bound] = await db
+  const [certificate] = await db
     .select({
       certificate: managedCertificate,
       materialId: certificateMaterial.id,
     })
-    .from(certificateServer)
-    .innerJoin(
-      managedCertificate,
-      eq(managedCertificate.id, certificateServer.certificateId),
-    )
+    .from(managedCertificate)
     .leftJoin(
       certificateMaterial,
       and(
@@ -355,29 +611,25 @@ async function validateManagedCertificateSelection(
         ),
       ),
     )
-    .where(
-      and(
-        eq(certificateServer.certificateId, certificateId),
-        eq(certificateServer.serverId, serverId),
-        eq(certificateServer.enabled, true),
-      ),
+    .where(eq(managedCertificate.id, certificateId));
+  if (!certificate) {
+    throw new Error("Certificate not found");
+  }
+  if (
+    !isCertificateCurrentlyUsable(
+      certificate.certificate,
+      certificate.materialId !== null,
+    )
+  ) {
+    throw new Error(
+      "The selected certificate is not issued or is not currently usable",
     );
-  if (!bound)
-    throw new Error("Certificate is not bound to the selected server");
+  }
   if (
     !tlsServerName ||
-    !certificateCoversDomain(bound.certificate.domains, tlsServerName)
+    !certificateCoversDomain(certificate.certificate.domains, tlsServerName)
   ) {
     throw new Error("TLS server name is not covered by the certificate");
-  }
-  // The agent installs certificate actions before validating and applying the
-  // sing-box config returned in the same poll. A pending server binding is
-  // therefore usable as long as the control plane has valid active material.
-  if (
-    enabled &&
-    !isCertificateCurrentlyUsable(bound.certificate, bound.materialId !== null)
-  ) {
-    throw new Error("An enabled node requires a valid issued certificate");
   }
 }
 
@@ -385,9 +637,21 @@ export const deleteNode = createServerFn({ method: "POST" })
   .validator(nodeIdSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
-    const [row] = await db.delete(node).where(eq(node.id, data.id)).returning();
-    if (!row) {
-      throw new Error("Not found");
-    }
-    return { id: row.id };
+    const run = async (tx: DbHandle) => {
+      const [row] = await tx
+        .delete(node)
+        .where(eq(node.id, data.id))
+        .returning();
+      if (!row) {
+        throw new Error("Not found");
+      }
+      if (
+        row.certificateId &&
+        nodeUsesManagedCertificate(row.protocol, row.settings)
+      ) {
+        await maybeDisableBinding(tx, row.certificateId, row.serverId, row.id);
+      }
+      return { id: row.id };
+    };
+    return withNodeTransaction(run);
   });

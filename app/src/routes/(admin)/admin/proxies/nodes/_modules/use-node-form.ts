@@ -14,7 +14,7 @@ import {
   type NodeProtocol,
   protocolSupportsTls,
   settingsSchemaFor,
-  withoutManagedCertificateTlsFields,
+  withoutNodeTlsMaterial,
 } from "@/orpc/proxy/sing-box-registry";
 import { m } from "@/paraglide/messages";
 import { createNode, NODES_QUERY_KEY, updateNode } from "@/query/nodes";
@@ -27,7 +27,6 @@ export interface NodeFormValues {
   tags: string;
   enabled: boolean;
   serverId: string;
-  tlsMode: "managed" | "manual";
   certificateId: string;
   tlsServerName: string;
   // Address override. Empty string means "no override": send `null` to the
@@ -58,7 +57,6 @@ function defaultValues(node: NodeDetail | undefined): NodeFormValues {
     tags: (node?.tags ?? []).join(", "),
     enabled: node?.enabled ?? true,
     serverId: node?.serverId ?? "",
-    tlsMode: node?.certificateId ? "managed" : "manual",
     certificateId: node?.certificateId ?? "",
     tlsServerName: node?.tlsServerName ?? "",
     address: node?.address ?? "",
@@ -70,17 +68,17 @@ function defaultValues(node: NodeDetail | undefined): NodeFormValues {
 
 function toPayload(v: NodeFormValues) {
   const usesManagedCertificate =
-    v.tlsMode === "managed" &&
     protocolSupportsTls(v.protocol) &&
     isNodeTlsEnabled(v.settings) &&
     !isNodeRealityEnabled(v.settings) &&
     Boolean(v.certificateId);
-  const settings = usesManagedCertificate
-    ? withoutManagedCertificateTlsFields(v.settings)
-    : structuredClone(v.settings);
-  const pruned = pruneSettings(settings, settingsSchemaFor(v.protocol)) as
-    | Record<string, JsonValue>
-    | undefined;
+  // X.509 material and the raw `server_name` are never node-owned: strip them
+  // from the fragment regardless of whether a certificate is selected, so
+  // manual/historical material can never survive a save.
+  const pruned = pruneSettings(
+    withoutNodeTlsMaterial(v.settings),
+    settingsSchemaFor(v.protocol),
+  ) as Record<string, JsonValue> | undefined;
   return {
     name: v.name,
     remark: v.remark || undefined,

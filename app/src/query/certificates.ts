@@ -32,6 +32,10 @@ import {
 import { ensureAdmin } from "@/lib/ensure-admin";
 import { supportsInteractiveTransactions } from "@/lib/env-schema";
 import {
+  BINDING_GENERATION_RESET_WRITE,
+  describeCertificateDeployment,
+} from "@/lib/node-certificate-binding";
+import {
   certificateIdSchema,
   certificateMaterialActionSchema,
   createCertificateSchema,
@@ -141,7 +145,15 @@ export const listCertificates = createServerFn({ method: "GET" }).handler(
             item.certificateServer.certificateId === certificate.id &&
             item.certificateServer.enabled,
         )
-        .map((item) => ({ ...item.certificateServer, server: item.server })),
+        .map((item) => ({
+          ...item.certificateServer,
+          server: item.server,
+          // Per-server deployment state derived from the truthful V3
+          // acknowledgement fields — never "in use" merely because issued.
+          deploymentStatus: describeCertificateDeployment(
+            item.certificateServer,
+          ),
+        })),
     }));
   },
 );
@@ -203,14 +215,21 @@ export const deleteCertificate = createServerFn({ method: "POST" })
       .from(node)
       .where(eq(node.certificateId, data.id));
     if (used) throw new Error("Certificate is still assigned to a node");
+    // Bindings are internal deployment state derived from node use: an enabled
+    // binding means a node on that server still uses the certificate. Disabled
+    // bindings are cleanup remnants and must not block deletion — the FK
+    // cascades them away with the certificate.
     const [binding] = await db
       .select({ serverId: certificateServer.serverId })
       .from(certificateServer)
-      .where(eq(certificateServer.certificateId, data.id));
-    if (binding) {
-      throw new Error(
-        "Certificate is still assigned to a server or awaiting removal",
+      .where(
+        and(
+          eq(certificateServer.certificateId, data.id),
+          eq(certificateServer.enabled, true),
+        ),
       );
+    if (binding) {
+      throw new Error("Certificate is still in use by a node on a server");
     }
     const [row] = await db
       .delete(managedCertificate)
@@ -405,8 +424,7 @@ async function runImportedMaterialReplace(
         .update(certificateServer)
         .set({
           desiredGeneration: targetVersion,
-          state: "pending",
-          lastError: null,
+          ...BINDING_GENERATION_RESET_WRITE,
         })
         .where(eq(certificateServer.certificateId, certificateId));
       return { activeVersion: targetVersion, pendingVersion: null };
@@ -540,8 +558,7 @@ export const activatePendingImportedCertificate = createServerFn({
         .update(certificateServer)
         .set({
           desiredGeneration: pendingVersion,
-          state: "pending",
-          lastError: null,
+          ...BINDING_GENERATION_RESET_WRITE,
         })
         .where(eq(certificateServer.certificateId, data.certificateId));
       return { activeVersion: pendingVersion };
