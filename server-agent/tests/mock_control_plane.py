@@ -12,16 +12,22 @@ class State:
     lock = threading.Lock()
     heartbeats = []
     traffic = []
+    mode = "valid"
 
 
-def v3_document(certificate_pem: str, private_key_pem: str, revision: str) -> dict:
+def v3_document(
+    certificate_pem: str, private_key_pem: str, revision: str, mode: str
+) -> dict:
+    runtime_failure = mode == "runtime-failure"
     return {
         "apiVersion": 3,
         "agent": {
             "configPollIntervalSeconds": 5,
             "heartbeatIntervalSeconds": 5,
         },
-        "desiredRevision": revision,
+        "desiredRevision": (
+            "sha256:managed-tls-runtime-failure" if runtime_failure else revision
+        ),
         "materializedNodeIds": ["node-test"],
         "singboxConfig": {
             "log": {"level": "info", "timestamp": True},
@@ -29,7 +35,10 @@ def v3_document(certificate_pem: str, private_key_pem: str, revision: str) -> di
                 {
                     "type": "vless",
                     "tag": "node-node-test",
-                    "listen": "0.0.0.0",
+                    # This TEST-NET address passes `sing-box check` but is not
+                    # assigned inside the container, so the replacement
+                    # process fails at runtime and exercises LKG rollback.
+                    "listen": "192.0.2.123" if runtime_failure else "0.0.0.0",
                     "listen_port": 18443,
                     "users": [
                         {
@@ -97,16 +106,28 @@ class Handler(BaseHTTPRequestHandler):
             with State.lock:
                 heartbeats = list(State.heartbeats)
                 traffic = list(State.traffic)
+                mode = State.mode
             self.send_json(
                 200,
                 {
                     "heartbeats": heartbeats,
                     "lastHeartbeat": heartbeats[-1] if heartbeats else None,
                     "traffic": traffic,
+                    "mode": mode,
                 },
             )
         elif self.path == "/api/agent/config/v3":
-            self.send_json(200, self.document)
+            with State.lock:
+                mode = State.mode
+            self.send_json(
+                200,
+                v3_document(
+                    self.certificate_pem,
+                    self.private_key_pem,
+                    self.revision,
+                    mode,
+                ),
+            )
         else:
             self.send_json(404, {"error": "not found"})
 
@@ -121,6 +142,14 @@ class Handler(BaseHTTPRequestHandler):
             with State.lock:
                 State.traffic.append(body)
             self.send_json(200, {"accepted": len(body.get("entries", [])), "dropped": 0})
+        elif self.path == "/control":
+            mode = body.get("mode")
+            if mode not in {"valid", "runtime-failure"}:
+                self.send_json(400, {"error": "unsupported mode"})
+                return
+            with State.lock:
+                State.mode = mode
+            self.send_json(200, {"mode": mode})
         else:
             self.send_json(404, {"error": "not found"})
 
@@ -136,9 +165,9 @@ def main() -> None:
     parser.add_argument("--revision", default="sha256:managed-tls-integration")
     args = parser.parse_args()
 
-    Handler.document = v3_document(
-        args.certificate.read_text(), args.private_key.read_text(), args.revision
-    )
+    Handler.certificate_pem = args.certificate.read_text()
+    Handler.private_key_pem = args.private_key.read_text()
+    Handler.revision = args.revision
     ThreadingHTTPServer(("0.0.0.0", args.port), Handler).serve_forever()
 
 

@@ -298,6 +298,13 @@ async fn sync_config(
                     }
                 }
             }
+            if manager.is_some() && config.applied_revision().is_some() {
+                // A successful reconcile proves the earlier transport error
+                // is no longer current. Keep runtime health separate from the
+                // config state; heartbeat will still report crash loops.
+                status.config_state = "applied";
+                status.error = None;
+            }
             return Ok(policy);
         }
         FetchStatus::Updated { policy, candidate } => (policy, candidate),
