@@ -1,5 +1,9 @@
 # syntax=docker/dockerfile:1
 
+# Build ID stamped into the agent binary (OCI revision / CI build arg). Defaults
+# to "local"; build.rs falls back to the short local git sha when unset.
+ARG BUILD_ID=local
+
 # ── Stage 1: build a full-featured sing-box from source ───────────────
 # Start with the upstream full non-CGO build tags for this exact sing-box
 # release, then add v2ray-api because the agent uses it for traffic stats.
@@ -24,6 +28,9 @@ RUN apk add --no-cache musl-dev build-base openssl-dev openssl-libs-static pkgco
 # Statically link OpenSSL so the final binary needs no shared libs at runtime.
 ENV OPENSSL_STATIC=1 OPENSSL_NO_VENDOR=1 PKG_CONFIG_ALL_STATIC=1
 
+ARG BUILD_ID
+ENV AGENT_BUILD_ID=$BUILD_ID
+
 WORKDIR /app
 # build.rs generates the API client from this spec, so it must be present before
 # any cargo build touches the crate.
@@ -41,12 +48,15 @@ FROM alpine:latest
 # ca-certificates for TLS to the blossom API; tzdata since sing-box logs local time.
 RUN apk add --no-cache ca-certificates tzdata
 
+ARG BUILD_ID
+ENV AGENT_BUILD_ID=$BUILD_ID
+ENV AGENT_SING_BOX_PATH=/usr/local/bin/sing-box
+ENV AGENT_STATE_DIR=/var/lib/blossom-agent
+
 COPY --from=singbox /out/bin/sing-box /usr/local/bin/sing-box
 COPY --from=agent   /server-agent /usr/local/bin/server-agent
 
 # The agent resolves sing-box via PATH when no explicit path is given.
-ENV AGENT_SING_BOX_PATH=/usr/local/bin/sing-box
-ENV AGENT_STATE_DIR=/var/lib/blossom-agent
 
 VOLUME ["/var/lib/blossom-agent"]
 

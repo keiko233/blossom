@@ -125,6 +125,10 @@ jobs:
           outputs: type=image,name=${{ matrix.target.image }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.target.name }}-${{ matrix.platform.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.target.name }}-${{ matrix.platform.arch }}
+          # Bake the OCI revision (commit sha) into the agent binary as its
+          # build ID; harmless for the app image which ignores it.
+          build-args: |
+            BUILD_ID=${{ github.sha }}
 
       - name: Export digest
         run: |

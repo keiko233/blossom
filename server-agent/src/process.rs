@@ -1,9 +1,8 @@
 //! Supervises the sing-box child process via processkit.
 //!
 //! A background task owns the running process: it forwards sing-box's logs to
-//! `tracing`, restarts it with backoff if it crashes, hot-reloads it on demand
-//! via SIGHUP (sing-box re-reads the same config path in place — no restart,
-//! sub-second window), and shuts the whole process tree down gracefully on exit.
+//! `tracing`, restarts it with backoff if it crashes, and shuts the whole
+//! process tree down gracefully on replacement or agent exit.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -27,8 +26,6 @@ const BACKOFF_MAX: Duration = Duration::from_secs(30);
 const HEALTHY_UPTIME: Duration = Duration::from_secs(10);
 
 enum Ctrl {
-    /// Hot-reload: SIGHUP the running sing-box so it re-reads its config file.
-    Reload(oneshot::Sender<std::result::Result<(), String>>),
     /// Graceful stop; the ack fires once the tree is down.
     Shutdown(oneshot::Sender<()>),
 }
@@ -88,20 +85,6 @@ impl SingBoxManager {
         })
     }
 
-    /// Requests an in-place config reload (SIGHUP). Fire-and-forget: the
-    /// supervisor logs the outcome.
-    pub async fn reload(&self) -> Result<()> {
-        let (ack_tx, ack_rx) = oneshot::channel();
-        self.ctrl_tx
-            .send(Ctrl::Reload(ack_tx))
-            .await
-            .map_err(|_| anyhow::anyhow!("supervisor is gone"))?;
-        ack_rx
-            .await
-            .map_err(|_| anyhow::anyhow!("reload acknowledgement dropped"))?
-            .map_err(anyhow::Error::msg)
-    }
-
     pub fn state(&self) -> ProcessState {
         match self.state.load(Ordering::Relaxed) {
             0 => ProcessState::Starting,
@@ -151,7 +134,7 @@ async fn spawn_singbox(bin: &Path, config_path: &Path) -> Result<RunningProcess>
         .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
-/// Validates a candidate with the exact sing-box binary that will reload it.
+/// Validates a candidate with the exact sing-box binary that will run it.
 /// `check` decodes and constructs the service graph without touching the live
 /// process. Output is bounded before it can be reported upstream.
 pub async fn check_config(bin: &Path, config_path: &Path) -> Result<()> {
@@ -263,11 +246,6 @@ async fn restart(
                     let _ = ack.send(());
                     return None;
                 }
-                // Ignore reloads while there is no process to signal.
-                Some(Ctrl::Reload(ack)) => {
-                    let _ = ack.send(Err("sing-box is not running".to_string()));
-                    continue;
-                }
                 None => return None,
             },
         }
@@ -292,15 +270,14 @@ enum RunOutcome {
     Exited,
 }
 
-/// Pumps one process's output to tracing until it exits or a shutdown/reload
-/// control arrives. Reload sends SIGHUP and keeps running; shutdown stops it.
+/// Pumps one process's output to tracing until it exits or a shutdown control
+/// arrives.
 async fn run_one(
     mut proc: RunningProcess,
     ctrl_rx: &mut mpsc::Receiver<Ctrl>,
     state: &Arc<AtomicU8>,
     last_error: &Arc<Mutex<Option<String>>>,
 ) -> RunOutcome {
-    let pid = proc.pid();
     let mut events = match proc.output_events() {
         Ok(events) => events,
         Err(e) => {
@@ -329,18 +306,6 @@ async fn run_one(
                 None => return RunOutcome::Exited,
             },
             ctrl = ctrl_rx.recv() => match ctrl {
-                Some(Ctrl::Reload(ack)) => {
-                    let result = reload_process(pid).map_err(|e| e.to_string());
-                    if result.is_ok() {
-                        if let Ok(mut slot) = last_error.lock() {
-                            *slot = None;
-                        }
-                        state.store(ProcessState::Starting as u8, Ordering::Relaxed);
-                        healthy_timer.as_mut().reset(tokio::time::Instant::now() + HEALTHY_UPTIME);
-                        marked_healthy = false;
-                    }
-                    let _ = ack.send(result);
-                }
                 Some(Ctrl::Shutdown(ack)) => {
                     drop(events);
                     if let Err(e) = proc.shutdown(SHUTDOWN_GRACE).await {
@@ -357,31 +322,6 @@ async fn run_one(
                 }
             },
         }
-    }
-}
-
-/// Sends SIGHUP so sing-box hot-reloads its config file in place. On non-Unix
-/// there is no SIGHUP; the supervisor would need a stop+start, but the agent
-/// targets Unix hosts, so this is a hard error there.
-fn reload_process(pid: Option<u32>) -> Result<()> {
-    let Some(pid) = pid else {
-        anyhow::bail!("cannot reload: sing-box pid unknown");
-    };
-
-    #[cfg(unix)]
-    {
-        use nix::sys::signal::{Signal, kill};
-        use nix::unistd::Pid;
-        kill(Pid::from_raw(pid as i32), Signal::SIGHUP)
-            .with_context(|| format!("failed to send SIGHUP to sing-box pid {pid}"))?;
-        info!("sent SIGHUP to sing-box (pid {pid}); awaiting healthy reload");
-        Ok(())
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = pid;
-        anyhow::bail!("SIGHUP reload is only supported on Unix");
     }
 }
 

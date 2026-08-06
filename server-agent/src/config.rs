@@ -1,24 +1,38 @@
-//! Fetches the server's combined multi-inbound sing-box config from the blossom
-//! API and materialises it on disk. The control plane validates the config; the
-//! agent only interprets the two pieces it owns locally: the v2ray API listen
-//! address and managed-certificate paths. The latter are normalized to the
-//! configured state directory so stale inline material can never override files
-//! the agent has validated and installed.
+//! Fetches the V3 desired-state document, reconciles certificate artifacts and
+//! managed-TLS bindings into the base `singboxConfig`, and materializes it on
+//! disk. The control plane validates the config; the agent owns the two pieces
+//! that must be local and validated: the v2ray API listen address and managed
+//! certificate paths.
+//!
+//! Lifecycle rules enforced here:
+//!
+//! - `singboxConfig` is a base config. Every `managedTlsBinding` is matched by
+//!   exact `inboundTag`, its artifact is looked up by exact `certificateId` +
+//!   `generation`, and only local `certificate_path`/`key_path` are injected.
+//!   Inline material and control-plane paths in the base config are never
+//!   trusted.
+//! - Artifacts are validated and staged to `generation-<n>` directories before
+//!   the candidate is written, and the candidate is written before
+//!   `sing-box check`. Active/LKG references only move after preflight passes.
+//! - `installed` is reported as soon as material is staged and validated;
+//!   `inUse` only after the candidate survives probation and is committed.
+//! - An equal `desiredRevision` is skipped only while the active config still
+//!   parses and every referenced generation/fingerprint still validates.
+//!   Otherwise the agent self-heals and re-applies.
 
+use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
-use chrono::{DateTime, Utc};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 
-use crate::certificate::CertificateManager;
-use crate::client::Client;
-
-const CONTROL_PLANE_CERTIFICATE_ROOT: &str = "/var/lib/blossom-agent/certificates";
-const MANAGED_TLS_INLINE_FIELDS: [&str; 4] = ["certificate", "key", "acme", "certificate_provider"];
+use crate::certificate::{
+    CertificateManager, CertificateRef, FULLCHAIN_FILE, GENERATION_DIR_PREFIX, PRIVATE_KEY_FILE,
+};
+use crate::client::{Client, types};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AgentPolicy {
@@ -31,10 +45,9 @@ pub struct CandidateConfig {
     pub revision: String,
     pub materialized_node_ids: Vec<String>,
     pub v2ray_listen: Option<String>,
+    pub referenced_generations: Vec<CertificateRef>,
 }
 
-/// Whether a fetch produced a new candidate config. Policy is returned on every
-/// fetch so server-side interval changes take effect without reloading sing-box.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FetchStatus {
     Updated {
@@ -44,11 +57,56 @@ pub enum FetchStatus {
     Unchanged(AgentPolicy),
 }
 
+/// Structured reconcile failure mapped onto the top-level heartbeat error.
+#[derive(Debug, Clone)]
+pub struct ConfigError {
+    pub phase: &'static str,
+    pub code: &'static str,
+    pub message: String,
+    pub node_id: Option<String>,
+}
+
+impl ConfigError {
+    pub fn new(
+        phase: &'static str,
+        code: &'static str,
+        message: impl Into<String>,
+        node_id: Option<String>,
+    ) -> Self {
+        Self {
+            phase,
+            code,
+            message: message.into(),
+            node_id,
+        }
+    }
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}: {}", self.code, self.message)
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeploymentRecord {
+    pub certificate_id: String,
+    pub generation: u64,
+    pub fingerprint_sha256: String,
+    pub installed: bool,
+    pub in_use: bool,
+    pub error_phase: Option<String>,
+    pub error_message: Option<String>,
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct PersistedState {
     applied_revision: Option<String>,
     active_node_ids: Vec<String>,
-    applied_at: Option<DateTime<Utc>>,
+    applied_at: Option<chrono::DateTime<chrono::Utc>>,
+    deployments: Vec<DeploymentRecord>,
 }
 
 pub struct ConfigManager {
@@ -62,6 +120,8 @@ pub struct ConfigManager {
     observed_revision: Option<String>,
     persisted: PersistedState,
     v2ray_listen: Option<String>,
+    needs_reapply: bool,
+    startup_error: Option<String>,
 }
 
 impl ConfigManager {
@@ -78,30 +138,50 @@ impl ConfigManager {
         let candidate_path = state_dir.join("candidate.json");
         let last_good_path = state_dir.join("last-known-good.json");
         let state_path = state_dir.join("state.json");
-        let persisted = std::fs::read(&state_path)
+        let persisted: PersistedState = std::fs::read(&state_path)
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
 
-        // A previous failed promotion may have left active.json unusable. The
-        // committed LKG is authoritative across agent restarts.
-        if last_good_path.exists() {
-            replace_from(
-                &last_good_path,
-                &active_path,
-                &state_dir.join("active.json.restore"),
-            )?;
-        } else if active_path.exists() {
-            // active.json is not committed until the probation window succeeds.
-            // A crash during first apply must not turn that unverified candidate
-            // into the startup config on the next agent boot.
-            std::fs::remove_file(&active_path)
-                .context("failed to discard uncommitted active config")?;
-        }
-        let v2ray_listen = read_v2ray_listen(&active_path);
+        let certificate_manager = CertificateManager::new(&state_dir)?;
 
-        let certificate_manager = CertificateManager::new(client.clone(), &state_dir)?;
-        Ok(Self {
+        // Restore the authoritative committed config, repairing stale material
+        // from generation storage. A malformed/escaped LKG must never be
+        // promoted or launched; it is retained untouched for recovery.
+        let mut startup_error = None;
+        let startup_source = if last_good_path.exists() {
+            Some(&last_good_path)
+        } else if active_path.exists() && persisted.applied_revision.is_some() {
+            Some(&active_path)
+        } else {
+            None
+        };
+        if let Some(source) = startup_source {
+            match read_config_map(source).and_then(|mut config| {
+                certificate_manager.repair_config(&mut config)?;
+                write_config_atomic(&active_path, &config)?;
+                if source == &last_good_path {
+                    write_config_atomic(&last_good_path, &config)?;
+                }
+                Ok(())
+            }) {
+                Ok(()) => {}
+                Err(error) => {
+                    startup_error = Some(error.to_string());
+                    let _ = std::fs::remove_file(&active_path);
+                }
+            }
+        } else if active_path.exists() {
+            startup_error = Some(
+                "uncommitted active config was discarded because no last-known-good state exists"
+                    .to_string(),
+            );
+            let _ = std::fs::remove_file(&active_path);
+        }
+
+        let v2ray_listen = read_v2ray_listen(&active_path);
+        let needs_reapply = startup_error.is_some();
+        let mut manager = Self {
             client,
             certificate_manager,
             state_dir,
@@ -112,10 +192,13 @@ impl ConfigManager {
             observed_revision: None,
             persisted,
             v2ray_listen,
-        })
+            needs_reapply,
+            startup_error,
+        };
+        manager.recompute_installed_deployments();
+        Ok(manager)
     }
 
-    /// Path sing-box is launched against.
     pub fn config_path(&self) -> &PathBuf {
         &self.active_path
     }
@@ -140,83 +223,374 @@ impl ConfigManager {
         &self.persisted.active_node_ids
     }
 
-    pub fn applied_at(&self) -> Option<DateTime<Utc>> {
+    pub fn applied_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.persisted.applied_at
     }
 
-    /// The sing-box v2ray API listen address, if the latest config provided one.
     pub fn v2ray_api_listen(&self) -> Option<&str> {
         self.v2ray_listen.as_deref()
     }
 
-    pub async fn fetch(&mut self) -> Result<FetchStatus> {
-        let response = self
-            .client
-            .get_agent_config_v2()
-            .await
-            .map_err(|e| anyhow::anyhow!("failed to fetch config: {e}"))?;
-        let mut document = response.into_inner();
+    pub fn startup_error(&self) -> Option<&str> {
+        self.startup_error.as_deref()
+    }
+
+    /// Forces the next fetch to re-apply instead of skipping, even for an equal
+    /// revision. Used when startup preflight/launch fails so the agent cannot
+    /// permanently skip a committed config that sing-box rejects.
+    pub fn mark_needs_reapply(&mut self) {
+        self.needs_reapply = true;
+    }
+
+    pub fn deployments(&self) -> &[DeploymentRecord] {
+        &self.persisted.deployments
+    }
+
+    /// Re-derives `installed` (on-disk material still validates) and `inUse`
+    /// (the active config references it) from durable state. Used at startup
+    /// and after rollback so heartbeats stay truthful across restarts.
+    fn recompute_installed_deployments(&mut self) {
+        for record in &mut self.persisted.deployments {
+            let reference = CertificateRef {
+                certificate_id: record.certificate_id.clone(),
+                generation: record.generation,
+            };
+            record.installed = self
+                .certificate_manager
+                .validate_generation_on_disk(&reference, Some(&record.fingerprint_sha256))
+                .is_ok();
+            // Runtime confirmation is process state, not a property of files on
+            // disk. Startup and rollback always clear it until sing-box has
+            // survived its health window against the active config.
+            record.in_use = false;
+        }
+        if let Err(error) = self.persist_state() {
+            warn!("failed to persist recomputed deployment state: {error:#}");
+        }
+    }
+
+    pub fn set_runtime_confirmed(&mut self, confirmed: bool) {
+        let referenced: HashSet<CertificateRef> = if confirmed {
+            read_config_map(&self.active_path)
+                .map(|config| {
+                    self.certificate_manager
+                        .referenced_generations(&config)
+                        .into_iter()
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            HashSet::new()
+        };
+        let mut changed = false;
+        for record in &mut self.persisted.deployments {
+            let reference = CertificateRef {
+                certificate_id: record.certificate_id.clone(),
+                generation: record.generation,
+            };
+            let in_use = record.installed && referenced.contains(&reference);
+            if record.in_use != in_use {
+                record.in_use = in_use;
+                changed = true;
+            }
+        }
+        if changed && let Err(error) = self.persist_state() {
+            warn!("failed to persist runtime certificate confirmation: {error:#}");
+        }
+    }
+
+    pub async fn fetch(&mut self) -> Result<FetchStatus, ConfigError> {
+        let response = self.client.get_agent_config_v3().await.map_err(|error| {
+            ConfigError::new(
+                "fetch",
+                "CONFIG_FETCH_FAILED",
+                format!("failed to fetch config: {error}"),
+                None,
+            )
+        })?;
+        let document = response.into_inner();
         let policy = AgentPolicy {
             config_poll_interval_seconds: document
                 .agent
                 .config_poll_interval_seconds
                 .clamp(5, 86_400) as u64,
-            heartbeat_interval_seconds: document.agent.heartbeat_interval_seconds.clamp(5, 300)
+            heartbeat_interval_seconds: document.agent.heartbeat_interval_seconds.clamp(5, 3_600)
                 as u64,
         };
+        let desired_revision = document.desired_revision.to_string();
+        self.observed_revision = Some(desired_revision.clone());
 
-        // Certificate actions must complete before the candidate configuration is
-        // checked or promoted because managed TLS paths are referenced by sing-box.
-        self.certificate_manager
-            .reconcile(&document.actions)
-            .await?;
+        // Reconcile certificate artifacts into validated generation storage.
+        let mut artifacts =
+            std::collections::HashMap::<(String, u64), crate::certificate::StagedMaterial>::new();
+        let mut validation_failure = None;
+        for artifact in &document.certificate_artifacts {
+            let key = (
+                artifact.certificate_id.to_string(),
+                artifact.generation.get(),
+            );
+            self.ensure_deployment(&key.0, key.1, artifact.fingerprint_sha256.as_str());
+            match self.certificate_manager.stage(artifact) {
+                Ok(material) => {
+                    artifacts.insert(key, material.clone());
+                    self.upsert_deployment(&material);
+                }
+                Err(error) => {
+                    let message = sanitize_error(&error.to_string());
+                    warn!(
+                        certificate_id = artifact.certificate_id.as_str(),
+                        generation = artifact.generation.get(),
+                        "certificate artifact failed validation: {message}"
+                    );
+                    self.set_deployment_error(&key.0, key.1, "validation", &message);
+                    validation_failure = Some(message);
+                }
+            }
+        }
+        if let Some(message) = validation_failure {
+            self.persist_state().map_err(|error| {
+                ConfigError::new("reconcile", "STATE_PERSIST_FAILED", error.to_string(), None)
+            })?;
+            return Err(ConfigError::new(
+                "reconcile",
+                "CERTIFICATE_VALIDATION_FAILED",
+                format!("certificate artifact failed validation: {message}"),
+                None,
+            ));
+        }
 
-        // Observing a revision is not the same as applying it. A candidate may
-        // have failed preflight or startup because a certificate/dependency was
-        // temporarily unavailable; treating that revision as unchanged leaves
-        // the agent heartbeating forever without a sing-box process. Only a
-        // revision backed by the committed active config can be skipped.
-        if is_applied_revision(
-            self.active_path.exists(),
-            self.persisted.applied_revision.as_deref(),
-            &document.singbox.revision,
+        // Materialize managed TLS bindings into the base config. Only local
+        // generation paths are injected; inline material is stripped.
+        let mut config = document.singbox_config;
+        strip_base_tls_material(&mut config);
+        let (referenced_generations, binding_errors) = materialize_bindings(
+            &mut config,
+            &document.managed_tls_bindings,
+            &artifacts,
+            self.certificate_manager.root(),
+        );
+        if !binding_errors.is_empty() {
+            for binding in &binding_errors {
+                self.set_deployment_error(
+                    &binding.certificate_id,
+                    binding.generation,
+                    "binding",
+                    &binding.message,
+                );
+            }
+            self.persist_state().map_err(|error| {
+                ConfigError::new("reconcile", "STATE_PERSIST_FAILED", error.to_string(), None)
+            })?;
+            let first = &binding_errors[0];
+            return Err(ConfigError::new(
+                "reconcile",
+                "MANAGED_TLS_BINDING_FAILED",
+                format!(
+                    "managed TLS binding for certificate {} generation {} failed: {}",
+                    first.certificate_id, first.generation, first.message
+                ),
+                first.node_id.clone(),
+            ));
+        }
+
+        let v2ray_listen = extract_v2ray_listen(&config);
+        let serialized = serde_json::to_vec_pretty(&config).map_err(|error| {
+            ConfigError::new(
+                "reconcile",
+                "CONFIG_SERIALIZE_FAILED",
+                error.to_string(),
+                None,
+            )
+        })?;
+
+        if self.can_skip(
+            &desired_revision,
+            &serialized,
+            &referenced_generations,
+            &artifacts,
         ) {
-            self.observed_revision = Some(document.singbox.revision);
+            self.persist_state().map_err(|error| {
+                ConfigError::new("reconcile", "STATE_PERSIST_FAILED", error.to_string(), None)
+            })?;
             return Ok(FetchStatus::Unchanged(policy));
         }
-        self.observed_revision = Some(document.singbox.revision.clone());
-        let normalized =
-            normalize_managed_certificate_tls(&mut document.singbox.config, &self.state_dir)?;
-        for item in normalized {
-            info!(
-                inbound_index = item.inbound_index,
-                certificate_id = %item.certificate_id,
-                removed_fields = ?item.removed_fields,
-                "normalized managed certificate TLS input"
-            );
-        }
-        let v2ray_listen = extract_v2ray_listen(&document.singbox.config);
 
-        let serialized = serde_json::to_vec_pretty(&document.singbox.config)
-            .context("failed to serialize config")?;
-        write_secret_file(&self.candidate_path, &serialized)?;
+        write_secret_file(&self.candidate_path, &serialized).map_err(|error| {
+            ConfigError::new(
+                "reconcile",
+                "CANDIDATE_WRITE_FAILED",
+                error.to_string(),
+                None,
+            )
+        })?;
+        self.persist_state().map_err(|error| {
+            ConfigError::new("reconcile", "STATE_PERSIST_FAILED", error.to_string(), None)
+        })?;
         info!(
-            "candidate config written to {}",
+            "candidate config for revision {desired_revision} written to {}",
             self.candidate_path.display()
         );
+
         Ok(FetchStatus::Updated {
             policy,
             candidate: CandidateConfig {
-                revision: document.singbox.revision,
-                materialized_node_ids: document.singbox.materialized_node_ids,
+                revision: desired_revision,
+                materialized_node_ids: document
+                    .materialized_node_ids
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect(),
                 v2ray_listen,
+                referenced_generations,
             },
         })
     }
 
-    pub fn promote_candidate(&self) -> Result<()> {
+    /// A candidate may be skipped only when the active config still parses and
+    /// every generation/fingerprint it references still validates on disk.
+    fn can_skip(
+        &self,
+        desired_revision: &str,
+        candidate_bytes: &[u8],
+        references: &[CertificateRef],
+        artifacts: &std::collections::HashMap<(String, u64), crate::certificate::StagedMaterial>,
+    ) -> bool {
+        if self.needs_reapply {
+            return false;
+        }
+        if self.persisted.applied_revision.as_deref() != Some(desired_revision) {
+            return false;
+        }
+        if !self.active_path.exists() {
+            return false;
+        }
+        let Ok(active_bytes) = std::fs::read(&self.active_path) else {
+            return false;
+        };
+        if active_bytes != candidate_bytes {
+            return false;
+        }
+        for reference in references {
+            let fingerprint = artifacts
+                .get(&(reference.certificate_id.clone(), reference.generation))
+                .map(|artifact| artifact.fingerprint_sha256.as_str());
+            if self
+                .certificate_manager
+                .validate_generation_on_disk(reference, fingerprint)
+                .is_err()
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn ensure_deployment(
+        &mut self,
+        certificate_id: &str,
+        generation: u64,
+        fingerprint_sha256: &str,
+    ) {
+        if let Some(record) = self.persisted.deployments.iter_mut().find(|record| {
+            record.certificate_id == certificate_id && record.generation == generation
+        }) {
+            if record.fingerprint_sha256 != fingerprint_sha256 {
+                record.fingerprint_sha256 = fingerprint_sha256.to_owned();
+                record.installed = false;
+                record.in_use = false;
+            }
+            return;
+        }
+        self.persisted.deployments.push(DeploymentRecord {
+            certificate_id: certificate_id.to_owned(),
+            generation,
+            fingerprint_sha256: fingerprint_sha256.to_owned(),
+            installed: false,
+            in_use: false,
+            error_phase: None,
+            error_message: None,
+        });
+    }
+
+    fn upsert_deployment(&mut self, material: &crate::certificate::StagedMaterial) {
+        let record = self.persisted.deployments.iter_mut().find(|record| {
+            record.certificate_id == material.certificate_id
+                && record.generation == material.generation
+        });
+        match record {
+            Some(record) => {
+                record.fingerprint_sha256 = material.fingerprint_sha256.clone();
+                record.installed = true;
+                record.error_phase = None;
+                record.error_message = None;
+            }
+            None => self.persisted.deployments.push(DeploymentRecord {
+                certificate_id: material.certificate_id.clone(),
+                generation: material.generation,
+                fingerprint_sha256: material.fingerprint_sha256.clone(),
+                installed: true,
+                in_use: false,
+                error_phase: None,
+                error_message: None,
+            }),
+        }
+    }
+
+    fn set_deployment_error(
+        &mut self,
+        certificate_id: &str,
+        generation: u64,
+        phase: &str,
+        message: &str,
+    ) {
+        let record = self.persisted.deployments.iter_mut().find(|record| {
+            record.certificate_id == certificate_id && record.generation == generation
+        });
+        match record {
+            Some(record) => {
+                record.error_phase = Some(phase.to_string());
+                record.error_message = Some(sanitize_error(message));
+            }
+            None => {
+                // No fingerprint known for an unstaged/unknown generation; the
+                // top-level error carries the detail instead.
+                warn!(
+                    certificate_id = certificate_id,
+                    generation = generation,
+                    "binding error for unknown deployment: {message}"
+                );
+            }
+        }
+    }
+
+    pub fn mark_candidate_error(
+        &mut self,
+        candidate: &CandidateConfig,
+        phase: &str,
+        message: &str,
+    ) {
+        for reference in &candidate.referenced_generations {
+            self.set_deployment_error(
+                &reference.certificate_id,
+                reference.generation,
+                phase,
+                message,
+            );
+        }
+        if let Err(error) = self.persist_state() {
+            warn!("failed to persist candidate deployment error: {error:#}");
+        }
+    }
+
+    /// Promotes the candidate to active and clears `inUse` for every
+    /// deployment: nothing is in use until probation passes and the commit runs.
+    pub fn promote_candidate(&mut self) -> Result<()> {
         std::fs::rename(&self.candidate_path, &self.active_path)
-            .context("failed to promote candidate config")
+            .context("failed to promote candidate config")?;
+        for record in &mut self.persisted.deployments {
+            record.in_use = false;
+        }
+        self.persist_state()
     }
 
     pub fn commit_applied(&mut self, candidate: &CandidateConfig) -> Result<()> {
@@ -227,13 +601,38 @@ impl ConfigManager {
         )?;
         self.persisted.applied_revision = Some(candidate.revision.clone());
         self.persisted.active_node_ids = candidate.materialized_node_ids.clone();
-        self.persisted.applied_at = Some(Utc::now());
+        self.persisted.applied_at = Some(chrono::Utc::now());
         self.v2ray_listen = candidate.v2ray_listen.clone();
+        let referenced: HashSet<&CertificateRef> =
+            candidate.referenced_generations.iter().collect();
+        for record in &mut self.persisted.deployments {
+            let reference = CertificateRef {
+                certificate_id: record.certificate_id.clone(),
+                generation: record.generation,
+            };
+            record.in_use = record.installed && referenced.contains(&reference);
+        }
+        self.persisted.deployments.retain(|record| {
+            referenced.contains(&CertificateRef {
+                certificate_id: record.certificate_id.clone(),
+                generation: record.generation,
+            })
+        });
+        self.needs_reapply = false;
         self.persist_state()
     }
 
     pub fn rollback(&mut self) -> Result<bool> {
         if !self.last_good_path.exists() {
+            if self.active_path.exists() {
+                std::fs::remove_file(&self.active_path)
+                    .context("failed to remove uncommitted active config")?;
+            }
+            self.persisted.applied_revision = None;
+            self.persisted.active_node_ids.clear();
+            self.persisted.applied_at = None;
+            self.v2ray_listen = None;
+            self.recompute_installed_deployments();
             return Ok(false);
         }
         replace_from(
@@ -242,6 +641,7 @@ impl ConfigManager {
             &self.state_dir.join("active.json.rollback"),
         )?;
         self.v2ray_listen = read_v2ray_listen(&self.active_path);
+        self.recompute_installed_deployments();
         Ok(true)
     }
 
@@ -251,6 +651,160 @@ impl ConfigManager {
         write_secret_file(&temp, &bytes)?;
         std::fs::rename(temp, &self.state_path).context("failed to persist agent state")
     }
+}
+
+#[derive(Debug)]
+struct BindingError {
+    certificate_id: String,
+    generation: u64,
+    message: String,
+    node_id: Option<String>,
+}
+
+/// A V3 base config is never allowed to dictate certificate ownership. Strip
+/// every inline, path, ACME, and provider field from every TLS object before
+/// matching the explicit managed bindings. Unbound TLS therefore cannot retain
+/// a legacy/manual certificate by accident.
+fn strip_base_tls_material(config: &mut serde_json::Map<String, serde_json::Value>) {
+    let Some(inbounds) = config
+        .get_mut("inbounds")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    for inbound in inbounds {
+        let Some(tls) = inbound
+            .get_mut("tls")
+            .and_then(serde_json::Value::as_object_mut)
+        else {
+            continue;
+        };
+        for field in crate::certificate::MANAGED_TLS_MATERIAL_FIELDS {
+            tls.remove(field);
+        }
+    }
+}
+
+/// Matches each managed TLS binding to its inbound by exact tag and injects
+/// only local generation paths into that inbound's TLS object. Returns the
+/// referenced generations on success; every failure is collected so the caller
+/// can record per-deployment errors.
+fn materialize_bindings(
+    config: &mut serde_json::Map<String, serde_json::Value>,
+    bindings: &[types::GetAgentConfigV3ResponseManagedTlsBindingsItem],
+    artifacts: &std::collections::HashMap<(String, u64), crate::certificate::StagedMaterial>,
+    root: &Path,
+) -> (Vec<CertificateRef>, Vec<BindingError>) {
+    let mut errors = Vec::new();
+    let mut referenced = Vec::new();
+    let mut bound_tags = HashSet::new();
+    for binding in bindings {
+        let certificate_id = binding.certificate_id.to_string();
+        let generation = binding.generation.get();
+        let node_id = binding.node_id.to_string();
+        let inbound_tag = binding.inbound_tag.to_string();
+        if !bound_tags.insert(inbound_tag.clone()) {
+            errors.push(BindingError {
+                certificate_id,
+                generation,
+                message: format!("inbound tag {inbound_tag} has more than one managed binding"),
+                node_id: Some(node_id),
+            });
+            continue;
+        }
+        let Some(_material) = artifacts.get(&(certificate_id.clone(), generation)) else {
+            errors.push(BindingError {
+                certificate_id,
+                generation,
+                message: "certificate artifact not provided for this binding".to_string(),
+                node_id: Some(node_id),
+            });
+            continue;
+        };
+        let Some(inbounds) = config
+            .get_mut("inbounds")
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            errors.push(BindingError {
+                certificate_id,
+                generation,
+                message: "base config has no inbounds array".to_string(),
+                node_id: Some(node_id),
+            });
+            continue;
+        };
+        let matches = inbounds
+            .iter()
+            .enumerate()
+            .filter(|(_, inbound)| {
+                inbound.get("tag").and_then(serde_json::Value::as_str) == Some(inbound_tag.as_str())
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if matches.len() != 1 {
+            errors.push(BindingError {
+                certificate_id,
+                generation,
+                message: if matches.is_empty() {
+                    format!("inbound tag {inbound_tag} not found in base config")
+                } else {
+                    format!("inbound tag {inbound_tag} is duplicated in base config")
+                },
+                node_id: Some(node_id),
+            });
+            continue;
+        }
+        let inbound = &mut inbounds[matches[0]];
+        let tls = inbound
+            .get_mut("tls")
+            .and_then(serde_json::Value::as_object_mut);
+        let Some(tls) = tls else {
+            errors.push(BindingError {
+                certificate_id,
+                generation,
+                message: format!("inbound {inbound_tag} has no tls object to bind certificate to"),
+                node_id: Some(node_id),
+            });
+            continue;
+        };
+        match binding.server_name.as_deref() {
+            Some(server_name) => {
+                tls.insert(
+                    "server_name".into(),
+                    serde_json::Value::String(server_name.to_owned()),
+                );
+            }
+            None => {
+                tls.remove("server_name");
+            }
+        }
+        let generation_dir = root
+            .join(&certificate_id)
+            .join(format!("{GENERATION_DIR_PREFIX}{generation}"));
+        tls.insert(
+            "certificate_path".into(),
+            serde_json::Value::String(
+                generation_dir
+                    .join(FULLCHAIN_FILE)
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        );
+        tls.insert(
+            "key_path".into(),
+            serde_json::Value::String(
+                generation_dir
+                    .join(PRIVATE_KEY_FILE)
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        );
+        referenced.push(CertificateRef {
+            certificate_id,
+            generation,
+        });
+    }
+    (referenced, errors)
 }
 
 fn write_secret_file(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -277,14 +831,25 @@ fn replace_from(source: &Path, destination: &Path, temp: &Path) -> Result<()> {
         .with_context(|| format!("failed to replace {}", destination.display()))
 }
 
+fn read_config_map(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>> {
+    let bytes =
+        std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    serde_json::from_slice(&bytes).context("config is not a valid JSON object")
+}
+
+fn write_config_atomic(
+    path: &Path,
+    config: &serde_json::Map<String, serde_json::Value>,
+) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(config)?;
+    write_secret_file(path, &bytes)
+}
+
 fn read_v2ray_listen(path: &Path) -> Option<String> {
-    let config = std::fs::read(path).ok()?;
-    let config: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_slice(&config).ok()?;
+    let config = read_config_map(path).ok()?;
     extract_v2ray_listen(&config)
 }
 
-/// Reads `experimental.v2ray_api.listen` from a sing-box config object.
 fn extract_v2ray_listen(config: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
     config
         .get("experimental")?
@@ -294,145 +859,15 @@ fn extract_v2ray_listen(config: &serde_json::Map<String, serde_json::Value>) -> 
         .map(String::from)
 }
 
-fn is_applied_revision(
-    active_config_exists: bool,
-    applied_revision: Option<&str>,
-    fetched_revision: &str,
-) -> bool {
-    active_config_exists && applied_revision == Some(fetched_revision)
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct ManagedTlsNormalization {
-    inbound_index: usize,
-    certificate_id: String,
-    removed_fields: Vec<&'static str>,
-}
-
-fn normalize_managed_certificate_tls(
-    config: &mut serde_json::Map<String, serde_json::Value>,
-    state_dir: &Path,
-) -> Result<Vec<ManagedTlsNormalization>> {
-    let Some(inbounds) = config
-        .get_mut("inbounds")
-        .and_then(|value| value.as_array_mut())
-    else {
-        return Ok(Vec::new());
-    };
-    let local_root = state_dir.join("certificates");
-    let control_plane_root = Path::new(CONTROL_PLANE_CERTIFICATE_ROOT);
-    let mut normalized = Vec::new();
-
-    for (inbound_index, inbound) in inbounds.iter_mut().enumerate() {
-        let Some(tls) = inbound
-            .as_object_mut()
-            .and_then(|inbound| inbound.get_mut("tls"))
-            .and_then(|tls| tls.as_object_mut())
-        else {
-            continue;
-        };
-        let certificate_path = tls
-            .get("certificate_path")
-            .and_then(|value| value.as_str())
-            .map(str::to_owned);
-        let key_path = tls
-            .get("key_path")
-            .and_then(|value| value.as_str())
-            .map(str::to_owned);
-        let certificate_id = certificate_path
-            .as_deref()
-            .map(|path| {
-                parse_managed_material_path(path, &local_root, control_plane_root, "fullchain.pem")
-            })
-            .transpose()?
-            .flatten();
-        let key_certificate_id = key_path
-            .as_deref()
-            .map(|path| {
-                parse_managed_material_path(
-                    path,
-                    &local_root,
-                    control_plane_root,
-                    "private-key.pem",
-                )
-            })
-            .transpose()?
-            .flatten();
-
-        let certificate_id = match (certificate_id, key_certificate_id) {
-            (None, None) => continue,
-            (Some(certificate_id), Some(key_certificate_id))
-                if certificate_id == key_certificate_id =>
-            {
-                certificate_id
-            }
-            (certificate_id, key_certificate_id) => {
-                bail!(
-                    "inbound[{inbound_index}] managed certificate/key paths do not identify the same certificate: certificate={certificate_id:?}, key={key_certificate_id:?}"
-                );
-            }
-        };
-
-        let mut removed_fields = Vec::new();
-        for field in MANAGED_TLS_INLINE_FIELDS {
-            if tls.remove(field).is_some() {
-                removed_fields.push(field);
-            }
-        }
-        let current = local_root.join(&certificate_id).join("current");
-        tls.insert(
-            "certificate_path".into(),
-            serde_json::Value::String(current.join("fullchain.pem").to_string_lossy().into_owned()),
-        );
-        tls.insert(
-            "key_path".into(),
-            serde_json::Value::String(
-                current
-                    .join("private-key.pem")
-                    .to_string_lossy()
-                    .into_owned(),
-            ),
-        );
-        normalized.push(ManagedTlsNormalization {
-            inbound_index,
-            certificate_id,
-            removed_fields,
-        });
-    }
-    Ok(normalized)
-}
-
-fn parse_managed_material_path(
-    value: &str,
-    local_root: &Path,
-    control_plane_root: &Path,
-    expected_file: &str,
-) -> Result<Option<String>> {
-    let path = Path::new(value);
-    let relative = match path.strip_prefix(local_root) {
-        Ok(relative) => Some(relative),
-        Err(_) => path.strip_prefix(control_plane_root).ok(),
-    };
-    let Some(relative) = relative else {
-        return Ok(None);
-    };
-    let components = relative.components().collect::<Vec<_>>();
-    let [
-        std::path::Component::Normal(certificate_id),
-        std::path::Component::Normal(current),
-        std::path::Component::Normal(file),
-    ] = components.as_slice()
-    else {
-        bail!("invalid managed certificate path: {value}");
-    };
-    if *current != "current" || *file != expected_file {
-        bail!("invalid managed certificate path: {value}");
-    }
-    let certificate_id = certificate_id
-        .to_str()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("invalid managed certificate id in path: {value}"))?;
-    Ok(Some(certificate_id.to_owned()))
+fn sanitize_error(value: &str) -> String {
+    value
+        .replace(
+            |character: char| character.is_control() && character != '\n',
+            "",
+        )
+        .chars()
+        .take(4096)
+        .collect()
 }
 
 #[cfg(test)]
@@ -442,23 +877,33 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ManagedTlsNormalization, extract_v2ray_listen, is_applied_revision,
-        normalize_managed_certificate_tls,
+        DeploymentRecord, extract_v2ray_listen, materialize_bindings, sanitize_error,
+        strip_base_tls_material,
     };
+    use crate::certificate::StagedMaterial;
+    use crate::client::types;
+
+    fn staged(certificate_id: &str, generation: u64) -> StagedMaterial {
+        StagedMaterial {
+            certificate_id: certificate_id.into(),
+            generation,
+            fingerprint_sha256: "fingerprint".into(),
+        }
+    }
 
     #[test]
-    fn managed_tls_removes_inline_material_and_uses_local_state_dir() {
+    fn binding_injects_local_generation_paths_and_strips_inline() {
         let mut config = json!({
             "inbounds": [{
                 "type": "vless",
+                "tag": "node-edge",
                 "tls": {
                     "enabled": true,
-                    "certificate": ["stale-certificate"],
+                    "server_name": "edge.example.com",
+                    "certificate": ["stale-non-pem-certificate"],
                     "certificate_path": "/var/lib/blossom-agent/certificates/cert-1/current/fullchain.pem",
-                    "key": ["stale-key"],
-                    "key_path": "/var/lib/blossom-agent/certificates/cert-1/current/private-key.pem",
-                    "acme": { "domain": ["legacy.example.com"] },
-                    "certificate_provider": "legacy"
+                    "key": ["stale-non-pem-key"],
+                    "key_path": "/var/lib/blossom-agent/certificates/cert-1/current/private-key.pem"
                 }
             }]
         })
@@ -466,41 +911,108 @@ mod tests {
         .unwrap()
         .clone();
 
-        let normalized =
-            normalize_managed_certificate_tls(&mut config, Path::new("/custom/blossom-state"))
-                .unwrap();
+        let binding = types::GetAgentConfigV3ResponseManagedTlsBindingsItem {
+            node_id: "node-edge".parse().unwrap(),
+            inbound_tag: "node-edge".parse().unwrap(),
+            certificate_id: "cert-1".parse().unwrap(),
+            generation: std::num::NonZeroU64::new(2).unwrap(),
+            server_name: Some("edge.example.com".to_string()),
+        };
+        let artifacts = [(("cert-1".to_string(), 2u64), staged("cert-1", 2))]
+            .into_iter()
+            .collect();
 
-        assert_eq!(
-            normalized,
-            vec![ManagedTlsNormalization {
-                inbound_index: 0,
-                certificate_id: "cert-1".into(),
-                removed_fields: vec!["certificate", "key", "acme", "certificate_provider"],
-            }]
+        strip_base_tls_material(&mut config);
+        let (referenced, errors) = materialize_bindings(
+            &mut config,
+            std::slice::from_ref(&binding),
+            &artifacts,
+            Path::new("/custom/state/certificates"),
         );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(referenced.len(), 1);
+
         let tls = config["inbounds"][0]["tls"].as_object().unwrap();
         assert_eq!(
             tls["certificate_path"],
-            "/custom/blossom-state/certificates/cert-1/current/fullchain.pem"
+            "/custom/state/certificates/cert-1/generation-2/fullchain.pem"
         );
         assert_eq!(
             tls["key_path"],
-            "/custom/blossom-state/certificates/cert-1/current/private-key.pem"
+            "/custom/state/certificates/cert-1/generation-2/private-key.pem"
         );
         for field in ["certificate", "key", "acme", "certificate_provider"] {
-            assert!(!tls.contains_key(field));
+            assert!(
+                !tls.contains_key(field),
+                "stale field {field} left in place"
+            );
         }
     }
 
     #[test]
-    fn manual_tls_paths_are_not_modified() {
+    fn binding_reports_missing_inbound_tag() {
+        let mut config = json!({
+            "inbounds": [{ "type": "vless", "tag": "other" }]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let binding = types::GetAgentConfigV3ResponseManagedTlsBindingsItem {
+            node_id: "node-edge".parse().unwrap(),
+            inbound_tag: "node-edge".parse().unwrap(),
+            certificate_id: "cert-1".parse().unwrap(),
+            generation: std::num::NonZeroU64::new(1).unwrap(),
+            server_name: None,
+        };
+        let artifacts = [(("cert-1".to_string(), 1u64), staged("cert-1", 1))]
+            .into_iter()
+            .collect();
+        let (_referenced, errors) = materialize_bindings(
+            &mut config,
+            std::slice::from_ref(&binding),
+            &artifacts,
+            Path::new("/custom/state/certificates"),
+        );
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0]
+                .message
+                .contains("inbound tag node-edge not found")
+        );
+    }
+
+    #[test]
+    fn binding_reports_missing_artifact() {
+        let mut config = json!({
+            "inbounds": [{ "type": "vless", "tag": "node-edge", "tls": { "enabled": true } }]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let binding = types::GetAgentConfigV3ResponseManagedTlsBindingsItem {
+            node_id: "node-edge".parse().unwrap(),
+            inbound_tag: "node-edge".parse().unwrap(),
+            certificate_id: "cert-1".parse().unwrap(),
+            generation: std::num::NonZeroU64::new(1).unwrap(),
+            server_name: None,
+        };
+        let (_referenced, errors) = materialize_bindings(
+            &mut config,
+            std::slice::from_ref(&binding),
+            &std::collections::HashMap::new(),
+            Path::new("/custom/state/certificates"),
+        );
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("artifact not provided"));
+    }
+
+    #[test]
+    fn unbound_legacy_tls_material_is_stripped_from_base_config() {
         let mut config = json!({
             "inbounds": [{
+                "tag": "manual",
                 "tls": {
-                    "enabled": true,
-                    "certificate": ["manual-certificate"],
                     "certificate_path": "/etc/sing-box/fullchain.pem",
-                    "key": ["manual-key"],
                     "key_path": "/etc/sing-box/private-key.pem"
                 }
             }]
@@ -508,61 +1020,23 @@ mod tests {
         .as_object()
         .unwrap()
         .clone();
-        let original = config.clone();
-
-        assert!(
-            normalize_managed_certificate_tls(&mut config, Path::new("/custom/state"))
-                .unwrap()
-                .is_empty()
+        strip_base_tls_material(&mut config);
+        let (_referenced, errors) = materialize_bindings(
+            &mut config,
+            &[],
+            &std::collections::HashMap::new(),
+            Path::new("/custom/state/certificates"),
         );
-        assert_eq!(config, original);
-    }
-
-    #[test]
-    fn mismatched_managed_certificate_paths_are_rejected() {
-        let mut config = json!({
-            "inbounds": [{
-                "tls": {
-                    "certificate_path": "/var/lib/blossom-agent/certificates/cert-1/current/fullchain.pem",
-                    "key_path": "/var/lib/blossom-agent/certificates/cert-2/current/private-key.pem"
-                }
-            }]
-        })
-        .as_object()
-        .unwrap()
-        .clone();
-
-        let error = normalize_managed_certificate_tls(&mut config, Path::new("/custom/state"))
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("do not identify the same certificate"));
-    }
-
-    #[test]
-    fn observed_but_unapplied_revision_must_be_retried() {
-        assert!(!is_applied_revision(false, None, "revision-1"));
-        assert!(!is_applied_revision(
-            false,
-            Some("revision-1"),
-            "revision-1"
-        ));
-        assert!(!is_applied_revision(true, None, "revision-1"));
-    }
-
-    #[test]
-    fn committed_active_revision_is_unchanged() {
-        assert!(is_applied_revision(true, Some("revision-1"), "revision-1"));
-        assert!(!is_applied_revision(true, Some("revision-1"), "revision-2"));
+        assert!(errors.is_empty());
+        let tls = config["inbounds"][0]["tls"].as_object().unwrap();
+        assert!(!tls.contains_key("certificate_path"));
+        assert!(!tls.contains_key("key_path"));
     }
 
     #[test]
     fn extracts_listen_when_present() {
         let config = json!({
-            "experimental": {
-                "v2ray_api": {
-                    "listen": "127.0.0.1:8080"
-                }
-            }
+            "experimental": { "v2ray_api": { "listen": "127.0.0.1:8080" } }
         })
         .as_object()
         .unwrap()
@@ -574,29 +1048,33 @@ mod tests {
     }
 
     #[test]
-    fn returns_none_when_experimental_missing() {
-        let config = json!({}).as_object().unwrap().clone();
-        assert_eq!(extract_v2ray_listen(&config), None);
-    }
-
-    #[test]
     fn returns_none_when_v2ray_api_missing() {
         let config = json!({ "experimental": {} }).as_object().unwrap().clone();
         assert_eq!(extract_v2ray_listen(&config), None);
     }
 
     #[test]
-    fn returns_none_when_listen_not_string() {
-        let config = json!({
-            "experimental": {
-                "v2ray_api": {
-                    "listen": 8080
-                }
-            }
-        })
-        .as_object()
-        .unwrap()
-        .clone();
-        assert_eq!(extract_v2ray_listen(&config), None);
+    fn sanitize_bounds_and_strips_control_bytes() {
+        let input = format!("boom\x1b[31m{}", "x".repeat(10_000));
+        let sanitized = sanitize_error(&input);
+        assert!(sanitized.len() <= 4096);
+        assert!(!sanitized.contains('\x1b'));
+    }
+
+    #[test]
+    fn deployment_record_round_trips() {
+        let record = DeploymentRecord {
+            certificate_id: "cert-1".into(),
+            generation: 3,
+            fingerprint_sha256: "abc".into(),
+            installed: true,
+            in_use: true,
+            error_phase: None,
+            error_message: None,
+        };
+        let encoded = serde_json::to_string(&record).unwrap();
+        let decoded: DeploymentRecord = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.certificate_id, "cert-1");
+        assert!(decoded.in_use);
     }
 }
