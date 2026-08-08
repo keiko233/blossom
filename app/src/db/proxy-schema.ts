@@ -85,6 +85,14 @@ export const server = pgTable(
       .notNull(),
     observedRevision: text("observed_revision"),
     appliedRevision: text("applied_revision"),
+    // Publish-gate versioning: `desiredRevisionSeq` is bumped (inside the same
+    // write) by every mutation that changes the agent-facing config or the
+    // subscription payload; `appliedRevisionSeq` is parsed back out of the
+    // agent heartbeat's `appliedRevision` (format "<seq>:<hash>") and only
+    // ever moves forward. Subscriptions publish a node's state only as of the
+    // owning server's applied seq (see `@/lib/publish-gate`).
+    desiredRevisionSeq: integer("desired_revision_seq").default(0).notNull(),
+    appliedRevisionSeq: integer("applied_revision_seq").default(0).notNull(),
     activeNodeIds: jsonb("active_node_ids")
       .$type<string[]>()
       .default([])
@@ -368,3 +376,67 @@ export const nodeGroup = pgTable(
 
 export type ProxyGroup = typeof proxyGroup.$inferSelect;
 export type NewProxyGroup = typeof proxyGroup.$inferInsert;
+
+// --- Config publish gate ----------------------------------------------------
+
+export const CONFIG_CHANGE_KINDS = [
+  "node",
+  "credential",
+  "certificate",
+  "authorization",
+  "server",
+] as const;
+
+export type ConfigChangeKind = (typeof CONFIG_CHANGE_KINDS)[number];
+
+/**
+ * One recorded mutation of state that feeds the agent config and/or the
+ * subscription payload. `prevRow` carries the pre-change snapshot the
+ * publish gate replays while the change is not yet applied on a server
+ * (null for creations — the entity simply stays unpublished until applied).
+ * Rows become garbage once every linked server has applied them; they are
+ * pruned lazily.
+ */
+export const configChange = pgTable(
+  "config_change",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind").$type<ConfigChangeKind>().notNull(),
+    // nodeId | subscriptionId | certificateId | planId | groupId | userId | serverId
+    subjectId: text("subject_id").notNull(),
+    prevRow: jsonb("prev_row").$type<unknown>(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("config_change_subject_idx").on(table.kind, table.subjectId),
+  ],
+);
+
+/**
+ * Links a config change to every server whose agent must apply it, stamped
+ * with the per-server revision sequence at which the change becomes
+ * effective. A change is published for a server once
+ * `server.appliedRevisionSeq >= revisionSeq`.
+ */
+export const configChangeServer = pgTable(
+  "config_change_server",
+  {
+    changeId: text("change_id")
+      .notNull()
+      .references(() => configChange.id, { onDelete: "cascade" }),
+    serverId: text("server_id")
+      .notNull()
+      .references(() => server.id, { onDelete: "cascade" }),
+    revisionSeq: integer("revision_seq").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.changeId, table.serverId] }),
+    index("config_change_server_pending_idx").on(
+      table.serverId,
+      table.revisionSeq,
+    ),
+  ],
+);
+
+export type ConfigChange = typeof configChange.$inferSelect;
+export type ConfigChangeServer = typeof configChangeServer.$inferSelect;

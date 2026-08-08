@@ -3,9 +3,11 @@ import type { z } from "zod";
 
 import { db } from "@/db";
 import { subscription } from "@/db/plan-schema";
-import { node, server, type Server } from "@/db/proxy-schema";
-import { trafficRecord, type NewTrafficRecord } from "@/db/traffic-schema";
+import { node, type Server, server } from "@/db/proxy-schema";
+import { type NewTrafficRecord, trafficRecord } from "@/db/traffic-schema";
+import { parseRevisionSeq } from "@/lib/config-revision";
 import type { heartbeatSchema } from "@/orpc/proxy/schema";
+import { pruneAppliedConfigChanges } from "@/query/config-change";
 
 type AgentHeartbeat = z.infer<typeof heartbeatSchema>;
 
@@ -39,6 +41,10 @@ export async function updateAgentHeartbeat(
     input.error !== undefined ||
     input.clearError !== undefined;
   const error = input.error;
+  // The applied revision carries the publish-gate sequence as a numeric
+  // prefix ("<seq>:<hash>"). It only ever moves forward; legacy hash-only
+  // revisions parse to null and leave the seq untouched.
+  const appliedSeq = parseRevisionSeq(input.appliedRevision);
   const sanitizeMessage = (message: string) =>
     [...message]
       .filter((character) => {
@@ -86,6 +92,11 @@ export async function updateAgentHeartbeat(
       ...(input.appliedRevision !== undefined
         ? { appliedRevision: input.appliedRevision }
         : {}),
+      ...(appliedSeq !== null
+        ? {
+            appliedRevisionSeq: sql<number>`GREATEST(${server.appliedRevisionSeq}, ${appliedSeq})`,
+          }
+        : {}),
       ...(input.clearActiveNodeIds
         ? { activeNodeIds: [] }
         : input.activeNodeIds !== undefined
@@ -129,6 +140,11 @@ export async function updateAgentHeartbeat(
             }),
     })
     .where(eq(server.id, serverId));
+
+  // Change links at or below the confirmed applied seq can never gate again.
+  if (appliedSeq !== null) {
+    await pruneAppliedConfigChanges(serverId, appliedSeq);
+  }
 }
 
 export async function listServerNodeIds(serverId: string): Promise<string[]> {

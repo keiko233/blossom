@@ -8,6 +8,7 @@ import { parseClientUserAgent } from "@/lib/user-agent";
 import { recordAccessLog } from "@/query/access-log-record";
 import {
   findSubscriptionByToken,
+  getGatedSubscriptionView,
   getSubscriptionAccessibleNodes,
 } from "@/query/subscription-access";
 
@@ -60,12 +61,43 @@ export const Route = createFileRoute("/api/sub/$token")({
         }
 
         const nodes = await getSubscriptionAccessibleNodes(subscription.id);
-        const { config } = buildClashConfig(nodes, {
-          credentials: {
-            uuid: subscription.credentialUuid,
-            password: subscription.credentialPassword,
-          },
+        // Publish gate: emit, per node, only the state the node's server has
+        // confirmed applied — a freshly changed node/credential/authorization
+        // replays its previous state (or is withheld) until the agent catches
+        // up, so a fetched subscription can never describe config no agent is
+        // serving. See docs/config-versioning.md.
+        const gate = await getGatedSubscriptionView({
+          subscription,
+          user,
+          nodes,
         });
+        if (!gate.eligible) {
+          return new Response("Forbidden", { status: 403 });
+        }
+
+        let config: unknown;
+        try {
+          config = buildClashConfig(gate.nodes, {
+            credentials: {
+              uuid: subscription.credentialUuid,
+              password: subscription.credentialPassword,
+            },
+            resolveCredentials: (resolved) =>
+              gate.credentialsByNodeId.get(resolved.node.id) ?? {
+                uuid: subscription.credentialUuid,
+                password: subscription.credentialPassword,
+              },
+          }).config;
+        } catch {
+          // Every visible node is still waiting on an agent apply (e.g. a
+          // just-created subscription or node). Nothing servable yet — tell
+          // the client to retry rather than handing it a config that cannot
+          // connect.
+          return new Response("Configuration is being deployed", {
+            status: 503,
+            headers: { "Retry-After": "30" },
+          });
+        }
 
         const userAgent = request.headers.get("user-agent");
         const { clientName, clientVersion } = parseClientUserAgent(userAgent);

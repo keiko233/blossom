@@ -1,17 +1,24 @@
-import { and, asc, eq, gt, isNull, lt, or } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, lt, or } from "drizzle-orm";
 
 import { db } from "@/db";
 import { user } from "@/db/auth-schema";
 import { planGroup, subscription } from "@/db/plan-schema";
 import type { Subscription } from "@/db/plan-schema";
 import {
+  type CertificateKind,
   managedCertificate,
+  type Node,
   node,
   nodeGroup,
   server,
-  type CertificateKind,
-  type Node,
 } from "@/db/proxy-schema";
+import {
+  applyPublishGate,
+  type GateResult,
+  type PlanAuthzPrevRow,
+  type SubscriptionAuthzPrevRow,
+} from "@/lib/publish-gate";
+import { listPendingConfigChanges } from "@/query/config-change";
 
 /**
  * Minimal, never-secret-bearing summary of the server a node lives on. Only
@@ -115,6 +122,90 @@ export async function getSubscriptionAccessibleNodes(
     byId.set(n.id, resolve(n, s, certificateKind));
   }
   return [...byId.values()];
+}
+
+/**
+ * Applies the publish gate (`@/lib/publish-gate`) to a subscription's
+ * currently visible nodes: fetches the changes not yet confirmed applied on
+ * the hosting servers plus — only when authorization changes pend — the
+ * current plan/group bindings the visibility replay needs, then replays each
+ * node to the state its server is actually serving.
+ */
+export async function getGatedSubscriptionView(input: {
+  subscription: Subscription;
+  user: { banned: boolean | null; banExpires: Date | null };
+  nodes: ResolvedNode[];
+}): Promise<GateResult> {
+  const { subscription: sub, user: userRow, nodes } = input;
+  const serverIds = [...new Set(nodes.map((resolved) => resolved.server.id))];
+  const pending = await listPendingConfigChanges(serverIds);
+  if (pending.length === 0) {
+    return {
+      eligible: true,
+      nodes,
+      credentialsByNodeId: new Map(),
+    };
+  }
+
+  // Current bindings are only needed to replay visibility when authorization
+  // changes pend. Collect the involved plans/groups: the subscription's
+  // current plan, any previous plan from a pending plan switch, and every
+  // group named by a pending plan/group change.
+  const planIds = new Set<string>([sub.planId]);
+  const groupIds = new Set<string>();
+  for (const change of pending) {
+    if (change.kind !== "authorization") {
+      continue;
+    }
+    if (change.subjectId === sub.id && change.prevRow) {
+      const prev = change.prevRow as SubscriptionAuthzPrevRow;
+      if (prev.planId) {
+        planIds.add(prev.planId);
+      }
+    }
+    const prevGroups = (change.prevRow as PlanAuthzPrevRow | undefined)
+      ?.groupIds;
+    if (prevGroups) {
+      for (const groupId of prevGroups) {
+        groupIds.add(groupId);
+      }
+    }
+  }
+
+  const planRows = await db
+    .select({ planId: planGroup.planId, groupId: planGroup.groupId })
+    .from(planGroup)
+    .where(inArray(planGroup.planId, [...planIds]));
+  const planGroupIds = new Map<string, string[]>();
+  for (const row of planRows) {
+    const list = planGroupIds.get(row.planId) ?? [];
+    list.push(row.groupId);
+    planGroupIds.set(row.planId, list);
+    groupIds.add(row.groupId);
+  }
+
+  const groupNodeIds = new Map<string, string[]>();
+  if (groupIds.size > 0) {
+    const groupRows = await db
+      .select({ groupId: nodeGroup.groupId, nodeId: nodeGroup.nodeId })
+      .from(nodeGroup)
+      .where(inArray(nodeGroup.groupId, [...groupIds]));
+    for (const row of groupRows) {
+      const list = groupNodeIds.get(row.groupId) ?? [];
+      list.push(row.nodeId);
+      groupNodeIds.set(row.groupId, list);
+    }
+  }
+
+  return applyPublishGate({
+    now: new Date(),
+    subscription: sub,
+    user: userRow,
+    nodes,
+    pending,
+    planGroupIds,
+    groupNodeIds,
+  });
 }
 
 /**

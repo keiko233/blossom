@@ -10,6 +10,13 @@ interface SubscriptionCredentials {
 
 interface BuildOptions {
   credentials: SubscriptionCredentials;
+  /**
+   * Per-node credential override (publish gate): while a credential rotation
+   * is still unapplied on a node's server, that node's proxy must keep
+   * emitting the previous credentials — the running agent config knows
+   * nothing else. Nodes absent from the resolver use `credentials`.
+   */
+  resolveCredentials?: (node: ResolvedNode) => SubscriptionCredentials;
 }
 
 /** Makes proxy names unique by appending a counter when duplicated. */
@@ -35,11 +42,16 @@ export function buildClashConfig(
   nodes: ResolvedNode[],
   options: BuildOptions,
 ): { config: unknown; proxyNames: string[] } {
-  const { credentials } = options;
+  const { credentials, resolveCredentials } = options;
 
   const proxies = uniqueProxyNames(
     nodes
-      .map((resolved) => nodeToClashProxy(resolved, credentials))
+      .map((resolved) =>
+        nodeToClashProxy(
+          resolved,
+          resolveCredentials?.(resolved) ?? credentials,
+        ),
+      )
       .filter((proxy): proxy is Record<string, JsonValue> => proxy !== null),
   );
 

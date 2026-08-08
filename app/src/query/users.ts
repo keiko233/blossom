@@ -14,6 +14,10 @@ import {
   setUserRoleSchema,
   userIdSchema,
 } from "@/orpc/user/schema";
+import {
+  listServerIdsForUserId,
+  recordConfigChange,
+} from "@/query/config-change";
 
 /** TanStack Query key for the admin user list. */
 export const USERS_QUERY_KEY = ["admin", "users"] as const;
@@ -96,6 +100,12 @@ export const banUser = createServerFn({ method: "POST" })
     if (session.user.id === data.userId) {
       throw new Error("Cannot ban yourself");
     }
+    // Publish gate: capture the pre-ban state so a later unban can be held
+    // back until agents serve the user's credentials again.
+    const [preBan] = await db
+      .select({ banned: user.banned, banExpires: user.banExpires })
+      .from(user)
+      .where(eq(user.id, data.userId));
     await getAuth().api.banUser({
       headers: getRequestHeaders(),
       body: {
@@ -106,6 +116,17 @@ export const banUser = createServerFn({ method: "POST" })
           : undefined,
       },
     });
+    if (preBan && !preBan.banned) {
+      await recordConfigChange(db, {
+        kind: "authorization",
+        subjectId: data.userId,
+        prevRow: {
+          banned: preBan.banned,
+          banExpires: preBan.banExpires?.toISOString() ?? null,
+        },
+        serverIds: await listServerIdsForUserId(db, data.userId),
+      });
+    }
     return { id: data.userId };
   });
 
@@ -113,10 +134,27 @@ export const unbanUser = createServerFn({ method: "POST" })
   .validator(userIdSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
+    const [preUnban] = await db
+      .select({ banned: user.banned, banExpires: user.banExpires })
+      .from(user)
+      .where(eq(user.id, data.id));
     await getAuth().api.unbanUser({
       headers: getRequestHeaders(),
       body: { userId: data.id },
     });
+    // Publish gate: the subscription keeps refusing access until every agent
+    // hosting the user's nodes has applied the revision that re-adds them.
+    if (preUnban?.banned) {
+      await recordConfigChange(db, {
+        kind: "authorization",
+        subjectId: data.id,
+        prevRow: {
+          banned: preUnban.banned,
+          banExpires: preUnban.banExpires?.toISOString() ?? null,
+        },
+        serverIds: await listServerIdsForUserId(db, data.id),
+      });
+    }
     return { id: data.id };
   });
 

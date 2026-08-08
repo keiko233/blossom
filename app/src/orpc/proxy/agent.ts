@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import type { NewTrafficRecord } from "@/db/traffic-schema";
 import { hashAgentToken, parseBearerToken } from "@/lib/agent-token";
+import { formatDesiredRevision } from "@/lib/config-revision";
 import {
   findAgentServerByTokenHash,
   getSubscriptionUserMap,
@@ -141,11 +142,18 @@ export const getAgentConfigV3 = agentProcedure
       managedTlsBindings,
     );
 
-    const desiredRevision = computeDesiredRevision(
-      config,
-      managedTlsBindings,
-      certificateArtifacts,
-      materializedNodeIds,
+    // The revision pairs the server's monotonic publish-gate sequence with
+    // the content hash. The agent treats it as opaque (equality + content
+    // byte-compare only); the subscription gate parses the seq prefix back
+    // out of heartbeat `appliedRevision` reports.
+    const desiredRevision = formatDesiredRevision(
+      context.server.desiredRevisionSeq,
+      computeDesiredRevision(
+        config,
+        managedTlsBindings,
+        certificateArtifacts,
+        materializedNodeIds,
+      ),
     );
 
     return {

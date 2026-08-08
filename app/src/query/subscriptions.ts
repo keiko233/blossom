@@ -15,6 +15,11 @@ import {
   subscriptionIdSchema,
   updateSubscriptionSchema,
 } from "@/orpc/plan/schema";
+import {
+  listServerIdsForPlanIds,
+  listServerIdsForSubscriptionId,
+  recordConfigChange,
+} from "@/query/config-change";
 
 /** TanStack Query key for the admin subscription list. */
 export const SUBSCRIPTIONS_QUERY_KEY = ["admin", "subscriptions"] as const;
@@ -74,17 +79,28 @@ export const createSubscription = createServerFn({ method: "POST" })
         token: generateSubscriptionToken(),
       })
       .returning();
+    // Publish gate: the fresh credentials are in no running agent config yet,
+    // so the subscription holds back its nodes until every server hosting them
+    // has applied the revision that introduces this user.
+    await recordConfigChange(db, {
+      kind: "credential",
+      subjectId: row.id,
+      prevRow: null,
+      serverIds: await listServerIdsForPlanIds(db, [data.planId]),
+    });
     return row;
   });
-
-/**
- * Rotates a subscription's proxy credentials. The old secret keeps working on a
- * node until its agent next pulls config — there is no push invalidation.
- */
 export const resetSubscriptionCredentials = createServerFn({ method: "POST" })
   .validator(subscriptionIdSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
+    const [existing] = await db
+      .select()
+      .from(subscription)
+      .where(eq(subscription.id, data.id));
+    if (!existing) {
+      throw new Error("Not found");
+    }
     const credentials = generateSubscriptionCredentials();
     const [row] = await db
       .update(subscription)
@@ -97,6 +113,17 @@ export const resetSubscriptionCredentials = createServerFn({ method: "POST" })
     if (!row) {
       throw new Error("Not found");
     }
+    // Publish gate: subscriptions keep emitting the previous credentials for
+    // nodes on servers that have not applied the rotation yet.
+    await recordConfigChange(db, {
+      kind: "credential",
+      subjectId: data.id,
+      prevRow: {
+        credentialUuid: existing.credentialUuid,
+        credentialPassword: existing.credentialPassword,
+      },
+      serverIds: await listServerIdsForSubscriptionId(db, data.id),
+    });
     return row;
   });
 
@@ -126,6 +153,14 @@ export const updateSubscription = createServerFn({ method: "POST" })
     await ensureAdmin();
     const { id, expiresAt, ...rest } = data;
 
+    const [existing] = await db
+      .select()
+      .from(subscription)
+      .where(eq(subscription.id, id));
+    if (!existing) {
+      throw new Error("Not found");
+    }
+
     const [row] = await db
       .update(subscription)
       .set({
@@ -136,6 +171,26 @@ export const updateSubscription = createServerFn({ method: "POST" })
       .returning();
     if (!row) {
       throw new Error("Not found");
+    }
+
+    // Publish gate: re-activations (status/expiry moving from ineligible to
+    // eligible) change what the agent must serve; hold the subscription
+    // payload until every affected server confirms. De-activation directions
+    // are already refused at fetch time.
+    const statusChanged = row.status !== existing.status;
+    const expiryChanged =
+      row.expiresAt.getTime() !== existing.expiresAt.getTime();
+    if (statusChanged || expiryChanged) {
+      await recordConfigChange(db, {
+        kind: "authorization",
+        subjectId: id,
+        prevRow: {
+          planId: existing.planId,
+          status: existing.status,
+          expiresAt: existing.expiresAt.toISOString(),
+        },
+        serverIds: await listServerIdsForSubscriptionId(db, id),
+      });
     }
     return row;
   });

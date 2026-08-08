@@ -11,6 +11,11 @@ import {
   groupIdSchema,
   updateGroupSchema,
 } from "@/orpc/proxy/schema";
+import {
+  listServerIdsForGroupIds,
+  listServerIdsForNodeIds,
+  recordConfigChange,
+} from "@/query/config-change";
 
 /** TanStack Query key for the admin group list. */
 export const GROUPS_QUERY_KEY = ["admin", "groups"] as const;
@@ -106,11 +111,32 @@ export const updateGroup = createServerFn({ method: "POST" })
 
     // Replace the full membership: delete + insert beats diffing at this scale.
     if (nodeIds !== undefined) {
+      const previousNodeIds = (
+        await db
+          .select({ nodeId: nodeGroup.nodeId })
+          .from(nodeGroup)
+          .where(eq(nodeGroup.groupId, id))
+      ).map((member) => member.nodeId);
       await db.delete(nodeGroup).where(eq(nodeGroup.groupId, id));
       if (nodeIds.length > 0) {
         await db
           .insert(nodeGroup)
           .values(nodeIds.map((nodeId) => ({ nodeId, groupId: id })));
+      }
+      // Publish gate: newly membered nodes stay out of subscriptions until
+      // the hosting agents apply the change; removed nodes drop immediately.
+      const unchanged =
+        previousNodeIds.length === nodeIds.length &&
+        previousNodeIds.every((nodeId) => nodeIds.includes(nodeId));
+      if (!unchanged) {
+        await recordConfigChange(db, {
+          kind: "authorization",
+          subjectId: id,
+          prevRow: { nodeIds: previousNodeIds },
+          serverIds: await listServerIdsForNodeIds(db, [
+            ...new Set([...previousNodeIds, ...nodeIds]),
+          ]),
+        });
       }
     }
     return row;
@@ -120,12 +146,29 @@ export const deleteGroup = createServerFn({ method: "POST" })
   .validator(groupIdSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
+    // Publish gate: capture membership before the cascade wipes it so the
+    // affected servers' agents get a revision bump for the removal.
+    const previousNodeIds = (
+      await db
+        .select({ nodeId: nodeGroup.nodeId })
+        .from(nodeGroup)
+        .where(eq(nodeGroup.groupId, data.id))
+    ).map((member) => member.nodeId);
+    const serverIds = await listServerIdsForGroupIds(db, [data.id]);
     const [row] = await db
       .delete(proxyGroup)
       .where(eq(proxyGroup.id, data.id))
       .returning();
     if (!row) {
       throw new Error("Not found");
+    }
+    if (previousNodeIds.length > 0) {
+      await recordConfigChange(db, {
+        kind: "authorization",
+        subjectId: data.id,
+        prevRow: { nodeIds: previousNodeIds },
+        serverIds,
+      });
     }
     return { id: row.id };
   });

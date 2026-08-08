@@ -3,7 +3,7 @@ import { count, desc, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
 import { db } from "@/db";
-import { node, server, type Server } from "@/db/proxy-schema";
+import { node, type Server, server } from "@/db/proxy-schema";
 import { generateAgentToken } from "@/lib/agent-token";
 import { ensureAdmin } from "@/lib/ensure-admin";
 import {
@@ -11,6 +11,10 @@ import {
   serverIdSchema,
   updateServerSchema,
 } from "@/orpc/proxy/schema";
+import {
+  countPendingConfigChangesByServer,
+  recordConfigChange,
+} from "@/query/config-change";
 
 /** TanStack Query key for the admin server list. */
 export const SERVERS_QUERY_KEY = ["admin", "servers"] as const;
@@ -27,6 +31,13 @@ export type ServerDTO = Omit<Server, "agentTokenHash">;
 /** Server summary joined with the live child-node count for the list UI. */
 export interface ServerListItem extends ServerDTO {
   nodeCount: number;
+  /**
+   * Changes recorded against this server that its agent has not confirmed
+   * applied yet (`revisionSeq > appliedRevisionSeq`). Non-zero while a change
+   * is inside the poll window; stays non-zero ("awaiting apply") if the agent
+   * is offline — the subscription gate holds back those changes indefinitely.
+   */
+  pendingConfigChanges: number;
 }
 
 function toDTO(row: Server): ServerDTO {
@@ -44,6 +55,9 @@ export const listServers = createServerFn({ method: "GET" }).handler(
         .from(node)
         .groupBy(node.serverId),
     ]);
+    const pendingCounts = await countPendingConfigChangesByServer(
+      servers.map((row) => row.id),
+    );
 
     const countByServer = new Map(
       nodeCounts.map((row) => [row.serverId, row.count]),
@@ -51,6 +65,7 @@ export const listServers = createServerFn({ method: "GET" }).handler(
     const result: ServerListItem[] = servers.map((row) => ({
       ...toDTO(row),
       nodeCount: countByServer.get(row.id) ?? 0,
+      pendingConfigChanges: pendingCounts.get(row.id) ?? 0,
     }));
     return result;
   },
@@ -93,6 +108,14 @@ export const updateServer = createServerFn({ method: "POST" })
     await ensureAdmin();
     const { id, ...rest } = data;
 
+    const [existing] = await db
+      .select({ enabled: server.enabled })
+      .from(server)
+      .where(eq(server.id, id));
+    if (!existing) {
+      throw new Error("Not found");
+    }
+
     const [row] = await db
       .update(server)
       .set(rest)
@@ -101,6 +124,18 @@ export const updateServer = createServerFn({ method: "POST" })
 
     if (!row) {
       throw new Error("Not found");
+    }
+    // Publish gate: a freshly enabled server's nodes stay out of
+    // subscriptions until the agent applies the config that serves them;
+    // disabling hides them immediately (safe direction). Address/name edits
+    // resolve client-side and change no agent state, so they are not gated.
+    if (rest.enabled !== undefined && rest.enabled !== existing.enabled) {
+      await recordConfigChange(db, {
+        kind: "server",
+        subjectId: id,
+        prevRow: { enabled: existing.enabled },
+        serverIds: [id],
+      });
     }
     return toDTO(row);
   });

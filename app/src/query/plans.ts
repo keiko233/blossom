@@ -10,6 +10,10 @@ import {
   planIdSchema,
   updatePlanSchema,
 } from "@/orpc/plan/schema";
+import {
+  listServerIdsForGroupIds,
+  recordConfigChange,
+} from "@/query/config-change";
 
 /** TanStack Query key for the admin plan list. */
 export const PLANS_QUERY_KEY = ["admin", "plans"] as const;
@@ -89,11 +93,32 @@ export const updatePlan = createServerFn({ method: "POST" })
 
     // Replace the full binding list: delete + insert beats diffing at this scale.
     if (groupIds !== undefined) {
+      const previousGroupIds = (
+        await db
+          .select({ groupId: planGroup.groupId })
+          .from(planGroup)
+          .where(eq(planGroup.planId, id))
+      ).map((binding) => binding.groupId);
       await db.delete(planGroup).where(eq(planGroup.planId, id));
       if (groupIds.length > 0) {
         await db
           .insert(planGroup)
           .values(groupIds.map((groupId) => ({ planId: id, groupId })));
+      }
+      // Publish gate: newly reachable nodes stay out of subscriptions until
+      // the hosting agents apply the change; lost nodes drop immediately.
+      const unchanged =
+        previousGroupIds.length === groupIds.length &&
+        previousGroupIds.every((groupId) => groupIds.includes(groupId));
+      if (!unchanged) {
+        await recordConfigChange(db, {
+          kind: "authorization",
+          subjectId: id,
+          prevRow: { groupIds: previousGroupIds },
+          serverIds: await listServerIdsForGroupIds(db, [
+            ...new Set([...previousGroupIds, ...groupIds]),
+          ]),
+        });
       }
     }
     return row;

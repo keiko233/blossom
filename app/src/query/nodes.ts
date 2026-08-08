@@ -18,12 +18,16 @@ import { ensureAdmin } from "@/lib/ensure-admin";
 import { supportsInteractiveTransactions } from "@/lib/env-schema";
 import {
   BINDING_DISABLE_WRITE,
+  type BindingUpsertPlan,
   bindingUpsertWrite,
   isNewlyActivatedBinding,
   planBindingUpsert,
   shouldDisableBinding,
-  type BindingUpsertPlan,
 } from "@/lib/node-certificate-binding";
+import {
+  isNodeConfigChange,
+  snapshotNodeForGate,
+} from "@/lib/node-config-change";
 import {
   createNodeSchema,
   nodeIdSchema,
@@ -36,6 +40,7 @@ import {
   protocolSupportsTls,
   withoutNodeTlsMaterial,
 } from "@/orpc/proxy/sing-box-registry";
+import { recordConfigChange } from "@/query/config-change";
 
 /** TanStack Query key for the admin node list. */
 export const NODES_QUERY_KEY = ["admin", "nodes"] as const;
@@ -415,6 +420,17 @@ export const createNode = createServerFn({ method: "POST" })
         })
         .returning();
       if (!row) throw new Error("Failed to create node");
+      // Publish gate: an enabled node appears in subscriptions only after the
+      // agent confirms the revision that first serves it. Disabled nodes are
+      // absent from both payloads, so creating one records nothing.
+      if (row.enabled) {
+        await recordConfigChange(tx, {
+          kind: "node",
+          subjectId: row.id,
+          prevRow: null,
+          serverIds: [row.serverId],
+        });
+      }
       return row;
     };
 
@@ -517,6 +533,22 @@ export const updateNode = createServerFn({ method: "POST" })
         ? {}
         : { address: address === null ? null : address };
 
+    // Publish gate: record only changes that alter the compiled agent config
+    // or the client connection tuple, and only when the node is enabled on
+    // either side of the transition (a dark node is in neither payload).
+    const configChanged = isNodeConfigChange(existingNode, {
+      protocol: effectiveProtocol,
+      listenPort: rest.listenPort ?? existingNode.listenPort,
+      settings: sanitizedSettings,
+      certificateId: effectiveCertificateId,
+      tlsServerName: effectiveTlsServerName,
+      serverId: effectiveServerId,
+      enabled: rest.enabled ?? existingNode.enabled,
+    });
+    const prevRow = configChanged
+      ? await snapshotNodeForGate(db, existingNode)
+      : null;
+
     let pendingPlan: BindingUpsertPlan | null = null;
     let nodePersisted = false;
 
@@ -551,6 +583,16 @@ export const updateNode = createServerFn({ method: "POST" })
         throw new Error("Not found");
       }
       nodePersisted = true;
+      if (configChanged) {
+        // Both the old and the new server must apply before subscriptions
+        // publish the change (moving a node touches both configs).
+        await recordConfigChange(tx, {
+          kind: "node",
+          subjectId: id,
+          prevRow,
+          serverIds: [...new Set([existingNode.serverId, row.serverId])],
+        });
+      }
       if (oldBinding && bindingChanged) {
         await maybeDisableBinding(
           tx,
@@ -650,6 +692,14 @@ export const deleteNode = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     await ensureAdmin();
     const { db, databaseDriver } = await import("@/db");
+    // Snapshot before the delete so the agent revision bump carries the
+    // removed node's identity. (Subscriptions stop offering a deleted node
+    // immediately — the safe direction — so no gate snapshot is needed for
+    // replay; the change record only tracks the agent-side removal.)
+    const [existing] = await db.select().from(node).where(eq(node.id, data.id));
+    if (!existing) {
+      throw new Error("Not found");
+    }
     const run = async (tx: DbHandle) => {
       const [row] = await tx
         .delete(node)
@@ -657,6 +707,14 @@ export const deleteNode = createServerFn({ method: "POST" })
         .returning();
       if (!row) {
         throw new Error("Not found");
+      }
+      if (row.enabled) {
+        await recordConfigChange(tx, {
+          kind: "node",
+          subjectId: row.id,
+          prevRow: null,
+          serverIds: [row.serverId],
+        });
       }
       if (
         row.certificateId &&

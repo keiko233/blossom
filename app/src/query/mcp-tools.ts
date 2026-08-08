@@ -3,9 +3,18 @@ import { count, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { user } from "@/db/auth-schema";
 import { session } from "@/db/auth-schema";
-import { plan, subscription, type Subscription } from "@/db/plan-schema";
-import { node, server, type Node, type Server } from "@/db/proxy-schema";
+import { plan, type Subscription, subscription } from "@/db/plan-schema";
+import { type Node, node, type Server, server } from "@/db/proxy-schema";
+import {
+  isNodeConfigChange,
+  snapshotNodeForGate,
+} from "@/lib/node-config-change";
 import { parseNodeSettings } from "@/orpc/proxy/schema";
+import {
+  listServerIdsForSubscriptionId,
+  listServerIdsForUserId,
+  recordConfigChange,
+} from "@/query/config-change";
 import type { ServerDTO } from "@/query/servers";
 
 const DEFAULT_LIMIT = 50;
@@ -188,6 +197,13 @@ export async function banUserMCP(
 
   await requireUserExists(targetUserId);
 
+  // Publish gate: capture the pre-ban state so an unban can be held back
+  // until agents serve the user's credentials again.
+  const [preBan] = await db
+    .select({ banned: user.banned, banExpires: user.banExpires })
+    .from(user)
+    .where(eq(user.id, targetUserId));
+
   const banExpires = expiresInDays
     ? new Date(Date.now() + expiresInDays * 86400 * 1000)
     : undefined;
@@ -203,6 +219,18 @@ export async function banUserMCP(
 
   await db.delete(session).where(eq(session.userId, targetUserId));
 
+  if (preBan && !preBan.banned) {
+    await recordConfigChange(db, {
+      kind: "authorization",
+      subjectId: targetUserId,
+      prevRow: {
+        banned: preBan.banned,
+        banExpires: preBan.banExpires?.toISOString() ?? null,
+      },
+      serverIds: await listServerIdsForUserId(db, targetUserId),
+    });
+  }
+
   return { id: targetUserId };
 }
 
@@ -212,10 +240,25 @@ export async function unbanUserMCP(
 ): Promise<{ id: string }> {
   await requireActorAdmin(actorUserId);
   await requireUserExists(targetUserId);
+  const [preUnban] = await db
+    .select({ banned: user.banned, banExpires: user.banExpires })
+    .from(user)
+    .where(eq(user.id, targetUserId));
   await db
     .update(user)
     .set({ banned: false, banReason: null, banExpires: null })
     .where(eq(user.id, targetUserId));
+  if (preUnban?.banned) {
+    await recordConfigChange(db, {
+      kind: "authorization",
+      subjectId: targetUserId,
+      prevRow: {
+        banned: preUnban.banned,
+        banExpires: preUnban.banExpires?.toISOString() ?? null,
+      },
+      serverIds: await listServerIdsForUserId(db, targetUserId),
+    });
+  }
   return { id: targetUserId };
 }
 
@@ -268,6 +311,16 @@ export async function createNodeMCP(
       updatedAt: new Date(),
     })
     .returning();
+  // Publish gate: hold a newly enabled node out of subscriptions until the
+  // agent confirms the revision that first serves it.
+  if (row.enabled) {
+    await recordConfigChange(db, {
+      kind: "node",
+      subjectId: row.id,
+      prevRow: null,
+      serverIds: [row.serverId],
+    });
+  }
   return row;
 }
 
@@ -299,16 +352,17 @@ export async function updateNodeMCP(
 
   const { protocol, settings, address, ...rest } = input;
 
+  const [existingNode] = await db
+    .select()
+    .from(node)
+    .where(eq(node.id, nodeId));
+  if (!existingNode) throw new Error("Not found");
+
   let effectiveProtocol: string | undefined;
   if (settings !== undefined) {
     effectiveProtocol = protocol;
     if (!effectiveProtocol) {
-      const [existing] = await db
-        .select({ protocol: node.protocol })
-        .from(node)
-        .where(eq(node.id, nodeId));
-      if (!existing) throw new Error("Not found");
-      effectiveProtocol = existing.protocol;
+      effectiveProtocol = existingNode.protocol;
     }
   }
 
@@ -319,6 +373,22 @@ export async function updateNodeMCP(
     settings !== undefined
       ? { settings: parseNodeSettings(effectiveProtocol!, settings) }
       : {};
+
+  // Publish gate: record only changes that alter the compiled agent config
+  // or the client connection tuple.
+  const after = {
+    protocol: protocol ?? existingNode.protocol,
+    listenPort: rest.listenPort ?? existingNode.listenPort,
+    settings: settingsUpdate.settings ?? existingNode.settings,
+    certificateId: existingNode.certificateId,
+    tlsServerName: existingNode.tlsServerName,
+    serverId: rest.serverId ?? existingNode.serverId,
+    enabled: rest.enabled ?? existingNode.enabled,
+  };
+  const configChanged = isNodeConfigChange(existingNode, after);
+  const prevRow = configChanged
+    ? await snapshotNodeForGate(db, existingNode)
+    : null;
 
   const [row] = await db
     .update(node)
@@ -331,6 +401,14 @@ export async function updateNodeMCP(
     .where(eq(node.id, nodeId))
     .returning();
   if (!row) throw new Error("Not found");
+  if (configChanged) {
+    await recordConfigChange(db, {
+      kind: "node",
+      subjectId: nodeId,
+      prevRow,
+      serverIds: [...new Set([existingNode.serverId, row.serverId])],
+    });
+  }
   return row;
 }
 
@@ -341,6 +419,14 @@ export async function deleteNodeMCP(
   await requireActorAdmin(actorUserId);
   const [row] = await db.delete(node).where(eq(node.id, nodeId)).returning();
   if (!row) throw new Error("Not found");
+  if (row.enabled) {
+    await recordConfigChange(db, {
+      kind: "node",
+      subjectId: row.id,
+      prevRow: null,
+      serverIds: [row.serverId],
+    });
+  }
   return { id: row.id };
 }
 
@@ -360,12 +446,25 @@ export async function updateServerMCP(
   if (Object.keys(input).length === 0) {
     throw new Error("Invalid server update: no changes supplied");
   }
+  const [existingServer] = await db
+    .select({ enabled: server.enabled })
+    .from(server)
+    .where(eq(server.id, serverId));
+  if (!existingServer) throw new Error("Not found");
   const [row] = await db
     .update(server)
     .set(input)
     .where(eq(server.id, serverId))
     .returning();
   if (!row) throw new Error("Not found");
+  if (input.enabled !== undefined && input.enabled !== existingServer.enabled) {
+    await recordConfigChange(db, {
+      kind: "server",
+      subjectId: serverId,
+      prevRow: { enabled: existingServer.enabled },
+      serverIds: [serverId],
+    });
+  }
   return stripAgentTokenHash(row);
 }
 
@@ -374,12 +473,25 @@ export async function enableServerMCP(
   serverId: string,
 ): Promise<ServerDTO> {
   await requireActorAdmin(actorUserId);
+  const [existing] = await db
+    .select({ enabled: server.enabled })
+    .from(server)
+    .where(eq(server.id, serverId));
+  if (!existing) throw new Error("Not found");
   const [row] = await db
     .update(server)
     .set({ enabled: true })
     .where(eq(server.id, serverId))
     .returning();
   if (!row) throw new Error("Not found");
+  if (!existing.enabled) {
+    await recordConfigChange(db, {
+      kind: "server",
+      subjectId: serverId,
+      prevRow: { enabled: false },
+      serverIds: [serverId],
+    });
+  }
   return stripAgentTokenHash(row);
 }
 
@@ -388,12 +500,25 @@ export async function disableServerMCP(
   serverId: string,
 ): Promise<ServerDTO> {
   await requireActorAdmin(actorUserId);
+  const [existing] = await db
+    .select({ enabled: server.enabled })
+    .from(server)
+    .where(eq(server.id, serverId));
+  if (!existing) throw new Error("Not found");
   const [row] = await db
     .update(server)
     .set({ enabled: false })
     .where(eq(server.id, serverId))
     .returning();
   if (!row) throw new Error("Not found");
+  if (existing.enabled) {
+    await recordConfigChange(db, {
+      kind: "server",
+      subjectId: serverId,
+      prevRow: { enabled: true },
+      serverIds: [serverId],
+    });
+  }
   return stripAgentTokenHash(row);
 }
 
@@ -443,6 +568,12 @@ export async function updateSubscriptionMCP(
     }
   }
 
+  const [existingSub] = await db
+    .select()
+    .from(subscription)
+    .where(eq(subscription.id, subscriptionId));
+  if (!existingSub) throw new Error("Not found");
+
   const [row] = await db
     .update(subscription)
     .set({
@@ -457,6 +588,24 @@ export async function updateSubscriptionMCP(
     .where(eq(subscription.id, subscriptionId))
     .returning();
   if (!row) throw new Error("Not found");
+  // Publish gate: re-activations stay hidden from the subscription endpoint
+  // until agents serve the user again; de-activations apply immediately.
+  if (
+    (input.status !== undefined && input.status !== existingSub.status) ||
+    (input.expiresAt !== undefined &&
+      new Date(input.expiresAt).getTime() !== existingSub.expiresAt.getTime())
+  ) {
+    await recordConfigChange(db, {
+      kind: "authorization",
+      subjectId: subscriptionId,
+      prevRow: {
+        planId: existingSub.planId,
+        status: existingSub.status,
+        expiresAt: existingSub.expiresAt.toISOString(),
+      },
+      serverIds: await listServerIdsForSubscriptionId(db, subscriptionId),
+    });
+  }
   return stripSubscriptionCredentials(row);
 }
 
@@ -465,12 +614,31 @@ export async function cancelSubscriptionMCP(
   subscriptionId: string,
 ): Promise<SubscriptionSummary> {
   await requireActorAdmin(actorUserId);
+  const [existingSub] = await db
+    .select()
+    .from(subscription)
+    .where(eq(subscription.id, subscriptionId));
+  if (!existingSub) throw new Error("Not found");
   const [row] = await db
     .update(subscription)
     .set({ status: "cancelled" })
     .where(eq(subscription.id, subscriptionId))
     .returning();
   if (!row) throw new Error("Not found");
+  // Cancellation is the safe direction (the subscription endpoint already
+  // refuses it); the record only tracks the pending agent-side removal.
+  if (existingSub.status !== "cancelled") {
+    await recordConfigChange(db, {
+      kind: "authorization",
+      subjectId: subscriptionId,
+      prevRow: {
+        planId: existingSub.planId,
+        status: existingSub.status,
+        expiresAt: existingSub.expiresAt.toISOString(),
+      },
+      serverIds: await listServerIdsForSubscriptionId(db, subscriptionId),
+    });
+  }
   return stripSubscriptionCredentials(row);
 }
 
