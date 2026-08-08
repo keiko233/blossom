@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { and, desc, eq, ne } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
-import { db, databaseDriver } from "@/db";
+import type { Database } from "@/db";
 import {
   certificateMaterial,
   certificateServer,
@@ -102,6 +102,7 @@ function resolveAddress(
 
 export const listNodes = createServerFn({ method: "GET" }).handler(async () => {
   await ensureAdmin();
+  const { db } = await import("@/db");
   const rows = await db
     .select({ node, server })
     .from(node)
@@ -146,6 +147,7 @@ export const getNode = createServerFn({ method: "GET" })
   .validator(nodeIdSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
+    const { db } = await import("@/db");
     const [row] = await db
       .select({ node, server })
       .from(node)
@@ -203,14 +205,16 @@ export const getNode = createServerFn({ method: "GET" })
 // evidence-based compensation for a newly created/re-enabled binding if node
 // persistence fails.
 
-type DbHandle = typeof db;
+type DbHandle = Database;
 
 async function withNodeTransaction<T>(
+  database: DbHandle,
+  driver: Parameters<typeof supportsInteractiveTransactions>[0],
   run: (tx: DbHandle) => Promise<T>,
 ): Promise<T> {
-  if (supportsInteractiveTransactions(databaseDriver)) {
+  if (supportsInteractiveTransactions(driver)) {
     return (
-      db as unknown as {
+      database as unknown as {
         transaction: <Result>(
           callback: (tx: DbHandle) => Promise<Result>,
         ) => Promise<Result>;
@@ -220,7 +224,7 @@ async function withNodeTransaction<T>(
   // neon-http exposes transaction() in Drizzle's common surface, but calling it
   // throws at runtime. Keep the same parent-first, reference-safe ordering used
   // by the other multi-statement mutations in this app.
-  return run(db);
+  return run(database);
 }
 
 /** Whether a node actually serves a managed certificate given its protocol + settings. */
@@ -338,6 +342,7 @@ async function maybeDisableBinding(
  * same server is never harmed; otherwise disable the row we just activated.
  */
 async function compensateBindingAfterNodeFailure(
+  database: DbHandle,
   certificateId: string | null | undefined,
   serverId: string | null | undefined,
   plan: BindingUpsertPlan | null,
@@ -345,9 +350,9 @@ async function compensateBindingAfterNodeFailure(
   if (!certificateId || !serverId) return;
   if (!isNewlyActivatedBinding(plan)) return;
   const stillUsed =
-    (await countNodesUsingCertificate(db, serverId, certificateId)) > 0;
+    (await countNodesUsingCertificate(database, serverId, certificateId)) > 0;
   if (stillUsed) return;
-  await db
+  await database
     .update(certificateServer)
     .set({ ...BINDING_DISABLE_WRITE })
     .where(
@@ -362,8 +367,10 @@ export const createNode = createServerFn({ method: "POST" })
   .validator(createNodeSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
+    const { db, databaseDriver } = await import("@/db");
 
     await validateManagedCertificateSelection(
+      db,
       data.certificateId,
       data.tlsServerName,
       data.protocol,
@@ -413,12 +420,13 @@ export const createNode = createServerFn({ method: "POST" })
 
     let row;
     if (supportsInteractiveTransactions(databaseDriver)) {
-      row = await withNodeTransaction(run);
+      row = await withNodeTransaction(db, databaseDriver, run);
     } else {
       try {
         row = await run(db);
       } catch (error) {
         await compensateBindingAfterNodeFailure(
+          db,
           data.certificateId,
           data.serverId,
           pendingPlan,
@@ -433,6 +441,7 @@ export const updateNode = createServerFn({ method: "POST" })
   .validator(updateNodeSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
+    const { db, databaseDriver } = await import("@/db");
     const {
       id,
       protocol,
@@ -453,6 +462,7 @@ export const updateNode = createServerFn({ method: "POST" })
     const effectiveTlsServerName =
       tlsServerName === undefined ? existingNode.tlsServerName : tlsServerName;
     await validateManagedCertificateSelection(
+      db,
       effectiveCertificateId,
       effectiveTlsServerName,
       effectiveProtocol,
@@ -553,13 +563,14 @@ export const updateNode = createServerFn({ method: "POST" })
     };
 
     if (supportsInteractiveTransactions(databaseDriver)) {
-      return withNodeTransaction(run);
+      return withNodeTransaction(db, databaseDriver, run);
     }
     try {
       return await run(db);
     } catch (error) {
       if (!nodePersisted) {
         await compensateBindingAfterNodeFailure(
+          db,
           newBinding?.certificateId,
           newBinding?.serverId,
           pendingPlan,
@@ -578,6 +589,7 @@ export const updateNode = createServerFn({ method: "POST" })
  * material within its validity window) and SNI domain coverage.
  */
 async function validateManagedCertificateSelection(
+  database: DbHandle,
   certificateId: string | null | undefined,
   tlsServerName: string | null | undefined,
   protocol: string,
@@ -595,7 +607,7 @@ async function validateManagedCertificateSelection(
   if (isNodeRealityEnabled(settings)) {
     throw new Error("Reality cannot be combined with a managed certificate");
   }
-  const [certificate] = await db
+  const [certificate] = await database
     .select({
       certificate: managedCertificate,
       materialId: certificateMaterial.id,
@@ -637,6 +649,7 @@ export const deleteNode = createServerFn({ method: "POST" })
   .validator(nodeIdSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
+    const { db, databaseDriver } = await import("@/db");
     const run = async (tx: DbHandle) => {
       const [row] = await tx
         .delete(node)
@@ -653,5 +666,5 @@ export const deleteNode = createServerFn({ method: "POST" })
       }
       return { id: row.id };
     };
-    return withNodeTransaction(run);
+    return withNodeTransaction(db, databaseDriver, run);
   });
