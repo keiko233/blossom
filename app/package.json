@@ -55,7 +55,7 @@
     "drizzle-zod": "^0.8.3",
     "filesize": "^11.0.22",
     "lodash-es": "^4.18.1",
-    "lucide-react": "^0.545.0",
+    "lucide-react": "^1.0.0",
     "mcp-handler": "^1.1.0",
     "meta-json-schema": "^1.19.27",
     "ms": "^2.1.3",
