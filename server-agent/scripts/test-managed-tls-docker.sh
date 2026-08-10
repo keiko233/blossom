@@ -63,6 +63,7 @@ start_mock
 
 start_agent() {
   docker run -d --name "$container" \
+    --user "$(id -u):$(id -g)" \
     --add-host host.docker.internal:host-gateway \
     -p 127.0.0.1::18443 \
     -v "$state_dir:/var/lib/blossom-agent" \
