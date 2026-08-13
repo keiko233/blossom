@@ -7,6 +7,7 @@ import { devtools } from "@tanstack/devtools-vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { nitro } from "nitro/vite";
+import { fileURLToPath } from "node:url";
 import Icons from "unplugin-icons/vite";
 import { defineConfig, loadEnv } from "vite";
 
@@ -23,6 +24,15 @@ if (!DEPLOY_TARGETS.includes(deployTarget)) {
 
 const config = defineConfig(({ mode, command }) => {
   const runtimeEnv = loadEnv(mode, import.meta.dirname, "");
+  if (
+    deployTarget === "cloudflare" &&
+    command === "serve" &&
+    runtimeEnv.DATABASE_URL &&
+    !process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE
+  ) {
+    process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE =
+      runtimeEnv.DATABASE_URL;
+  }
   clientEnvSchema.parse(runtimeEnv); // client VITE_* vars are baked into the bundle -> validate at build
   if (command === "serve" && !process.env.SKIP_ENV_VALIDATION) {
     // dev-only fail-fast; production validates server env at runtime via getServerEnv() (src/lib/env.ts)
@@ -32,6 +42,16 @@ const config = defineConfig(({ mode, command }) => {
   return {
     clearScreen: false,
     resolve: {
+      alias: {
+        "@/lib/database-connection": fileURLToPath(
+          new URL(
+            deployTarget === "cloudflare"
+              ? "./src/lib/database-connection.cloudflare.ts"
+              : "./src/lib/database-connection.ts",
+            import.meta.url,
+          ),
+        ),
+      },
       tsconfigPaths: true,
     },
     plugins: [

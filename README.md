@@ -31,7 +31,7 @@ The app selects its deploy target through the `DEPLOY_TARGET` build switch in `a
 | Railway | (Docker) | `railway.toml` | Connect the repo; Railway builds from `Dockerfile` |
 | Self-host Docker | (Docker) | `Dockerfile`, `docker-compose.yaml` | `docker compose up -d` |
 
-For Cloudflare, push secrets with `wrangler secret put <NAME>` and non-secret vars through `vars` in `app/wrangler.jsonc`. For Netlify and Vercel, configure environment variables in their dashboards; the build presets handle the rest.
+For Cloudflare, push secrets with `wrangler secret put <NAME>` and non-secret vars through `vars` in `app/wrangler.jsonc`. The Worker is bound to the `blossom` Hyperdrive configuration as `HYPERDRIVE`; when that binding is available, runtime database traffic uses Hyperdrive through `node-postgres`. `DATABASE_URL` remains the fallback for local/non-Cloudflare runtimes and is still required by Drizzle Kit migrations. For Netlify and Vercel, configure environment variables in their dashboards; the build presets handle the rest.
 
 ### Prebuilt Docker images
 
@@ -64,6 +64,8 @@ Server env vars are validated at runtime on the first request, so production bui
 | `GOOGLE_CLIENT_SECRET` | No | Runtime | Google OAuth client secret. |
 
 Copy `app/.env.example` to `app/.env.local` for local development.
+
+During local Cloudflare development, Vite supplies `DATABASE_URL` to Wrangler's local Hyperdrive binding automatically. This exercises the Hyperdrive connection path without remote pooling or caching; production Workers use the deployed Hyperdrive configuration.
 
 ## Database migrations
 
