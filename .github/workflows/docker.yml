@@ -136,7 +136,7 @@ jobs:
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: digests-${{ matrix.target.name }}-${{ matrix.platform.arch }}
           path: /tmp/digests/*
@@ -153,7 +153,7 @@ jobs:
       matrix:
         target: ${{ fromJSON(needs.prepare.outputs.targets) }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: /tmp/digests
           pattern: digests-${{ matrix.target.name }}-*
