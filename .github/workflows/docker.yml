@@ -118,7 +118,7 @@ jobs:
           skip-extraction: ${{ steps.cache-mounts.outputs.cache-hit }}
 
       - id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.target.context }}
           platforms: linux/${{ matrix.platform.arch }}
