@@ -27,7 +27,7 @@ tracing-subscriber = "0.3.23"
 
 [build-dependencies]
 openapiv3 = "2.2"
-prettyplease = "0.2.37"
+prettyplease = "0.3.0"
 progenitor = "0.14.0"
 serde_json = "1.0.150"
 syn = "2.0.118"
