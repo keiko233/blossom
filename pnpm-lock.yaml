@@ -37,10 +37,10 @@ importers:
         version: 1.6.0(@date-fns/tz@1.5.0)(@types/react@19.2.17)(date-fns@4.4.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@better-auth/drizzle-adapter':
         specifier: ^1.6.23
-        version: 1.6.23(@better-auth/core@1.6.23(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.3.7(zod@4.4.3))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.4.0))(@better-auth/utils@0.4.2)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3))
+        version: 1.6.23(@better-auth/core@1.6.23(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.3.7(zod@4.4.3))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.4.0))(@better-auth/utils@0.4.2)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3))
       '@better-auth/oauth-provider':
         specifier: ^1.6.23
-        version: 1.6.23(c49af675cbb8fcaa85a1948e163fc49e)
+        version: 1.6.23(cccdaffbb1e146185db4c982525ea297)
       '@black-duty/sing-box-schema':
         specifier: ^1.13.13
         version: 1.13.13(typescript@6.0.3)
@@ -82,7 +82,7 @@ importers:
         version: 2.0.0
       '@t3-oss/env-core':
         specifier: ^0.13.11
-        version: 0.13.11(typescript@6.0.3)(zod@4.4.3)
+        version: 0.13.11(typescript@6.0.3)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3)
       '@tanstack/match-sorter-utils':
         specifier: ^8.19.4
         version: 8.19.4
@@ -112,7 +112,7 @@ importers:
         version: 5.4.0
       better-auth:
         specifier: ^1.6.23
-        version: 1.6.23(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.27(crossws@0.4.9(srvx@0.11.20))(esbuild@0.28.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(rolldown@1.1.5)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)))(drizzle-kit@1.0.0-rc.4)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3))(next@16.2.10(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(pg@8.22.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.14)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.20.1)(jsdom@28.1.0(@noble/hashes@2.2.0))(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)))
+        version: 1.6.23(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.27(crossws@0.4.9(srvx@0.11.20))(esbuild@0.28.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(rolldown@1.1.5)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)))(drizzle-kit@1.0.0-rc.4)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3))(next@16.2.10(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(pg@8.22.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.14)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.20.1)(jsdom@28.1.0(@noble/hashes@2.2.0))(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)))
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -124,10 +124,10 @@ importers:
         version: 4.4.0
       drizzle-orm:
         specifier: 1.0.0-rc.4
-        version: 1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3)
+        version: 1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3)
       drizzle-zod:
         specifier: ^0.8.3
-        version: 0.8.3(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3))(zod@4.4.3)
+        version: 0.8.3(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3))(zod@4.4.3)
       filesize:
         specifier: ^11.0.22
         version: 11.0.22
@@ -203,10 +203,10 @@ importers:
         version: 2.2.498
       '@inlang/paraglide-js':
         specifier: ^2.20.2
-        version: 2.20.2(typescript@6.0.3)
+        version: 2.25.0(typescript@6.0.3)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))
       '@netlify/vite-plugin-tanstack-start':
         specifier: ^1.3.16
-        version: 1.3.16(@tanstack/react-start@1.168.27(crossws@0.4.9(srvx@0.11.20))(esbuild@0.28.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(rolldown@1.1.5)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)))(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3)))(srvx@0.11.20)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))
+        version: 1.3.16(@tanstack/react-start@1.168.27(crossws@0.4.9(srvx@0.11.20))(esbuild@0.28.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(rolldown@1.1.5)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)))(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3)))(srvx@0.11.20)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))
       '@react-email/ui':
         specifier: ^6.6.6
         version: 6.6.6(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -227,7 +227,7 @@ importers:
         version: 4.3.2(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))
       '@tanstack/devtools-vite':
         specifier: latest
-        version: 0.8.3(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.2)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))
+        version: 0.8.5(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.2)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))
       '@tanstack/react-devtools':
         specifier: ^0.10.8
         version: 0.10.8(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(csstype@3.2.3)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.14)
@@ -278,7 +278,7 @@ importers:
         version: 1.0.0-rc.4
       nitro:
         specifier: 3.0.260610-beta
-        version: 3.0.260610-beta(@electric-sql/pglite@0.3.16)(@netlify/blobs@10.7.9)(@netlify/runtime@4.1.25)(chokidar@5.0.0)(dotenv@17.4.2)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3))(jiti@2.7.0)(lru-cache@11.5.1)(miniflare@4.20260701.0)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))(wrangler@4.107.0)
+        version: 3.0.260610-beta(@electric-sql/pglite@0.3.16)(@netlify/blobs@10.7.9)(@netlify/runtime@4.1.25)(chokidar@5.0.0)(dotenv@17.4.2)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3))(jiti@2.7.0)(lru-cache@11.5.1)(miniflare@4.20260701.0)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))(wrangler@4.107.0)
       tw-animate-css:
         specifier: ^1.4.0
         version: 1.4.0
@@ -1433,20 +1433,23 @@ packages:
   '@import-maps/resolve@2.0.0':
     resolution: {integrity: sha512-RwzRTpmrrS6Q1ZhQExwuxJGK1Wqhv4stt+OF2JzS+uawewpwNyU7EJL1WpBex7aDiiGLs4FsXGkfUBdYuX7xiQ==}
 
-  '@inlang/paraglide-js@2.20.2':
-    resolution: {integrity: sha512-V8iY3uu/vQU94gEag1bdC3glMJSp4Dg3XMwfnabZLBh1Dv0F++DvDYlMeniqv2+nHbnS/twB75AM140OmpHDEg==}
+  '@inlang/paraglide-js@2.25.0':
+    resolution: {integrity: sha512-a3Gw3md1S3WyJK1rFAP/FwDCsFKnu1b98rJ3k5bUl6nc3cmbglaSYpuK9qq9aLLlUlZhuCtB/Pb1LeKDUaLycg==}
     hasBin: true
     peerDependencies:
       typescript: '>=5.6'
+      vite: '>=5.0.0'
     peerDependenciesMeta:
       typescript:
+        optional: true
+      vite:
         optional: true
 
   '@inlang/recommend-sherlock@0.2.1':
     resolution: {integrity: sha512-ckv8HvHy/iTqaVAEKrr+gnl+p3XFNwe5D2+6w6wJk2ORV2XkcRkKOJ/XsTUJbPSiyi4PI+p+T3bqbmNx/rDUlg==}
 
-  '@inlang/sdk@2.10.2':
-    resolution: {integrity: sha512-O1ki72SNK6LPagaGrvlioBb1mWKvump7cO7P85hfGZjdFTmDdn3icI0A6MvaBsB3P9KQHAjzyubnN1OslGufTw==}
+  '@inlang/sdk@3.0.3':
+    resolution: {integrity: sha512-11aQcOw58oAcCtIOJ17XhQxfxaiGsg6XJi7coMul8wNJiW+Rzv2OfJU42NLwSuWXUNSASjegp5Z3uklTkY5GJw==}
     engines: {node: '>=20.0.0'}
 
   '@isaacs/cliui@8.0.2':
@@ -1480,12 +1483,28 @@ packages:
     resolution: {integrity: sha512-hloP58zRVCRSpgDxmqCWJNlizAlUgJFqG2ypq79DCvyv9tHjRYMDOcPFjzfl/A1/YxDvRCZz8wvZvmapQnKwFQ==}
     engines: {node: '>=12'}
 
-  '@lix-js/sdk@0.4.10':
-    resolution: {integrity: sha512-0dMInAJK/67guTG5rRZaCEhvzC5cCXENOjaePA5AqMXrCE97kaY7SRor9e2vnoGsFIiGqXKlT0MCIoZj36G0gg==}
-    engines: {node: '>=18'}
+  '@lix-js/sdk-darwin-arm64@0.12.3':
+    resolution: {integrity: sha512-YeMJyYGk+QwvQe8O4AAcBMgfNm68IjAGDvuvZHr1U1rIb3GC2kYFStajqf4mT4BGc+cN65/P/2kkqEo+Igu/sA==}
+    cpu: [arm64]
+    os: [darwin]
 
-  '@lix-js/server-protocol-schema@0.1.1':
-    resolution: {integrity: sha512-jBeALB6prAbtr5q4vTuxnRZZv1M2rKe8iNqRQhFJ4Tv7150unEa0vKyz0hs8Gl3fUGsWaNJBh3J8++fpbrpRBQ==}
+  '@lix-js/sdk-linux-arm64@0.12.3':
+    resolution: {integrity: sha512-jtmfNg6jLW61l1QvsU3W184l3hGtYUyPGzZrQyekk0vsMF1hxsP++7ONEGNI19PE7ldwSnGCB8Q6OzRKX87abQ==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@lix-js/sdk-linux-x64@0.12.3':
+    resolution: {integrity: sha512-PiQL4h1FJXbxnZx/PgenI5grgpFtYlS/ZtPtTYh638YHVu+6J0cqGY/pLVqP8CKv1dWAKsZ2YgftLd+1j2+WKA==}
+    cpu: [x64]
+    os: [linux]
+
+  '@lix-js/sdk-win32-x64@0.12.3':
+    resolution: {integrity: sha512-hnxMI7kPS4ngXs0ZVnOve5CmtC4+vaNIyNDi/yWU0rSvxj7mqw/1RCegTrCB7LjxlX4DG+eg9HruXurk9NDjGg==}
+    cpu: [x64]
+    os: [win32]
+
+  '@lix-js/sdk@0.12.3':
+    resolution: {integrity: sha512-T2194yoZsM2S9kyRmI8UtEJL0fgXYAkeY9jZ/PVyC0K78/wmBvrqOSt9SdvgYxM5qnZ57re3NLOjVlV+X5hWxQ==}
 
   '@mapbox/node-pre-gyp@2.0.3':
     resolution: {integrity: sha512-uwPAhccfFJlsfCxMYTwOdVfOz3xqyj8xYL3zJj8f0pb30tLohnnFPhLuqp4/qoEz8sNxe4SESZedcBojRefIzg==}
@@ -2707,8 +2726,8 @@ packages:
     resolution: {integrity: sha512-fCTuZK4QBa+39Oz9l4OGfJfz+GpwCp3AqO7Zch3to99xHPgstVsRFpeQ8LNd2o1Gv8raL2mCFwiaHh7bFSp5DQ==}
     engines: {node: '>=22'}
 
-  '@sinclair/typebox@0.31.28':
-    resolution: {integrity: sha512-/s55Jujywdw/Jpan+vsy6JZs1z2ZTGxTmbZTPiuSL2wz9mfzA2gN1zzaqmvfi4pq+uOt7Du85fkiwv5ymW84aQ==}
+  '@sinclair/typebox@0.31.30':
+    resolution: {integrity: sha512-MGsM7bVmHg3sUKCphlu3SGQ+T+5JTbygZWYArfKQCW5anJeACHeqLhcnf+R7XlCWZ+QR3C8JTBx3kCKJTN69ow==}
 
   '@sindresorhus/is@7.2.0':
     resolution: {integrity: sha512-P1Cz1dWaFfR4IR+U13mqqiGsLFf1KbayybWwdd2vfctdV6hDpUkgCY0nKOLLTMSoRd/jJNjtbqzf13K8DCCXQw==}
@@ -2752,10 +2771,6 @@ packages:
 
   '@speed-highlight/core@1.2.17':
     resolution: {integrity: sha512-Z92FwKpCtfaW1V0jTU/fh3QzYEZN8wDwrzRIBoADCJfn4mJCNcJN/XegifX7BDrQ8/h9Xh/JnbyMchL0FqXrkg==}
-
-  '@sqlite.org/sqlite-wasm@3.48.0-build4':
-    resolution: {integrity: sha512-hI6twvUkzOmyGZhQMza1gpfqErZxXRw6JEsiVjUbo7tFanVD+8Oil0Ih3l2nGzHdxPI41zFmfUQG7GHqhciKZQ==}
-    hasBin: true
 
   '@stablelib/base64@1.0.1':
     resolution: {integrity: sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ==}
@@ -2955,8 +2970,8 @@ packages:
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7 || ^8
 
-  '@tanstack/devtools-bundler-core@0.1.1':
-    resolution: {integrity: sha512-2kowecGXNi/FAnwmJKW3WDZ6XuacHDcz4JsMmx43E21G6ZFmoQFuOJCVuv2bFkQZIR1M7+FVLQF5bdS5MQY62Q==}
+  '@tanstack/devtools-bundler-core@0.1.3':
+    resolution: {integrity: sha512-F0tlxIyfFqXkZ1mJP1EjtkiSeJA+ztXY2AYOHf7r4goCIEAOp86N9PFJ/yv8vu1TnmxGS6vKsZCS3Kyls9xQQA==}
     engines: {node: '>=18'}
 
   '@tanstack/devtools-client@0.0.8':
@@ -2965,6 +2980,10 @@ packages:
 
   '@tanstack/devtools-event-bus@0.4.2':
     resolution: {integrity: sha512-2LHzhwBFlKHCcklsQrGe8TeyjHd4XAF8nuCO6wHmva5fePUkJUULbu6CsCNAlGlCi0KkEsMXZSvRdR4HgMq4yA==}
+    engines: {node: '>=18'}
+
+  '@tanstack/devtools-event-bus@0.4.3':
+    resolution: {integrity: sha512-NeegBt5/n2E5q4DbrXHqECBq42+kDi6JBOp8/+RNqkIE+P4hJpbM36kGyjnGQFMWOoku31qhMyX9/48VuTTdmg==}
     engines: {node: '>=18'}
 
   '@tanstack/devtools-event-client@0.4.4':
@@ -2983,8 +3002,8 @@ packages:
     peerDependencies:
       solid-js: '>=1.9.7'
 
-  '@tanstack/devtools-vite@0.8.3':
-    resolution: {integrity: sha512-MqqE4/rdQUG55Y8Zux1Jj1I2wIBHdqYgjAJzP1grMUtFqSZ2XIDB7BHEV9UW/vrbhK7ocl4yFgVaJWROv0zeDA==}
+  '@tanstack/devtools-vite@0.8.5':
+    resolution: {integrity: sha512-xaifCEmiwwzizlbp973oISXNsnmuU/BugLa66gryAZaPJJ/qo1kJd2DxY5X960eHwmyIS3SN0KYrL3/aRhucmA==}
     engines: {node: '>=18'}
     hasBin: true
     peerDependencies:
@@ -3450,6 +3469,11 @@ packages:
 
   acorn@8.17.0:
     resolution: {integrity: sha512-xRQbDb9BnwDafYNn6Vwl839DYVjqXYb1XVGtWAZ1kcDc6iwAL4hg3B1dZlRiuENFeO2H53gFG3in621AdERVAg==}
+    engines: {node: '>=0.4.0'}
+    hasBin: true
+
+  acorn@8.18.0:
+    resolution: {integrity: sha512-lGq+9yr1/GuAWaVYIHRjvvySG5/4VfKIvC8EWxStPdcDh/Ka7FG3twP6v4d5BkravUilhIAsG4Qj83t02LWUPQ==}
     engines: {node: '>=0.4.0'}
     hasBin: true
 
@@ -4179,14 +4203,6 @@ packages:
   decimal.js@10.6.0:
     resolution: {integrity: sha512-YpgQiITW3JXGntzdUmyUR1V812Hn8T1YVXhCu+wO3OpS4eU9l4YdD3qjyiKdV6mvV29zapkMeD390UVEf2lkUg==}
 
-  dedent@1.5.1:
-    resolution: {integrity: sha512-+LxW+KLWxu3HW3M2w2ympwtqPrqYRzU8fqi6Fhd18fBALe15blJPI/I4+UHveMVG6lJqB4JNd4UG0S5cnVHwIg==}
-    peerDependencies:
-      babel-plugin-macros: ^3.1.0
-    peerDependenciesMeta:
-      babel-plugin-macros:
-        optional: true
-
   dedent@1.7.2:
     resolution: {integrity: sha512-WzMx3mW98SN+zn3hgemf4OzdmyNhhhKz5Ay0pUfQiMQ3e1g+xmTJWp/pKdwKVXhdSkAEGIIzqeuWrL3mV/AXbA==}
     peerDependencies:
@@ -4760,6 +4776,9 @@ packages:
   fetchdts@0.1.7:
     resolution: {integrity: sha512-YoZjBdafyLIop9lSxXVI33oLD5kN31q4Td+CasofLLYeLXRFeOsuOw0Uo+XNRi9PZlbfdlN2GmRtm4tCEQ9/KA==}
 
+  fflate@0.8.3:
+    resolution: {integrity: sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==}
+
   figures@6.1.0:
     resolution: {integrity: sha512-d+l3qxjSesT4V7v2fh+QnmFnUWv9lSpjarhShNTgBOfA0ttejbQUAlHLitbjkoRiDulW0OPoQPYIGhIC8ohejg==}
     engines: {node: '>=18'}
@@ -5033,10 +5052,6 @@ packages:
   httpxy@0.5.4:
     resolution: {integrity: sha512-URfeibL0kTH6VuIxxaJDXWQWEk8fKr+9L8MGv6CuAiNy0fGnoVhWbXBvJR1mkdsvCDUxvhX9cW60k2AhtH5s6w==}
 
-  human-id@4.2.0:
-    resolution: {integrity: sha512-K3GbkIWqyvvlpfhBPlbEvD97TtqBpAYA4kt+cn2lD2x2HuohzZCibcA2nOlnJT6exqvJLggoB5nv2dNf192nEA==}
-    hasBin: true
-
   human-signals@5.0.0:
     resolution: {integrity: sha512-AXcZb6vzzrFAUE61HnN4mpLqd/cSIwNQjtNWR0euPm6y0iqx3G4gOXaIDdtdDwZmhwe82LA6+zinmW4UBWVePQ==}
     engines: {node: '>=16.17.0'}
@@ -5299,9 +5314,6 @@ packages:
 
   js-image-generator@1.0.4:
     resolution: {integrity: sha512-ckb7kyVojGAnArouVR+5lBIuwU1fcrn7E/YYSd0FK7oIngAkMmRvHASLro9Zt5SQdWToaI66NybG+OGxPw/HlQ==}
-
-  js-sha256@0.11.1:
-    resolution: {integrity: sha512-o6WSo/LUvY2uC4j7mO50a2ms7E/EAdbP0swigLV+nzHKTTaYnaLIWJ02VdXrsJX0vGedDESQnLsOekr94ryfjg==}
 
   js-tokens@4.0.0:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
@@ -6136,6 +6148,10 @@ packages:
     resolution: {integrity: sha512-RvwwcruNjI1ncT5xRakeyS9Lf8lcItv34KD+aif+VH9kduAyfYBipGh12274xtenIPZ119/R9BdTBa8gAwSh0A==}
     engines: {node: '>=12'}
 
+  picomatch@4.0.7:
+    resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
+    engines: {node: '>=12'}
+
   picoquery@2.5.0:
     resolution: {integrity: sha512-j1kgOFxtaCyoFCkpoYG2Oj3OdGakadO7HZ7o5CqyRazlmBekKhbDoUnNnXASE07xSY4nDImWZkrZv7toSxMi/g==}
 
@@ -6647,11 +6663,6 @@ packages:
   split2@4.2.0:
     resolution: {integrity: sha512-UcjcJOWknrNkF6PLX83qcHM6KHgVKNkV62Y8a5uYDVv9ydGQVwAHMKqHdJje1VTWpljG0WYpCDhrCdAOYH4TWg==}
     engines: {node: '>= 10.x'}
-
-  sqlite-wasm-kysely@0.3.0:
-    resolution: {integrity: sha512-TzjBNv7KwRw6E3pdKdlRyZiTmUIE0UttT/Sl56MVwVARl/u5gp978KepazCJZewFUnlWHz9i3NQd4kOtP/Afdg==}
-    peerDependencies:
-      kysely: '*'
 
   srvx@0.11.20:
     resolution: {integrity: sha512-gdPvbwpJOJpMyBYcp39q78C4pmv/Aw5WwZKB3+/pfeUVxo3EvNXlOi1fxzoy2ECGvUeBhouXy9rBxstjQQOPog==}
@@ -7225,9 +7236,17 @@ packages:
   util-deprecate@1.0.2:
     resolution: {integrity: sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==}
 
-  uuid@14.0.1:
-    resolution: {integrity: sha512-6ZxzVpzDXDa3bJWaHilVayA+BH/1zmxCJoVgvmqJnid/gPoKHxUrS/aC/T6LGQtNHT+XHG9fXPJB4d+IrU30Ew==}
+  uuid@14.0.2:
+    resolution: {integrity: sha512-xZe/16rV4aa+HGSOCiY2YeLT1OybRLrrkL/Rqaq7p7GMVXjFh+6wN4oMYgjFmnSnhY8t6Xpdl2l9qmnHYuMHwQ==}
     hasBin: true
+
+  valibot@1.4.2:
+    resolution: {integrity: sha512-gjdCvJ6d3RyHAneqxMYMW9QMCwYMb3jpOO0IyHZV1bnRHFBHrX3VkIILt5XYR0WhwHiH7Mty8ovuPZ/O3gamrg==}
+    peerDependencies:
+      typescript: '>=5'
+    peerDependenciesMeta:
+      typescript:
+        optional: true
 
   validate-npm-package-license@3.0.4:
     resolution: {integrity: sha512-DpKm2Ui/xN7/HQKCtpZxoRWBhZ9Z0kqtygG8XCgNQ8ZlDnxuQmWhj566j8fN4Cu3/JmbhsDo7fcAJq4s9h27Ew==}
@@ -7737,12 +7756,12 @@ snapshots:
     optionalDependencies:
       '@opentelemetry/api': 1.9.0
 
-  '@better-auth/drizzle-adapter@1.6.23(@better-auth/core@1.6.23(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.3.7(zod@4.4.3))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.4.0))(@better-auth/utils@0.4.2)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3))':
+  '@better-auth/drizzle-adapter@1.6.23(@better-auth/core@1.6.23(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.3.7(zod@4.4.3))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.4.0))(@better-auth/utils@0.4.2)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3))':
     dependencies:
       '@better-auth/core': 1.6.23(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.3.7(zod@4.4.3))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.4.0)
       '@better-auth/utils': 0.4.2
     optionalDependencies:
-      drizzle-orm: 1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3)
+      drizzle-orm: 1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3)
 
   '@better-auth/kysely-adapter@1.6.23(@better-auth/core@1.6.23(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.3.7(zod@4.4.3))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.4.0))(@better-auth/utils@0.4.2)(kysely@0.29.2)':
     dependencies:
@@ -7761,12 +7780,12 @@ snapshots:
       '@better-auth/core': 1.6.23(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.3.7(zod@4.4.3))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.4.0)
       '@better-auth/utils': 0.4.2
 
-  '@better-auth/oauth-provider@1.6.23(c49af675cbb8fcaa85a1948e163fc49e)':
+  '@better-auth/oauth-provider@1.6.23(cccdaffbb1e146185db4c982525ea297)':
     dependencies:
       '@better-auth/core': 1.6.23(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.3.7(zod@4.4.3))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.4.0)
       '@better-auth/utils': 0.4.2
       '@better-fetch/fetch': 1.3.1
-      better-auth: 1.6.23(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.27(crossws@0.4.9(srvx@0.11.20))(esbuild@0.28.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(rolldown@1.1.5)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)))(drizzle-kit@1.0.0-rc.4)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3))(next@16.2.10(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(pg@8.22.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.14)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.20.1)(jsdom@28.1.0(@noble/hashes@2.2.0))(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)))
+      better-auth: 1.6.23(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.27(crossws@0.4.9(srvx@0.11.20))(esbuild@0.28.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(rolldown@1.1.5)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)))(drizzle-kit@1.0.0-rc.4)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3))(next@16.2.10(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(pg@8.22.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.14)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.20.1)(jsdom@28.1.0(@noble/hashes@2.2.0))(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)))
       better-call: 1.3.7(zod@4.4.3)
       jose: 6.2.3
       zod: 4.4.3
@@ -8419,33 +8438,31 @@ snapshots:
 
   '@import-maps/resolve@2.0.0': {}
 
-  '@inlang/paraglide-js@2.20.2(typescript@6.0.3)':
+  '@inlang/paraglide-js@2.25.0(typescript@6.0.3)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))':
     dependencies:
       '@inlang/recommend-sherlock': 0.2.1
-      '@inlang/sdk': 2.10.2
+      '@inlang/sdk': 3.0.3
       commander: 11.1.0
       consola: 3.4.0
+      jiti: 2.7.0
       json5: 2.2.3
       unplugin: 2.3.11
       urlpattern-polyfill: 10.1.0
+      valibot: 1.4.2(typescript@6.0.3)
     optionalDependencies:
       typescript: 6.0.3
-    transitivePeerDependencies:
-      - babel-plugin-macros
+      vite: 8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)
 
   '@inlang/recommend-sherlock@0.2.1':
     dependencies:
       comment-json: 4.6.2
 
-  '@inlang/sdk@2.10.2':
+  '@inlang/sdk@3.0.3':
     dependencies:
-      '@lix-js/sdk': 0.4.10
-      '@sinclair/typebox': 0.31.28
+      '@lix-js/sdk': 0.12.3
+      '@sinclair/typebox': 0.31.30
       kysely: 0.28.17
-      sqlite-wasm-kysely: 0.3.0(kysely@0.28.17)
-      uuid: 14.0.1
-    transitivePeerDependencies:
-      - babel-plugin-macros
+      uuid: 14.0.2
 
   '@isaacs/cliui@8.0.2':
     dependencies:
@@ -8488,23 +8505,30 @@ snapshots:
     dependencies:
       jsbi: 4.3.2
 
-  '@lix-js/sdk@0.4.10':
-    dependencies:
-      '@lix-js/server-protocol-schema': 0.1.1
-      dedent: 1.5.1
-      human-id: 4.2.0
-      js-sha256: 0.11.1
-      kysely: 0.28.17
-      sqlite-wasm-kysely: 0.3.0(kysely@0.28.17)
-      uuid: 14.0.1
-    transitivePeerDependencies:
-      - babel-plugin-macros
+  '@lix-js/sdk-darwin-arm64@0.12.3':
+    optional: true
 
-  '@lix-js/server-protocol-schema@0.1.1': {}
+  '@lix-js/sdk-linux-arm64@0.12.3':
+    optional: true
+
+  '@lix-js/sdk-linux-x64@0.12.3':
+    optional: true
+
+  '@lix-js/sdk-win32-x64@0.12.3':
+    optional: true
+
+  '@lix-js/sdk@0.12.3':
+    dependencies:
+      fflate: 0.8.3
+    optionalDependencies:
+      '@lix-js/sdk-darwin-arm64': 0.12.3
+      '@lix-js/sdk-linux-arm64': 0.12.3
+      '@lix-js/sdk-linux-x64': 0.12.3
+      '@lix-js/sdk-win32-x64': 0.12.3
 
   '@mapbox/node-pre-gyp@2.0.3':
     dependencies:
-      consola: 3.4.0
+      consola: 3.4.2
       detect-libc: 2.1.2
       https-proxy-agent: 7.0.6
       node-fetch: 2.7.0
@@ -8628,7 +8652,7 @@ snapshots:
       semver: 7.8.5
       tmp-promise: 3.0.3
 
-  '@netlify/dev@4.18.7(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3)))(srvx@0.11.20)':
+  '@netlify/dev@4.18.7(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3)))(srvx@0.11.20)':
     dependencies:
       '@netlify/ai': 0.4.2
       '@netlify/blobs': 10.7.9
@@ -8638,7 +8662,7 @@ snapshots:
       '@netlify/edge-functions-dev': 1.0.20
       '@netlify/functions-dev': 1.3.0
       '@netlify/headers': 2.1.11
-      '@netlify/images': 1.3.10(@netlify/blobs@10.7.9)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3)))(srvx@0.11.20)
+      '@netlify/images': 1.3.10(@netlify/blobs@10.7.9)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3)))(srvx@0.11.20)
       '@netlify/redirects': 3.1.13
       '@netlify/runtime': 4.1.25
       '@netlify/static': 3.1.10
@@ -8749,9 +8773,9 @@ snapshots:
     dependencies:
       '@netlify/headers-parser': 9.0.3
 
-  '@netlify/images@1.3.10(@netlify/blobs@10.7.9)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3)))(srvx@0.11.20)':
+  '@netlify/images@1.3.10(@netlify/blobs@10.7.9)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3)))(srvx@0.11.20)':
     dependencies:
-      ipx: 3.1.1(@netlify/blobs@10.7.9)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3)))(srvx@0.11.20)
+      ipx: 3.1.1(@netlify/blobs@10.7.9)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3)))(srvx@0.11.20)
     transitivePeerDependencies:
       - '@azure/app-configuration'
       - '@azure/cosmos'
@@ -8822,9 +8846,9 @@ snapshots:
 
   '@netlify/types@2.8.0': {}
 
-  '@netlify/vite-plugin-tanstack-start@1.3.16(@tanstack/react-start@1.168.27(crossws@0.4.9(srvx@0.11.20))(esbuild@0.28.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(rolldown@1.1.5)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)))(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3)))(srvx@0.11.20)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))':
+  '@netlify/vite-plugin-tanstack-start@1.3.16(@tanstack/react-start@1.168.27(crossws@0.4.9(srvx@0.11.20))(esbuild@0.28.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(rolldown@1.1.5)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)))(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3)))(srvx@0.11.20)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))':
     dependencies:
-      '@netlify/vite-plugin': 2.12.8(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3)))(srvx@0.11.20)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))
+      '@netlify/vite-plugin': 2.12.8(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3)))(srvx@0.11.20)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))
       vite: 8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)
     optionalDependencies:
       '@tanstack/react-start': 1.168.27(crossws@0.4.9(srvx@0.11.20))(esbuild@0.28.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(rolldown@1.1.5)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))
@@ -8856,9 +8880,9 @@ snapshots:
       - supports-color
       - uploadthing
 
-  '@netlify/vite-plugin@2.12.8(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3)))(srvx@0.11.20)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))':
+  '@netlify/vite-plugin@2.12.8(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3)))(srvx@0.11.20)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))':
     dependencies:
-      '@netlify/dev': 4.18.7(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3)))(srvx@0.11.20)
+      '@netlify/dev': 4.18.7(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3)))(srvx@0.11.20)
       '@netlify/dev-utils': 4.4.6
       dedent: 1.7.2
       vite: 8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)
@@ -9765,7 +9789,7 @@ snapshots:
 
   '@simple-libs/stream-utils@2.0.0': {}
 
-  '@sinclair/typebox@0.31.28': {}
+  '@sinclair/typebox@0.31.30': {}
 
   '@sindresorhus/is@7.2.0': {}
 
@@ -9811,8 +9835,6 @@ snapshots:
       solid-js: 1.9.14
 
   '@speed-highlight/core@1.2.17': {}
-
-  '@sqlite.org/sqlite-wasm@3.48.0-build4': {}
 
   '@stablelib/base64@1.0.1': {}
 
@@ -9896,9 +9918,10 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@t3-oss/env-core@0.13.11(typescript@6.0.3)(zod@4.4.3)':
+  '@t3-oss/env-core@0.13.11(typescript@6.0.3)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3)':
     optionalDependencies:
       typescript: 6.0.3
+      valibot: 1.4.2(typescript@6.0.3)
       zod: 4.4.3
 
   '@tailwindcss/node@4.3.2':
@@ -9974,10 +9997,10 @@ snapshots:
       tailwindcss: 4.3.2
       vite: 8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)
 
-  '@tanstack/devtools-bundler-core@0.1.1(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.2)':
+  '@tanstack/devtools-bundler-core@0.1.3(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.2)':
     dependencies:
       '@tanstack/devtools-client': 0.0.8
-      '@tanstack/devtools-event-bus': 0.4.2
+      '@tanstack/devtools-event-bus': 0.4.3
       chalk: 5.6.2
       launch-editor: 2.14.1
       magic-string: 0.30.21
@@ -10000,6 +10023,13 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
+  '@tanstack/devtools-event-bus@0.4.3':
+    dependencies:
+      ws: 8.21.0
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
   '@tanstack/devtools-event-client@0.4.4': {}
 
   '@tanstack/devtools-event-client@0.5.0': {}
@@ -10013,11 +10043,11 @@ snapshots:
     transitivePeerDependencies:
       - csstype
 
-  '@tanstack/devtools-vite@0.8.3(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.2)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))':
+  '@tanstack/devtools-vite@0.8.5(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.2)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))':
     dependencies:
-      '@tanstack/devtools-bundler-core': 0.1.1(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.2)
+      '@tanstack/devtools-bundler-core': 0.1.3(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.2)
       '@tanstack/devtools-client': 0.0.8
-      '@tanstack/devtools-event-bus': 0.4.2
+      '@tanstack/devtools-event-bus': 0.4.3
       chalk: 5.6.2
       vite: 8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)
     transitivePeerDependencies:
@@ -10646,6 +10676,8 @@ snapshots:
 
   acorn@8.17.0: {}
 
+  acorn@8.18.0: {}
+
   agent-base@6.0.2:
     dependencies:
       debug: 4.4.3
@@ -10850,10 +10882,10 @@ snapshots:
       jsonpointer: 5.0.1
       leven: 3.1.0
 
-  better-auth@1.6.23(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.27(crossws@0.4.9(srvx@0.11.20))(esbuild@0.28.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(rolldown@1.1.5)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)))(drizzle-kit@1.0.0-rc.4)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3))(next@16.2.10(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(pg@8.22.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.14)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.20.1)(jsdom@28.1.0(@noble/hashes@2.2.0))(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))):
+  better-auth@1.6.23(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.27(crossws@0.4.9(srvx@0.11.20))(esbuild@0.28.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(rolldown@1.1.5)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)))(drizzle-kit@1.0.0-rc.4)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3))(next@16.2.10(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(pg@8.22.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.14)(vitest@4.1.10(@opentelemetry/api@1.9.0)(@types/node@22.20.1)(jsdom@28.1.0(@noble/hashes@2.2.0))(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))):
     dependencies:
       '@better-auth/core': 1.6.23(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.3.7(zod@4.4.3))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.4.0)
-      '@better-auth/drizzle-adapter': 1.6.23(@better-auth/core@1.6.23(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.3.7(zod@4.4.3))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.4.0))(@better-auth/utils@0.4.2)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3))
+      '@better-auth/drizzle-adapter': 1.6.23(@better-auth/core@1.6.23(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.3.7(zod@4.4.3))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.4.0))(@better-auth/utils@0.4.2)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3))
       '@better-auth/kysely-adapter': 1.6.23(@better-auth/core@1.6.23(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.3.7(zod@4.4.3))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.4.0))(@better-auth/utils@0.4.2)(kysely@0.29.2)
       '@better-auth/memory-adapter': 1.6.23(@better-auth/core@1.6.23(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.3.7(zod@4.4.3))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.4.0))(@better-auth/utils@0.4.2)
       '@better-auth/mongo-adapter': 1.6.23(@better-auth/core@1.6.23(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@opentelemetry/api@1.9.0)(better-call@1.3.7(zod@4.4.3))(jose@6.2.3)(kysely@0.29.2)(nanostores@1.4.0))(@better-auth/utils@0.4.2)
@@ -10872,7 +10904,7 @@ snapshots:
     optionalDependencies:
       '@tanstack/react-start': 1.168.27(crossws@0.4.9(srvx@0.11.20))(esbuild@0.28.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(rolldown@1.1.5)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))
       drizzle-kit: 1.0.0-rc.4
-      drizzle-orm: 1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3)
+      drizzle-orm: 1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3)
       next: 16.2.10(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       pg: 8.22.0
       react: 19.2.7
@@ -11002,7 +11034,7 @@ snapshots:
 
   citty@0.1.6:
     dependencies:
-      consola: 3.4.0
+      consola: 3.4.2
 
   citty@0.2.2: {}
 
@@ -11289,10 +11321,10 @@ snapshots:
 
   dayjs@1.11.21: {}
 
-  db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3)):
+  db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3)):
     optionalDependencies:
       '@electric-sql/pglite': 0.3.16
-      drizzle-orm: 1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3)
+      drizzle-orm: 1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3)
 
   debounce-fn@6.0.0:
     dependencies:
@@ -11310,8 +11342,6 @@ snapshots:
 
   decimal.js@10.6.0:
     optional: true
-
-  dedent@1.5.1: {}
 
   dedent@1.7.2: {}
 
@@ -11446,7 +11476,7 @@ snapshots:
       get-tsconfig: 4.14.0
       jiti: 2.7.0
 
-  drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3):
+  drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3):
     optionalDependencies:
       '@electric-sql/pglite': 0.3.16
       '@neondatabase/serverless': 1.1.0
@@ -11454,11 +11484,12 @@ snapshots:
       '@types/pg': 8.20.0
       pg: 8.22.0
       postgres: 3.4.9
+      valibot: 1.4.2(typescript@6.0.3)
       zod: 4.4.3
 
-  drizzle-zod@0.8.3(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3))(zod@4.4.3):
+  drizzle-zod@0.8.3(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3))(zod@4.4.3):
     dependencies:
-      drizzle-orm: 1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3)
+      drizzle-orm: 1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3)
       zod: 4.4.3
 
   dunder-proto@1.0.1:
@@ -11883,6 +11914,8 @@ snapshots:
 
   fetchdts@0.1.7: {}
 
+  fflate@0.8.3: {}
+
   figures@6.1.0:
     dependencies:
       is-unicode-supported: 2.1.0
@@ -12173,8 +12206,6 @@ snapshots:
 
   httpxy@0.5.4: {}
 
-  human-id@4.2.0: {}
-
   human-signals@5.0.0: {}
 
   husky@9.1.7: {}
@@ -12220,7 +12251,7 @@ snapshots:
 
   ipaddr.js@1.9.1: {}
 
-  ipx@3.1.1(@netlify/blobs@10.7.9)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3)))(srvx@0.11.20):
+  ipx@3.1.1(@netlify/blobs@10.7.9)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3)))(srvx@0.11.20):
     dependencies:
       '@fastify/accept-negotiator': 2.0.1
       citty: 0.1.6
@@ -12236,7 +12267,7 @@ snapshots:
       sharp: 0.34.5
       svgo: 4.0.1
       ufo: 1.6.4
-      unstorage: 1.17.5(@netlify/blobs@10.7.9)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3)))
+      unstorage: 1.17.5(@netlify/blobs@10.7.9)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3)))
       xss: 1.0.15
     transitivePeerDependencies:
       - '@azure/app-configuration'
@@ -12432,8 +12463,6 @@ snapshots:
   js-image-generator@1.0.4:
     dependencies:
       jpeg-js: 0.4.4
-
-  js-sha256@0.11.1: {}
 
   js-tokens@4.0.0: {}
 
@@ -12881,11 +12910,11 @@ snapshots:
 
   nf3@0.3.21: {}
 
-  nitro@3.0.260610-beta(@electric-sql/pglite@0.3.16)(@netlify/blobs@10.7.9)(@netlify/runtime@4.1.25)(chokidar@5.0.0)(dotenv@17.4.2)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3))(jiti@2.7.0)(lru-cache@11.5.1)(miniflare@4.20260701.0)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))(wrangler@4.107.0):
+  nitro@3.0.260610-beta(@electric-sql/pglite@0.3.16)(@netlify/blobs@10.7.9)(@netlify/runtime@4.1.25)(chokidar@5.0.0)(dotenv@17.4.2)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3))(jiti@2.7.0)(lru-cache@11.5.1)(miniflare@4.20260701.0)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))(wrangler@4.107.0):
     dependencies:
       consola: 3.4.2
       crossws: 0.4.9(srvx@0.11.20)
-      db0: 0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3))
+      db0: 0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3))
       env-runner: 0.1.16(@netlify/runtime@4.1.25)(miniflare@4.20260701.0)(wrangler@4.107.0)
       h3: 2.0.1-rc.22(crossws@0.4.9(srvx@0.11.20))
       hookable: 6.1.1
@@ -12896,7 +12925,7 @@ snapshots:
       rolldown: 1.1.4
       srvx: 0.11.20
       unenv: 2.0.0-rc.24
-      unstorage: 2.0.0-alpha.7(@netlify/blobs@10.7.9)(chokidar@5.0.0)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3)))(lru-cache@11.5.1)(ofetch@2.0.0-alpha.3)
+      unstorage: 2.0.0-alpha.7(@netlify/blobs@10.7.9)(chokidar@5.0.0)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3)))(lru-cache@11.5.1)(ofetch@2.0.0-alpha.3)
     optionalDependencies:
       dotenv: 17.4.2
       jiti: 2.7.0
@@ -13289,6 +13318,8 @@ snapshots:
   picomatch@2.3.2: {}
 
   picomatch@4.0.5: {}
+
+  picomatch@4.0.7: {}
 
   picoquery@2.5.0: {}
 
@@ -13941,11 +13972,6 @@ snapshots:
 
   split2@4.2.0: {}
 
-  sqlite-wasm-kysely@0.3.0(kysely@0.28.17):
-    dependencies:
-      '@sqlite.org/sqlite-wasm': 3.48.0-build4
-      kysely: 0.28.17
-
   srvx@0.11.20: {}
 
   srvx@0.11.22: {}
@@ -14310,8 +14336,8 @@ snapshots:
   unplugin@2.3.11:
     dependencies:
       '@jridgewell/remapping': 2.3.5
-      acorn: 8.17.0
-      picomatch: 4.0.5
+      acorn: 8.18.0
+      picomatch: 4.0.7
       webpack-virtual-modules: 0.6.2
 
   unplugin@3.3.0(esbuild@0.28.1)(rolldown@1.1.5)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)):
@@ -14324,7 +14350,7 @@ snapshots:
       rolldown: 1.1.5
       vite: 8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)
 
-  unstorage@1.17.5(@netlify/blobs@10.7.9)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3))):
+  unstorage@1.17.5(@netlify/blobs@10.7.9)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3))):
     dependencies:
       anymatch: 3.1.3
       chokidar: 5.0.0
@@ -14336,20 +14362,20 @@ snapshots:
       ufo: 1.6.4
     optionalDependencies:
       '@netlify/blobs': 10.7.9
-      db0: 0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3))
+      db0: 0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3))
 
-  unstorage@2.0.0-alpha.7(@netlify/blobs@10.7.9)(chokidar@5.0.0)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3)))(lru-cache@11.5.1)(ofetch@2.0.0-alpha.3):
+  unstorage@2.0.0-alpha.7(@netlify/blobs@10.7.9)(chokidar@5.0.0)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3)))(lru-cache@11.5.1)(ofetch@2.0.0-alpha.3):
     optionalDependencies:
       '@netlify/blobs': 10.7.9
       chokidar: 5.0.0
-      db0: 0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(zod@4.4.3))
+      db0: 0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@1.0.0-rc.4(@electric-sql/pglite@0.3.16)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.20.0)(pg@8.22.0)(postgres@3.4.9)(valibot@1.4.2(typescript@6.0.3))(zod@4.4.3))
       lru-cache: 11.5.1
       ofetch: 2.0.0-alpha.3
 
   untun@0.1.3:
     dependencies:
       citty: 0.1.6
-      consola: 3.4.0
+      consola: 3.4.2
       pathe: 1.1.2
 
   update-browserslist-db@1.2.3(browserslist@4.28.6):
@@ -14375,7 +14401,11 @@ snapshots:
 
   util-deprecate@1.0.2: {}
 
-  uuid@14.0.1: {}
+  uuid@14.0.2: {}
+
+  valibot@1.4.2(typescript@6.0.3):
+    optionalDependencies:
+      typescript: 6.0.3
 
   validate-npm-package-license@3.0.4:
     dependencies:
