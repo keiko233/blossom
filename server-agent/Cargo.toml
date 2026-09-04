@@ -30,7 +30,7 @@ openapiv3 = "2.2"
 prettyplease = "0.2.37"
 progenitor = "0.14.0"
 serde_json = "1.0.150"
-syn = "2.0.118"
+syn = "3.0.0"
 
 [dev-dependencies]
 rcgen = "0.14"
