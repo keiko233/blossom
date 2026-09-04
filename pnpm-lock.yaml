@@ -136,7 +136,7 @@ importers:
         version: 4.18.1
       lucide-react:
         specifier: ^1.0.0
-        version: 1.30.0(react@19.2.7)
+        version: 1.41.0(react@19.2.7)
       mcp-handler:
         specifier: ^1.1.0
         version: 1.1.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(next@16.2.10(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))
@@ -227,7 +227,7 @@ importers:
         version: 4.3.2(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))
       '@tanstack/devtools-vite':
         specifier: latest
-        version: 0.8.3(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.2)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))
+        version: 0.8.5(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.2)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))
       '@tanstack/react-devtools':
         specifier: ^0.10.8
         version: 0.10.8(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(csstype@3.2.3)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.14)
@@ -2955,8 +2955,8 @@ packages:
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7 || ^8
 
-  '@tanstack/devtools-bundler-core@0.1.1':
-    resolution: {integrity: sha512-2kowecGXNi/FAnwmJKW3WDZ6XuacHDcz4JsMmx43E21G6ZFmoQFuOJCVuv2bFkQZIR1M7+FVLQF5bdS5MQY62Q==}
+  '@tanstack/devtools-bundler-core@0.1.3':
+    resolution: {integrity: sha512-F0tlxIyfFqXkZ1mJP1EjtkiSeJA+ztXY2AYOHf7r4goCIEAOp86N9PFJ/yv8vu1TnmxGS6vKsZCS3Kyls9xQQA==}
     engines: {node: '>=18'}
 
   '@tanstack/devtools-client@0.0.8':
@@ -2965,6 +2965,10 @@ packages:
 
   '@tanstack/devtools-event-bus@0.4.2':
     resolution: {integrity: sha512-2LHzhwBFlKHCcklsQrGe8TeyjHd4XAF8nuCO6wHmva5fePUkJUULbu6CsCNAlGlCi0KkEsMXZSvRdR4HgMq4yA==}
+    engines: {node: '>=18'}
+
+  '@tanstack/devtools-event-bus@0.4.3':
+    resolution: {integrity: sha512-NeegBt5/n2E5q4DbrXHqECBq42+kDi6JBOp8/+RNqkIE+P4hJpbM36kGyjnGQFMWOoku31qhMyX9/48VuTTdmg==}
     engines: {node: '>=18'}
 
   '@tanstack/devtools-event-client@0.4.4':
@@ -2983,8 +2987,8 @@ packages:
     peerDependencies:
       solid-js: '>=1.9.7'
 
-  '@tanstack/devtools-vite@0.8.3':
-    resolution: {integrity: sha512-MqqE4/rdQUG55Y8Zux1Jj1I2wIBHdqYgjAJzP1grMUtFqSZ2XIDB7BHEV9UW/vrbhK7ocl4yFgVaJWROv0zeDA==}
+  '@tanstack/devtools-vite@0.8.5':
+    resolution: {integrity: sha512-xaifCEmiwwzizlbp973oISXNsnmuU/BugLa66gryAZaPJJ/qo1kJd2DxY5X960eHwmyIS3SN0KYrL3/aRhucmA==}
     engines: {node: '>=18'}
     hasBin: true
     peerDependencies:
@@ -5554,8 +5558,8 @@ packages:
   lru-cache@5.1.1:
     resolution: {integrity: sha512-KpNARQA3Iwv+jTA0utUVVbrh+Jlrr1Fv0e56GGzAFOXN7dk/FviaDW8LHmK52DlcH4WP2n6gI8vN1aesBFgo9w==}
 
-  lucide-react@1.30.0:
-    resolution: {integrity: sha512-tUIr2jXLbWpCkdtH8XP7P7YppM9ueWgTky99lpWDY6z5REs6B+O6ZQ3U5tHkUUY59ANyOv/PBcs8E4Fe3KO3eA==}
+  lucide-react@1.41.0:
+    resolution: {integrity: sha512-6lksP35l6KszDKUeRTi4LV7i6DEe0Yzl2ALJm9j4c5xEYN91GdW1xGsawGMOg2mgjF5GHBVX8pKX9kP+cWsP3Q==}
     peerDependencies:
       react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
@@ -9974,10 +9978,10 @@ snapshots:
       tailwindcss: 4.3.2
       vite: 8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)
 
-  '@tanstack/devtools-bundler-core@0.1.1(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.2)':
+  '@tanstack/devtools-bundler-core@0.1.3(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.2)':
     dependencies:
       '@tanstack/devtools-client': 0.0.8
-      '@tanstack/devtools-event-bus': 0.4.2
+      '@tanstack/devtools-event-bus': 0.4.3
       chalk: 5.6.2
       launch-editor: 2.14.1
       magic-string: 0.30.21
@@ -10000,6 +10004,13 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
+  '@tanstack/devtools-event-bus@0.4.3':
+    dependencies:
+      ws: 8.21.0
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
   '@tanstack/devtools-event-client@0.4.4': {}
 
   '@tanstack/devtools-event-client@0.5.0': {}
@@ -10013,11 +10024,11 @@ snapshots:
     transitivePeerDependencies:
       - csstype
 
-  '@tanstack/devtools-vite@0.8.3(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.2)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))':
+  '@tanstack/devtools-vite@0.8.5(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.2)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0))':
     dependencies:
-      '@tanstack/devtools-bundler-core': 0.1.1(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.2)
+      '@tanstack/devtools-bundler-core': 0.1.3(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.2)
       '@tanstack/devtools-client': 0.0.8
-      '@tanstack/devtools-event-bus': 0.4.2
+      '@tanstack/devtools-event-bus': 0.4.3
       chalk: 5.6.2
       vite: 8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.5)(yaml@2.9.0)
     transitivePeerDependencies:
@@ -12695,7 +12706,7 @@ snapshots:
     dependencies:
       yallist: 3.1.1
 
-  lucide-react@1.30.0(react@19.2.7):
+  lucide-react@1.41.0(react@19.2.7):
     dependencies:
       react: 19.2.7
 
