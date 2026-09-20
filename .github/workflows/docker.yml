@@ -104,7 +104,7 @@ jobs:
       # cargo registry/target) across runs — ephemeral runners lose them.
       - name: Restore build cache mounts
         id: cache-mounts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ matrix.target['cache-path'] }}
           key: cache-mounts-${{ matrix.target.name }}-${{ matrix.platform.arch }}-${{ hashFiles('pnpm-lock.yaml', 'server-agent/Cargo.lock') }}
