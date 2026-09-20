@@ -22,7 +22,7 @@ jobs:
       - "pnpm-workspace.yaml"
       - ".github/workflows/test.yml"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v4
 
@@ -51,7 +51,7 @@ jobs:
       run:
         working-directory: server-agent
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
