@@ -9,7 +9,7 @@ import viteReact, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { nitro } from "nitro/vite";
 import { fileURLToPath } from "node:url";
 import Icons from "unplugin-icons/vite";
-import { defineConfig, loadEnv } from "vite";
+import { defineConfig, loadEnv, type Plugin } from "vite";
 
 import { clientEnvSchema, serverEnvSchema } from "./src/lib/env-schema";
 
@@ -20,6 +20,31 @@ const deployTarget = (process.env.DEPLOY_TARGET ??
   "cloudflare") as DeployTarget;
 if (!DEPLOY_TARGETS.includes(deployTarget)) {
   throw new Error(`Unknown DEPLOY_TARGET: ${process.env.DEPLOY_TARGET}`);
+}
+
+/**
+ * tsyringe (pulled in by @peculiar/x509 v1, which acme-client depends on)
+ * throws at module-evaluation time unless a Reflect metadata polyfill is
+ * already installed. Bundlers hoist/merge chunks, so an `import
+ * "reflect-metadata"` placed in app code (or a dynamic import before the
+ * x509 import) cannot guarantee ordering: the chunk that contains x509 is
+ * evaluated as soon as any static importer (acme-client) loads. Making the
+ * polyfill a real dependency of tsyringe's entry module lets the bundler
+ * order it correctly on every deploy target.
+ */
+function tsyringeReflectMetadata(): Plugin {
+  return {
+    name: "blossom:tsyringe-reflect-metadata",
+    enforce: "pre",
+    transform: {
+      filter: {
+        id: /[\\/]tsyringe[\\/]dist[\\/](esm5|esm2015)[\\/]index\.js$/,
+      },
+      handler(code) {
+        return { code: `import "reflect-metadata";\n${code}`, map: null };
+      },
+    },
+  };
 }
 
 const config = defineConfig(({ mode, command }) => {
@@ -55,6 +80,7 @@ const config = defineConfig(({ mode, command }) => {
       tsconfigPaths: true,
     },
     plugins: [
+      tsyringeReflectMetadata(),
       devtools(),
       paraglideVitePlugin({
         project: "./project.inlang",
