@@ -452,7 +452,7 @@ function buildHandler(): (req: Request) => Promise<Response> {
           {
             title: tool.title,
             description: `${tool.description} Requires blossom:mcp:write scope.`,
-            inputSchema: tool.schema.shape,
+            inputSchema: tool.schema,
           },
           async (args, extra) => {
             try {
@@ -479,7 +479,6 @@ function buildHandler(): (req: Request) => Promise<Response> {
       }
     },
     { serverInfo: { name: "blossom-mcp", version: "1.0.0" } },
-    { basePath: "/api" },
   );
 
   return createMcpOAuthHandler({

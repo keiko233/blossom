@@ -7,13 +7,10 @@ import {
   X509Certificate,
   X509CertificateGenerator,
 } from "@peculiar/x509";
-import {
-  createHash,
-  createPrivateKey,
-  randomUUID,
-  webcrypto,
-} from "node:crypto";
+import { createHash, createPrivateKey, randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
+
+const webcrypto = globalThis.crypto;
 
 import {
   classifyImportedValidity,

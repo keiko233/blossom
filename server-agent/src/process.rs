@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use processkit::{Command, OutputEvent, RunningProcess};
+use processkit::{CancellationToken, Command, ProcessEvent, RunningProcess};
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, warn};
@@ -64,7 +64,7 @@ impl SingBoxManager {
         let proc = spawn_singbox(&bin, &config_path)
             .await
             .context("failed to start sing-box")?;
-        info!("sing-box started (pid {:?})", proc.pid());
+        info!("sing-box started (pid {:?})", proc.process.pid());
 
         let (ctrl_tx, ctrl_rx) = mpsc::channel(8);
         let state = Arc::new(AtomicU8::new(ProcessState::Starting as u8));
@@ -123,15 +123,24 @@ pub fn resolve_binary(explicit: Option<PathBuf>) -> PathBuf {
     PathBuf::from("sing-box")
 }
 
-async fn spawn_singbox(bin: &Path, config_path: &Path) -> Result<RunningProcess> {
+struct ManagedProcess {
+    process: RunningProcess,
+    cancel: CancellationToken,
+}
+
+async fn spawn_singbox(bin: &Path, config_path: &Path) -> Result<ManagedProcess> {
     let config = config_path
         .to_str()
         .context("config path is not valid UTF-8")?;
-    Command::new(bin)
+    let cancel = CancellationToken::new();
+    let process = Command::new(bin)
         .args(["run", "-c", config])
+        .cancel_on(cancel.clone())
+        .cancel_grace(SHUTDOWN_GRACE)
         .start()
         .await
-        .map_err(|e| anyhow::anyhow!("{e}"))
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(ManagedProcess { process, cancel })
 }
 
 /// Validates a candidate with the exact sing-box binary that will run it.
@@ -181,7 +190,7 @@ pub async fn singbox_version(bin: &Path) -> Option<String> {
 /// The supervisor loop. Owns the process for its whole lifetime; each iteration
 /// runs one sing-box until it exits or is told to stop, then restarts on crash.
 async fn supervise(
-    proc: RunningProcess,
+    proc: ManagedProcess,
     bin: PathBuf,
     config_path: PathBuf,
     mut ctrl_rx: mpsc::Receiver<Ctrl>,
@@ -236,7 +245,7 @@ async fn restart(
     config_path: &Path,
     backoff: Duration,
     ctrl_rx: &mut mpsc::Receiver<Ctrl>,
-) -> Option<RunningProcess> {
+) -> Option<ManagedProcess> {
     let mut delay = backoff;
     loop {
         tokio::select! {
@@ -252,7 +261,7 @@ async fn restart(
 
         match spawn_singbox(bin, config_path).await {
             Ok(proc) => {
-                info!("sing-box restarted (pid {:?})", proc.pid());
+                info!("sing-box restarted (pid {:?})", proc.process.pid());
                 return Some(proc);
             }
             Err(e) => {
@@ -273,18 +282,24 @@ enum RunOutcome {
 /// Pumps one process's output to tracing until it exits or a shutdown control
 /// arrives.
 async fn run_one(
-    mut proc: RunningProcess,
+    proc: ManagedProcess,
     ctrl_rx: &mut mpsc::Receiver<Ctrl>,
     state: &Arc<AtomicU8>,
     last_error: &Arc<Mutex<Option<String>>>,
 ) -> RunOutcome {
-    let mut events = match proc.output_events() {
+    let ManagedProcess {
+        mut process,
+        cancel,
+    } = proc;
+    let mut events = match process.events() {
         Ok(events) => events,
         Err(e) => {
             error!("failed to read sing-box output: {e}");
             return RunOutcome::Exited;
         }
     };
+    let finish = process.finish();
+    tokio::pin!(finish);
     let mut healthy_timer = Box::pin(tokio::time::sleep(HEALTHY_UPTIME));
     let mut marked_healthy = false;
 
@@ -293,6 +308,19 @@ async fn run_one(
             _ = &mut healthy_timer, if !marked_healthy => {
                 state.store(ProcessState::Running as u8, Ordering::Relaxed);
                 marked_healthy = true;
+            }
+            result = &mut finish => {
+                if let Err(e) = result {
+                    error!("failed to wait for sing-box: {e}");
+                }
+                while let Some(event) = events.next().await {
+                    if let Some(message) = forward_log(event)
+                        && let Ok(mut slot) = last_error.lock()
+                    {
+                        *slot = Some(message);
+                    }
+                }
+                return RunOutcome::Exited;
             }
             event = events.next() => match event {
                 Some(event) => {
@@ -307,17 +335,15 @@ async fn run_one(
             },
             ctrl = ctrl_rx.recv() => match ctrl {
                 Some(Ctrl::Shutdown(ack)) => {
-                    drop(events);
-                    if let Err(e) = proc.shutdown(SHUTDOWN_GRACE).await {
-                        error!("error during sing-box shutdown: {e}");
-                    }
+                    cancel.cancel();
+                    let _ = finish.await;
                     let _ = ack.send(());
                     return RunOutcome::Stopped;
                 }
                 // Control channel dropped without an explicit shutdown: stop.
                 None => {
-                    drop(events);
-                    let _ = proc.shutdown(SHUTDOWN_GRACE).await;
+                    cancel.cancel();
+                    let _ = finish.await;
                     return RunOutcome::Stopped;
                 }
             },
@@ -332,8 +358,11 @@ async fn run_one(
 /// `tracing`'s formatter escapes control bytes in a message (so a raw ESC would
 /// print as a literal `\x1b[36m`), and the level colour is re-applied by our own
 /// subscriber anyway — so the embedded codes are pure noise.
-fn forward_log(event: OutputEvent) -> Option<String> {
-    let raw = event.text()?;
+fn forward_log(event: ProcessEvent) -> Option<String> {
+    let raw = match &event {
+        ProcessEvent::Stdout(line) | ProcessEvent::Stderr(line) => line.text(),
+        _ => return None,
+    };
     let line = strip_ansi(raw.trim_end());
     let line = line.trim();
     if line.is_empty() {
@@ -385,6 +414,77 @@ fn strip_ansi(input: &str) -> std::borrow::Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::{check_config, strip_ansi};
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn supervisor_observes_output_and_process_exit() {
+        use super::*;
+
+        let cancel = CancellationToken::new();
+        let process = Command::new("sh")
+            .args(["-c", "echo 'ERROR expected failure' >&2; exit 1"])
+            .cancel_on(cancel.clone())
+            .cancel_grace(SHUTDOWN_GRACE)
+            .start()
+            .await
+            .unwrap();
+        let (_tx, mut rx) = mpsc::channel(1);
+        let state = Arc::new(AtomicU8::new(0));
+        let last_error = Arc::new(Mutex::new(None));
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(5),
+            run_one(
+                ManagedProcess { process, cancel },
+                &mut rx,
+                &state,
+                &last_error,
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome, RunOutcome::Exited));
+        assert!(
+            last_error
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .contains("expected failure")
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn supervisor_stops_on_shutdown() {
+        use super::*;
+
+        let cancel = CancellationToken::new();
+        let process = Command::new("sh")
+            .args(["-c", "exec sleep 60"])
+            .cancel_on(cancel.clone())
+            .cancel_grace(SHUTDOWN_GRACE)
+            .start()
+            .await
+            .unwrap();
+        let (tx, mut rx) = mpsc::channel(1);
+        let (ack, received) = oneshot::channel();
+        tx.send(Ctrl::Shutdown(ack)).await.unwrap();
+        let state = Arc::new(AtomicU8::new(0));
+        let last_error = Arc::new(Mutex::new(None));
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(10),
+            run_one(
+                ManagedProcess { process, cancel },
+                &mut rx,
+                &state,
+                &last_error,
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome, RunOutcome::Stopped));
+        received.await.unwrap();
+    }
 
     #[test]
     fn strips_color_codes() {

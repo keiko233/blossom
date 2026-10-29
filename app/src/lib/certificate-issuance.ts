@@ -1,6 +1,6 @@
 import * as acme from "acme-client";
 import { and, desc, eq, isNull, lt, notInArray, or } from "drizzle-orm";
-import { createHash, randomUUID, webcrypto } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { db } from "@/db";
 import {
@@ -206,6 +206,7 @@ async function issueSelfSigned(policy: CertificatePolicy) {
     X509CertificateGenerator,
   } = await import("@peculiar/x509");
   const algorithm = { name: "ECDSA", namedCurve: "P-256" } as const;
+  const webcrypto = globalThis.crypto;
   const keys = await webcrypto.subtle.generateKey(algorithm, true, [
     "sign",
     "verify",

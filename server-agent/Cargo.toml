@@ -8,8 +8,8 @@ anyhow = "1.0.103"
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
 clap = { version = "4.6.1", features = ["derive", "env"] }
 http = "1"
-processkit = "3.0.0"
-progenitor-client = "0.14.0"
+processkit = "3.3.4"
+progenitor-client = "0.15.1"
 prost = "0.14"
 reqwest = { version = "0.13.4", features = ["json"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
@@ -28,7 +28,7 @@ tracing-subscriber = "0.3.23"
 [build-dependencies]
 openapiv3 = "2.2"
 prettyplease = "0.3.0"
-progenitor = "0.14.0"
+progenitor = "0.15.1"
 serde_json = "1.0.150"
 syn = "3.0.0"
 

@@ -4,7 +4,7 @@ Blossom is a sing-box proxy subscription control plane. It is a TanStack Start S
 
 ## Development
 
-This repo is a pnpm workspace. Run everything from the repo root:
+This repo is a pnpm workspace. Use Node.js 26 or newer and pnpm 12.16.1. Run everything from the repo root:
 
 ```bash
 pnpm install

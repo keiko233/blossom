@@ -453,7 +453,10 @@ fn validate_material(
 }
 
 fn hex_digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn parse_rfc3339(value: &str) -> Option<DateTime<Utc>> {
@@ -558,7 +561,6 @@ mod tests {
 
     use rcgen::generate_simple_self_signed;
     use serde_json::json;
-    use sha2::{Digest, Sha256};
 
     use super::{
         CertificateManager, CertificateRef, hex_digest, normalize_pem, parse_managed_material_path,
@@ -922,7 +924,7 @@ fUqnbG2/fNsWS1o7VTewVDOEFmYemJcFvnFfoq3ynjXQGJ5UAfOOFv1yo8n8CgAm
     }
 
     fn hex_digest_for(pem: &str) -> String {
-        format!("{:x}", Sha256::digest(normalize_pem(pem).as_bytes()))
+        super::hex_digest(normalize_pem(pem).as_bytes())
     }
 
     fn artifact(

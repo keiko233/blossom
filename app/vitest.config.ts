@@ -10,6 +10,7 @@ export default defineConfig({
     },
   },
   test: {
+    server: { deps: { inline: ["better-auth"] } },
     environment: "node",
     include: ["src/**/*.test.ts"],
   },

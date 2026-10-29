@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
-FROM node:24-alpine AS base
+FROM node:26-alpine AS base
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
-RUN corepack enable
+RUN npm install --global pnpm@12.16.1
 
 FROM base AS builder
 WORKDIR /repo
@@ -20,7 +20,7 @@ ENV VITE_APP_NAME=${VITE_APP_NAME:-Blossom}
 ENV DEPLOY_TARGET=node
 RUN pnpm --filter @blossom/app build
 
-FROM node:24-alpine AS runner
+FROM node:26-alpine AS runner
 ENV NODE_ENV=production
 WORKDIR /app
 RUN addgroup -S app && adduser -S app -G app
