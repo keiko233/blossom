@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 
 import { db } from "@/db";
 import { node, type Server, server } from "@/db/proxy-schema";
+import { fromInput, fromResult } from "@/lib/admin-audit";
+import { adminAudit } from "@/lib/admin-audit-middleware";
 import { generateAgentToken } from "@/lib/agent-token";
 import { ensureAdmin } from "@/lib/ensure-admin";
 import {
@@ -83,6 +85,12 @@ export const getServer = createServerFn({ method: "GET" })
   });
 
 export const createServer = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("server.create", {
+      targetType: "server",
+      targetId: fromResult("server", "id"),
+    }),
+  ])
   .validator(createServerSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
@@ -103,6 +111,12 @@ export const createServer = createServerFn({ method: "POST" })
   });
 
 export const updateServer = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("server.update", {
+      targetType: "server",
+      targetId: fromInput("id"),
+    }),
+  ])
   .validator(updateServerSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
@@ -146,6 +160,12 @@ export const updateServer = createServerFn({ method: "POST" })
  * cryptic FK error into a clear user-facing message.
  */
 export const deleteServer = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("server.delete", {
+      targetType: "server",
+      targetId: fromInput("id"),
+    }),
+  ])
   .validator(serverIdSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
@@ -170,6 +190,12 @@ export const deleteServer = createServerFn({ method: "POST" })
   });
 
 export const regenerateServerToken = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("server.regenerate_token", {
+      targetType: "server",
+      targetId: fromInput("id"),
+    }),
+  ])
   .validator(serverIdSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();

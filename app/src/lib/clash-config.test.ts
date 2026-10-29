@@ -512,4 +512,34 @@ describe("buildClashConfig", () => {
     const result = clashMetaSchema.safeParse(config);
     expect(result.success).toBe(true);
   });
+
+  it("keeps the default rules when no custom rules are given", () => {
+    const node = makeResolved("shadowsocks", { method: "aes-256-gcm" });
+    const defaults = [
+      "GEOIP,LAN,DIRECT,no-resolve",
+      "GEOIP,CN,DIRECT",
+      "MATCH,PROXY",
+    ];
+    expect(buildClashConfig([node], { credentials }).config).toMatchObject({
+      rules: defaults,
+    });
+    expect(
+      buildClashConfig([node], { credentials, rules: [] }).config,
+    ).toMatchObject({ rules: defaults });
+  });
+
+  it("places custom rules before the defaults with MATCH still last", () => {
+    const node = makeResolved("shadowsocks", { method: "aes-256-gcm" });
+    const { config } = buildClashConfig([node], {
+      credentials,
+      rules: ["DOMAIN-SUFFIX,example.com,DIRECT", "DOMAIN-KEYWORD,ads,REJECT"],
+    });
+    expect((config as { rules: string[] }).rules).toEqual([
+      "DOMAIN-SUFFIX,example.com,DIRECT",
+      "DOMAIN-KEYWORD,ads,REJECT",
+      "GEOIP,LAN,DIRECT,no-resolve",
+      "GEOIP,CN,DIRECT",
+      "MATCH,PROXY",
+    ]);
+  });
 });

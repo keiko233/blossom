@@ -132,6 +132,30 @@ describe("computeDesiredRevision", () => {
     expect(revision).toMatch(/^sha256:[0-9a-f]{64}$/);
   });
 
+  it("changes when a server routing rule changes, so rule edits reach agents via the hash", () => {
+    const bindings = sampleBindings();
+    const artifacts = sampleArtifacts();
+    const revisionFor = (
+      routeRules: Parameters<typeof compileServerConfig>[0]["routeRules"],
+    ) =>
+      computeDesiredRevision(
+        compileServerConfig({ inbounds: [], routeRules }),
+        bindings,
+        artifacts,
+        ["n1"],
+      );
+
+    const none = revisionFor(undefined);
+    expect(revisionFor([])).toBe(none);
+    const withRule = revisionFor([
+      { domain_suffix: ["ads.example.com"], action: "reject" },
+    ]);
+    expect(withRule).not.toBe(none);
+    expect(
+      revisionFor([{ domain_suffix: ["ads.example.org"], action: "reject" }]),
+    ).not.toBe(withRule);
+  });
+
   it("does not hash PEM bytes directly when a fingerprint is available", () => {
     const config = compiledConfig();
     const bindings = sampleBindings();

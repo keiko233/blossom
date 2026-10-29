@@ -53,10 +53,13 @@ function RouteComponent(): React.ReactElement {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
 
-  const { data: users, isPending } = useQuery({
+  // Transitional: listUsers is paginated now; this page shows the first 100
+  // until the paginated list UI lands.
+  const { data, isPending } = useQuery({
     queryKey: USERS_QUERY_KEY,
-    queryFn: () => listUsers(),
+    queryFn: () => listUsers({ data: { pageSize: 100 } }),
   });
+  const users = data?.rows;
 
   const actions = useUserActions(() =>
     queryClient.invalidateQueries({ queryKey: USERS_QUERY_KEY }),

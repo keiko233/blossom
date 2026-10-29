@@ -1,0 +1,1 @@
+CREATE INDEX "traffic_record_created_idx" ON "traffic_record" ("created_at");

@@ -10,6 +10,8 @@ import {
   node,
   server,
 } from "@/db/proxy-schema";
+import { fromInput, fromResult } from "@/lib/admin-audit";
+import { adminAudit } from "@/lib/admin-audit-middleware";
 import {
   certificateCoversDomain,
   isCertificateCurrentlyUsable,
@@ -369,6 +371,12 @@ async function compensateBindingAfterNodeFailure(
 }
 
 export const createNode = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("node.create", {
+      targetType: "node",
+      targetId: fromResult("node", "id"),
+    }),
+  ])
   .validator(createNodeSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
@@ -454,6 +462,12 @@ export const createNode = createServerFn({ method: "POST" })
   });
 
 export const updateNode = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("node.update", {
+      targetType: "node",
+      targetId: fromInput("id"),
+    }),
+  ])
   .validator(updateNodeSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
@@ -688,6 +702,12 @@ async function validateManagedCertificateSelection(
 }
 
 export const deleteNode = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("node.delete", {
+      targetType: "node",
+      targetId: fromInput("id"),
+    }),
+  ])
   .validator(nodeIdSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();

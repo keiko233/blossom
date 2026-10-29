@@ -9,11 +9,18 @@ import { tanstackStartCookies } from "better-auth/tanstack-start";
 
 import { db } from "@/db";
 import * as schema from "@/db/schema";
+import { getSettings } from "@/query/settings-store";
+import { grantSignupTrial } from "@/query/trial-grant";
 import MagicLinkEmail from "@/templates/emails/magic-link";
 
+import { createRegistrationHooks } from "./auth-registration-hooks";
 import { emailSignInSchema, emailSignUpSchema } from "./auth-schema";
 import { getEmailClient } from "./email";
 import { getServerEnv } from "./env";
+import {
+  evaluateRegistration,
+  type RegistrationDenyReason,
+} from "./registration-policy";
 
 const buildSocialProviders = createServerOnlyFn(() => {
   const env = getServerEnv();
@@ -29,6 +36,11 @@ const buildAuth = createServerOnlyFn(() => {
 
   const mcpResourceUrl = `${env.BETTER_AUTH_URL.replace(/\/$/, "")}/api/mcp`;
 
+  const registrationHooks = createRegistrationHooks({
+    getRegistration: async () => (await getSettings()).registration,
+    grantTrial: grantSignupTrial,
+  });
+
   return betterAuth({
     baseURL: env.BETTER_AUTH_URL,
     database: drizzleAdapter(db, {
@@ -38,6 +50,12 @@ const buildAuth = createServerOnlyFn(() => {
     emailAndPassword: {
       enabled: true,
     },
+    // The single choke point for registration rules: better-auth calls
+    // `validateUserInfo` just before it creates a user, whatever the route in
+    // (email/password sign-up, first email-link sign-in, first social sign-in,
+    // admin plugin). See `createRegistrationHooks`.
+    user: { validateUserInfo: registrationHooks.validateUserInfo },
+    databaseHooks: registrationHooks.databaseHooks,
     socialProviders: {
       github:
         env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET
@@ -121,12 +139,15 @@ export const getAuth = () => {
 
 let cachedSocialProviders: ReturnType<typeof buildSocialProviders> | undefined;
 
-export const getSocialProviders = createServerFn({
-  method: "GET",
-}).handler(() => {
+/** Which social sign-in providers have credentials configured. Server only. */
+export const getEnabledSocialProviders = () => {
   cachedSocialProviders ??= buildSocialProviders();
   return cachedSocialProviders;
-});
+};
+
+export const getSocialProviders = createServerFn({
+  method: "GET",
+}).handler(() => getEnabledSocialProviders());
 
 export type Session = ReturnType<typeof buildAuth>["$Infer"]["Session"];
 export type SessionUser = Session["user"];
@@ -168,19 +189,40 @@ export const emailSignUp = createServerFn({
   method: "POST",
 })
   .validator(emailSignUpSchema)
-  .handler(async ({ data }) => {
-    const headers = getRequestHeaders();
-    const auth = getAuth();
-    const result = await auth.api.signInMagicLink({
-      body: {
-        ...data,
-        callbackURL: "/dashboard",
-        newUserCallbackURL: "/welcome",
-      },
-      headers,
-    });
-    return result;
-  });
+  .handler(
+    async ({
+      data,
+    }): Promise<{
+      status: boolean;
+      /** Set when registration rules refused the address; no email was sent. */
+      reason: RegistrationDenyReason | null;
+    }> => {
+      // Refuse up front so nobody is mailed a link that would only fail at the
+      // verify step. The create-user gate in `validateUserInfo` remains the
+      // authority; this just keeps the sign-up page honest.
+      const { registration } = await getSettings();
+      const decision = evaluateRegistration(registration, {
+        email: data.email,
+        method: "magic-link",
+      });
+      if (!decision.allowed) {
+        return { status: false, reason: decision.reason };
+      }
+
+      const headers = getRequestHeaders();
+      const auth = getAuth();
+      const result = await auth.api.signInMagicLink({
+        body: {
+          ...data,
+          callbackURL: "/dashboard",
+          newUserCallbackURL: "/welcome",
+          errorCallbackURL: "/auth/login",
+        },
+        headers,
+      });
+      return { status: result.status, reason: null };
+    },
+  );
 
 export const signOut = createServerFn({
   method: "POST",

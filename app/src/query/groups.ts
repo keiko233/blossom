@@ -5,6 +5,8 @@ import { randomUUID } from "node:crypto";
 import { db } from "@/db";
 import { planGroup } from "@/db/plan-schema";
 import { nodeGroup, proxyGroup } from "@/db/proxy-schema";
+import { fromInput, fromResult } from "@/lib/admin-audit";
+import { adminAudit } from "@/lib/admin-audit-middleware";
 import { ensureAdmin } from "@/lib/ensure-admin";
 import {
   createGroupSchema,
@@ -73,6 +75,12 @@ export const getGroup = createServerFn({ method: "GET" })
   });
 
 export const createGroup = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("group.create", {
+      targetType: "group",
+      targetId: fromResult("id"),
+    }),
+  ])
   .validator(createGroupSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
@@ -95,6 +103,12 @@ export const createGroup = createServerFn({ method: "POST" })
   });
 
 export const updateGroup = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("group.update", {
+      targetType: "group",
+      targetId: fromInput("id"),
+    }),
+  ])
   .validator(updateGroupSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
@@ -143,6 +157,12 @@ export const updateGroup = createServerFn({ method: "POST" })
   });
 
 export const deleteGroup = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("group.delete", {
+      targetType: "group",
+      targetId: fromInput("id"),
+    }),
+  ])
   .validator(groupIdSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();

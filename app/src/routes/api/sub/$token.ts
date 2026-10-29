@@ -2,17 +2,22 @@ import { createFileRoute } from "@tanstack/react-router";
 import { stringify } from "yaml";
 
 import type { Subscription } from "@/db/plan-schema";
-import { buildClashConfig } from "@/lib/clash-config";
+import { buildClashConfig, toClashOutputOptions } from "@/lib/clash-config";
 import { getClientIp } from "@/lib/client-ip";
+import { toClashRules } from "@/lib/routing-rules";
+import {
+  buildContentDisposition,
+  buildProfileUpdateInterval,
+} from "@/lib/subscription-headers";
 import { parseClientUserAgent } from "@/lib/user-agent";
 import { recordAccessLog } from "@/query/access-log-record";
+import { listEnabledRules } from "@/query/rule-access";
+import { getSettings } from "@/query/settings-store";
 import {
   findSubscriptionByToken,
   getGatedSubscriptionView,
   getSubscriptionAccessibleNodes,
 } from "@/query/subscription-access";
-
-const PROFILE_UPDATE_INTERVAL_HOURS = 24;
 
 function isSubscriptionEligible(
   subscription: Subscription,
@@ -75,9 +80,15 @@ export const Route = createFileRoute("/api/sub/$token")({
           return new Response("Forbidden", { status: 403 });
         }
 
+        const [enabledRules, { subscription_output: output }] =
+          await Promise.all([listEnabledRules(), getSettings()]);
+        const rules = toClashRules(enabledRules);
+
         let config: unknown;
         try {
           config = buildClashConfig(gate.nodes, {
+            rules,
+            output: toClashOutputOptions(output),
             credentials: {
               uuid: subscription.credentialUuid,
               password: subscription.credentialPassword,
@@ -118,8 +129,10 @@ export const Route = createFileRoute("/api/sub/$token")({
           status: 200,
           headers: {
             "Content-Type": "text/yaml; charset=utf-8",
-            "Content-Disposition": 'attachment; filename="blossom.yaml"',
-            "Profile-Update-Interval": String(PROFILE_UPDATE_INTERVAL_HOURS),
+            "Content-Disposition": buildContentDisposition(output.profileTitle),
+            "Profile-Update-Interval": buildProfileUpdateInterval(
+              output.profileUpdateIntervalHours,
+            ),
             "Subscription-Userinfo":
               buildSubscriptionUserinfoHeader(subscription),
           },

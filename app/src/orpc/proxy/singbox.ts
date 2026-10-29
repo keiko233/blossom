@@ -2,6 +2,7 @@ import { Configuration } from "@black-duty/sing-box-schema";
 import { createHash } from "node:crypto";
 
 import type { Node } from "@/db/proxy-schema";
+import type { SingboxRouteRule } from "@/lib/routing-rules";
 import {
   isNodeRealityEnabled,
   isNodeTlsEnabled,
@@ -21,8 +22,8 @@ import {
  * forward-looking hooks:
  *  - `experimental.v2ray_api`: the stats/user API the agent uses to add users
  *    and report traffic.
- *  - `route`: an empty placeholder for the future rules module (server-side
- *    routing).
+ *  - `route`: carries the server-scoped routing rules (`toSingboxRouteRules`),
+ *    empty when none are configured.
  */
 
 export type SingboxConfig = Configuration;
@@ -58,6 +59,8 @@ export interface CompileOptions {
   inbounds: NodeInbound[];
   /** Enable the v2ray stats/user API used for traffic reporting. Default on. */
   enableV2rayApi?: boolean;
+  /** Server-side routing rules in sing-box rule-action syntax; default none. */
+  routeRules?: SingboxRouteRule[];
 }
 
 /**
@@ -78,7 +81,7 @@ export interface CompileOptions {
  * stats — their traffic is not reported per-user, a known limitation.
  */
 export function compileServerConfig(options: CompileOptions): SingboxConfig {
-  const { inbounds, enableV2rayApi = true } = options;
+  const { inbounds, enableV2rayApi = true, routeRules = [] } = options;
 
   const compiled = inbounds
     .filter(({ users }) => users.length > 0)
@@ -91,8 +94,8 @@ export function compileServerConfig(options: CompileOptions): SingboxConfig {
     },
     inbounds: compiled,
     outbounds: [{ type: "direct", tag: "direct" }],
-    // Placeholder for the future rules module: server-side routing gets injected here.
-    route: { rules: [], rule_set: [], final: "direct" },
+    // Server-scoped routing rules (reject only: the sole outbound is `direct`).
+    route: { rules: routeRules, rule_set: [], final: "direct" },
   };
 
   if (enableV2rayApi) {

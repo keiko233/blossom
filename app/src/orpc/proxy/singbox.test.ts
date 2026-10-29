@@ -166,6 +166,30 @@ describe("compileServerConfig", () => {
     expect(experimental.v2ray_api.stats.users).toEqual([]);
   });
 
+  it("emits an empty route rule list by default", () => {
+    const config = compileServerConfig({ inbounds: [] });
+    expect(config.route).toEqual({
+      rules: [],
+      rule_set: [],
+      final: "direct",
+    });
+  });
+
+  it("fills route.rules with server routing rules that survive schema parsing", () => {
+    const routeRules = [
+      { domain_suffix: ["ads.example.com"], action: "reject" as const },
+      { ip_cidr: ["10.0.0.0/8", "fd00::/8"], action: "reject" as const },
+      { domain_keyword: ["tracker"], action: "reject" as const },
+      { domain: ["bad.example.com"], action: "reject" as const },
+    ];
+    const config = compileServerConfig({ inbounds: [], routeRules });
+    expect(config.route).toEqual({
+      rules: routeRules,
+      rule_set: [],
+      final: "direct",
+    });
+  });
+
   it("keeps each coded user name distinct when a subscription spans multiple nodes", () => {
     const codedS1 = encodeTrafficUser("n1", "s1");
     const codedS1FromN2 = encodeTrafficUser("n2", "s1");

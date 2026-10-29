@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { NewTrafficRecord } from "@/db/traffic-schema";
 import { hashAgentToken, parseBearerToken } from "@/lib/agent-token";
 import { formatDesiredRevision } from "@/lib/config-revision";
+import { toSingboxRouteRules } from "@/lib/routing-rules";
 import {
   findAgentServerByTokenHash,
   getSubscriptionUserMap,
@@ -17,6 +18,7 @@ import {
   applyAgentCertificateDeployments,
   getCertificateAgentContext,
 } from "@/query/certificate-agent";
+import { listEnabledRules } from "@/query/rule-access";
 import { getNodeActiveSubscriptions } from "@/query/subscription-access";
 
 import { base } from "../base";
@@ -71,7 +73,10 @@ const agentProcedure = base.use(async ({ context, next }) => {
 });
 
 async function compileAgentServerConfig(serverId: string, enabled: boolean) {
-  const nodes = enabled ? await listEnabledServerNodes(serverId) : [];
+  const [nodes, rules] = await Promise.all([
+    enabled ? listEnabledServerNodes(serverId) : [],
+    listEnabledRules(),
+  ]);
   const perNodeUsers = await Promise.all(
     nodes.map(async (n) => {
       const subs = await getNodeActiveSubscriptions(n.id);
@@ -85,7 +90,10 @@ async function compileAgentServerConfig(serverId: string, enabled: boolean) {
     users: perNodeUsers[i]!,
   }));
   const materialized = built.filter(({ users }) => users.length > 0);
-  const config = compileServerConfig({ inbounds: built });
+  const config = compileServerConfig({
+    inbounds: built,
+    routeRules: toSingboxRouteRules(rules),
+  });
   return {
     config,
     materializedNodes: materialized.map(({ node }) => node),

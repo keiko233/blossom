@@ -10,6 +10,8 @@ import {
   node,
   server,
 } from "@/db/proxy-schema";
+import { fromInput, fromResult } from "@/lib/admin-audit";
+import { adminAudit } from "@/lib/admin-audit-middleware";
 import { encryptCertificateSecret } from "@/lib/certificate-crypto";
 import {
   assertImportedCertificateKind,
@@ -158,15 +160,23 @@ export const listCertificates = createServerFn({ method: "GET" }).handler(
   },
 );
 
-export const reconcileCertificates = createServerFn({ method: "POST" }).handler(
-  async () => {
+export const reconcileCertificates = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("certificate.reconcile", { targetType: "certificate" }),
+  ])
+  .handler(async () => {
     await ensureAdmin();
     await advanceCertificateIssuance();
     return { ok: true };
-  },
-);
+  });
 
 export const createCertificate = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("certificate.create", {
+      targetType: "certificate",
+      targetId: fromResult("id"),
+    }),
+  ])
   .validator(createCertificateSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
@@ -207,6 +217,12 @@ export const createCertificate = createServerFn({ method: "POST" })
   });
 
 export const deleteCertificate = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("certificate.delete", {
+      targetType: "certificate",
+      targetId: fromInput("id"),
+    }),
+  ])
   .validator(certificateIdSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
@@ -240,6 +256,12 @@ export const deleteCertificate = createServerFn({ method: "POST" })
   });
 
 export const renewCertificate = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("certificate.renew", {
+      targetType: "certificate",
+      targetId: fromInput("id"),
+    }),
+  ])
   .validator(certificateIdSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
@@ -270,6 +292,12 @@ export const renewCertificate = createServerFn({ method: "POST" })
 export const continueCertificateDnsChallenge = createServerFn({
   method: "POST",
 })
+  .middleware([
+    adminAudit("certificate.continue_dns_challenge", {
+      targetType: "certificate",
+      targetId: fromInput("id"),
+    }),
+  ])
   .validator(certificateIdSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
@@ -455,6 +483,12 @@ async function runImportedMaterialReplace(
 }
 
 export const importCertificate = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("certificate.import", {
+      targetType: "certificate",
+      targetId: fromResult("id"),
+    }),
+  ])
   .validator(createImportedCertificateSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
@@ -496,6 +530,12 @@ export const importCertificate = createServerFn({ method: "POST" })
 export const replaceImportedCertificate = createServerFn({
   method: "POST",
 })
+  .middleware([
+    adminAudit("certificate.replace_material", {
+      targetType: "certificate",
+      targetId: fromInput("certificateId"),
+    }),
+  ])
   .validator(replaceImportedCertificateMaterialSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
@@ -510,6 +550,12 @@ export const replaceImportedCertificate = createServerFn({
 export const activatePendingImportedCertificate = createServerFn({
   method: "POST",
 })
+  .middleware([
+    adminAudit("certificate.activate_pending", {
+      targetType: "certificate",
+      targetId: fromInput("certificateId"),
+    }),
+  ])
   .validator(certificateMaterialActionSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
@@ -569,6 +615,12 @@ export const activatePendingImportedCertificate = createServerFn({
 export const discardPendingImportedCertificate = createServerFn({
   method: "POST",
 })
+  .middleware([
+    adminAudit("certificate.discard_pending", {
+      targetType: "certificate",
+      targetId: fromInput("certificateId"),
+    }),
+  ])
   .validator(certificateMaterialActionSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();

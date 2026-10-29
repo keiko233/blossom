@@ -2,6 +2,7 @@ import type { JsonValue } from "@/orpc/proxy/schema";
 import type { ResolvedNode } from "@/query/subscription-access";
 
 import { nodeToClashProxy } from "./clash-proxies";
+import type { SubscriptionOutputSettings } from "./settings";
 
 interface SubscriptionCredentials {
   uuid: string;
@@ -17,6 +18,51 @@ interface BuildOptions {
    * nothing else. Nodes absent from the resolver use `credentials`.
    */
   resolveCredentials?: (node: ResolvedNode) => SubscriptionCredentials;
+  /**
+   * Compiled custom rules (`toClashRules`). They go ahead of the built-in
+   * defaults so an admin rule can override the LAN/CN split; `MATCH` stays last.
+   */
+  rules?: readonly string[];
+  /**
+   * Admin-tunable parts of the output (ports, latency test, built-in rules).
+   * Omitted fields keep the values the generator always used.
+   */
+  output?: Partial<ClashOutputOptions>;
+}
+
+export interface ClashOutputOptions {
+  mixedPort: number;
+  allowLan: boolean;
+  urlTestUrl: string;
+  urlTestIntervalSeconds: number;
+  /** `GEOIP,LAN,DIRECT,no-resolve` */
+  ruleLanDirect: boolean;
+  /** `GEOIP,CN,DIRECT` */
+  ruleCnDirect: boolean;
+}
+
+/** What the generator emitted before these became settings. */
+export const DEFAULT_CLASH_OUTPUT: Readonly<ClashOutputOptions> = {
+  mixedPort: 7890,
+  allowLan: false,
+  urlTestUrl: "https://www.gstatic.com/generate_204",
+  urlTestIntervalSeconds: 300,
+  ruleLanDirect: true,
+  ruleCnDirect: true,
+};
+
+/** The generator's options from the stored subscription-output settings. */
+export function toClashOutputOptions(
+  settings: SubscriptionOutputSettings,
+): ClashOutputOptions {
+  return {
+    mixedPort: settings.mixedPort,
+    allowLan: settings.allowLan,
+    urlTestUrl: settings.urlTestUrl,
+    urlTestIntervalSeconds: settings.urlTestIntervalSeconds,
+    ruleLanDirect: settings.ruleLanDirect,
+    ruleCnDirect: settings.ruleCnDirect,
+  };
 }
 
 /** Makes proxy names unique by appending a counter when duplicated. */
@@ -42,7 +88,8 @@ export function buildClashConfig(
   nodes: ResolvedNode[],
   options: BuildOptions,
 ): { config: unknown; proxyNames: string[] } {
-  const { credentials, resolveCredentials } = options;
+  const { credentials, resolveCredentials, rules = [] } = options;
+  const output = { ...DEFAULT_CLASH_OUTPUT, ...options.output };
 
   const proxies = uniqueProxyNames(
     nodes
@@ -62,8 +109,8 @@ export function buildClashConfig(
   const proxyNames = proxies.map((proxy) => proxy.name as string);
 
   const config = {
-    "mixed-port": 7890,
-    "allow-lan": false,
+    "mixed-port": output.mixedPort,
+    "allow-lan": output.allowLan,
     mode: "rule",
     "log-level": "info",
     proxies,
@@ -76,12 +123,18 @@ export function buildClashConfig(
       {
         name: "Auto",
         type: "url-test",
-        url: "https://www.gstatic.com/generate_204",
-        interval: 300,
+        url: output.urlTestUrl,
+        interval: output.urlTestIntervalSeconds,
         proxies: proxyNames,
       },
     ],
-    rules: ["GEOIP,LAN,DIRECT,no-resolve", "GEOIP,CN,DIRECT", "MATCH,PROXY"],
+    rules: [
+      ...rules,
+      ...(output.ruleLanDirect ? ["GEOIP,LAN,DIRECT,no-resolve"] : []),
+      ...(output.ruleCnDirect ? ["GEOIP,CN,DIRECT"] : []),
+      // The catch-all always closes the list; it is not a setting.
+      "MATCH,PROXY",
+    ],
   };
 
   return { config, proxyNames };

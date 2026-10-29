@@ -41,6 +41,9 @@ export const trafficRecord = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
+    // Leads with the time range: serves unfiltered / plan-filtered analytics
+    // queries (the other indexes lead with an entity column).
+    index("traffic_record_created_idx").on(table.createdAt),
     index("traffic_record_subscription_idx").on(
       table.subscriptionId,
       table.createdAt,
