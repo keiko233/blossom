@@ -58,7 +58,7 @@ The oRPC router (`app/src/orpc/router/index.ts`) exposes exactly the agent surfa
 
 - Tables are defined in `app/src/db/*-schema.ts` and re-exported from `app/src/db/schema.ts`, which is what `drizzle.config.ts` and better-auth's Drizzle adapter read. **A new schema file must be exported from `schema.ts`** or migrations and the auth adapter will not see it.
 - `auth-schema.ts` and `oauth-schema.ts` mirror better-auth's tables. When upgrading better-auth, reconcile them with its schema and ship a migration (the upgrade to 1.7 did exactly this in the `better_auth_1_7_oauth` migration).
-- The client is `db` from `@/db`, built once at module load from `getServerEnv()`. It is a `NeonHttpDatabase | NodePgDatabase` union; write queries that work on both, and respect the transaction limits in [Architecture](architecture.md#runtimes-and-deploy-targets).
+- The `db` facade from `@/db` lazily resolves a database instance: one per request on Workers, shared on Node. It is a `NeonHttpDatabase | NodePgDatabase` union; write queries that work on both, and respect the transaction limits in [Architecture](architecture.md#runtimes-and-deploy-targets).
 - Prefer SQL-side atomic updates (Drizzle's `sql` template and `returning()`) over read-modify-write for counters and state transitions.
 - IDs are text (UUIDs from `randomUUID()` for app tables; better-auth generates its own).
 

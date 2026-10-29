@@ -26,6 +26,7 @@
     "@better-auth/oauth-provider": "^1.7.14",
     "@black-duty/sing-box-schema": "^1.13.13",
     "@blossom/contracts": "workspace:*",
+    "@blossom/database": "workspace:*",
     "@blossom/domain": "workspace:*",
     "@faker-js/faker": "^10.6.0",
     "@fontsource-variable/geist-mono": "^5.3.0",

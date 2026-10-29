@@ -1,33 +1,23 @@
-import {
-  drizzle as drizzleNeonHttp,
-  type NeonHttpDatabase,
-} from "drizzle-orm/neon-http";
-import {
-  drizzle as drizzleNodePg,
-  type NodePgDatabase,
-} from "drizzle-orm/node-postgres";
+import { createDatabaseManager } from "@blossom/database/server";
 
-import { getHyperdriveConnectionString } from "@/lib/database-connection";
+import {
+  getDatabaseRequest,
+  getHyperdriveConnectionString,
+} from "@/lib/database-connection";
 import { getServerEnv } from "@/lib/env";
-import { DatabaseDriver } from "@/lib/env-schema";
 
-import { resolveDatabaseConfig } from "./config";
+export type { Database } from "@blossom/database/server";
 
-const serverEnv = getServerEnv();
-
-export { DatabaseDriver };
-
-export type Database = NeonHttpDatabase | NodePgDatabase;
-
-const databaseConfig = resolveDatabaseConfig({
-  databaseUrl: serverEnv.DATABASE_URL,
-  configuredDriver: serverEnv.DATABASE_DRIVER,
-  hyperdriveConnectionString: getHyperdriveConnectionString(),
+const manager = createDatabaseManager({
+  getRequest: getDatabaseRequest,
+  getConfig: () => {
+    const env = getServerEnv();
+    return {
+      databaseUrl: env.DATABASE_URL,
+      configuredDriver: env.DATABASE_DRIVER,
+      hyperdriveConnectionString: getHyperdriveConnectionString(),
+    };
+  },
 });
 
-export const databaseDriver = databaseConfig.driver;
-
-export const db: Database =
-  databaseDriver === DatabaseDriver.NeonHttp
-    ? drizzleNeonHttp(databaseConfig.connectionString)
-    : drizzleNodePg(databaseConfig.connectionString);
+export const { db, getDatabaseDriver } = manager;

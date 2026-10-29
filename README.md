@@ -33,7 +33,7 @@ Netlify, Vercel and Node are built by [Nitro](https://nitro.build) (`netlify`, `
 | Railway | (Docker) | `railway.toml` | Connect the repo; Railway builds from `Dockerfile` |
 | Self-host Docker | (Docker) | `Dockerfile`, `docker-compose.yaml` | `docker compose up -d` |
 
-For Cloudflare, push secrets with `wrangler secret put <NAME>` and non-secret vars through `vars` in `app/wrangler.jsonc`. The repository does not declare a Hyperdrive binding. The existing optional `HYPERDRIVE` connection path has a known initialization issue; see [Runtimes and deploy targets](docs/development/architecture.md#runtimes-and-deploy-targets). `DATABASE_URL` is used without that binding and is required by Drizzle Kit migrations. For Netlify and Vercel, configure environment variables in their dashboards; the Nitro presets handle the rest. Local builds and local handler/runtime checks do not prove a hosted deployment: verify a preview deploy on the platform before relying on it. Netlify's output moved from `dist/client` plus `.netlify/v1/functions` to `dist` plus `.netlify/functions-internal`, so an existing Netlify site whose publish directory is overridden in the UI must be set to `dist`.
+For Cloudflare, push secrets with `wrangler secret put <NAME>` and non-secret vars through `vars` in `app/wrangler.jsonc`. To use Hyperdrive, declare your own `HYPERDRIVE` binding in the Wrangler configuration; the repository does not include a configuration ID. Workers use a separate database client per request. `DATABASE_URL` is used without that binding and is required by Drizzle Kit migrations. For Netlify and Vercel, configure environment variables in their dashboards; the Nitro presets handle the rest. Local builds and local handler/runtime checks do not prove a hosted deployment: verify a preview deploy on the platform before relying on it. Netlify's output moved from `dist/client` plus `.netlify/v1/functions` to `dist` plus `.netlify/functions-internal`, so an existing Netlify site whose publish directory is overridden in the UI must be set to `dist`.
 
 ### Prebuilt Docker images
 
@@ -67,7 +67,7 @@ Server env vars are validated at runtime on the first request, so production bui
 
 Copy `app/.env.example` to `app/.env.local` for local development.
 
-During local Cloudflare development, Vite supplies `DATABASE_URL` to Wrangler's local Hyperdrive binding automatically. This exercises the Hyperdrive connection path without remote pooling or caching; production Workers use the deployed Hyperdrive configuration.
+When a `HYPERDRIVE` binding is declared, local Cloudflare development supplies `DATABASE_URL` to Wrangler as its local connection string unless an explicit local Hyperdrive connection string is set. Local development does not exercise remote pooling or caching.
 
 ## Database migrations
 

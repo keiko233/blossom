@@ -10,6 +10,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY app/package.json app/
 COPY packages/domain/package.json packages/domain/
 COPY packages/contracts/package.json packages/contracts/
+COPY packages/database/package.json packages/database/
 # Husky's `prepare` script installs git hooks, but .git is excluded by
 # .dockerignore. Setting HUSKY=0 makes husky a no-op while still allowing
 # dependency build scripts (e.g. @parcel/watcher, esbuild, sharp) to run.

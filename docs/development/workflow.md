@@ -31,7 +31,7 @@ From the repo root:
 
 The deploy-target build scripts are `build:cloudflare`, `build:netlify`, `build:vercel` and `build:node` (the example above uses the last); plain `pnpm build` uses the default `cloudflare` target (`@cloudflare/vite-plugin`); the other three targets are built by Nitro with a pinned preset. `db:migrate` acts on the database `DATABASE_URL` points at, and `agent:spec` needs the dev server running; see [API, data and auth](api-data-auth.md#migrations) and [Generated files](generated-files.md#agent-openapi-spec-and-client).
 
-The root `dev`, `build` and `test` scripts use `pnpm --parallel` over the workspace. The app consumes the private domain and contracts packages as TypeScript source and runs their tests in its Vitest suite; they do not need a separate build. The agent is built and tested with `cargo` separately. Which checks to run for a change is in [Testing and verification](testing.md).
+The root `dev`, `build` and `test` scripts use `pnpm --parallel` over the workspace. The app consumes the private domain, contracts and database packages as TypeScript source and runs their tests in its Vitest suite; they do not need a separate build. The agent is built and tested with `cargo` separately. Which checks to run for a change is in [Testing and verification](testing.md).
 
 ## Scope and verification
 

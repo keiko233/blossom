@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { and, asc, eq, inArray, notInArray } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
-import { db, databaseDriver } from "@/db";
+import { db, getDatabaseDriver } from "@/db";
 import {
   certificateMaterial,
   certificateServer,
@@ -316,7 +316,7 @@ type ManagedCertificateRow = typeof managedCertificate.$inferSelect;
 async function withCertificateTransaction<T>(
   callback: (tx: typeof db, rowLock: boolean) => Promise<T>,
 ): Promise<T> {
-  if (supportsInteractiveTransactions(databaseDriver)) {
+  if (supportsInteractiveTransactions(getDatabaseDriver())) {
     return (
       db as unknown as {
         transaction: <Result>(

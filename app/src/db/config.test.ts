@@ -1,8 +1,7 @@
+import { resolveDatabaseConfig } from "@blossom/database/driver";
 import { describe, expect, it } from "vitest";
 
 import { DatabaseDriver } from "@/lib/env-schema";
-
-import { resolveDatabaseConfig } from "./config";
 
 describe("resolveDatabaseConfig", () => {
   it("prefers Hyperdrive and uses the PostgreSQL wire driver", () => {

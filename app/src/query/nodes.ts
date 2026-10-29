@@ -380,7 +380,8 @@ export const createNode = createServerFn({ method: "POST" })
   .validator(createNodeSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
-    const { db, databaseDriver } = await import("@/db");
+    const { db, getDatabaseDriver } = await import("@/db");
+    const databaseDriver = getDatabaseDriver();
 
     await validateManagedCertificateSelection(
       db,
@@ -471,7 +472,8 @@ export const updateNode = createServerFn({ method: "POST" })
   .validator(updateNodeSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
-    const { db, databaseDriver } = await import("@/db");
+    const { db, getDatabaseDriver } = await import("@/db");
+    const databaseDriver = getDatabaseDriver();
     const {
       id,
       protocol,
@@ -711,7 +713,8 @@ export const deleteNode = createServerFn({ method: "POST" })
   .validator(nodeIdSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
-    const { db, databaseDriver } = await import("@/db");
+    const { db, getDatabaseDriver } = await import("@/db");
+    const databaseDriver = getDatabaseDriver();
     // Snapshot before the delete so the agent revision bump carries the
     // removed node's identity. (Subscriptions stop offering a deleted node
     // immediately — the safe direction — so no gate snapshot is needed for

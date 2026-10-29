@@ -13,6 +13,7 @@ import { tanstackStartCookies } from "better-auth/tanstack-start";
 
 import { db } from "@/db";
 import * as schema from "@/db/schema";
+import { getDatabaseRequest } from "@/lib/database-connection";
 import { getSettings } from "@/query/settings-store";
 import { grantSignupTrial } from "@/query/trial-grant";
 import MagicLinkEmail from "@/templates/emails/magic-link";
@@ -131,11 +132,21 @@ const buildAuth = createServerOnlyFn(() => {
 });
 
 let cachedAuth: ReturnType<typeof buildAuth> | undefined;
+const requestAuth = new WeakMap<Request, ReturnType<typeof buildAuth>>();
 
-export const getAuth = () => {
+export const getAuth = createServerOnlyFn(() => {
+  const request = getDatabaseRequest();
+  if (request) {
+    let auth = requestAuth.get(request);
+    if (!auth) {
+      auth = buildAuth();
+      requestAuth.set(request, auth);
+    }
+    return auth;
+  }
   cachedAuth ??= buildAuth();
   return cachedAuth;
-};
+});
 
 let cachedSocialProviders: ReturnType<typeof buildSocialProviders> | undefined;
 

@@ -1,0 +1,14 @@
+{
+  "name": "@blossom/database",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./driver": "./src/driver.ts",
+    "./server": "./src/server.ts"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.2.0",
+    "drizzle-orm": "1.0.0-rc.5",
+    "pg": "^8.23.1"
+  }
+}

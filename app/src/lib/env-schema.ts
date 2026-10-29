@@ -1,15 +1,9 @@
+import { DatabaseDriver } from "@blossom/database/driver";
 import z from "zod";
-
-export enum DatabaseDriver {
-  NeonHttp = "neon-http",
-  NodePg = "node-postgres",
-}
-
-export function supportsInteractiveTransactions(
-  driver: DatabaseDriver,
-): boolean {
-  return driver === DatabaseDriver.NodePg;
-}
+export {
+  DatabaseDriver,
+  supportsInteractiveTransactions,
+} from "@blossom/database/driver";
 
 export const serverEnvSchema = z.object({
   APP_NAME: z.string().optional().default("Blossom"),

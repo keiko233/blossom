@@ -50,3 +50,7 @@ Evaluated against Nitro `3.0.260903-beta`:
 | Cloudflare Workers | `@cloudflare/vite-plugin` retained | Nitro `cloudflare_module` blocked: needs changed compat flags to start in workerd and its dev runner cannot run the app. Evidence in [Architecture](architecture.md#runtimes-and-deploy-targets). |
 
 The presets are pinned in `app/vite.config.ts` and the `build:<target>` scripts instead of relying on host auto-detection. The certificate `reflect-metadata` ordering plugin, the `@/lib/database-connection` alias (Cloudflare-only `cloudflare:workers` import) and client/server env validation are still required and kept. No real-platform deployment was performed.
+
+## Workspace outcome
+
+Private `domain` and `contracts` packages expose portable rules and browser-safe schemas. The `database` package owns driver resolution and request-scoped database management, with a separate server entry. Table schemas, application-specific server functions, auth integration and agent API remain in the app because they are closely coupled. Docker copies workspace packages, and image change detection includes them. Workers startup and repeated requests have been tested locally with a dummy Hyperdrive binding; database queries and cross-request behavior against a real database still require integration verification.

@@ -105,6 +105,10 @@ const config = defineConfig(({ mode, command }) => {
         : []),
       tailwindcss(),
       tanstackStart({
+        importProtection: {
+          include: [/^src\//, /^\.\.\/packages\//],
+          client: { specifiers: ["@blossom/database/server"] },
+        },
         router: {
           generatedRouteTree: `route-tree.gen.ts`,
           routeTreeFileHeader: [`/* oxlint-disable */`, `// @ts-nocheck`],

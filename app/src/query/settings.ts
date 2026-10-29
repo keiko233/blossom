@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeaders } from "@tanstack/react-start/server";
 import { eq } from "drizzle-orm";
 
-import { databaseDriver, db } from "@/db";
+import { getDatabaseDriver, db } from "@/db";
 import { plan } from "@/db/plan-schema";
 import { appSetting } from "@/db/settings-schema";
 import { fromInput } from "@/lib/admin-audit";
@@ -42,7 +42,7 @@ function readSystemStatus() {
       env: typeof process === "undefined" ? undefined : process.env,
       hasNodeProcess: typeof process !== "undefined",
     }),
-    databaseDriver,
+    databaseDriver: getDatabaseDriver(),
   };
 }
 
