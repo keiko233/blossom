@@ -37,3 +37,16 @@ Stages may be combined only when necessary for a working intermediate commit. A 
 - The workspace graph is acyclic, each new package has explicit dependencies and public entry points, and packages are included in test/build and image rebuild triggers.
 - Authentication, admin POST auditing, secret redaction, agent endpoints, transaction-dependent paths and publish gate semantics remain intact.
 - No production deploy, remote database operation, push or unrelated work is included. Report any unavailable verification and unresolved compatibility limitations.
+
+## Stage 2 outcome (deployment integration)
+
+Evaluated against Nitro `3.0.260903-beta`:
+
+| Target | Integration | Result |
+| --- | --- | --- |
+| Node / Docker | Nitro `node-server` (unchanged) | Builds; local server smoke passes. |
+| Vercel | Nitro `vercel` (unchanged) | Builds; handler smoke passes. Not deployed. |
+| Netlify | Nitro `netlify` (replaces `@netlify/vite-plugin-tanstack-start`, removed) | Builds; dev and handler smoke pass. Publish directory is now `dist`. Not deployed. |
+| Cloudflare Workers | `@cloudflare/vite-plugin` retained | Nitro `cloudflare_module` blocked: needs changed compat flags to start in workerd and its dev runner cannot run the app. Evidence in [Architecture](architecture.md#runtimes-and-deploy-targets). |
+
+The presets are pinned in `app/vite.config.ts` and the `build:<target>` scripts instead of relying on host auto-detection. The certificate `reflect-metadata` ordering plugin, the `@/lib/database-connection` alias (Cloudflare-only `cloudflare:workers` import) and client/server env validation are still required and kept. No real-platform deployment was performed.

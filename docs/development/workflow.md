@@ -29,7 +29,7 @@ From the repo root:
 | Preview email templates       | `pnpm --filter @blossom/app email:dev`                         |
 | Agent checks                  | `cd server-agent && cargo test --locked`                       |
 
-The deploy-target build scripts are `build:cloudflare`, `build:netlify`, `build:vercel` and `build:node` (the example above uses the last); plain `pnpm build` uses the default `cloudflare` target. `db:migrate` acts on the database `DATABASE_URL` points at, and `agent:spec` needs the dev server running; see [API, data and auth](api-data-auth.md#migrations) and [Generated files](generated-files.md#agent-openapi-spec-and-client).
+The deploy-target build scripts are `build:cloudflare`, `build:netlify`, `build:vercel` and `build:node` (the example above uses the last); plain `pnpm build` uses the default `cloudflare` target (`@cloudflare/vite-plugin`); the other three targets are built by Nitro with a pinned preset. `db:migrate` acts on the database `DATABASE_URL` points at, and `agent:spec` needs the dev server running; see [API, data and auth](api-data-auth.md#migrations) and [Generated files](generated-files.md#agent-openapi-spec-and-client).
 
 The root `dev`, `build` and `test` scripts use `pnpm --parallel` over the workspace, which contains only `app`. The agent is built and tested with `cargo` separately. Which checks to run for a change is in [Testing and verification](testing.md).
 
@@ -75,7 +75,7 @@ Keep job names stable if you edit workflows: branch protection and badges may re
 
 ## Deployment and external effects
 
-Deployment is outside the normal development loop, and these operations have effects beyond your checkout: `wrangler deploy` publishes a Worker, `wrangler secret put` writes a live secret, pushing to `main` or a `v*` tag triggers `docker.yml` and publishes images to GHCR, and `db:migrate` changes the database `DATABASE_URL` points at. Authorization to do any of them comes from the task instructions; for verification, prefer local builds (`pnpm build`), a disposable database and local Docker. Keep real secrets out of files in the repo. Target-specific configuration: `app/wrangler.jsonc` (Cloudflare, Hyperdrive binding `HYPERDRIVE`), `netlify.toml`, `app/vercel.json`, `railway.toml`, `Dockerfile`, `docker-compose.yaml`. Deployment instructions are in the [README](../../README.md#deployment).
+Deployment is outside the normal development loop, and these operations have effects beyond your checkout: `wrangler deploy` publishes a Worker, `wrangler secret put` writes a live secret, pushing to `main` or a `v*` tag triggers `docker.yml` and publishes images to GHCR, and `db:migrate` changes the database `DATABASE_URL` points at. Authorization to do any of them comes from the task instructions; for verification, prefer local builds (`pnpm build`), a disposable database and local Docker. Keep real secrets out of files in the repo. Target-specific configuration: `app/wrangler.jsonc` (Cloudflare; the `HYPERDRIVE` binding is not declared in the file), `netlify.toml` (publish `dist`), `app/vercel.json`, `railway.toml`, `Dockerfile`, `docker-compose.yaml`. Deployment instructions are in the [README](../../README.md#deployment).
 
 ## Documentation
 

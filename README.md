@@ -21,17 +21,19 @@ For app-only commands, use `pnpm --filter @blossom/app <script>`.
 
 The app selects its deploy target through the `DEPLOY_TARGET` build switch in `app/vite.config.ts`. Valid values are `cloudflare` (default), `netlify`, `vercel`, and `node`. Because `cloudflare` is the default, plain `pnpm build` and `pnpm dev` behave exactly as before; platform-specific builds use `pnpm build:<target>`.
 
+Netlify, Vercel and Node are built by [Nitro](https://nitro.build) (`netlify`, `vercel` and `node-server` presets). The preset is pinned per target rather than auto-detected, so the `build:<target>` scripts are reproducible and keep working if a host's detection changes. Cloudflare Workers keeps `@cloudflare/vite-plugin` because Nitro's `cloudflare_module` preset is not yet a drop-in replacement (see [Runtimes and deploy targets](docs/development/architecture.md#runtimes-and-deploy-targets)).
+
 > The `pnpm build:*` scripts below are defined in `app/package.json`. From the repo root, run them as `pnpm --filter @blossom/app build:<target>`.
 
 | Platform | Build command | Config | How |
 |---|---|---|---|
 | Cloudflare Workers (primary) | `pnpm build:cloudflare` | `app/wrangler.jsonc` | `cd app && wrangler deploy` |
-| Netlify | `pnpm build:netlify` | `netlify.toml` | Connect the repo, set base directory to `app` |
+| Netlify | `pnpm build:netlify` | `netlify.toml` | Connect the repo; `netlify.toml` sets base directory `app` and publish directory `dist` |
 | Vercel | `pnpm build:vercel` | `app/vercel.json` | Connect the repo, set root directory to `app` |
 | Railway | (Docker) | `railway.toml` | Connect the repo; Railway builds from `Dockerfile` |
 | Self-host Docker | (Docker) | `Dockerfile`, `docker-compose.yaml` | `docker compose up -d` |
 
-For Cloudflare, push secrets with `wrangler secret put <NAME>` and non-secret vars through `vars` in `app/wrangler.jsonc`. The Worker is bound to the `blossom` Hyperdrive configuration as `HYPERDRIVE`; when that binding is available, runtime database traffic uses Hyperdrive through `node-postgres`. `DATABASE_URL` remains the fallback for local/non-Cloudflare runtimes and is still required by Drizzle Kit migrations. For Netlify and Vercel, configure environment variables in their dashboards; the build presets handle the rest.
+For Cloudflare, push secrets with `wrangler secret put <NAME>` and non-secret vars through `vars` in `app/wrangler.jsonc`. The repository does not declare a Hyperdrive binding. The existing optional `HYPERDRIVE` connection path has a known initialization issue; see [Runtimes and deploy targets](docs/development/architecture.md#runtimes-and-deploy-targets). `DATABASE_URL` is used without that binding and is required by Drizzle Kit migrations. For Netlify and Vercel, configure environment variables in their dashboards; the Nitro presets handle the rest. Local builds and local handler/runtime checks do not prove a hosted deployment: verify a preview deploy on the platform before relying on it. Netlify's output moved from `dist/client` plus `.netlify/v1/functions` to `dist` plus `.netlify/functions-internal`, so an existing Netlify site whose publish directory is overridden in the UI must be set to `dist`.
 
 ### Prebuilt Docker images
 

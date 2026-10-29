@@ -1,6 +1,5 @@
 import { cloudflare } from "@cloudflare/vite-plugin";
 import { paraglideVitePlugin } from "@inlang/paraglide-js";
-import netlify from "@netlify/vite-plugin-tanstack-start";
 import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
 import { devtools } from "@tanstack/devtools-vite";
@@ -15,6 +14,19 @@ import { clientEnvSchema, serverEnvSchema } from "./src/lib/env-schema";
 
 const DEPLOY_TARGETS = ["cloudflare", "netlify", "vercel", "node"] as const;
 type DeployTarget = (typeof DEPLOY_TARGETS)[number];
+
+/**
+ * Every target except Cloudflare is built by Nitro. The preset is pinned per
+ * target (instead of relying on Nitro's provider auto-detection) so the same
+ * `build:<target>` script gives the same output on a laptop, in CI and on the
+ * host. Cloudflare keeps @cloudflare/vite-plugin: see "Cloudflare" in
+ * docs/development/architecture.md#runtimes-and-deploy-targets for why.
+ */
+const NITRO_PRESETS = {
+  netlify: "netlify",
+  vercel: "vercel",
+  node: "node-server",
+} as const satisfies Partial<Record<DeployTarget, string>>;
 
 const deployTarget = (process.env.DEPLOY_TARGET ??
   "cloudflare") as DeployTarget;
@@ -99,15 +111,10 @@ const config = defineConfig(({ mode, command }) => {
           routeFileIgnorePattern: "_modules",
         },
       }),
-      // netlify / nitro plugins go AFTER tanstackStart per their docs
-      ...(deployTarget === "netlify" ? [netlify()] : []),
-      ...(deployTarget === "vercel" || deployTarget === "node"
-        ? [
-            nitro({
-              preset: deployTarget === "vercel" ? "vercel" : "node-server",
-            }),
-          ]
-        : []),
+      // nitro goes AFTER tanstackStart per its docs
+      ...(deployTarget === "cloudflare"
+        ? []
+        : [nitro({ preset: NITRO_PRESETS[deployTarget] })]),
       viteReact(),
       babel({
         presets: [reactCompilerPreset()],
