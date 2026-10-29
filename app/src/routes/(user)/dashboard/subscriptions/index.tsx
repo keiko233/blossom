@@ -7,6 +7,7 @@ import {
   PageHeader,
   PageHeaderTitle,
 } from "@/components/app-shell/page-header";
+import { RedeemCodeCard } from "@/components/redeem-code-card";
 import {
   SubscriptionQuotaUsage,
   SubscriptionStatusBadge,
@@ -80,14 +81,19 @@ function RouteComponent() {
 
   if (subscriptions.length === 0) {
     return (
-      <Empty>
-        <EmptyHeader>
-          <EmptyTitle>{m.user_subscriptions_empty()}</EmptyTitle>
-          <EmptyDescription>
-            {m.user_subscriptions_empty_description()}
-          </EmptyDescription>
-        </EmptyHeader>
-      </Empty>
+      <div className="flex flex-col gap-6">
+        <Empty>
+          <EmptyHeader>
+            <EmptyTitle>{m.user_subscriptions_empty()}</EmptyTitle>
+            <EmptyDescription>
+              {m.user_subscriptions_empty_description()}
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+        <div className="mx-auto w-full max-w-xl px-4">
+          <RedeemCodeCard userId={user.id} />
+        </div>
+      </div>
     );
   }
 
@@ -98,6 +104,8 @@ function RouteComponent() {
           {m.user_subscriptions_title()}
         </PageHeaderTitle>
       </PageHeader>
+
+      <RedeemCodeCard userId={user.id} />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {subscriptions.map((sub) => (

@@ -198,6 +198,9 @@
   --chart-3: var(--color-cyan-900);
   --chart-4: var(--color-amber-400);
   --chart-5: var(--color-amber-500);
+  /* Traffic charts: validated orange/blue pair (CVD-safe, >=3:1 on the surface). */
+  --chart-up: var(--color-orange-600);
+  --chart-down: var(--color-blue-600);
   --code: var(--color-white);
   --code-foreground: var(--foreground);
   --code-highlight: --alpha(var(--color-black) / 4%);
@@ -259,6 +262,8 @@
   --chart-3: var(--color-amber-500);
   --chart-4: var(--color-purple-500);
   --chart-5: var(--color-rose-500);
+  --chart-up: var(--color-orange-600);
+  --chart-down: var(--color-blue-500);
   --code: color-mix(in srgb, var(--background) 98%, var(--color-white));
   --code-foreground: var(--foreground);
   --code-highlight: --alpha(var(--color-white) / 4%);

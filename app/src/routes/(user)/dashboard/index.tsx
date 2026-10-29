@@ -6,6 +6,7 @@ import {
   PageHeader,
   PageHeaderTitle,
 } from "@/components/app-shell/page-header";
+import { RedeemCodeCard } from "@/components/redeem-code-card";
 import {
   SubscriptionQuotaUsage,
   SubscriptionTrafficTable,
@@ -30,6 +31,8 @@ import { formatDate } from "@/lib/format";
 import { isSubscriptionActive } from "@/lib/subscription-helpers";
 import { m } from "@/paraglide/messages";
 import { currentUserQueryKey, getCurrentUser } from "@/query/current-user";
+
+import { UserAnnouncements } from "./_modules/user-announcements";
 
 export const Route = createFileRoute("/(user)/dashboard/")({
   component: RouteComponent,
@@ -73,14 +76,20 @@ function RouteComponent() {
 
   if (subscriptions.length === 0) {
     return (
-      <Empty>
-        <EmptyHeader>
-          <EmptyTitle>{m.user_dashboard_no_subscriptions_title()}</EmptyTitle>
-          <EmptyDescription>
-            {m.user_dashboard_no_subscriptions_description()}
-          </EmptyDescription>
-        </EmptyHeader>
-      </Empty>
+      <div className="flex flex-col gap-6">
+        <UserAnnouncements userId={user.id} />
+        <Empty>
+          <EmptyHeader>
+            <EmptyTitle>{m.user_dashboard_no_subscriptions_title()}</EmptyTitle>
+            <EmptyDescription>
+              {m.user_dashboard_no_subscriptions_description()}
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+        <div className="mx-auto w-full max-w-xl px-4">
+          <RedeemCodeCard userId={user.id} />
+        </div>
+      </div>
     );
   }
 
@@ -91,6 +100,8 @@ function RouteComponent() {
           {m.user_dashboard_title()}
         </PageHeaderTitle>
       </PageHeader>
+
+      <UserAnnouncements userId={user.id} />
 
       {activeSubscriptions.length === 0 && (
         <Alert>
@@ -110,6 +121,8 @@ function RouteComponent() {
           </AlertDescription>
         </Alert>
       )}
+
+      {activeSubscriptions.length === 0 && <RedeemCodeCard userId={user.id} />}
 
       {activeSubscriptions.length > 0 && (
         <div className="flex flex-col gap-3">

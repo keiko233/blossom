@@ -7,77 +7,110 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as userRouteRouteImport } from './routes/(user)/route'
-import { Route as authRouteRouteImport } from './routes/(auth)/route'
 import { Route as adminRouteRouteImport } from './routes/(admin)/route'
-import { Route as staticIndexRouteImport } from './routes/(static)/index'
-import { Route as ApiMcpRouteImport } from './routes/api/mcp'
-import { Route as ApiHealthRouteImport } from './routes/api/health'
-import { Route as ApiSplatRouteImport } from './routes/api/$'
-import { Route as DotwellKnownOauthProtectedResourceRouteImport } from './routes/[.]well-known.oauth-protected-resource'
-import { Route as DotwellKnownOauthAuthorizationServerRouteImport } from './routes/[.]well-known.oauth-authorization-server'
-import { Route as userDashboardRouteRouteImport } from './routes/(user)/dashboard/route'
+import { Route as authRouteRouteImport } from './routes/(auth)/route'
+import { Route as userRouteRouteImport } from './routes/(user)/route'
 import { Route as adminAdminRouteRouteImport } from './routes/(admin)/admin/route'
-import { Route as userWelcomeIndexRouteImport } from './routes/(user)/welcome/index'
-import { Route as userDashboardIndexRouteImport } from './routes/(user)/dashboard/index'
+import { Route as staticIndexRouteImport } from './routes/(static)/index'
+import { Route as userDashboardRouteRouteImport } from './routes/(user)/dashboard/route'
+import { Route as DotwellKnownOauthAuthorizationServerRouteImport } from './routes/[.]well-known.oauth-authorization-server'
+import { Route as DotwellKnownOauthProtectedResourceRouteImport } from './routes/[.]well-known.oauth-protected-resource'
+import { Route as ApiSplatRouteImport } from './routes/api/$'
+import { Route as ApiHealthRouteImport } from './routes/api/health'
+import { Route as ApiMcpRouteImport } from './routes/api/mcp'
 import { Route as adminAdminIndexRouteImport } from './routes/(admin)/admin/index'
-import { Route as ApiSubTokenRouteImport } from './routes/api/sub/$token'
-import { Route as ApiRpcSplatRouteImport } from './routes/api/rpc/$'
-import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
-import { Route as authAuthSignupRouteImport } from './routes/(auth)/auth/signup'
-import { Route as authAuthMcpConsentRouteImport } from './routes/(auth)/auth/mcp-consent'
-import { Route as authAuthLoginRouteImport } from './routes/(auth)/auth/login'
-import { Route as authAuthForgotRouteImport } from './routes/(auth)/auth/forgot'
-import { Route as adminAdminUsersRouteRouteImport } from './routes/(admin)/admin/users/route'
-import { Route as adminAdminProxiesRouteRouteImport } from './routes/(admin)/admin/proxies/route'
-import { Route as adminAdminPlansRouteRouteImport } from './routes/(admin)/admin/plans/route'
+import { Route as adminAdminAuditRouteRouteImport } from './routes/(admin)/admin/audit/route'
 import { Route as adminAdminMcpRouteRouteImport } from './routes/(admin)/admin/mcp/route'
-import { Route as userDashboardSubscriptionsIndexRouteImport } from './routes/(user)/dashboard/subscriptions/index'
-import { Route as adminAdminUsersIndexRouteImport } from './routes/(admin)/admin/users/index'
-import { Route as adminAdminPlansIndexRouteImport } from './routes/(admin)/admin/plans/index'
+import { Route as adminAdminPlansRouteRouteImport } from './routes/(admin)/admin/plans/route'
+import { Route as adminAdminProxiesRouteRouteImport } from './routes/(admin)/admin/proxies/route'
+import { Route as adminAdminRedeemRouteRouteImport } from './routes/(admin)/admin/redeem/route'
+import { Route as adminAdminSubscriptionsRouteRouteImport } from './routes/(admin)/admin/subscriptions/route'
+import { Route as adminAdminTrafficRouteRouteImport } from './routes/(admin)/admin/traffic/route'
+import { Route as adminAdminUsersRouteRouteImport } from './routes/(admin)/admin/users/route'
+import { Route as authAuthForgotRouteImport } from './routes/(auth)/auth/forgot'
+import { Route as authAuthLoginRouteImport } from './routes/(auth)/auth/login'
+import { Route as authAuthMcpConsentRouteImport } from './routes/(auth)/auth/mcp-consent'
+import { Route as authAuthSignupRouteImport } from './routes/(auth)/auth/signup'
+import { Route as userDashboardIndexRouteImport } from './routes/(user)/dashboard/index'
+import { Route as userWelcomeIndexRouteImport } from './routes/(user)/welcome/index'
+import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiRpcSplatRouteImport } from './routes/api/rpc/$'
+import { Route as ApiSubTokenRouteImport } from './routes/api/sub/$token'
+import { Route as adminAdminAnnouncementsIndexRouteImport } from './routes/(admin)/admin/announcements/index'
+import { Route as adminAdminAuditIndexRouteImport } from './routes/(admin)/admin/audit/index'
 import { Route as adminAdminMcpIndexRouteImport } from './routes/(admin)/admin/mcp/index'
-import { Route as DotwellKnownOauthProtectedResourceApiMcpRouteImport } from './routes/[.]well-known.oauth-protected-resource.api.mcp'
-import { Route as DotwellKnownOauthAuthorizationServerApiAuthRouteImport } from './routes/[.]well-known.oauth-authorization-server.api.auth'
-import { Route as adminAdminUsersUserIdRouteImport } from './routes/(admin)/admin/users/$userId'
-import { Route as adminAdminPlansNewRouteImport } from './routes/(admin)/admin/plans/new'
+import { Route as adminAdminPlansIndexRouteImport } from './routes/(admin)/admin/plans/index'
 import { Route as adminAdminPlansPlanIdRouteImport } from './routes/(admin)/admin/plans/$planId'
-import { Route as adminAdminProxiesServersRouteRouteImport } from './routes/(admin)/admin/proxies/servers/route'
-import { Route as adminAdminProxiesNodesRouteRouteImport } from './routes/(admin)/admin/proxies/nodes/route'
-import { Route as adminAdminProxiesGroupsRouteRouteImport } from './routes/(admin)/admin/proxies/groups/route'
+import { Route as adminAdminPlansNewRouteImport } from './routes/(admin)/admin/plans/new'
 import { Route as adminAdminProxiesCertificatesRouteRouteImport } from './routes/(admin)/admin/proxies/certificates/route'
-import { Route as adminAdminProxiesServersIndexRouteImport } from './routes/(admin)/admin/proxies/servers/index'
-import { Route as adminAdminProxiesRulesIndexRouteImport } from './routes/(admin)/admin/proxies/rules/index'
-import { Route as adminAdminProxiesNodesIndexRouteImport } from './routes/(admin)/admin/proxies/nodes/index'
-import { Route as adminAdminProxiesGroupsIndexRouteImport } from './routes/(admin)/admin/proxies/groups/index'
+import { Route as adminAdminProxiesGroupsRouteRouteImport } from './routes/(admin)/admin/proxies/groups/route'
+import { Route as adminAdminProxiesNodesRouteRouteImport } from './routes/(admin)/admin/proxies/nodes/route'
+import { Route as adminAdminProxiesServersRouteRouteImport } from './routes/(admin)/admin/proxies/servers/route'
+import { Route as adminAdminRedeemIndexRouteImport } from './routes/(admin)/admin/redeem/index'
+import { Route as adminAdminRedeemBatchIdRouteImport } from './routes/(admin)/admin/redeem/$batchId'
+import { Route as adminAdminSettingsIndexRouteImport } from './routes/(admin)/admin/settings/index'
+import { Route as adminAdminSubscriptionsIndexRouteImport } from './routes/(admin)/admin/subscriptions/index'
+import { Route as adminAdminTrafficIndexRouteImport } from './routes/(admin)/admin/traffic/index'
+import { Route as adminAdminUsersIndexRouteImport } from './routes/(admin)/admin/users/index'
+import { Route as adminAdminUsersUserIdRouteImport } from './routes/(admin)/admin/users/$userId'
+import { Route as userDashboardSubscriptionsIndexRouteImport } from './routes/(user)/dashboard/subscriptions/index'
+import { Route as DotwellKnownOauthAuthorizationServerApiAuthRouteImport } from './routes/[.]well-known.oauth-authorization-server.api.auth'
+import { Route as DotwellKnownOauthProtectedResourceApiMcpRouteImport } from './routes/[.]well-known.oauth-protected-resource.api.mcp'
 import { Route as adminAdminProxiesCertificatesIndexRouteImport } from './routes/(admin)/admin/proxies/certificates/index'
-import { Route as adminAdminProxiesServersNewRouteImport } from './routes/(admin)/admin/proxies/servers/new'
-import { Route as adminAdminProxiesServersServerIdRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId'
-import { Route as adminAdminProxiesNodesNewRouteImport } from './routes/(admin)/admin/proxies/nodes/new'
-import { Route as adminAdminProxiesNodesNodeIdRouteImport } from './routes/(admin)/admin/proxies/nodes/$nodeId'
-import { Route as adminAdminProxiesGroupsNewRouteImport } from './routes/(admin)/admin/proxies/groups/new'
+import { Route as adminAdminProxiesGroupsIndexRouteImport } from './routes/(admin)/admin/proxies/groups/index'
 import { Route as adminAdminProxiesGroupsGroupIdRouteImport } from './routes/(admin)/admin/proxies/groups/$groupId'
+import { Route as adminAdminProxiesGroupsNewRouteImport } from './routes/(admin)/admin/proxies/groups/new'
+import { Route as adminAdminProxiesNodesIndexRouteImport } from './routes/(admin)/admin/proxies/nodes/index'
+import { Route as adminAdminProxiesNodesNodeIdRouteImport } from './routes/(admin)/admin/proxies/nodes/$nodeId'
+import { Route as adminAdminProxiesNodesNewRouteImport } from './routes/(admin)/admin/proxies/nodes/new'
+import { Route as adminAdminProxiesRulesIndexRouteImport } from './routes/(admin)/admin/proxies/rules/index'
+import { Route as adminAdminProxiesServersIndexRouteImport } from './routes/(admin)/admin/proxies/servers/index'
+import { Route as adminAdminProxiesServersServerIdRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId'
+import { Route as adminAdminProxiesServersNewRouteImport } from './routes/(admin)/admin/proxies/servers/new'
 import { Route as ApiAdminCertificatesCertificateIdExportPartRouteImport } from './routes/api/admin/certificates/$certificateId/export/$part'
 
-const userRouteRoute = userRouteRouteImport.update({
-  id: '/(user)',
+const adminRouteRoute = adminRouteRouteImport.update({
+  id: '/(admin)',
   getParentRoute: () => rootRouteImport,
 } as any)
 const authRouteRoute = authRouteRouteImport.update({
   id: '/(auth)',
   getParentRoute: () => rootRouteImport,
 } as any)
-const adminRouteRoute = adminRouteRouteImport.update({
-  id: '/(admin)',
+const userRouteRoute = userRouteRouteImport.update({
+  id: '/(user)',
   getParentRoute: () => rootRouteImport,
+} as any)
+const adminAdminRouteRoute = adminAdminRouteRouteImport.update({
+  id: '/admin',
+  path: '/admin',
+  getParentRoute: () => adminRouteRoute,
 } as any)
 const staticIndexRoute = staticIndexRouteImport.update({
   id: '/(static)/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiMcpRoute = ApiMcpRouteImport.update({
-  id: '/api/mcp',
-  path: '/api/mcp',
+const userDashboardRouteRoute = userDashboardRouteRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
+  getParentRoute: () => userRouteRoute,
+} as any)
+const DotwellKnownOauthAuthorizationServerRoute =
+  DotwellKnownOauthAuthorizationServerRouteImport.update({
+    id: '/.well-known/oauth-authorization-server',
+    path: '/.well-known/oauth-authorization-server',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const DotwellKnownOauthProtectedResourceRoute =
+  DotwellKnownOauthProtectedResourceRouteImport.update({
+    id: '/.well-known/oauth-protected-resource',
+    path: '/.well-known/oauth-protected-resource',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiSplatRoute = ApiSplatRouteImport.update({
+  id: '/api/$',
+  path: '/api/$',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiHealthRoute = ApiHealthRouteImport.update({
@@ -85,96 +118,19 @@ const ApiHealthRoute = ApiHealthRouteImport.update({
   path: '/api/health',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiSplatRoute = ApiSplatRouteImport.update({
-  id: '/api/$',
-  path: '/api/$',
+const ApiMcpRoute = ApiMcpRouteImport.update({
+  id: '/api/mcp',
+  path: '/api/mcp',
   getParentRoute: () => rootRouteImport,
-} as any)
-const DotwellKnownOauthProtectedResourceRoute =
-  DotwellKnownOauthProtectedResourceRouteImport.update({
-    id: '/.well-known/oauth-protected-resource',
-    path: '/.well-known/oauth-protected-resource',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const DotwellKnownOauthAuthorizationServerRoute =
-  DotwellKnownOauthAuthorizationServerRouteImport.update({
-    id: '/.well-known/oauth-authorization-server',
-    path: '/.well-known/oauth-authorization-server',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const userDashboardRouteRoute = userDashboardRouteRouteImport.update({
-  id: '/dashboard',
-  path: '/dashboard',
-  getParentRoute: () => userRouteRoute,
-} as any)
-const adminAdminRouteRoute = adminAdminRouteRouteImport.update({
-  id: '/admin',
-  path: '/admin',
-  getParentRoute: () => adminRouteRoute,
-} as any)
-const userWelcomeIndexRoute = userWelcomeIndexRouteImport.update({
-  id: '/welcome/',
-  path: '/welcome/',
-  getParentRoute: () => userRouteRoute,
-} as any)
-const userDashboardIndexRoute = userDashboardIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => userDashboardRouteRoute,
 } as any)
 const adminAdminIndexRoute = adminAdminIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => adminAdminRouteRoute,
 } as any)
-const ApiSubTokenRoute = ApiSubTokenRouteImport.update({
-  id: '/api/sub/$token',
-  path: '/api/sub/$token',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiRpcSplatRoute = ApiRpcSplatRouteImport.update({
-  id: '/api/rpc/$',
-  path: '/api/rpc/$',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
-  id: '/api/auth/$',
-  path: '/api/auth/$',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const authAuthSignupRoute = authAuthSignupRouteImport.update({
-  id: '/auth/signup',
-  path: '/auth/signup',
-  getParentRoute: () => authRouteRoute,
-} as any)
-const authAuthMcpConsentRoute = authAuthMcpConsentRouteImport.update({
-  id: '/auth/mcp-consent',
-  path: '/auth/mcp-consent',
-  getParentRoute: () => authRouteRoute,
-} as any)
-const authAuthLoginRoute = authAuthLoginRouteImport.update({
-  id: '/auth/login',
-  path: '/auth/login',
-  getParentRoute: () => authRouteRoute,
-} as any)
-const authAuthForgotRoute = authAuthForgotRouteImport.update({
-  id: '/auth/forgot',
-  path: '/auth/forgot',
-  getParentRoute: () => authRouteRoute,
-} as any)
-const adminAdminUsersRouteRoute = adminAdminUsersRouteRouteImport.update({
-  id: '/users',
-  path: '/users',
-  getParentRoute: () => adminAdminRouteRoute,
-} as any)
-const adminAdminProxiesRouteRoute = adminAdminProxiesRouteRouteImport.update({
-  id: '/proxies',
-  path: '/proxies',
-  getParentRoute: () => adminAdminRouteRoute,
-} as any)
-const adminAdminPlansRouteRoute = adminAdminPlansRouteRouteImport.update({
-  id: '/plans',
-  path: '/plans',
+const adminAdminAuditRouteRoute = adminAdminAuditRouteRouteImport.update({
+  id: '/audit',
+  path: '/audit',
   getParentRoute: () => adminAdminRouteRoute,
 } as any)
 const adminAdminMcpRouteRoute = adminAdminMcpRouteRouteImport.update({
@@ -182,47 +138,101 @@ const adminAdminMcpRouteRoute = adminAdminMcpRouteRouteImport.update({
   path: '/mcp',
   getParentRoute: () => adminAdminRouteRoute,
 } as any)
-const userDashboardSubscriptionsIndexRoute =
-  userDashboardSubscriptionsIndexRouteImport.update({
-    id: '/subscriptions/',
-    path: '/subscriptions/',
-    getParentRoute: () => userDashboardRouteRoute,
-  } as any)
-const adminAdminUsersIndexRoute = adminAdminUsersIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => adminAdminUsersRouteRoute,
+const adminAdminPlansRouteRoute = adminAdminPlansRouteRouteImport.update({
+  id: '/plans',
+  path: '/plans',
+  getParentRoute: () => adminAdminRouteRoute,
 } as any)
-const adminAdminPlansIndexRoute = adminAdminPlansIndexRouteImport.update({
+const adminAdminProxiesRouteRoute = adminAdminProxiesRouteRouteImport.update({
+  id: '/proxies',
+  path: '/proxies',
+  getParentRoute: () => adminAdminRouteRoute,
+} as any)
+const adminAdminRedeemRouteRoute = adminAdminRedeemRouteRouteImport.update({
+  id: '/redeem',
+  path: '/redeem',
+  getParentRoute: () => adminAdminRouteRoute,
+} as any)
+const adminAdminSubscriptionsRouteRoute =
+  adminAdminSubscriptionsRouteRouteImport.update({
+    id: '/subscriptions',
+    path: '/subscriptions',
+    getParentRoute: () => adminAdminRouteRoute,
+  } as any)
+const adminAdminTrafficRouteRoute = adminAdminTrafficRouteRouteImport.update({
+  id: '/traffic',
+  path: '/traffic',
+  getParentRoute: () => adminAdminRouteRoute,
+} as any)
+const adminAdminUsersRouteRoute = adminAdminUsersRouteRouteImport.update({
+  id: '/users',
+  path: '/users',
+  getParentRoute: () => adminAdminRouteRoute,
+} as any)
+const authAuthForgotRoute = authAuthForgotRouteImport.update({
+  id: '/auth/forgot',
+  path: '/auth/forgot',
+  getParentRoute: () => authRouteRoute,
+} as any)
+const authAuthLoginRoute = authAuthLoginRouteImport.update({
+  id: '/auth/login',
+  path: '/auth/login',
+  getParentRoute: () => authRouteRoute,
+} as any)
+const authAuthMcpConsentRoute = authAuthMcpConsentRouteImport.update({
+  id: '/auth/mcp-consent',
+  path: '/auth/mcp-consent',
+  getParentRoute: () => authRouteRoute,
+} as any)
+const authAuthSignupRoute = authAuthSignupRouteImport.update({
+  id: '/auth/signup',
+  path: '/auth/signup',
+  getParentRoute: () => authRouteRoute,
+} as any)
+const userDashboardIndexRoute = userDashboardIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => adminAdminPlansRouteRoute,
+  getParentRoute: () => userDashboardRouteRoute,
+} as any)
+const userWelcomeIndexRoute = userWelcomeIndexRouteImport.update({
+  id: '/welcome/',
+  path: '/welcome/',
+  getParentRoute: () => userRouteRoute,
+} as any)
+const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
+  id: '/api/auth/$',
+  path: '/api/auth/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRpcSplatRoute = ApiRpcSplatRouteImport.update({
+  id: '/api/rpc/$',
+  path: '/api/rpc/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiSubTokenRoute = ApiSubTokenRouteImport.update({
+  id: '/api/sub/$token',
+  path: '/api/sub/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const adminAdminAnnouncementsIndexRoute =
+  adminAdminAnnouncementsIndexRouteImport.update({
+    id: '/announcements/',
+    path: '/announcements/',
+    getParentRoute: () => adminAdminRouteRoute,
+  } as any)
+const adminAdminAuditIndexRoute = adminAdminAuditIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => adminAdminAuditRouteRoute,
 } as any)
 const adminAdminMcpIndexRoute = adminAdminMcpIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => adminAdminMcpRouteRoute,
 } as any)
-const DotwellKnownOauthProtectedResourceApiMcpRoute =
-  DotwellKnownOauthProtectedResourceApiMcpRouteImport.update({
-    id: '/api/mcp',
-    path: '/api/mcp',
-    getParentRoute: () => DotwellKnownOauthProtectedResourceRoute,
-  } as any)
-const DotwellKnownOauthAuthorizationServerApiAuthRoute =
-  DotwellKnownOauthAuthorizationServerApiAuthRouteImport.update({
-    id: '/api/auth',
-    path: '/api/auth',
-    getParentRoute: () => DotwellKnownOauthAuthorizationServerRoute,
-  } as any)
-const adminAdminUsersUserIdRoute = adminAdminUsersUserIdRouteImport.update({
-  id: '/$userId',
-  path: '/$userId',
-  getParentRoute: () => adminAdminUsersRouteRoute,
-} as any)
-const adminAdminPlansNewRoute = adminAdminPlansNewRouteImport.update({
-  id: '/new',
-  path: '/new',
+const adminAdminPlansIndexRoute = adminAdminPlansIndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => adminAdminPlansRouteRoute,
 } as any)
 const adminAdminPlansPlanIdRoute = adminAdminPlansPlanIdRouteImport.update({
@@ -230,16 +240,15 @@ const adminAdminPlansPlanIdRoute = adminAdminPlansPlanIdRouteImport.update({
   path: '/$planId',
   getParentRoute: () => adminAdminPlansRouteRoute,
 } as any)
-const adminAdminProxiesServersRouteRoute =
-  adminAdminProxiesServersRouteRouteImport.update({
-    id: '/servers',
-    path: '/servers',
-    getParentRoute: () => adminAdminProxiesRouteRoute,
-  } as any)
-const adminAdminProxiesNodesRouteRoute =
-  adminAdminProxiesNodesRouteRouteImport.update({
-    id: '/nodes',
-    path: '/nodes',
+const adminAdminPlansNewRoute = adminAdminPlansNewRouteImport.update({
+  id: '/new',
+  path: '/new',
+  getParentRoute: () => adminAdminPlansRouteRoute,
+} as any)
+const adminAdminProxiesCertificatesRouteRoute =
+  adminAdminProxiesCertificatesRouteRouteImport.update({
+    id: '/certificates',
+    path: '/certificates',
     getParentRoute: () => adminAdminProxiesRouteRoute,
   } as any)
 const adminAdminProxiesGroupsRouteRoute =
@@ -248,35 +257,71 @@ const adminAdminProxiesGroupsRouteRoute =
     path: '/groups',
     getParentRoute: () => adminAdminProxiesRouteRoute,
   } as any)
-const adminAdminProxiesCertificatesRouteRoute =
-  adminAdminProxiesCertificatesRouteRouteImport.update({
-    id: '/certificates',
-    path: '/certificates',
+const adminAdminProxiesNodesRouteRoute =
+  adminAdminProxiesNodesRouteRouteImport.update({
+    id: '/nodes',
+    path: '/nodes',
     getParentRoute: () => adminAdminProxiesRouteRoute,
   } as any)
-const adminAdminProxiesServersIndexRoute =
-  adminAdminProxiesServersIndexRouteImport.update({
-    id: '/',
-    path: '/',
-    getParentRoute: () => adminAdminProxiesServersRouteRoute,
-  } as any)
-const adminAdminProxiesRulesIndexRoute =
-  adminAdminProxiesRulesIndexRouteImport.update({
-    id: '/rules/',
-    path: '/rules/',
+const adminAdminProxiesServersRouteRoute =
+  adminAdminProxiesServersRouteRouteImport.update({
+    id: '/servers',
+    path: '/servers',
     getParentRoute: () => adminAdminProxiesRouteRoute,
   } as any)
-const adminAdminProxiesNodesIndexRoute =
-  adminAdminProxiesNodesIndexRouteImport.update({
+const adminAdminRedeemIndexRoute = adminAdminRedeemIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => adminAdminRedeemRouteRoute,
+} as any)
+const adminAdminRedeemBatchIdRoute = adminAdminRedeemBatchIdRouteImport.update({
+  id: '/$batchId',
+  path: '/$batchId',
+  getParentRoute: () => adminAdminRedeemRouteRoute,
+} as any)
+const adminAdminSettingsIndexRoute = adminAdminSettingsIndexRouteImport.update({
+  id: '/settings/',
+  path: '/settings/',
+  getParentRoute: () => adminAdminRouteRoute,
+} as any)
+const adminAdminSubscriptionsIndexRoute =
+  adminAdminSubscriptionsIndexRouteImport.update({
     id: '/',
     path: '/',
-    getParentRoute: () => adminAdminProxiesNodesRouteRoute,
+    getParentRoute: () => adminAdminSubscriptionsRouteRoute,
   } as any)
-const adminAdminProxiesGroupsIndexRoute =
-  adminAdminProxiesGroupsIndexRouteImport.update({
-    id: '/',
-    path: '/',
-    getParentRoute: () => adminAdminProxiesGroupsRouteRoute,
+const adminAdminTrafficIndexRoute = adminAdminTrafficIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => adminAdminTrafficRouteRoute,
+} as any)
+const adminAdminUsersIndexRoute = adminAdminUsersIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => adminAdminUsersRouteRoute,
+} as any)
+const adminAdminUsersUserIdRoute = adminAdminUsersUserIdRouteImport.update({
+  id: '/$userId',
+  path: '/$userId',
+  getParentRoute: () => adminAdminUsersRouteRoute,
+} as any)
+const userDashboardSubscriptionsIndexRoute =
+  userDashboardSubscriptionsIndexRouteImport.update({
+    id: '/subscriptions/',
+    path: '/subscriptions/',
+    getParentRoute: () => userDashboardRouteRoute,
+  } as any)
+const DotwellKnownOauthAuthorizationServerApiAuthRoute =
+  DotwellKnownOauthAuthorizationServerApiAuthRouteImport.update({
+    id: '/api/auth',
+    path: '/api/auth',
+    getParentRoute: () => DotwellKnownOauthAuthorizationServerRoute,
+  } as any)
+const DotwellKnownOauthProtectedResourceApiMcpRoute =
+  DotwellKnownOauthProtectedResourceApiMcpRouteImport.update({
+    id: '/api/mcp',
+    path: '/api/mcp',
+    getParentRoute: () => DotwellKnownOauthProtectedResourceRoute,
   } as any)
 const adminAdminProxiesCertificatesIndexRoute =
   adminAdminProxiesCertificatesIndexRouteImport.update({
@@ -284,22 +329,28 @@ const adminAdminProxiesCertificatesIndexRoute =
     path: '/',
     getParentRoute: () => adminAdminProxiesCertificatesRouteRoute,
   } as any)
-const adminAdminProxiesServersNewRoute =
-  adminAdminProxiesServersNewRouteImport.update({
+const adminAdminProxiesGroupsIndexRoute =
+  adminAdminProxiesGroupsIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => adminAdminProxiesGroupsRouteRoute,
+  } as any)
+const adminAdminProxiesGroupsGroupIdRoute =
+  adminAdminProxiesGroupsGroupIdRouteImport.update({
+    id: '/$groupId',
+    path: '/$groupId',
+    getParentRoute: () => adminAdminProxiesGroupsRouteRoute,
+  } as any)
+const adminAdminProxiesGroupsNewRoute =
+  adminAdminProxiesGroupsNewRouteImport.update({
     id: '/new',
     path: '/new',
-    getParentRoute: () => adminAdminProxiesServersRouteRoute,
+    getParentRoute: () => adminAdminProxiesGroupsRouteRoute,
   } as any)
-const adminAdminProxiesServersServerIdRoute =
-  adminAdminProxiesServersServerIdRouteImport.update({
-    id: '/$serverId',
-    path: '/$serverId',
-    getParentRoute: () => adminAdminProxiesServersRouteRoute,
-  } as any)
-const adminAdminProxiesNodesNewRoute =
-  adminAdminProxiesNodesNewRouteImport.update({
-    id: '/new',
-    path: '/new',
+const adminAdminProxiesNodesIndexRoute =
+  adminAdminProxiesNodesIndexRouteImport.update({
+    id: '/',
+    path: '/',
     getParentRoute: () => adminAdminProxiesNodesRouteRoute,
   } as any)
 const adminAdminProxiesNodesNodeIdRoute =
@@ -308,17 +359,35 @@ const adminAdminProxiesNodesNodeIdRoute =
     path: '/$nodeId',
     getParentRoute: () => adminAdminProxiesNodesRouteRoute,
   } as any)
-const adminAdminProxiesGroupsNewRoute =
-  adminAdminProxiesGroupsNewRouteImport.update({
+const adminAdminProxiesNodesNewRoute =
+  adminAdminProxiesNodesNewRouteImport.update({
     id: '/new',
     path: '/new',
-    getParentRoute: () => adminAdminProxiesGroupsRouteRoute,
+    getParentRoute: () => adminAdminProxiesNodesRouteRoute,
   } as any)
-const adminAdminProxiesGroupsGroupIdRoute =
-  adminAdminProxiesGroupsGroupIdRouteImport.update({
-    id: '/$groupId',
-    path: '/$groupId',
-    getParentRoute: () => adminAdminProxiesGroupsRouteRoute,
+const adminAdminProxiesRulesIndexRoute =
+  adminAdminProxiesRulesIndexRouteImport.update({
+    id: '/rules/',
+    path: '/rules/',
+    getParentRoute: () => adminAdminProxiesRouteRoute,
+  } as any)
+const adminAdminProxiesServersIndexRoute =
+  adminAdminProxiesServersIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => adminAdminProxiesServersRouteRoute,
+  } as any)
+const adminAdminProxiesServersServerIdRoute =
+  adminAdminProxiesServersServerIdRouteImport.update({
+    id: '/$serverId',
+    path: '/$serverId',
+    getParentRoute: () => adminAdminProxiesServersRouteRoute,
+  } as any)
+const adminAdminProxiesServersNewRoute =
+  adminAdminProxiesServersNewRouteImport.update({
+    id: '/new',
+    path: '/new',
+    getParentRoute: () => adminAdminProxiesServersRouteRoute,
   } as any)
 const ApiAdminCertificatesCertificateIdExportPartRoute =
   ApiAdminCertificatesCertificateIdExportPartRouteImport.update({
@@ -336,9 +405,13 @@ export interface FileRoutesByFullPath {
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
   '/': typeof staticIndexRoute
+  '/admin/audit': typeof adminAdminAuditRouteRouteWithChildren
   '/admin/mcp': typeof adminAdminMcpRouteRouteWithChildren
   '/admin/plans': typeof adminAdminPlansRouteRouteWithChildren
   '/admin/proxies': typeof adminAdminProxiesRouteRouteWithChildren
+  '/admin/redeem': typeof adminAdminRedeemRouteRouteWithChildren
+  '/admin/subscriptions': typeof adminAdminSubscriptionsRouteRouteWithChildren
+  '/admin/traffic': typeof adminAdminTrafficRouteRouteWithChildren
   '/admin/users': typeof adminAdminUsersRouteRouteWithChildren
   '/auth/forgot': typeof authAuthForgotRoute
   '/auth/login': typeof authAuthLoginRoute
@@ -356,11 +429,18 @@ export interface FileRoutesByFullPath {
   '/admin/proxies/servers': typeof adminAdminProxiesServersRouteRouteWithChildren
   '/admin/plans/$planId': typeof adminAdminPlansPlanIdRoute
   '/admin/plans/new': typeof adminAdminPlansNewRoute
+  '/admin/redeem/$batchId': typeof adminAdminRedeemBatchIdRoute
   '/admin/users/$userId': typeof adminAdminUsersUserIdRoute
   '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
   '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
+  '/admin/announcements/': typeof adminAdminAnnouncementsIndexRoute
+  '/admin/audit/': typeof adminAdminAuditIndexRoute
   '/admin/mcp/': typeof adminAdminMcpIndexRoute
   '/admin/plans/': typeof adminAdminPlansIndexRoute
+  '/admin/redeem/': typeof adminAdminRedeemIndexRoute
+  '/admin/settings/': typeof adminAdminSettingsIndexRoute
+  '/admin/subscriptions/': typeof adminAdminSubscriptionsIndexRoute
+  '/admin/traffic/': typeof adminAdminTrafficIndexRoute
   '/admin/users/': typeof adminAdminUsersIndexRoute
   '/dashboard/subscriptions/': typeof userDashboardSubscriptionsIndexRoute
   '/admin/proxies/groups/$groupId': typeof adminAdminProxiesGroupsGroupIdRoute
@@ -396,11 +476,18 @@ export interface FileRoutesByTo {
   '/welcome': typeof userWelcomeIndexRoute
   '/admin/plans/$planId': typeof adminAdminPlansPlanIdRoute
   '/admin/plans/new': typeof adminAdminPlansNewRoute
+  '/admin/redeem/$batchId': typeof adminAdminRedeemBatchIdRoute
   '/admin/users/$userId': typeof adminAdminUsersUserIdRoute
   '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
   '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
+  '/admin/announcements': typeof adminAdminAnnouncementsIndexRoute
+  '/admin/audit': typeof adminAdminAuditIndexRoute
   '/admin/mcp': typeof adminAdminMcpIndexRoute
   '/admin/plans': typeof adminAdminPlansIndexRoute
+  '/admin/redeem': typeof adminAdminRedeemIndexRoute
+  '/admin/settings': typeof adminAdminSettingsIndexRoute
+  '/admin/subscriptions': typeof adminAdminSubscriptionsIndexRoute
+  '/admin/traffic': typeof adminAdminTrafficIndexRoute
   '/admin/users': typeof adminAdminUsersIndexRoute
   '/dashboard/subscriptions': typeof userDashboardSubscriptionsIndexRoute
   '/admin/proxies/groups/$groupId': typeof adminAdminProxiesGroupsGroupIdRoute
@@ -429,9 +516,13 @@ export interface FileRoutesById {
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
   '/(static)/': typeof staticIndexRoute
+  '/(admin)/admin/audit': typeof adminAdminAuditRouteRouteWithChildren
   '/(admin)/admin/mcp': typeof adminAdminMcpRouteRouteWithChildren
   '/(admin)/admin/plans': typeof adminAdminPlansRouteRouteWithChildren
   '/(admin)/admin/proxies': typeof adminAdminProxiesRouteRouteWithChildren
+  '/(admin)/admin/redeem': typeof adminAdminRedeemRouteRouteWithChildren
+  '/(admin)/admin/subscriptions': typeof adminAdminSubscriptionsRouteRouteWithChildren
+  '/(admin)/admin/traffic': typeof adminAdminTrafficRouteRouteWithChildren
   '/(admin)/admin/users': typeof adminAdminUsersRouteRouteWithChildren
   '/(auth)/auth/forgot': typeof authAuthForgotRoute
   '/(auth)/auth/login': typeof authAuthLoginRoute
@@ -449,11 +540,18 @@ export interface FileRoutesById {
   '/(admin)/admin/proxies/servers': typeof adminAdminProxiesServersRouteRouteWithChildren
   '/(admin)/admin/plans/$planId': typeof adminAdminPlansPlanIdRoute
   '/(admin)/admin/plans/new': typeof adminAdminPlansNewRoute
+  '/(admin)/admin/redeem/$batchId': typeof adminAdminRedeemBatchIdRoute
   '/(admin)/admin/users/$userId': typeof adminAdminUsersUserIdRoute
   '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
   '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
+  '/(admin)/admin/announcements/': typeof adminAdminAnnouncementsIndexRoute
+  '/(admin)/admin/audit/': typeof adminAdminAuditIndexRoute
   '/(admin)/admin/mcp/': typeof adminAdminMcpIndexRoute
   '/(admin)/admin/plans/': typeof adminAdminPlansIndexRoute
+  '/(admin)/admin/redeem/': typeof adminAdminRedeemIndexRoute
+  '/(admin)/admin/settings/': typeof adminAdminSettingsIndexRoute
+  '/(admin)/admin/subscriptions/': typeof adminAdminSubscriptionsIndexRoute
+  '/(admin)/admin/traffic/': typeof adminAdminTrafficIndexRoute
   '/(admin)/admin/users/': typeof adminAdminUsersIndexRoute
   '/(user)/dashboard/subscriptions/': typeof userDashboardSubscriptionsIndexRoute
   '/(admin)/admin/proxies/groups/$groupId': typeof adminAdminProxiesGroupsGroupIdRoute
@@ -480,9 +578,13 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/api/mcp'
     | '/'
+    | '/admin/audit'
     | '/admin/mcp'
     | '/admin/plans'
     | '/admin/proxies'
+    | '/admin/redeem'
+    | '/admin/subscriptions'
+    | '/admin/traffic'
     | '/admin/users'
     | '/auth/forgot'
     | '/auth/login'
@@ -500,11 +602,18 @@ export interface FileRouteTypes {
     | '/admin/proxies/servers'
     | '/admin/plans/$planId'
     | '/admin/plans/new'
+    | '/admin/redeem/$batchId'
     | '/admin/users/$userId'
     | '/.well-known/oauth-authorization-server/api/auth'
     | '/.well-known/oauth-protected-resource/api/mcp'
+    | '/admin/announcements/'
+    | '/admin/audit/'
     | '/admin/mcp/'
     | '/admin/plans/'
+    | '/admin/redeem/'
+    | '/admin/settings/'
+    | '/admin/subscriptions/'
+    | '/admin/traffic/'
     | '/admin/users/'
     | '/dashboard/subscriptions/'
     | '/admin/proxies/groups/$groupId'
@@ -540,11 +649,18 @@ export interface FileRouteTypes {
     | '/welcome'
     | '/admin/plans/$planId'
     | '/admin/plans/new'
+    | '/admin/redeem/$batchId'
     | '/admin/users/$userId'
     | '/.well-known/oauth-authorization-server/api/auth'
     | '/.well-known/oauth-protected-resource/api/mcp'
+    | '/admin/announcements'
+    | '/admin/audit'
     | '/admin/mcp'
     | '/admin/plans'
+    | '/admin/redeem'
+    | '/admin/settings'
+    | '/admin/subscriptions'
+    | '/admin/traffic'
     | '/admin/users'
     | '/dashboard/subscriptions'
     | '/admin/proxies/groups/$groupId'
@@ -572,9 +688,13 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/api/mcp'
     | '/(static)/'
+    | '/(admin)/admin/audit'
     | '/(admin)/admin/mcp'
     | '/(admin)/admin/plans'
     | '/(admin)/admin/proxies'
+    | '/(admin)/admin/redeem'
+    | '/(admin)/admin/subscriptions'
+    | '/(admin)/admin/traffic'
     | '/(admin)/admin/users'
     | '/(auth)/auth/forgot'
     | '/(auth)/auth/login'
@@ -592,11 +712,18 @@ export interface FileRouteTypes {
     | '/(admin)/admin/proxies/servers'
     | '/(admin)/admin/plans/$planId'
     | '/(admin)/admin/plans/new'
+    | '/(admin)/admin/redeem/$batchId'
     | '/(admin)/admin/users/$userId'
     | '/.well-known/oauth-authorization-server/api/auth'
     | '/.well-known/oauth-protected-resource/api/mcp'
+    | '/(admin)/admin/announcements/'
+    | '/(admin)/admin/audit/'
     | '/(admin)/admin/mcp/'
     | '/(admin)/admin/plans/'
+    | '/(admin)/admin/redeem/'
+    | '/(admin)/admin/settings/'
+    | '/(admin)/admin/subscriptions/'
+    | '/(admin)/admin/traffic/'
     | '/(admin)/admin/users/'
     | '/(user)/dashboard/subscriptions/'
     | '/(admin)/admin/proxies/groups/$groupId'
@@ -631,11 +758,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/(user)': {
-      id: '/(user)'
+    '/(admin)': {
+      id: '/(admin)'
       path: ''
       fullPath: ''
-      preLoaderRoute: typeof userRouteRouteImport
+      preLoaderRoute: typeof adminRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/(auth)': {
@@ -645,53 +772,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof authRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/(admin)': {
-      id: '/(admin)'
+    '/(user)': {
+      id: '/(user)'
       path: ''
       fullPath: ''
-      preLoaderRoute: typeof adminRouteRouteImport
+      preLoaderRoute: typeof userRouteRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/(admin)/admin': {
+      id: '/(admin)/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof adminAdminRouteRouteImport
+      parentRoute: typeof adminRouteRoute
     }
     '/(static)/': {
       id: '/(static)/'
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof staticIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/mcp': {
-      id: '/api/mcp'
-      path: '/api/mcp'
-      fullPath: '/api/mcp'
-      preLoaderRoute: typeof ApiMcpRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/health': {
-      id: '/api/health'
-      path: '/api/health'
-      fullPath: '/api/health'
-      preLoaderRoute: typeof ApiHealthRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/$': {
-      id: '/api/$'
-      path: '/api/$'
-      fullPath: '/api/$'
-      preLoaderRoute: typeof ApiSplatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/.well-known/oauth-protected-resource': {
-      id: '/.well-known/oauth-protected-resource'
-      path: '/.well-known/oauth-protected-resource'
-      fullPath: '/.well-known/oauth-protected-resource'
-      preLoaderRoute: typeof DotwellKnownOauthProtectedResourceRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/.well-known/oauth-authorization-server': {
-      id: '/.well-known/oauth-authorization-server'
-      path: '/.well-known/oauth-authorization-server'
-      fullPath: '/.well-known/oauth-authorization-server'
-      preLoaderRoute: typeof DotwellKnownOauthAuthorizationServerRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/(user)/dashboard': {
@@ -701,26 +800,40 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof userDashboardRouteRouteImport
       parentRoute: typeof userRouteRoute
     }
-    '/(admin)/admin': {
-      id: '/(admin)/admin'
-      path: '/admin'
-      fullPath: '/admin'
-      preLoaderRoute: typeof adminAdminRouteRouteImport
-      parentRoute: typeof adminRouteRoute
+    '/.well-known/oauth-authorization-server': {
+      id: '/.well-known/oauth-authorization-server'
+      path: '/.well-known/oauth-authorization-server'
+      fullPath: '/.well-known/oauth-authorization-server'
+      preLoaderRoute: typeof DotwellKnownOauthAuthorizationServerRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/(user)/welcome/': {
-      id: '/(user)/welcome/'
-      path: '/welcome'
-      fullPath: '/welcome/'
-      preLoaderRoute: typeof userWelcomeIndexRouteImport
-      parentRoute: typeof userRouteRoute
+    '/.well-known/oauth-protected-resource': {
+      id: '/.well-known/oauth-protected-resource'
+      path: '/.well-known/oauth-protected-resource'
+      fullPath: '/.well-known/oauth-protected-resource'
+      preLoaderRoute: typeof DotwellKnownOauthProtectedResourceRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/(user)/dashboard/': {
-      id: '/(user)/dashboard/'
-      path: '/'
-      fullPath: '/dashboard/'
-      preLoaderRoute: typeof userDashboardIndexRouteImport
-      parentRoute: typeof userDashboardRouteRoute
+    '/api/$': {
+      id: '/api/$'
+      path: '/api/$'
+      fullPath: '/api/$'
+      preLoaderRoute: typeof ApiSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/health': {
+      id: '/api/health'
+      path: '/api/health'
+      fullPath: '/api/health'
+      preLoaderRoute: typeof ApiHealthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/mcp': {
+      id: '/api/mcp'
+      path: '/api/mcp'
+      fullPath: '/api/mcp'
+      preLoaderRoute: typeof ApiMcpRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/(admin)/admin/': {
       id: '/(admin)/admin/'
@@ -729,74 +842,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof adminAdminIndexRouteImport
       parentRoute: typeof adminAdminRouteRoute
     }
-    '/api/sub/$token': {
-      id: '/api/sub/$token'
-      path: '/api/sub/$token'
-      fullPath: '/api/sub/$token'
-      preLoaderRoute: typeof ApiSubTokenRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/rpc/$': {
-      id: '/api/rpc/$'
-      path: '/api/rpc/$'
-      fullPath: '/api/rpc/$'
-      preLoaderRoute: typeof ApiRpcSplatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/auth/$': {
-      id: '/api/auth/$'
-      path: '/api/auth/$'
-      fullPath: '/api/auth/$'
-      preLoaderRoute: typeof ApiAuthSplatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/(auth)/auth/signup': {
-      id: '/(auth)/auth/signup'
-      path: '/auth/signup'
-      fullPath: '/auth/signup'
-      preLoaderRoute: typeof authAuthSignupRouteImport
-      parentRoute: typeof authRouteRoute
-    }
-    '/(auth)/auth/mcp-consent': {
-      id: '/(auth)/auth/mcp-consent'
-      path: '/auth/mcp-consent'
-      fullPath: '/auth/mcp-consent'
-      preLoaderRoute: typeof authAuthMcpConsentRouteImport
-      parentRoute: typeof authRouteRoute
-    }
-    '/(auth)/auth/login': {
-      id: '/(auth)/auth/login'
-      path: '/auth/login'
-      fullPath: '/auth/login'
-      preLoaderRoute: typeof authAuthLoginRouteImport
-      parentRoute: typeof authRouteRoute
-    }
-    '/(auth)/auth/forgot': {
-      id: '/(auth)/auth/forgot'
-      path: '/auth/forgot'
-      fullPath: '/auth/forgot'
-      preLoaderRoute: typeof authAuthForgotRouteImport
-      parentRoute: typeof authRouteRoute
-    }
-    '/(admin)/admin/users': {
-      id: '/(admin)/admin/users'
-      path: '/users'
-      fullPath: '/admin/users'
-      preLoaderRoute: typeof adminAdminUsersRouteRouteImport
-      parentRoute: typeof adminAdminRouteRoute
-    }
-    '/(admin)/admin/proxies': {
-      id: '/(admin)/admin/proxies'
-      path: '/proxies'
-      fullPath: '/admin/proxies'
-      preLoaderRoute: typeof adminAdminProxiesRouteRouteImport
-      parentRoute: typeof adminAdminRouteRoute
-    }
-    '/(admin)/admin/plans': {
-      id: '/(admin)/admin/plans'
-      path: '/plans'
-      fullPath: '/admin/plans'
-      preLoaderRoute: typeof adminAdminPlansRouteRouteImport
+    '/(admin)/admin/audit': {
+      id: '/(admin)/admin/audit'
+      path: '/audit'
+      fullPath: '/admin/audit'
+      preLoaderRoute: typeof adminAdminAuditRouteRouteImport
       parentRoute: typeof adminAdminRouteRoute
     }
     '/(admin)/admin/mcp': {
@@ -806,26 +856,124 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof adminAdminMcpRouteRouteImport
       parentRoute: typeof adminAdminRouteRoute
     }
-    '/(user)/dashboard/subscriptions/': {
-      id: '/(user)/dashboard/subscriptions/'
+    '/(admin)/admin/plans': {
+      id: '/(admin)/admin/plans'
+      path: '/plans'
+      fullPath: '/admin/plans'
+      preLoaderRoute: typeof adminAdminPlansRouteRouteImport
+      parentRoute: typeof adminAdminRouteRoute
+    }
+    '/(admin)/admin/proxies': {
+      id: '/(admin)/admin/proxies'
+      path: '/proxies'
+      fullPath: '/admin/proxies'
+      preLoaderRoute: typeof adminAdminProxiesRouteRouteImport
+      parentRoute: typeof adminAdminRouteRoute
+    }
+    '/(admin)/admin/redeem': {
+      id: '/(admin)/admin/redeem'
+      path: '/redeem'
+      fullPath: '/admin/redeem'
+      preLoaderRoute: typeof adminAdminRedeemRouteRouteImport
+      parentRoute: typeof adminAdminRouteRoute
+    }
+    '/(admin)/admin/subscriptions': {
+      id: '/(admin)/admin/subscriptions'
       path: '/subscriptions'
-      fullPath: '/dashboard/subscriptions/'
-      preLoaderRoute: typeof userDashboardSubscriptionsIndexRouteImport
+      fullPath: '/admin/subscriptions'
+      preLoaderRoute: typeof adminAdminSubscriptionsRouteRouteImport
+      parentRoute: typeof adminAdminRouteRoute
+    }
+    '/(admin)/admin/traffic': {
+      id: '/(admin)/admin/traffic'
+      path: '/traffic'
+      fullPath: '/admin/traffic'
+      preLoaderRoute: typeof adminAdminTrafficRouteRouteImport
+      parentRoute: typeof adminAdminRouteRoute
+    }
+    '/(admin)/admin/users': {
+      id: '/(admin)/admin/users'
+      path: '/users'
+      fullPath: '/admin/users'
+      preLoaderRoute: typeof adminAdminUsersRouteRouteImport
+      parentRoute: typeof adminAdminRouteRoute
+    }
+    '/(auth)/auth/forgot': {
+      id: '/(auth)/auth/forgot'
+      path: '/auth/forgot'
+      fullPath: '/auth/forgot'
+      preLoaderRoute: typeof authAuthForgotRouteImport
+      parentRoute: typeof authRouteRoute
+    }
+    '/(auth)/auth/login': {
+      id: '/(auth)/auth/login'
+      path: '/auth/login'
+      fullPath: '/auth/login'
+      preLoaderRoute: typeof authAuthLoginRouteImport
+      parentRoute: typeof authRouteRoute
+    }
+    '/(auth)/auth/mcp-consent': {
+      id: '/(auth)/auth/mcp-consent'
+      path: '/auth/mcp-consent'
+      fullPath: '/auth/mcp-consent'
+      preLoaderRoute: typeof authAuthMcpConsentRouteImport
+      parentRoute: typeof authRouteRoute
+    }
+    '/(auth)/auth/signup': {
+      id: '/(auth)/auth/signup'
+      path: '/auth/signup'
+      fullPath: '/auth/signup'
+      preLoaderRoute: typeof authAuthSignupRouteImport
+      parentRoute: typeof authRouteRoute
+    }
+    '/(user)/dashboard/': {
+      id: '/(user)/dashboard/'
+      path: '/'
+      fullPath: '/dashboard/'
+      preLoaderRoute: typeof userDashboardIndexRouteImport
       parentRoute: typeof userDashboardRouteRoute
     }
-    '/(admin)/admin/users/': {
-      id: '/(admin)/admin/users/'
-      path: '/'
-      fullPath: '/admin/users/'
-      preLoaderRoute: typeof adminAdminUsersIndexRouteImport
-      parentRoute: typeof adminAdminUsersRouteRoute
+    '/(user)/welcome/': {
+      id: '/(user)/welcome/'
+      path: '/welcome'
+      fullPath: '/welcome/'
+      preLoaderRoute: typeof userWelcomeIndexRouteImport
+      parentRoute: typeof userRouteRoute
     }
-    '/(admin)/admin/plans/': {
-      id: '/(admin)/admin/plans/'
+    '/api/auth/$': {
+      id: '/api/auth/$'
+      path: '/api/auth/$'
+      fullPath: '/api/auth/$'
+      preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/rpc/$': {
+      id: '/api/rpc/$'
+      path: '/api/rpc/$'
+      fullPath: '/api/rpc/$'
+      preLoaderRoute: typeof ApiRpcSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/sub/$token': {
+      id: '/api/sub/$token'
+      path: '/api/sub/$token'
+      fullPath: '/api/sub/$token'
+      preLoaderRoute: typeof ApiSubTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/(admin)/admin/announcements/': {
+      id: '/(admin)/admin/announcements/'
+      path: '/announcements'
+      fullPath: '/admin/announcements/'
+      preLoaderRoute: typeof adminAdminAnnouncementsIndexRouteImport
+      parentRoute: typeof adminAdminRouteRoute
+    }
+    '/(admin)/admin/audit/': {
+      id: '/(admin)/admin/audit/'
       path: '/'
-      fullPath: '/admin/plans/'
-      preLoaderRoute: typeof adminAdminPlansIndexRouteImport
-      parentRoute: typeof adminAdminPlansRouteRoute
+      fullPath: '/admin/audit/'
+      preLoaderRoute: typeof adminAdminAuditIndexRouteImport
+      parentRoute: typeof adminAdminAuditRouteRoute
     }
     '/(admin)/admin/mcp/': {
       id: '/(admin)/admin/mcp/'
@@ -834,32 +982,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof adminAdminMcpIndexRouteImport
       parentRoute: typeof adminAdminMcpRouteRoute
     }
-    '/.well-known/oauth-protected-resource/api/mcp': {
-      id: '/.well-known/oauth-protected-resource/api/mcp'
-      path: '/api/mcp'
-      fullPath: '/.well-known/oauth-protected-resource/api/mcp'
-      preLoaderRoute: typeof DotwellKnownOauthProtectedResourceApiMcpRouteImport
-      parentRoute: typeof DotwellKnownOauthProtectedResourceRoute
-    }
-    '/.well-known/oauth-authorization-server/api/auth': {
-      id: '/.well-known/oauth-authorization-server/api/auth'
-      path: '/api/auth'
-      fullPath: '/.well-known/oauth-authorization-server/api/auth'
-      preLoaderRoute: typeof DotwellKnownOauthAuthorizationServerApiAuthRouteImport
-      parentRoute: typeof DotwellKnownOauthAuthorizationServerRoute
-    }
-    '/(admin)/admin/users/$userId': {
-      id: '/(admin)/admin/users/$userId'
-      path: '/$userId'
-      fullPath: '/admin/users/$userId'
-      preLoaderRoute: typeof adminAdminUsersUserIdRouteImport
-      parentRoute: typeof adminAdminUsersRouteRoute
-    }
-    '/(admin)/admin/plans/new': {
-      id: '/(admin)/admin/plans/new'
-      path: '/new'
-      fullPath: '/admin/plans/new'
-      preLoaderRoute: typeof adminAdminPlansNewRouteImport
+    '/(admin)/admin/plans/': {
+      id: '/(admin)/admin/plans/'
+      path: '/'
+      fullPath: '/admin/plans/'
+      preLoaderRoute: typeof adminAdminPlansIndexRouteImport
       parentRoute: typeof adminAdminPlansRouteRoute
     }
     '/(admin)/admin/plans/$planId': {
@@ -869,18 +996,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof adminAdminPlansPlanIdRouteImport
       parentRoute: typeof adminAdminPlansRouteRoute
     }
-    '/(admin)/admin/proxies/servers': {
-      id: '/(admin)/admin/proxies/servers'
-      path: '/servers'
-      fullPath: '/admin/proxies/servers'
-      preLoaderRoute: typeof adminAdminProxiesServersRouteRouteImport
-      parentRoute: typeof adminAdminProxiesRouteRoute
+    '/(admin)/admin/plans/new': {
+      id: '/(admin)/admin/plans/new'
+      path: '/new'
+      fullPath: '/admin/plans/new'
+      preLoaderRoute: typeof adminAdminPlansNewRouteImport
+      parentRoute: typeof adminAdminPlansRouteRoute
     }
-    '/(admin)/admin/proxies/nodes': {
-      id: '/(admin)/admin/proxies/nodes'
-      path: '/nodes'
-      fullPath: '/admin/proxies/nodes'
-      preLoaderRoute: typeof adminAdminProxiesNodesRouteRouteImport
+    '/(admin)/admin/proxies/certificates': {
+      id: '/(admin)/admin/proxies/certificates'
+      path: '/certificates'
+      fullPath: '/admin/proxies/certificates'
+      preLoaderRoute: typeof adminAdminProxiesCertificatesRouteRouteImport
       parentRoute: typeof adminAdminProxiesRouteRoute
     }
     '/(admin)/admin/proxies/groups': {
@@ -890,40 +1017,89 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof adminAdminProxiesGroupsRouteRouteImport
       parentRoute: typeof adminAdminProxiesRouteRoute
     }
-    '/(admin)/admin/proxies/certificates': {
-      id: '/(admin)/admin/proxies/certificates'
-      path: '/certificates'
-      fullPath: '/admin/proxies/certificates'
-      preLoaderRoute: typeof adminAdminProxiesCertificatesRouteRouteImport
+    '/(admin)/admin/proxies/nodes': {
+      id: '/(admin)/admin/proxies/nodes'
+      path: '/nodes'
+      fullPath: '/admin/proxies/nodes'
+      preLoaderRoute: typeof adminAdminProxiesNodesRouteRouteImport
       parentRoute: typeof adminAdminProxiesRouteRoute
     }
-    '/(admin)/admin/proxies/servers/': {
-      id: '/(admin)/admin/proxies/servers/'
-      path: '/'
-      fullPath: '/admin/proxies/servers/'
-      preLoaderRoute: typeof adminAdminProxiesServersIndexRouteImport
-      parentRoute: typeof adminAdminProxiesServersRouteRoute
-    }
-    '/(admin)/admin/proxies/rules/': {
-      id: '/(admin)/admin/proxies/rules/'
-      path: '/rules'
-      fullPath: '/admin/proxies/rules/'
-      preLoaderRoute: typeof adminAdminProxiesRulesIndexRouteImport
+    '/(admin)/admin/proxies/servers': {
+      id: '/(admin)/admin/proxies/servers'
+      path: '/servers'
+      fullPath: '/admin/proxies/servers'
+      preLoaderRoute: typeof adminAdminProxiesServersRouteRouteImport
       parentRoute: typeof adminAdminProxiesRouteRoute
     }
-    '/(admin)/admin/proxies/nodes/': {
-      id: '/(admin)/admin/proxies/nodes/'
+    '/(admin)/admin/redeem/': {
+      id: '/(admin)/admin/redeem/'
       path: '/'
-      fullPath: '/admin/proxies/nodes/'
-      preLoaderRoute: typeof adminAdminProxiesNodesIndexRouteImport
-      parentRoute: typeof adminAdminProxiesNodesRouteRoute
+      fullPath: '/admin/redeem/'
+      preLoaderRoute: typeof adminAdminRedeemIndexRouteImport
+      parentRoute: typeof adminAdminRedeemRouteRoute
     }
-    '/(admin)/admin/proxies/groups/': {
-      id: '/(admin)/admin/proxies/groups/'
+    '/(admin)/admin/redeem/$batchId': {
+      id: '/(admin)/admin/redeem/$batchId'
+      path: '/$batchId'
+      fullPath: '/admin/redeem/$batchId'
+      preLoaderRoute: typeof adminAdminRedeemBatchIdRouteImport
+      parentRoute: typeof adminAdminRedeemRouteRoute
+    }
+    '/(admin)/admin/settings/': {
+      id: '/(admin)/admin/settings/'
+      path: '/settings'
+      fullPath: '/admin/settings/'
+      preLoaderRoute: typeof adminAdminSettingsIndexRouteImport
+      parentRoute: typeof adminAdminRouteRoute
+    }
+    '/(admin)/admin/subscriptions/': {
+      id: '/(admin)/admin/subscriptions/'
       path: '/'
-      fullPath: '/admin/proxies/groups/'
-      preLoaderRoute: typeof adminAdminProxiesGroupsIndexRouteImport
-      parentRoute: typeof adminAdminProxiesGroupsRouteRoute
+      fullPath: '/admin/subscriptions/'
+      preLoaderRoute: typeof adminAdminSubscriptionsIndexRouteImport
+      parentRoute: typeof adminAdminSubscriptionsRouteRoute
+    }
+    '/(admin)/admin/traffic/': {
+      id: '/(admin)/admin/traffic/'
+      path: '/'
+      fullPath: '/admin/traffic/'
+      preLoaderRoute: typeof adminAdminTrafficIndexRouteImport
+      parentRoute: typeof adminAdminTrafficRouteRoute
+    }
+    '/(admin)/admin/users/': {
+      id: '/(admin)/admin/users/'
+      path: '/'
+      fullPath: '/admin/users/'
+      preLoaderRoute: typeof adminAdminUsersIndexRouteImport
+      parentRoute: typeof adminAdminUsersRouteRoute
+    }
+    '/(admin)/admin/users/$userId': {
+      id: '/(admin)/admin/users/$userId'
+      path: '/$userId'
+      fullPath: '/admin/users/$userId'
+      preLoaderRoute: typeof adminAdminUsersUserIdRouteImport
+      parentRoute: typeof adminAdminUsersRouteRoute
+    }
+    '/(user)/dashboard/subscriptions/': {
+      id: '/(user)/dashboard/subscriptions/'
+      path: '/subscriptions'
+      fullPath: '/dashboard/subscriptions/'
+      preLoaderRoute: typeof userDashboardSubscriptionsIndexRouteImport
+      parentRoute: typeof userDashboardRouteRoute
+    }
+    '/.well-known/oauth-authorization-server/api/auth': {
+      id: '/.well-known/oauth-authorization-server/api/auth'
+      path: '/api/auth'
+      fullPath: '/.well-known/oauth-authorization-server/api/auth'
+      preLoaderRoute: typeof DotwellKnownOauthAuthorizationServerApiAuthRouteImport
+      parentRoute: typeof DotwellKnownOauthAuthorizationServerRoute
+    }
+    '/.well-known/oauth-protected-resource/api/mcp': {
+      id: '/.well-known/oauth-protected-resource/api/mcp'
+      path: '/api/mcp'
+      fullPath: '/.well-known/oauth-protected-resource/api/mcp'
+      preLoaderRoute: typeof DotwellKnownOauthProtectedResourceApiMcpRouteImport
+      parentRoute: typeof DotwellKnownOauthProtectedResourceRoute
     }
     '/(admin)/admin/proxies/certificates/': {
       id: '/(admin)/admin/proxies/certificates/'
@@ -932,25 +1108,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof adminAdminProxiesCertificatesIndexRouteImport
       parentRoute: typeof adminAdminProxiesCertificatesRouteRoute
     }
-    '/(admin)/admin/proxies/servers/new': {
-      id: '/(admin)/admin/proxies/servers/new'
-      path: '/new'
-      fullPath: '/admin/proxies/servers/new'
-      preLoaderRoute: typeof adminAdminProxiesServersNewRouteImport
-      parentRoute: typeof adminAdminProxiesServersRouteRoute
+    '/(admin)/admin/proxies/groups/': {
+      id: '/(admin)/admin/proxies/groups/'
+      path: '/'
+      fullPath: '/admin/proxies/groups/'
+      preLoaderRoute: typeof adminAdminProxiesGroupsIndexRouteImport
+      parentRoute: typeof adminAdminProxiesGroupsRouteRoute
     }
-    '/(admin)/admin/proxies/servers/$serverId': {
-      id: '/(admin)/admin/proxies/servers/$serverId'
-      path: '/$serverId'
-      fullPath: '/admin/proxies/servers/$serverId'
-      preLoaderRoute: typeof adminAdminProxiesServersServerIdRouteImport
-      parentRoute: typeof adminAdminProxiesServersRouteRoute
+    '/(admin)/admin/proxies/groups/$groupId': {
+      id: '/(admin)/admin/proxies/groups/$groupId'
+      path: '/$groupId'
+      fullPath: '/admin/proxies/groups/$groupId'
+      preLoaderRoute: typeof adminAdminProxiesGroupsGroupIdRouteImport
+      parentRoute: typeof adminAdminProxiesGroupsRouteRoute
     }
-    '/(admin)/admin/proxies/nodes/new': {
-      id: '/(admin)/admin/proxies/nodes/new'
+    '/(admin)/admin/proxies/groups/new': {
+      id: '/(admin)/admin/proxies/groups/new'
       path: '/new'
-      fullPath: '/admin/proxies/nodes/new'
-      preLoaderRoute: typeof adminAdminProxiesNodesNewRouteImport
+      fullPath: '/admin/proxies/groups/new'
+      preLoaderRoute: typeof adminAdminProxiesGroupsNewRouteImport
+      parentRoute: typeof adminAdminProxiesGroupsRouteRoute
+    }
+    '/(admin)/admin/proxies/nodes/': {
+      id: '/(admin)/admin/proxies/nodes/'
+      path: '/'
+      fullPath: '/admin/proxies/nodes/'
+      preLoaderRoute: typeof adminAdminProxiesNodesIndexRouteImport
       parentRoute: typeof adminAdminProxiesNodesRouteRoute
     }
     '/(admin)/admin/proxies/nodes/$nodeId': {
@@ -960,19 +1143,40 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof adminAdminProxiesNodesNodeIdRouteImport
       parentRoute: typeof adminAdminProxiesNodesRouteRoute
     }
-    '/(admin)/admin/proxies/groups/new': {
-      id: '/(admin)/admin/proxies/groups/new'
+    '/(admin)/admin/proxies/nodes/new': {
+      id: '/(admin)/admin/proxies/nodes/new'
       path: '/new'
-      fullPath: '/admin/proxies/groups/new'
-      preLoaderRoute: typeof adminAdminProxiesGroupsNewRouteImport
-      parentRoute: typeof adminAdminProxiesGroupsRouteRoute
+      fullPath: '/admin/proxies/nodes/new'
+      preLoaderRoute: typeof adminAdminProxiesNodesNewRouteImport
+      parentRoute: typeof adminAdminProxiesNodesRouteRoute
     }
-    '/(admin)/admin/proxies/groups/$groupId': {
-      id: '/(admin)/admin/proxies/groups/$groupId'
-      path: '/$groupId'
-      fullPath: '/admin/proxies/groups/$groupId'
-      preLoaderRoute: typeof adminAdminProxiesGroupsGroupIdRouteImport
-      parentRoute: typeof adminAdminProxiesGroupsRouteRoute
+    '/(admin)/admin/proxies/rules/': {
+      id: '/(admin)/admin/proxies/rules/'
+      path: '/rules'
+      fullPath: '/admin/proxies/rules/'
+      preLoaderRoute: typeof adminAdminProxiesRulesIndexRouteImport
+      parentRoute: typeof adminAdminProxiesRouteRoute
+    }
+    '/(admin)/admin/proxies/servers/': {
+      id: '/(admin)/admin/proxies/servers/'
+      path: '/'
+      fullPath: '/admin/proxies/servers/'
+      preLoaderRoute: typeof adminAdminProxiesServersIndexRouteImport
+      parentRoute: typeof adminAdminProxiesServersRouteRoute
+    }
+    '/(admin)/admin/proxies/servers/$serverId': {
+      id: '/(admin)/admin/proxies/servers/$serverId'
+      path: '/$serverId'
+      fullPath: '/admin/proxies/servers/$serverId'
+      preLoaderRoute: typeof adminAdminProxiesServersServerIdRouteImport
+      parentRoute: typeof adminAdminProxiesServersRouteRoute
+    }
+    '/(admin)/admin/proxies/servers/new': {
+      id: '/(admin)/admin/proxies/servers/new'
+      path: '/new'
+      fullPath: '/admin/proxies/servers/new'
+      preLoaderRoute: typeof adminAdminProxiesServersNewRouteImport
+      parentRoute: typeof adminAdminProxiesServersRouteRoute
     }
     '/api/admin/certificates/$certificateId/export/$part': {
       id: '/api/admin/certificates/$certificateId/export/$part'
@@ -983,6 +1187,17 @@ declare module '@tanstack/react-router' {
     }
   }
 }
+
+interface adminAdminAuditRouteRouteChildren {
+  adminAdminAuditIndexRoute: typeof adminAdminAuditIndexRoute
+}
+
+const adminAdminAuditRouteRouteChildren: adminAdminAuditRouteRouteChildren = {
+  adminAdminAuditIndexRoute: adminAdminAuditIndexRoute,
+}
+
+const adminAdminAuditRouteRouteWithChildren =
+  adminAdminAuditRouteRoute._addFileChildren(adminAdminAuditRouteRouteChildren)
 
 interface adminAdminMcpRouteRouteChildren {
   adminAdminMcpIndexRoute: typeof adminAdminMcpIndexRoute
@@ -1106,6 +1321,49 @@ const adminAdminProxiesRouteRouteWithChildren =
     adminAdminProxiesRouteRouteChildren,
   )
 
+interface adminAdminRedeemRouteRouteChildren {
+  adminAdminRedeemBatchIdRoute: typeof adminAdminRedeemBatchIdRoute
+  adminAdminRedeemIndexRoute: typeof adminAdminRedeemIndexRoute
+}
+
+const adminAdminRedeemRouteRouteChildren: adminAdminRedeemRouteRouteChildren = {
+  adminAdminRedeemBatchIdRoute: adminAdminRedeemBatchIdRoute,
+  adminAdminRedeemIndexRoute: adminAdminRedeemIndexRoute,
+}
+
+const adminAdminRedeemRouteRouteWithChildren =
+  adminAdminRedeemRouteRoute._addFileChildren(
+    adminAdminRedeemRouteRouteChildren,
+  )
+
+interface adminAdminSubscriptionsRouteRouteChildren {
+  adminAdminSubscriptionsIndexRoute: typeof adminAdminSubscriptionsIndexRoute
+}
+
+const adminAdminSubscriptionsRouteRouteChildren: adminAdminSubscriptionsRouteRouteChildren =
+  {
+    adminAdminSubscriptionsIndexRoute: adminAdminSubscriptionsIndexRoute,
+  }
+
+const adminAdminSubscriptionsRouteRouteWithChildren =
+  adminAdminSubscriptionsRouteRoute._addFileChildren(
+    adminAdminSubscriptionsRouteRouteChildren,
+  )
+
+interface adminAdminTrafficRouteRouteChildren {
+  adminAdminTrafficIndexRoute: typeof adminAdminTrafficIndexRoute
+}
+
+const adminAdminTrafficRouteRouteChildren: adminAdminTrafficRouteRouteChildren =
+  {
+    adminAdminTrafficIndexRoute: adminAdminTrafficIndexRoute,
+  }
+
+const adminAdminTrafficRouteRouteWithChildren =
+  adminAdminTrafficRouteRoute._addFileChildren(
+    adminAdminTrafficRouteRouteChildren,
+  )
+
 interface adminAdminUsersRouteRouteChildren {
   adminAdminUsersUserIdRoute: typeof adminAdminUsersUserIdRoute
   adminAdminUsersIndexRoute: typeof adminAdminUsersIndexRoute
@@ -1120,19 +1378,32 @@ const adminAdminUsersRouteRouteWithChildren =
   adminAdminUsersRouteRoute._addFileChildren(adminAdminUsersRouteRouteChildren)
 
 interface adminAdminRouteRouteChildren {
+  adminAdminAuditRouteRoute: typeof adminAdminAuditRouteRouteWithChildren
   adminAdminMcpRouteRoute: typeof adminAdminMcpRouteRouteWithChildren
   adminAdminPlansRouteRoute: typeof adminAdminPlansRouteRouteWithChildren
   adminAdminProxiesRouteRoute: typeof adminAdminProxiesRouteRouteWithChildren
+  adminAdminRedeemRouteRoute: typeof adminAdminRedeemRouteRouteWithChildren
+  adminAdminSubscriptionsRouteRoute: typeof adminAdminSubscriptionsRouteRouteWithChildren
+  adminAdminTrafficRouteRoute: typeof adminAdminTrafficRouteRouteWithChildren
   adminAdminUsersRouteRoute: typeof adminAdminUsersRouteRouteWithChildren
   adminAdminIndexRoute: typeof adminAdminIndexRoute
+  adminAdminAnnouncementsIndexRoute: typeof adminAdminAnnouncementsIndexRoute
+  adminAdminSettingsIndexRoute: typeof adminAdminSettingsIndexRoute
 }
 
 const adminAdminRouteRouteChildren: adminAdminRouteRouteChildren = {
+  adminAdminAuditRouteRoute: adminAdminAuditRouteRouteWithChildren,
   adminAdminMcpRouteRoute: adminAdminMcpRouteRouteWithChildren,
   adminAdminPlansRouteRoute: adminAdminPlansRouteRouteWithChildren,
   adminAdminProxiesRouteRoute: adminAdminProxiesRouteRouteWithChildren,
+  adminAdminRedeemRouteRoute: adminAdminRedeemRouteRouteWithChildren,
+  adminAdminSubscriptionsRouteRoute:
+    adminAdminSubscriptionsRouteRouteWithChildren,
+  adminAdminTrafficRouteRoute: adminAdminTrafficRouteRouteWithChildren,
   adminAdminUsersRouteRoute: adminAdminUsersRouteRouteWithChildren,
   adminAdminIndexRoute: adminAdminIndexRoute,
+  adminAdminAnnouncementsIndexRoute: adminAdminAnnouncementsIndexRoute,
+  adminAdminSettingsIndexRoute: adminAdminSettingsIndexRoute,
 }
 
 const adminAdminRouteRouteWithChildren = adminAdminRouteRoute._addFileChildren(

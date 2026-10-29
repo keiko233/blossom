@@ -1,10 +1,11 @@
 import { useForm } from "@tanstack/react-form";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import GithubLine from "~icons/mingcute/github-line";
 import GoogleLine from "~icons/mingcute/google-line";
 import InformationLine from "~icons/mingcute/information-line";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -28,7 +29,9 @@ import { useLockFn } from "@/hooks/use-lock-fn";
 import { emailSignIn, getSocialProviders } from "@/lib/auth";
 import { authClient } from "@/lib/auth-client";
 import { emailSignInSchema } from "@/lib/auth-schema";
+import { registrationReasonFromErrorCode } from "@/lib/registration-policy";
 import { m } from "@/paraglide/messages";
+import { getPublicSettings } from "@/query/settings";
 
 function useOAuthCallback(): string {
   const search = typeof window !== "undefined" ? window.location.search : "";
@@ -36,12 +39,39 @@ function useOAuthCallback(): string {
   return `/api/auth/oauth2/authorize${search}`;
 }
 
+/**
+ * Why a redirect back to this page failed (`?error=<code>`), as text. Read
+ * after mount from the URL: the page also receives OAuth parameters that a
+ * router-level search schema would strip. Null when there is no error.
+ */
+function useRedirectError(): string | null {
+  const [code, setCode] = useState<string | null>(null);
+
+  useEffect(() => {
+    setCode(new URLSearchParams(window.location.search).get("error"));
+  }, []);
+
+  if (!code) return null;
+  switch (registrationReasonFromErrorCode(code)) {
+    case "closed":
+      return m.auth_signup_closed_description();
+    case "domain_not_allowed":
+      return m.auth_signup_domain_not_allowed_description();
+    default:
+      return m.auth_redirect_error();
+  }
+}
+
 export const Route = createFileRoute("/(auth)/auth/login")({
   beforeLoad: async () => {
-    const socialProviders = await getSocialProviders();
+    const [socialProviders, publicSettings] = await Promise.all([
+      getSocialProviders(),
+      getPublicSettings(),
+    ]);
 
     return {
       socialProviders,
+      registrationMode: publicSettings.registrationMode,
     };
   },
   component: RouteComponent,
@@ -57,6 +87,7 @@ const SignInWithGithubButton = () => {
       await authClient.signIn.social({
         provider: "github",
         callbackURL,
+        errorCallbackURL: "/auth/login",
       });
     } catch (error) {
       console.error(error);
@@ -83,6 +114,7 @@ const SignInWithGoogleButton = () => {
       await authClient.signIn.social({
         provider: "google",
         callbackURL,
+        errorCallbackURL: "/auth/login",
       });
     } catch (error) {
       console.error(error);
@@ -100,7 +132,8 @@ const SignInWithGoogleButton = () => {
 };
 
 function RouteComponent() {
-  const { socialProviders } = Route.useRouteContext();
+  const { socialProviders, registrationMode } = Route.useRouteContext();
+  const redirectError = useRedirectError();
 
   const navigate = useNavigate();
   const callbackURL = useOAuthCallback();
@@ -131,11 +164,15 @@ function RouteComponent() {
             });
           }
         }
-      } catch {
+      } catch (error) {
+        const unverified =
+          error instanceof Error && /not verified/i.test(error.message);
         toastManager.add({
           type: "error",
           title: m.auth_login_error_title(),
-          description: m.auth_login_error_description(),
+          description: unverified
+            ? m.auth_login_error_unverified()
+            : m.auth_login_error_description(),
         });
       }
     },
@@ -149,6 +186,12 @@ function RouteComponent() {
       </CardHeader>
 
       <CardPanel className="flex flex-col gap-4">
+        {redirectError ? (
+          <Alert variant="error">
+            <AlertDescription>{redirectError}</AlertDescription>
+          </Alert>
+        ) : null}
+
         {socialProviders.github && <SignInWithGithubButton />}
 
         {socialProviders.google && <SignInWithGoogleButton />}
@@ -204,9 +247,13 @@ function RouteComponent() {
       <CardFooter>
         <div className="flex gap-1 text-xs text-muted-foreground">
           <InformationLine className="size-3 h-lh shrink-0" />
-          <Link className="underline" to="/auth/signup">
-            {m.auth_login_to_signup()}
-          </Link>
+          {registrationMode === "closed" ? (
+            <span>{m.auth_login_registration_closed()}</span>
+          ) : (
+            <Link className="underline" to="/auth/signup">
+              {m.auth_login_to_signup()}
+            </Link>
+          )}
         </div>
       </CardFooter>
     </Card>

@@ -75,9 +75,11 @@ function RouteComponent(): React.ReactElement {
     onError: (error) => {
       toastManager.add({
         type: "error",
-        title: error.message.includes("subscriptions")
-          ? m.admin_plans_delete_blocked()
-          : m.admin_plans_toast_error(),
+        title: error.message.includes("trial plan")
+          ? m.admin_plans_delete_blocked_trial()
+          : error.message.includes("subscriptions")
+            ? m.admin_plans_delete_blocked()
+            : m.admin_plans_toast_error(),
       });
     },
   });

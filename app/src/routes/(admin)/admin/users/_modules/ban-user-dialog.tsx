@@ -31,15 +31,17 @@ export interface BanUserResult {
 }
 
 export interface BanUserDialogProps {
+  /** Number of users a bulk ban applies to; omitted for a single user. */
+  count?: number;
   onBan: (result: BanUserResult) => Promise<unknown>;
 }
 
 /**
  * Collects ban parameters and keeps the dialog open while the caller's
- * mutation runs.
+ * mutation runs. Shared by the single-user and bulk ban actions.
  */
 export const BanUserDialog = createCallable<BanUserDialogProps, void>(
-  ({ call, onBan }) => {
+  ({ call, count, onBan }) => {
     const [reason, setReason] = React.useState("");
     const [days, setDays] = React.useState(0);
     const [isSubmitting, setIsSubmitting] = React.useState(false);
@@ -70,9 +72,15 @@ export const BanUserDialog = createCallable<BanUserDialogProps, void>(
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{m.admin_users_ban_title()}</DialogTitle>
+            <DialogTitle>
+              {count === undefined
+                ? m.admin_users_ban_title()
+                : m.admin_users_bulk_ban_title()}
+            </DialogTitle>
             <DialogDescription>
-              {m.admin_users_ban_description()}
+              {count === undefined
+                ? m.admin_users_ban_description()
+                : m.admin_users_bulk_ban_description({ count })}
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-3 px-6">

@@ -23,12 +23,45 @@ import { toastManager } from "@/components/ui/toast";
 import { emailSignUp } from "@/lib/auth";
 import { emailSignUpSchema } from "@/lib/auth-schema";
 import { m } from "@/paraglide/messages";
+import { getPublicSettings } from "@/query/settings";
 
 export const Route = createFileRoute("/(auth)/auth/signup")({
+  loader: async () => ({ settings: await getPublicSettings() }),
   component: RouteComponent,
 });
 
+/** Shown instead of the form while self-service registration is closed. */
+function RegistrationClosed() {
+  return (
+    <Card className="w-full max-w-xs">
+      <CardHeader>
+        <CardTitle>{m.auth_signup_closed_title()}</CardTitle>
+        <CardDescription>{m.auth_signup_closed_description()}</CardDescription>
+      </CardHeader>
+
+      <CardFooter>
+        <div className="flex gap-1 text-xs text-muted-foreground">
+          <InformationLine className="size-3 h-lh shrink-0" />
+          <Link className="underline" to="/auth/login">
+            {m.auth_signup_to_login()}
+          </Link>
+        </div>
+      </CardFooter>
+    </Card>
+  );
+}
+
 function RouteComponent() {
+  const { settings } = Route.useLoaderData();
+
+  return settings.registrationMode === "closed" ? (
+    <RegistrationClosed />
+  ) : (
+    <SignUpCard />
+  );
+}
+
+function SignUpCard() {
   const form = useForm({
     defaultValues: {
       email: "",
@@ -40,11 +73,23 @@ function RouteComponent() {
       try {
         const result = await emailSignUp({ data: value });
 
-        if (result) {
+        if (result.status) {
           toastManager.add({
             type: "success",
             title: m.auth_signup_mail_sent_title(),
             description: m.auth_signup_mail_sent_description(),
+          });
+        } else if (result.reason) {
+          toastManager.add({
+            type: "error",
+            title:
+              result.reason === "closed"
+                ? m.auth_signup_closed_title()
+                : m.auth_signup_domain_not_allowed_title(),
+            description:
+              result.reason === "closed"
+                ? m.auth_signup_closed_description()
+                : m.auth_signup_domain_not_allowed_description(),
           });
         }
       } catch {}

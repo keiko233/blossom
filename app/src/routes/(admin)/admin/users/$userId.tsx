@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
   CopyIcon,
@@ -20,6 +20,7 @@ import {
   SubscriptionStatusBadge,
   SubscriptionTrafficTable,
 } from "@/components/subscriptions";
+import { TrafficTrend } from "@/components/traffic-trend";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,6 +44,7 @@ import {
 import { toastManager } from "@/components/ui/toast";
 import type { SubscriptionStatus } from "@/db/plan-schema";
 import { m } from "@/paraglide/messages";
+import { ADMIN_AUDIT_QUERY_KEY } from "@/query/admin-audit";
 import {
   createSubscription,
   deleteSubscription,
@@ -58,6 +60,10 @@ import { CredentialDialog } from "./_modules/credential-dialog";
 import { EditSubscriptionDialog } from "./_modules/edit-subscription-dialog";
 import { SubscriptionLinkDialog } from "./_modules/subscription-link-dialog";
 import { useUserActions } from "./_modules/use-user-actions";
+import { UserAccounts } from "./_modules/user-accounts";
+import { UserActivity } from "./_modules/user-activity";
+import { UserNotes } from "./_modules/user-notes";
+import { UserSessions } from "./_modules/user-sessions";
 
 export const Route = createFileRoute("/(admin)/admin/users/$userId")({
   staticData: {
@@ -68,7 +74,9 @@ export const Route = createFileRoute("/(admin)/admin/users/$userId")({
 
 function RouteComponent(): React.ReactElement {
   const { userId } = Route.useParams();
+  const { user: currentUser } = Route.useRouteContext();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [copyingSubscriptionId, setCopyingSubscriptionId] = useState<
     string | null
   >(null);
@@ -79,9 +87,14 @@ function RouteComponent(): React.ReactElement {
     queryFn: () => getUserDetail({ data: { id: userId } }),
   });
 
-  // Prefix-invalidating the list key refreshes this detail query too.
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: USERS_QUERY_KEY });
+  // Prefix-invalidating the list key refreshes this detail query too; every
+  // mutation here also adds an audit entry, so the activity feed reloads.
+  const invalidate = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: USERS_QUERY_KEY }),
+      queryClient.invalidateQueries({ queryKey: ADMIN_AUDIT_QUERY_KEY }),
+    ]);
+  };
 
   const actions = useUserActions(invalidate);
 
@@ -246,6 +259,16 @@ function RouteComponent(): React.ReactElement {
     });
   };
 
+  const requestDeleteUser = async (target: {
+    id: string;
+    name: string;
+    role: string | null;
+  }) => {
+    if (await actions.requestDelete(target)) {
+      await navigate({ to: "/admin/users" });
+    }
+  };
+
   if (isPending || !detail) {
     return (
       <div className="flex justify-center py-16">
@@ -254,7 +277,8 @@ function RouteComponent(): React.ReactElement {
     );
   }
 
-  const { user, subscriptions, traffic } = detail;
+  const { user, subscriptions, traffic, accounts } = detail;
+  const isSelf = user.id === currentUser.id;
 
   return (
     <div className="flex flex-col gap-6 p-4">
@@ -334,23 +358,49 @@ function RouteComponent(): React.ReactElement {
               <EllipsisIcon />
             </MenuTrigger>
             <MenuPopup align="end">
-              <MenuItem onClick={() => actions.toggleRole(user)}>
-                {user.role === "admin"
-                  ? m.admin_users_action_make_user()
-                  : m.admin_users_action_make_admin()}
+              <MenuItem onClick={() => void actions.requestEdit(user)}>
+                {m.admin_users_action_edit()}
               </MenuItem>
-              <MenuSeparator />
-              {user.banned ? (
-                <MenuItem onClick={() => actions.unban(user)}>
-                  {m.admin_users_action_unban()}
-                </MenuItem>
-              ) : (
-                <MenuItem
-                  variant="destructive"
-                  onClick={() => void actions.requestBan(user)}
-                >
-                  {m.admin_users_action_ban()}
-                </MenuItem>
+              <MenuItem onClick={() => void actions.requestSetPassword(user)}>
+                {m.admin_users_action_set_password()}
+              </MenuItem>
+              <MenuItem onClick={() => actions.sendSignInLink(user)}>
+                {m.admin_users_action_send_link()}
+              </MenuItem>
+              {isSelf ? null : (
+                <>
+                  <MenuItem onClick={() => actions.toggleRole(user)}>
+                    {user.role === "admin"
+                      ? m.admin_users_action_make_user()
+                      : m.admin_users_action_make_admin()}
+                  </MenuItem>
+                  {user.role === "admin" ? null : (
+                    <MenuItem
+                      onClick={() => void actions.requestImpersonate(user)}
+                    >
+                      {m.admin_users_action_impersonate()}
+                    </MenuItem>
+                  )}
+                  <MenuSeparator />
+                  {user.banned ? (
+                    <MenuItem onClick={() => actions.unban(user)}>
+                      {m.admin_users_action_unban()}
+                    </MenuItem>
+                  ) : (
+                    <MenuItem
+                      variant="destructive"
+                      onClick={() => void actions.requestBan(user)}
+                    >
+                      {m.admin_users_action_ban()}
+                    </MenuItem>
+                  )}
+                  <MenuItem
+                    variant="destructive"
+                    onClick={() => void requestDeleteUser(user)}
+                  >
+                    {m.admin_users_action_delete()}
+                  </MenuItem>
+                </>
               )}
             </MenuPopup>
           </Menu>
@@ -489,6 +539,8 @@ function RouteComponent(): React.ReactElement {
         )}
       </div>
 
+      <TrafficTrend userId={userId} />
+
       {/* Recent traffic */}
       <div className="flex flex-col gap-3">
         <h2 className="font-heading text-base font-semibold">
@@ -505,6 +557,14 @@ function RouteComponent(): React.ReactElement {
           }))}
         />
       </div>
+
+      <UserAccounts accounts={accounts} />
+
+      <UserSessions userId={userId} />
+
+      <UserNotes userId={userId} />
+
+      <UserActivity userId={userId} />
     </div>
   );
 }

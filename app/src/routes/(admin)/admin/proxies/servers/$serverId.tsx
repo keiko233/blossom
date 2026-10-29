@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import type React from "react";
 
+import { TrafficTrend } from "@/components/traffic-trend";
 import { m } from "@/paraglide/messages";
 import { getServer } from "@/query/servers";
 
@@ -19,5 +20,12 @@ export const Route = createFileRoute(
 function RouteComponent(): React.ReactElement {
   const server = Route.useLoaderData();
   // Remount when navigating between servers so the form re-initialises cleanly.
-  return <ServerFormPage key={server.id} server={server} />;
+  return (
+    <>
+      <ServerFormPage key={server.id} server={server} />
+      <div className="mx-auto w-full max-w-3xl px-4 pb-6">
+        <TrafficTrend serverId={server.id} />
+      </div>
+    </>
+  );
 }
