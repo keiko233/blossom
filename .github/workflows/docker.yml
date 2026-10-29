@@ -30,6 +30,7 @@ jobs:
           filters: |
             app:
               - 'app/**'
+              - 'packages/**'
               - 'Dockerfile'
               - '.dockerignore'
               - 'package.json'

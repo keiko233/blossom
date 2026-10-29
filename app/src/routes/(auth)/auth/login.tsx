@@ -1,3 +1,4 @@
+import { registrationReasonFromErrorCode } from "@blossom/domain/registration-policy";
 import { useForm } from "@tanstack/react-form";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
@@ -29,7 +30,6 @@ import { useLockFn } from "@/hooks/use-lock-fn";
 import { emailSignIn, getSocialProviders } from "@/lib/auth";
 import { authClient } from "@/lib/auth-client";
 import { emailSignInSchema } from "@/lib/auth-schema";
-import { registrationReasonFromErrorCode } from "@/lib/registration-policy";
 import { m } from "@/paraglide/messages";
 import { getPublicSettings } from "@/query/settings";
 

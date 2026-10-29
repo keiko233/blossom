@@ -1,6 +1,6 @@
+import { normalizeDomainPattern } from "@blossom/domain/registration-policy";
 import { z } from "zod";
 
-import { normalizeDomainPattern } from "./registration-policy";
 import {
   DEFAULT_PROFILE_TITLE,
   DEFAULT_PROFILE_UPDATE_INTERVAL_HOURS,

@@ -1,11 +1,10 @@
-import { z } from "zod";
-
 import {
   SUBSCRIPTION_PAGE_SIZES,
   type SubscriptionFilterInput,
   subscriptionSortSchema,
   subscriptionStatusSchema,
-} from "@/orpc/plan/schema";
+} from "@blossom/contracts/plan";
+import { z } from "zod";
 
 export const DEFAULT_PAGE_SIZE = 20;
 

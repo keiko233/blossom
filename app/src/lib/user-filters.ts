@@ -1,3 +1,4 @@
+import type { UserFilter } from "@blossom/contracts/user";
 import {
   and,
   asc,
@@ -15,7 +16,6 @@ import {
 import { user } from "@/db/auth-schema";
 import { subscription } from "@/db/plan-schema";
 import { escapeLikePattern } from "@/lib/subscription-filters";
-import type { UserFilter } from "@/orpc/user/schema";
 
 /** Correlated EXISTS: the user holds an unexpired active subscription. */
 function hasActiveSubscription(now: Date): SQL {

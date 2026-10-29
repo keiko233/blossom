@@ -1,3 +1,4 @@
+import { isValidCertificateDomain } from "@blossom/domain/certificate-domain";
 import type {
   SubjectAlternativeNameExtension,
   X509Certificate,
@@ -9,8 +10,6 @@ import {
   type KeyObject,
   webcrypto,
 } from "node:crypto";
-
-import { isValidCertificateDomain } from "./certificate-domain";
 
 export interface ParsedCertificateMaterial {
   certificatePem: string;

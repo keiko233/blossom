@@ -1,6 +1,8 @@
+import {
+  formatDesiredRevision,
+  parseRevisionSeq,
+} from "@blossom/domain/config-revision";
 import { describe, expect, it } from "vitest";
-
-import { formatDesiredRevision, parseRevisionSeq } from "./config-revision";
 
 describe("config revision codec", () => {
   it("round-trips a sequenced revision", () => {

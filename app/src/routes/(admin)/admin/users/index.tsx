@@ -1,4 +1,9 @@
 import {
+  type BulkUserActionInput,
+  USER_PAGE_SIZES,
+  type userSortSchema,
+} from "@blossom/contracts/user";
+import {
   keepPreviousData,
   useMutation,
   useQuery,
@@ -66,11 +71,6 @@ import {
   type UsersSearch,
   usersSearchSchema,
 } from "@/lib/user-search";
-import {
-  type BulkUserActionInput,
-  USER_PAGE_SIZES,
-  type userSortSchema,
-} from "@/orpc/user/schema";
 import { m } from "@/paraglide/messages";
 import {
   bulkUpdateUsers,

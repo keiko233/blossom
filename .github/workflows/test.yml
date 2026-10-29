@@ -15,12 +15,6 @@ jobs:
   app:
     name: App tests and build
     runs-on: ubuntu-latest
-    paths:
-      - "app/**"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
-      - ".github/workflows/test.yml"
     steps:
       - uses: actions/checkout@v7
 
@@ -44,9 +38,6 @@ jobs:
   server-agent:
     name: Server agent tests
     runs-on: ubuntu-latest
-    paths:
-      - "server-agent/**"
-      - ".github/workflows/test.yml"
     defaults:
       run:
         working-directory: server-agent

@@ -1,8 +1,7 @@
+import type { UserFilter } from "@blossom/contracts/user";
 import { and } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
-
-import type { UserFilter } from "@/orpc/user/schema";
 
 import {
   buildUserConditions,

@@ -1,3 +1,20 @@
+import {
+  addUserNoteSchema,
+  type BanUserInput,
+  banUserSchema,
+  type BulkUserResult,
+  bulkUserSchema,
+  createUserSchema,
+  listUsersSchema,
+  setUserPasswordSchema,
+  setUserRoleSchema,
+  updateUserSchema,
+  USER_EXPORT_MAX_ROWS,
+  userFilterSchema,
+  userIdSchema,
+  userNoteIdSchema,
+  userSessionSchema,
+} from "@blossom/contracts/user";
 import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeaders } from "@tanstack/react-start/server";
 import { count, desc, eq, inArray, sql } from "drizzle-orm";
@@ -18,23 +35,6 @@ import { ensureAdmin } from "@/lib/ensure-admin";
 import { planUserBulk } from "@/lib/user-bulk";
 import { usersToCsv } from "@/lib/user-csv";
 import { buildUserOrderBy, buildUserWhere } from "@/lib/user-filters";
-import {
-  addUserNoteSchema,
-  type BanUserInput,
-  banUserSchema,
-  type BulkUserResult,
-  bulkUserSchema,
-  createUserSchema,
-  listUsersSchema,
-  setUserPasswordSchema,
-  setUserRoleSchema,
-  updateUserSchema,
-  USER_EXPORT_MAX_ROWS,
-  userFilterSchema,
-  userIdSchema,
-  userNoteIdSchema,
-  userSessionSchema,
-} from "@/orpc/user/schema";
 import {
   listServerIdsForUserId,
   recordConfigChange,

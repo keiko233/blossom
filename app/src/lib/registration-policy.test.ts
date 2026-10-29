@@ -1,5 +1,3 @@
-import { describe, expect, it } from "vitest";
-
 import {
   emailDomain,
   evaluateRegistration,
@@ -7,7 +5,8 @@ import {
   normalizeDomainPattern,
   REGISTRATION_ERROR_CODES,
   registrationReasonFromErrorCode,
-} from "./registration-policy";
+} from "@blossom/domain/registration-policy";
+import { describe, expect, it } from "vitest";
 
 describe("normalizeDomainPattern", () => {
   it("lower-cases, trims and drops a leading @ or trailing dot", () => {

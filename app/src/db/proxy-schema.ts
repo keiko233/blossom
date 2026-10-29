@@ -1,3 +1,4 @@
+import { isValidCertificateDomain } from "@blossom/domain/certificate-domain";
 import {
   boolean,
   index,
@@ -12,7 +13,6 @@ import {
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-import { isValidCertificateDomain } from "@/lib/certificate-domain";
 import type { JsonValue, NodeProtocol } from "@/orpc/proxy/schema";
 
 export type AgentRuntimeState =

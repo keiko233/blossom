@@ -1,3 +1,7 @@
+import {
+  certificateCoversDomain,
+  isCertificateCurrentlyUsable,
+} from "@blossom/domain/certificate-domain";
 import { createServerFn } from "@tanstack/react-start";
 import { and, desc, eq, ne } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
@@ -12,10 +16,6 @@ import {
 } from "@/db/proxy-schema";
 import { fromInput, fromResult } from "@/lib/admin-audit";
 import { adminAudit } from "@/lib/admin-audit-middleware";
-import {
-  certificateCoversDomain,
-  isCertificateCurrentlyUsable,
-} from "@/lib/certificate-domain";
 import { ensureAdmin } from "@/lib/ensure-admin";
 import { supportsInteractiveTransactions } from "@/lib/env-schema";
 import {

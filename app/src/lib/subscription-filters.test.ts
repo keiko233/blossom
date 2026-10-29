@@ -1,8 +1,7 @@
+import type { SubscriptionFilter } from "@blossom/contracts/plan";
 import { and } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
-
-import type { SubscriptionFilter } from "@/orpc/plan/schema";
 
 import {
   buildSubscriptionConditions,

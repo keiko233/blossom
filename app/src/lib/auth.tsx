@@ -1,5 +1,9 @@
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { oauthProvider } from "@better-auth/oauth-provider";
+import {
+  evaluateRegistration,
+  type RegistrationDenyReason,
+} from "@blossom/domain/registration-policy";
 import { createServerFn, createServerOnlyFn } from "@tanstack/react-start";
 import { getRequestHeaders } from "@tanstack/react-start/server";
 import { betterAuth } from "better-auth";
@@ -17,10 +21,6 @@ import { createRegistrationHooks } from "./auth-registration-hooks";
 import { emailSignInSchema, emailSignUpSchema } from "./auth-schema";
 import { getEmailClient } from "./email";
 import { getServerEnv } from "./env";
-import {
-  evaluateRegistration,
-  type RegistrationDenyReason,
-} from "./registration-policy";
 
 const buildSocialProviders = createServerOnlyFn(() => {
   const env = getServerEnv();

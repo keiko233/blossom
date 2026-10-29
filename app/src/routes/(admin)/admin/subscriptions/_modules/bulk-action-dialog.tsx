@@ -1,3 +1,4 @@
+import type { BulkSubscriptionActionInput } from "@blossom/contracts/plan";
 import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
 import { createCallable } from "react-call";
@@ -22,7 +23,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { BulkSubscriptionActionInput } from "@/orpc/plan/schema";
 import { m } from "@/paraglide/messages";
 import { listPlans, PLANS_QUERY_KEY } from "@/query/plans";
 

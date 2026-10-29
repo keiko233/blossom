@@ -1,3 +1,5 @@
+import { createUserSchema } from "@blossom/contracts/user";
+import type { CreateUserInput } from "@blossom/contracts/user";
 import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
 import { createCallable } from "react-call";
@@ -22,8 +24,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { createUserSchema } from "@/orpc/user/schema";
-import type { CreateUserInput } from "@/orpc/user/schema";
 import { m } from "@/paraglide/messages";
 import { listPlans, PLANS_QUERY_KEY } from "@/query/plans";
 

@@ -1,10 +1,9 @@
-import { describe, expect, it } from "vitest";
-
 import {
   certificateCoversDomain,
   isCertificateCurrentlyUsable,
   isValidCertificateDomain,
-} from "./certificate-domain";
+} from "@blossom/domain/certificate-domain";
+import { describe, expect, it } from "vitest";
 
 describe("isValidCertificateDomain", () => {
   it("accepts DNS names and single-label wildcards", () => {

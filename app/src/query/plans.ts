@@ -1,3 +1,8 @@
+import {
+  createPlanSchema,
+  planIdSchema,
+  updatePlanSchema,
+} from "@blossom/contracts/plan";
 import { createServerFn } from "@tanstack/react-start";
 import { asc, count, desc, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
@@ -8,11 +13,6 @@ import { redeemBatch } from "@/db/redeem-schema";
 import { fromInput, fromResult } from "@/lib/admin-audit";
 import { adminAudit } from "@/lib/admin-audit-middleware";
 import { ensureAdmin } from "@/lib/ensure-admin";
-import {
-  createPlanSchema,
-  planIdSchema,
-  updatePlanSchema,
-} from "@/orpc/plan/schema";
 import {
   listServerIdsForGroupIds,
   recordConfigChange,

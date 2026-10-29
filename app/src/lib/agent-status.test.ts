@@ -1,10 +1,9 @@
-import { describe, expect, it } from "vitest";
-
 import {
   deriveNodeHealth,
   deriveServerHealth,
   type AgentStatusLike,
-} from "./agent-status";
+} from "@blossom/domain/agent-status";
+import { describe, expect, it } from "vitest";
 
 const now = Date.parse("2026-07-13T00:00:00Z");
 const base: AgentStatusLike = {

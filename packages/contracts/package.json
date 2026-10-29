@@ -1,0 +1,12 @@
+{
+  "name": "@blossom/contracts",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./plan": "./src/plan.ts",
+    "./user": "./src/user.ts"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  }
+}

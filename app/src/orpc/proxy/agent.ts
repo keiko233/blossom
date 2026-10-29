@@ -1,10 +1,10 @@
+import { formatDesiredRevision } from "@blossom/domain/config-revision";
 import { ORPCError } from "@orpc/server";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
 import type { NewTrafficRecord } from "@/db/traffic-schema";
 import { hashAgentToken, parseBearerToken } from "@/lib/agent-token";
-import { formatDesiredRevision } from "@/lib/config-revision";
 import { toSingboxRouteRules } from "@/lib/routing-rules";
 import {
   findAgentServerByTokenHash,

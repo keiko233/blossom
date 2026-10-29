@@ -1,3 +1,4 @@
+import { deriveNodeHealth } from "@blossom/domain/agent-status";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import {
@@ -39,7 +40,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toastManager } from "@/components/ui/toast";
-import { deriveNodeHealth } from "@/lib/agent-status";
 import { m } from "@/paraglide/messages";
 import {
   deleteNode,

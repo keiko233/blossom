@@ -31,7 +31,7 @@ From the repo root:
 
 The deploy-target build scripts are `build:cloudflare`, `build:netlify`, `build:vercel` and `build:node` (the example above uses the last); plain `pnpm build` uses the default `cloudflare` target (`@cloudflare/vite-plugin`); the other three targets are built by Nitro with a pinned preset. `db:migrate` acts on the database `DATABASE_URL` points at, and `agent:spec` needs the dev server running; see [API, data and auth](api-data-auth.md#migrations) and [Generated files](generated-files.md#agent-openapi-spec-and-client).
 
-The root `dev`, `build` and `test` scripts use `pnpm --parallel` over the workspace, which contains only `app`. The agent is built and tested with `cargo` separately. Which checks to run for a change is in [Testing and verification](testing.md).
+The root `dev`, `build` and `test` scripts use `pnpm --parallel` over the workspace. The app consumes the private domain and contracts packages as TypeScript source and runs their tests in its Vitest suite; they do not need a separate build. The agent is built and tested with `cargo` separately. Which checks to run for a change is in [Testing and verification](testing.md).
 
 ## Scope and verification
 
@@ -71,7 +71,7 @@ Two workflows in `.github/workflows/`:
 | `test.yml` (`CI`)   | pull requests, manual                    | Job `app`: `pnpm install --frozen-lockfile`, `pnpm test`, `pnpm build`. Job `server-agent`: `cargo test --locked`, `cargo fmt --check`, `cargo clippy -D warnings`, image build, managed-TLS lifecycle test. |
 | `docker.yml`        | push to `main`, `v*` tags, manual        | Builds only the images whose sources changed (tags and manual runs build both), natively per architecture (amd64, arm64), and publishes multi-arch manifests to GHCR. |
 
-Keep job names stable if you edit workflows: branch protection and badges may refer to them. Note the `paths:` caveat in [Known drift](README.md#known-drift). Changing `docker.yml` can publish images on the next push to `main` (it includes itself in its change filters, so both images rebuild), so edits there are release-affecting.
+Keep job names stable if you edit workflows: branch protection and badges may refer to them. Both test jobs run on each pull request. Changing `docker.yml` can publish images on the next push to `main` (it includes itself in its change filters, so both images rebuild), so edits there are release-affecting.
 
 ## Deployment and external effects
 

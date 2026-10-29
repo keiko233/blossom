@@ -1,0 +1,11 @@
+{
+  "name": "@blossom/domain",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./agent-status": "./src/agent-status.ts",
+    "./certificate-domain": "./src/certificate-domain.ts",
+    "./config-revision": "./src/config-revision.ts",
+    "./registration-policy": "./src/registration-policy.ts"
+  }
+}

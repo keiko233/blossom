@@ -1,11 +1,11 @@
-import type { BetterAuthOptions } from "better-auth";
-import { APIError } from "better-auth/api";
-
 import {
   evaluateRegistration,
   REGISTRATION_ERROR_CODES,
   REGISTRATION_ERROR_DESCRIPTIONS,
-} from "./registration-policy";
+} from "@blossom/domain/registration-policy";
+import type { BetterAuthOptions } from "better-auth";
+import { APIError } from "better-auth/api";
+
 import type { RegistrationSettings } from "./settings";
 
 type ValidateUserInfo = NonNullable<

@@ -1,3 +1,4 @@
+import { parseRevisionSeq } from "@blossom/domain/config-revision";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { z } from "zod";
 
@@ -5,7 +6,6 @@ import { db } from "@/db";
 import { subscription } from "@/db/plan-schema";
 import { node, type Server, server } from "@/db/proxy-schema";
 import { type NewTrafficRecord, trafficRecord } from "@/db/traffic-schema";
-import { parseRevisionSeq } from "@/lib/config-revision";
 import type { heartbeatSchema } from "@/orpc/proxy/schema";
 import { pruneAppliedConfigChanges } from "@/query/config-change";
 

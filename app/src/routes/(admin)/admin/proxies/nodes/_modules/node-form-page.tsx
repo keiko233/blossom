@@ -1,3 +1,4 @@
+import { isCertificateCurrentlyUsable } from "@blossom/domain/certificate-domain";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { ArrowLeftIcon } from "lucide-react";
@@ -38,7 +39,6 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs";
-import { isCertificateCurrentlyUsable } from "@/lib/certificate-domain";
 import {
   isNodeRealityEnabled,
   isNodeTlsEnabled,

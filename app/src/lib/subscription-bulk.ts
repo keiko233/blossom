@@ -1,5 +1,6 @@
+import type { BulkSubscriptionAction } from "@blossom/contracts/plan";
+
 import type { Plan, Subscription } from "@/db/plan-schema";
-import type { BulkSubscriptionAction } from "@/orpc/plan/schema";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 

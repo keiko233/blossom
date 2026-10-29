@@ -1,11 +1,10 @@
-import { z } from "zod";
-
 import {
   USER_PAGE_SIZES,
   type UserFilterInput,
   userRoleSchema,
   userSortSchema,
-} from "@/orpc/user/schema";
+} from "@blossom/contracts/user";
+import { z } from "zod";
 
 /**
  * URL search params of the users page. Defaults are left out of the URL

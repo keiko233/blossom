@@ -2,7 +2,7 @@ import {
   type AgentStatusLike,
   deriveServerHealth,
   type ServerHealth,
-} from "@/lib/agent-status";
+} from "@blossom/domain/agent-status";
 
 /** Subscriptions expiring within this many days are flagged on the overview. */
 export const EXPIRING_SOON_DAYS = 7;

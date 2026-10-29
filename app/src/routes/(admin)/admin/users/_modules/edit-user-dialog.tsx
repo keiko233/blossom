@@ -1,3 +1,4 @@
+import { updateUserSchema } from "@blossom/contracts/user";
 import * as React from "react";
 import { createCallable } from "react-call";
 
@@ -14,7 +15,6 @@ import {
 } from "@/components/ui/dialog";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { updateUserSchema } from "@/orpc/user/schema";
 import { m } from "@/paraglide/messages";
 
 const EXIT_MS = 200;

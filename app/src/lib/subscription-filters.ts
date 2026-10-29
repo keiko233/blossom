@@ -1,3 +1,4 @@
+import type { SubscriptionFilter } from "@blossom/contracts/plan";
 import {
   and,
   asc,
@@ -18,7 +19,6 @@ import {
   getExpiringSoonCutoff,
   QUOTA_WARNING_PERCENT,
 } from "@/lib/admin-overview";
-import type { SubscriptionFilter } from "@/orpc/plan/schema";
 
 /** Escapes LIKE wildcards so user input is matched literally (`\` escape). */
 export function escapeLikePattern(value: string): string {

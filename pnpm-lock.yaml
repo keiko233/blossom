@@ -202,6 +202,12 @@ importers:
       '@black-duty/sing-box-schema':
         specifier: ^1.13.13
         version: 1.13.13(typescript@7.0.2)
+      '@blossom/contracts':
+        specifier: workspace:*
+        version: link:../packages/contracts
+      '@blossom/domain':
+        specifier: workspace:*
+        version: link:../packages/domain
       '@faker-js/faker':
         specifier: ^10.6.0
         version: 10.6.0
@@ -452,6 +458,14 @@ importers:
       wrangler:
         specifier: ^4.154.0
         version: 4.154.0(@types/node@26.6.5)
+
+  packages/contracts:
+    dependencies:
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+
+  packages/domain: {}
 
 packages:
 

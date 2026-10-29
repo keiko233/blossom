@@ -12,7 +12,8 @@ Blossom has two deployables that meet at one HTTP contract.
         └─ heartbeats, applied revision, traffic deltas
 ```
 
-- **`app/`** (`@blossom/app`, the only pnpm workspace package) is the control plane: admin console, user dashboard, authentication, subscription output, the agent API and the MCP API.
+- **`app/`** (`@blossom/app`) is the control plane: admin console, user dashboard, authentication, subscription output, the agent API and the MCP API.
+- **`packages/domain/`** and **`packages/contracts/`** contain portable domain rules and browser-safe validation contracts. They expose explicit TypeScript source entry points consumed by the app's bundler; their tests run in the app's Vitest suite.
 - **`server-agent/`** is a standalone Rust crate (not part of the pnpm workspace). One agent runs per physical proxy server, owns one sing-box process, and reconciles it to the desired state the app serves. See [Server agent](server-agent.md).
 
 The data model is server → nodes: a `server` has one agent token and one sing-box process; every enabled `node` on it becomes an inbound in the same generated config. Plans, groups, subscriptions, rules, certificates, redeem codes, announcements, settings and audit logs hang off that in `app/src/db/*-schema.ts`.
@@ -61,7 +62,7 @@ The gate resolves it:
 - Mutations covered by the gate (criterion below) call `recordConfigChange` (`app/src/query/config-change.ts`) with the pre-change snapshot (`prevRow`) and the affected server ids. It bumps `server.desiredRevisionSeq` for each affected server first, then writes a `config_change` row and links it to those servers. It does this inside the caller's transaction on `node-postgres`; on `neon-http` the statements commit individually, which is why the bump comes first. It is a no-op when no server is affected (for example a plan with no nodes).
 - The agent reports the revision it applied in its heartbeat; the app stores it as the server's applied sequence.
 - `app/src/lib/publish-gate.ts` (the pure half) replays changes that are ahead of a server's applied sequence backwards from their `prevRow` snapshot. Additions and enablements are withheld until applied; removals and disables take effect immediately, because withholding nothing new can never strand a client.
-- `desiredRevision` pairs the server's sequence with a content hash of the desired state (`app/src/lib/config-revision.ts`); the agent treats it as opaque.
+- `desiredRevision` pairs the server's sequence with a content hash of the desired state (`packages/domain/src/config-revision.ts`); the agent treats it as opaque.
 
 ### Criterion and exceptions
 
