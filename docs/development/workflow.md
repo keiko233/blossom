@@ -45,8 +45,8 @@ The root `dev`, `build` and `test` scripts use `pnpm --parallel` over the worksp
 Husky runs two hooks (`.husky/`):
 
 - `pre-commit` → `pnpm lint-staged` (`lint-staged.config.js`):
-  - `app/**/*.{js,jsx,ts,tsx,json,css,md}` → `oxfmt`
-  - `app/**/*.{js,jsx,ts,tsx}` → `oxlint --fix --deny-warnings`
+  - `{app,packages}/**/*.{js,jsx,ts,tsx,json,css,md}` → `oxfmt`
+  - `{app,packages}/**/*.{js,jsx,ts,tsx}` → `oxlint --fix --deny-warnings`
   - `server-agent/**/*.rs` → `cargo fmt --all` and `cargo clippy --all-targets --all-features --fix --allow-dirty --allow-staged -- -D warnings` (whole crate, not per file)
 - `commit-msg` → `commitlint` with `@commitlint/config-conventional`.
 
@@ -68,7 +68,7 @@ Two workflows in `.github/workflows/`:
 
 | Workflow            | Trigger                                  | What it does                                                                                                                                              |
 | ------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `test.yml` (`CI`)   | pull requests, manual                    | Job `app`: `pnpm install --frozen-lockfile`, `pnpm test`, `pnpm build`. Job `server-agent`: `cargo test --locked`, `cargo fmt --check`, `cargo clippy -D warnings`, image build, managed-TLS lifecycle test. |
+| `test.yml` (`CI`)   | pull requests, manual                    | Job `app`: `pnpm install --frozen-lockfile`, `pnpm test`, then one build per deploy target (`pnpm build` for Cloudflare, `build:node`, `build:vercel`, `build:netlify`). Job `server-agent`: `cargo test --locked`, `cargo fmt --check`, `cargo clippy -D warnings`, image build, managed-TLS lifecycle test. |
 | `docker.yml`        | push to `main`, `v*` tags, manual        | Builds only the images whose sources changed (tags and manual runs build both), natively per architecture (amd64, arm64), and publishes multi-arch manifests to GHCR. |
 
 Keep job names stable if you edit workflows: branch protection and badges may refer to them. Both test jobs run on each pull request. Changing `docker.yml` can publish images on the next push to `main` (it includes itself in its change filters, so both images rebuild), so edits there are release-affecting.

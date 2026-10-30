@@ -40,7 +40,7 @@ From the repo root unless noted. Taken from `package.json` and CI; the `pnpm` an
 | Agent tests              | `cd server-agent && cargo test --locked`                                             | CI.                                                                                                  |
 | Agent format / lint      | `cd server-agent && cargo fmt --all -- --check` and `cargo clippy --locked --all-targets --all-features -- -D warnings` | CI.                                                          |
 
-CI (`.github/workflows/test.yml`) runs `pnpm test` and `pnpm build` for the app, and test, fmt, clippy, image build and the managed-TLS script for the agent. It does not run `pnpm lint`, `pnpm fmt` or a type check for the app; the pre-commit hook is the only automated lint/format gate there. **Recommended**: run a type check yourself after non-trivial TypeScript changes, since nothing else will.
+CI (`.github/workflows/test.yml`) runs `pnpm test` and a build of every deploy target (`pnpm build`, then `build:node`, `build:vercel`, `build:netlify`) for the app, and test, fmt, clippy, image build and the managed-TLS script for the agent. It does not run `pnpm lint`, `pnpm fmt` or a type check for the app; the pre-commit hook is the only automated lint/format gate there. **Recommended**: run a type check yourself after non-trivial TypeScript changes, since nothing else will.
 
 ## Verification by area
 

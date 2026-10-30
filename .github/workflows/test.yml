@@ -32,8 +32,18 @@ jobs:
       - name: Run tests
         run: pnpm test
 
-      - name: Build app
+      - name: Build app (Cloudflare)
         run: pnpm build
+
+      # Built one after another so outputs cannot collide.
+      - name: Build app (Node)
+        run: pnpm --filter @blossom/app build:node
+
+      - name: Build app (Vercel)
+        run: pnpm --filter @blossom/app build:vercel
+
+      - name: Build app (Netlify)
+        run: pnpm --filter @blossom/app build:netlify
 
   server-agent:
     name: Server agent tests

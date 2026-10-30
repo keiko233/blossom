@@ -3,8 +3,8 @@
  * @type {import('lint-staged').Configuration}
  */
 export default {
-  "app/**/*.{js,jsx,ts,tsx,json,css,md}": "oxfmt",
-  "app/**/*.{js,jsx,ts,tsx}": "oxlint --fix --deny-warnings",
+  "{app,packages}/**/*.{js,jsx,ts,tsx,json,css,md}": "oxfmt",
+  "{app,packages}/**/*.{js,jsx,ts,tsx}": "oxlint --fix --deny-warnings",
   // Rust (server-agent). Run once on the whole crate rather than per-file:
   // cargo fmt/clippy operate on the crate, not individual paths. lint-staged
   // re-stages the matched .rs files after fmt rewrites them.
