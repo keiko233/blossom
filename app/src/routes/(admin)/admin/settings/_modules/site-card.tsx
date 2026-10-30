@@ -100,9 +100,9 @@ export function SiteCard({
           )}
         </form.Field>
       </div>
-      <FieldDescription>
+      <p className="text-xs text-muted-foreground">
         {m.admin_settings_site_support_hint()}
-      </FieldDescription>
+      </p>
 
       <form.Field name="userNotice">
         {(field) => (

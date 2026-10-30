@@ -61,11 +61,13 @@ Established, from `.oxfmtrc.json` and `.oxlintrc.json` at the repo root:
 - User-visible strings go through Paraglide: `import { m } from "@/paraglide/messages"` then `m.some_key()`. New code should not hard-code English or Chinese in components; I did not audit the existing code for exceptions.
 - Messages live in `app/messages/en.json` (base locale) and `app/messages/zh-cn.json`, which currently have the same number of keys. Add new keys to both. Keys are snake_case and prefixed by area, for example `admin_proxies_servers_toast_deleted`.
 - The generated `src/paraglide/` is rebuilt by `vite dev`/`vite build` and by `pnpm test`; see [Generated files](generated-files.md).
+- `src/server.ts` wraps the Start handler with Paraglide's request middleware, so SSR uses the same locale cookie as the browser and concurrent requests retain separate locales. Cloudflare's `wrangler.jsonc` points to that entry as well.
 - Do not match on translated error text to decide behaviour. **Recommended**: throw errors with a stable code or type and branch on that.
 
 ## UI composition
 
 - Build on `components/ui/*` and the existing shared components before adding new markup. Use `lucide-react` icons (`XxxIcon` names) and `cn()` from `@/lib/utils` for class merging.
+- `FieldDescription` is a Base UI field part and requires a surrounding `Field` or `FormField`; use ordinary text for hints outside a field.
 - The list pages inspected use `PageHeader` → toolbar → table, with `Empty` for empty states and `Spinner` for pending states; reuse those before inventing new patterns.
 - Keep server-only imports (`@/db`, `node:*`) out of code that the browser bundles. Shared constants that the client needs are kept beside, not inside, the Drizzle table files for this reason (see the comment at the top of `lib/admin-audit.ts`). Use `createServerFn`/`createServerOnlyFn` at the boundary.
 - Read client environment through `lib/env-client.ts`; read server environment through `getServerEnv()` in server-only code (see [API, data and auth](api-data-auth.md#environment) for the few direct `process.env` uses).

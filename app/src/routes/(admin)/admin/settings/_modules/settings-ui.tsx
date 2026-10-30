@@ -10,7 +10,6 @@ import {
   CardPanel,
   CardTitle,
 } from "@/components/ui/card";
-import { FieldDescription } from "@/components/ui/field";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { m } from "@/paraglide/messages";
@@ -52,7 +51,7 @@ export function SwitchField({
         <Switch checked={checked} onCheckedChange={onCheckedChange} />
         <Label>{label}</Label>
       </div>
-      {hint ? <FieldDescription>{hint}</FieldDescription> : null}
+      {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
     </div>
   );
 }

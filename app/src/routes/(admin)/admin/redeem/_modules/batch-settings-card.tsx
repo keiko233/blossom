@@ -304,9 +304,9 @@ export function BatchSettingsCard({
               <Switch checked={disabled} onCheckedChange={setDisabled} />
               <Label>{m.admin_redeem_field_disabled()}</Label>
             </div>
-            <FieldDescription>
+            <p className="text-xs text-muted-foreground">
               {m.admin_redeem_field_disabled_hint()}
-            </FieldDescription>
+            </p>
           </div>
         </form>
       </CardContent>

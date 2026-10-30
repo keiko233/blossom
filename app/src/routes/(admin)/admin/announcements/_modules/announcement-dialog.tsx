@@ -268,9 +268,9 @@ function AnnouncementForm({
                   />
                   <Label>{m.admin_announcements_field_pinned()}</Label>
                 </div>
-                <FieldDescription>
+                <p className="text-xs text-muted-foreground">
                   {m.admin_announcements_field_pinned_hint()}
-                </FieldDescription>
+                </p>
               </div>
             )}
           </form.Field>
@@ -321,9 +321,9 @@ function AnnouncementForm({
               )}
             </form.Field>
           </div>
-          <FieldDescription>
+          <p className="text-xs text-muted-foreground">
             {m.admin_announcements_field_schedule_hint()}
-          </FieldDescription>
+          </p>
         </form>
       </DialogPanel>
 
