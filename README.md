@@ -76,14 +76,22 @@ When a `HYPERDRIVE` binding is declared, local Cloudflare development supplies `
 
 ## Database migrations
 
-For local development and testing, set `DATABASE_URL` in `app/.env.local` to `postgresql://blossom_test:blossom_test@127.0.0.1:55432/blossom_test` and use `DATABASE_DRIVER=node-postgres` if a driver is explicitly configured. Start the isolated PostgreSQL service and apply migrations:
+For local development, set `DATABASE_URL` in `app/.env.local` to `postgresql://blossom_dev:blossom_dev@127.0.0.1:55433/blossom_dev` and use `DATABASE_DRIVER=node-postgres` if a driver is explicitly configured. Start the development database and apply migrations:
 
 ```bash
-docker compose -p blossom-test -f docker-compose.test.yaml up -d --wait
+docker compose -f docker-compose.dev.yaml up -d --wait
 pnpm --filter @blossom/app db:migrate
 ```
 
-The database uses a persistent `blossom-test` Compose volume and a local-only port; its credentials are for testing only. `docker compose -p blossom-test -f docker-compose.test.yaml down` stops it without deleting data. Adding `-v` deletes the test data.
+For database integration tests, use the separate test database. The tests delete rows from it, so use it only for disposable test data:
+
+```bash
+docker compose -f docker-compose.test.yaml up -d --wait
+DATABASE_URL=postgresql://blossom_test:blossom_test@127.0.0.1:55432/blossom_test pnpm --filter @blossom/app db:migrate
+BLOSSOM_TEST_DATABASE_URL=postgresql://blossom_test:blossom_test@127.0.0.1:55432/blossom_test BLOSSOM_TEST_CONFIRM_DISPOSABLE=yes pnpm test
+```
+
+Both databases bind only to localhost and use separate persistent Compose volumes. Their credentials are for local use only. Stop either with `docker compose -f docker-compose.dev.yaml down` or `docker compose -f docker-compose.test.yaml down`; adding `-v` deletes that database's data. Environment variables supplied in the shell take precedence over `app/.env.local`, so check the target before running migrations.
 
 Migrations live in `app/drizzle/` and are applied with Drizzle Kit:
 

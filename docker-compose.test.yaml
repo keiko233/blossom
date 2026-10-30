@@ -1,3 +1,5 @@
+name: blossom-test
+
 services:
   db:
     image: postgres:18-alpine
