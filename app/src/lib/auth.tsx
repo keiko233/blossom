@@ -16,11 +16,10 @@ import * as schema from "@/db/schema";
 import { getDatabaseRequest } from "@/lib/database-connection";
 import { getSettings } from "@/query/settings-store";
 import { grantSignupTrial } from "@/query/trial-grant";
-import MagicLinkEmail from "@/templates/emails/magic-link";
 
 import { createRegistrationHooks } from "./auth-registration-hooks";
 import { emailSignInSchema, emailSignUpSchema } from "./auth-schema";
-import { getEmailClient } from "./email";
+import { sendMagicLinkEmail } from "./email";
 import { getServerEnv } from "./env";
 
 const buildSocialProviders = createServerOnlyFn(() => {
@@ -82,23 +81,7 @@ const buildAuth = createServerOnlyFn(() => {
     plugins: [
       admin(),
       magicLink({
-        sendMagicLink: async (data) => {
-          const emailClient = getEmailClient();
-
-          if (emailClient) {
-            await emailClient.emails.send({
-              from: env.RESEND_MAIL_FROM!,
-              to: data.email,
-              subject: `Welcome to ${env.APP_NAME}! Here's your link`,
-              react: <MagicLinkEmail email={data.email} link={data.url} />,
-            });
-          } else {
-            console.warn(
-              "Email is not enabled, please configure the RESEND_API_KEY",
-              data,
-            );
-          }
-        },
+        sendMagicLink: sendMagicLinkEmail,
       }),
       jwt({
         jwt: {
