@@ -6,6 +6,10 @@ import { buildClashConfig, toClashOutputOptions } from "@/lib/clash-config";
 import { getClientIp } from "@/lib/client-ip";
 import { toClashRules } from "@/lib/routing-rules";
 import {
+  classifyDeliveryFailure,
+  deliveryFailureResponse,
+} from "@/lib/subscription-delivery";
+import {
   buildContentDisposition,
   buildProfileUpdateInterval,
 } from "@/lib/subscription-headers";
@@ -99,15 +103,22 @@ export const Route = createFileRoute("/api/sub/$token")({
                 password: subscription.credentialPassword,
               },
           }).config;
-        } catch {
-          // Every visible node is still waiting on an agent apply (e.g. a
-          // just-created subscription or node). Nothing servable yet — tell
-          // the client to retry rather than handing it a config that cannot
-          // connect.
-          return new Response("Configuration is being deployed", {
-            status: 503,
-            headers: { "Retry-After": "30" },
+        } catch (error) {
+          // Say why there is nothing to serve: only a publish-gate wait is
+          // worth a retry. The body stays generic; details (node names,
+          // protocols) belong to an authenticated admin view, not to whoever
+          // holds the link.
+          const failure = classifyDeliveryFailure({
+            accessibleCount: nodes.length,
+            gatedCount: gate.nodes.length,
+            error,
           });
+          if (failure.reason === "generation_failed") {
+            // Constant message: error names and messages can carry node
+            // settings or credentials.
+            console.error("[subscription] config generation failed");
+          }
+          return deliveryFailureResponse(failure);
         }
 
         const userAgent = request.headers.get("user-agent");

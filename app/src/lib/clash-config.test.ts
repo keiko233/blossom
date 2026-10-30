@@ -4,7 +4,7 @@ import { parse as parseYaml } from "yaml";
 import type { Node } from "@/db/proxy-schema";
 import type { ResolvedNode } from "@/query/subscription-access";
 
-import { buildClashConfig } from "./clash-config";
+import { buildClashConfig, NoUsableProxiesError } from "./clash-config";
 import { clashMetaSchema } from "./clash-meta-schema";
 
 const credentials = {
@@ -68,6 +68,77 @@ describe("buildClashConfig", () => {
     expect(() => buildClashConfig([], { credentials })).toThrow(
       "No usable proxies",
     );
+  });
+
+  it("throws a typed error with no skipped nodes when given none", () => {
+    try {
+      buildClashConfig([], { credentials });
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(NoUsableProxiesError);
+      expect((error as NoUsableProxiesError).skipped).toEqual([]);
+    }
+  });
+
+  it("reports why every node was skipped when none is usable", () => {
+    const unsupported = makeResolved("wireguard", {});
+    const unrepresentable = makeResolved("shadowsocks", {
+      method: "2022-blake3-aes-256-gcm",
+    });
+    try {
+      buildClashConfig([unsupported, unrepresentable], { credentials });
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(NoUsableProxiesError);
+      expect((error as NoUsableProxiesError).skipped).toEqual([
+        {
+          nodeId: "node-wireguard",
+          nodeName: "WIREGUARD Node",
+          protocol: "wireguard",
+          reason: "unsupported_protocol",
+        },
+        {
+          nodeId: "node-shadowsocks",
+          nodeName: "SHADOWSOCKS Node",
+          protocol: "shadowsocks",
+          reason: "unsupported_configuration",
+        },
+      ]);
+    }
+  });
+
+  it("keeps convertible nodes and reports the skipped ones", () => {
+    const good = makeResolved("trojan", {});
+    const bad = makeResolved("wireguard", {});
+    const { config, proxyNames, skipped } = buildClashConfig([bad, good], {
+      credentials,
+    });
+    expect(proxyNames).toEqual(["TROJAN Node"]);
+    expect((config as { proxies: unknown[] }).proxies).toHaveLength(1);
+    expect(skipped).toEqual([
+      {
+        nodeId: "node-wireguard",
+        nodeName: "WIREGUARD Node",
+        protocol: "wireguard",
+        reason: "unsupported_protocol",
+      },
+    ]);
+  });
+
+  it("never puts credentials or settings in skipped-node reports", () => {
+    const secret = "super-secret-psk";
+    const bad = makeResolved("shadowsocks", {
+      method: "2022-blake3-aes-256-gcm",
+      password: "",
+      note: secret,
+    });
+    const { skipped } = buildClashConfig([bad, makeResolved("trojan", {})], {
+      credentials,
+    });
+    const text = JSON.stringify(skipped);
+    expect(text).not.toContain(secret);
+    expect(text).not.toContain(credentials.uuid);
+    expect(text).not.toContain(credentials.password);
   });
 
   it("builds a serializable vless+ws config", () => {

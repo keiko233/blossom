@@ -1,7 +1,11 @@
 import type { JsonValue } from "@/orpc/proxy/schema";
 import type { ResolvedNode } from "@/query/subscription-access";
 
-import { nodeToClashProxy } from "./clash-proxies";
+import {
+  explainNodeSkip,
+  type NodeSkipReason,
+  nodeToClashProxy,
+} from "./clash-proxies";
 import type { SubscriptionOutputSettings } from "./settings";
 
 interface SubscriptionCredentials {
@@ -65,6 +69,33 @@ export function toClashOutputOptions(
   };
 }
 
+/**
+ * A node left out of the generated config. Carries ids and the node's own
+ * name only — never credentials or settings — so it is safe for an admin
+ * diagnostic view, but it is not meant for the subscription response body.
+ */
+export interface SkippedNode {
+  nodeId: string;
+  nodeName: string;
+  protocol: string;
+  reason: NodeSkipReason;
+}
+
+/**
+ * Thrown when none of the nodes could be turned into a Clash proxy. Typed so
+ * the endpoint can tell this expected condition from a genuine builder bug;
+ * `skipped` is empty when there were no nodes at all.
+ */
+export class NoUsableProxiesError extends Error {
+  readonly skipped: readonly SkippedNode[];
+
+  constructor(skipped: readonly SkippedNode[]) {
+    super("No usable proxies for this subscription");
+    this.name = "NoUsableProxiesError";
+    this.skipped = skipped;
+  }
+}
+
 /** Makes proxy names unique by appending a counter when duplicated. */
 function uniqueProxyNames(
   proxies: Record<string, JsonValue>[],
@@ -81,29 +112,40 @@ function uniqueProxyNames(
 
 /**
  * Builds a complete Clash Meta configuration from accessible nodes and a
- * subscription's credentials. Throws when there are no usable proxies so the
- * caller can return a 403 rather than an invalid Clash config.
+ * subscription's credentials. Nodes that cannot be expressed in Clash are
+ * skipped and reported in `skipped` (partial success). Throws
+ * `NoUsableProxiesError` when no proxy remains so the caller can answer with
+ * an error rather than an invalid Clash config.
  */
 export function buildClashConfig(
   nodes: ResolvedNode[],
   options: BuildOptions,
-): { config: unknown; proxyNames: string[] } {
+): { config: unknown; proxyNames: string[]; skipped: SkippedNode[] } {
   const { credentials, resolveCredentials, rules = [] } = options;
   const output = { ...DEFAULT_CLASH_OUTPUT, ...options.output };
 
-  const proxies = uniqueProxyNames(
-    nodes
-      .map((resolved) =>
-        nodeToClashProxy(
-          resolved,
-          resolveCredentials?.(resolved) ?? credentials,
-        ),
-      )
-      .filter((proxy): proxy is Record<string, JsonValue> => proxy !== null),
-  );
+  const converted: Record<string, JsonValue>[] = [];
+  const skipped: SkippedNode[] = [];
+  for (const resolved of nodes) {
+    const proxy = nodeToClashProxy(
+      resolved,
+      resolveCredentials?.(resolved) ?? credentials,
+    );
+    if (proxy === null) {
+      skipped.push({
+        nodeId: resolved.node.id,
+        nodeName: resolved.node.name,
+        protocol: resolved.node.protocol,
+        reason: explainNodeSkip(resolved),
+      });
+    } else {
+      converted.push(proxy);
+    }
+  }
+  const proxies = uniqueProxyNames(converted);
 
   if (proxies.length === 0) {
-    throw new Error("No usable proxies for this subscription");
+    throw new NoUsableProxiesError(skipped);
   }
 
   const proxyNames = proxies.map((proxy) => proxy.name as string);
@@ -137,5 +179,5 @@ export function buildClashConfig(
     ],
   };
 
-  return { config, proxyNames };
+  return { config, proxyNames, skipped };
 }

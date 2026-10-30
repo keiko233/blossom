@@ -587,6 +587,22 @@ const BUILDERS: Record<string, ProxyBuilder> = {
 };
 
 /**
+ * Why a node has no Clash Meta representation. Only meaningful for a node
+ * `nodeToClashProxy` returned null for; both reasons are permanent until an
+ * admin edits the node, so they must never be reported as a temporary
+ * deployment delay.
+ */
+export type NodeSkipReason =
+  | "unsupported_protocol"
+  | "unsupported_configuration";
+
+export function explainNodeSkip(resolved: ResolvedNode): NodeSkipReason {
+  return BUILDERS[resolved.node.protocol]
+    ? "unsupported_configuration"
+    : "unsupported_protocol";
+}
+
+/**
  * Converts a resolved node and subscription credentials into a Clash Meta proxy
  * object. The resolved address (per-node override or server fallback) is used
  * for `server`; the protocol `settings` come from the node row. Returns null
