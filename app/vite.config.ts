@@ -28,6 +28,22 @@ const NITRO_PRESETS = {
   node: "node-server",
 } as const satisfies Partial<Record<DeployTarget, string>>;
 
+/**
+ * Netlify installs and builds from the repository root (the lockfile and the
+ * workspace packages live there) and only discovers `.netlify/functions-internal`
+ * and `publish` relative to that base. Nitro's preset would write both under
+ * `app/`, so Netlify's output is redirected to the repository root.
+ */
+const repoRoot = fileURLToPath(new URL("../", import.meta.url));
+const NITRO_OUTPUT: Partial<
+  Record<DeployTarget, { dir: string; publicDir: string }>
+> = {
+  netlify: {
+    dir: `${repoRoot}.netlify/functions-internal`,
+    publicDir: `${repoRoot}dist`,
+  },
+};
+
 const deployTarget = (process.env.DEPLOY_TARGET ??
   "cloudflare") as DeployTarget;
 if (!DEPLOY_TARGETS.includes(deployTarget)) {
@@ -118,7 +134,12 @@ const config = defineConfig(({ mode, command }) => {
       // nitro goes AFTER tanstackStart per its docs
       ...(deployTarget === "cloudflare"
         ? []
-        : [nitro({ preset: NITRO_PRESETS[deployTarget] })]),
+        : [
+            nitro({
+              preset: NITRO_PRESETS[deployTarget],
+              output: NITRO_OUTPUT[deployTarget],
+            }),
+          ]),
       viteReact(),
       babel({
         presets: [reactCompilerPreset()],

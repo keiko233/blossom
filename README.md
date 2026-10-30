@@ -28,12 +28,12 @@ Netlify, Vercel and Node are built by [Nitro](https://nitro.build) (`netlify`, `
 | Platform | Build command | Config | How |
 |---|---|---|---|
 | Cloudflare Workers (primary) | `pnpm build:cloudflare` | `app/wrangler.jsonc` | `cd app && wrangler deploy` |
-| Netlify | `pnpm build:netlify` | `netlify.toml` | Connect the repo; `netlify.toml` sets base directory `app` and publish directory `dist` |
+| Netlify | `pnpm build:netlify` | `netlify.toml` | Connect the repo and leave the base and package directories empty; `netlify.toml` installs and builds from the repository root and publishes `dist` |
 | Vercel | `pnpm build:vercel` | `app/vercel.json` | Connect the repo, set root directory to `app` |
 | Railway | (Docker) | `railway.toml` | Connect the repo; Railway builds from `Dockerfile` |
 | Self-host Docker | (Docker) | `Dockerfile`, `docker-compose.yaml` | `docker compose up -d` |
 
-For Cloudflare, push secrets with `wrangler secret put <NAME>` and non-secret vars through `vars` in `app/wrangler.jsonc`. To use Hyperdrive, declare your own `HYPERDRIVE` binding in the Wrangler configuration; the repository does not include a configuration ID. Workers use a separate database client per request. `DATABASE_URL` is used without that binding and is required by Drizzle Kit migrations. For Netlify and Vercel, configure environment variables in their dashboards; the Nitro presets handle the rest. Local builds and local handler/runtime checks do not prove a hosted deployment: verify a preview deploy on the platform before relying on it. Netlify's output moved from `dist/client` plus `.netlify/v1/functions` to `dist` plus `.netlify/functions-internal`, so an existing Netlify site whose publish directory is overridden in the UI must be set to `dist`.
+For Cloudflare, push secrets with `wrangler secret put <NAME>` and non-secret vars through `vars` in `app/wrangler.jsonc`. To use Hyperdrive, declare your own `HYPERDRIVE` binding in the Wrangler configuration; the repository does not include a configuration ID. Workers use a separate database client per request. `DATABASE_URL` is used without that binding and is required by Drizzle Kit migrations. For Netlify and Vercel, configure environment variables in their dashboards; the Nitro presets handle the rest. The app depends on the private packages under `packages/`, so these hosts must install the whole pnpm workspace from the repository root. On Vercel keep "Include source files outside of the Root Directory in the Build Step" enabled (the default); Vercel then also rebuilds when a package the app declares in `package.json` changes. Netlify is configured from the repository root with no `base`: `netlify.toml` runs `pnpm --filter @blossom/app build:netlify`, and the build writes the static files to `dist` and the server function to `.netlify/functions-internal` at the repository root, where Netlify looks for them (`app/vite.config.ts` redirects Nitro's `app/`-relative defaults). Because the base is the repository root, Netlify rebuilds on any change in the repository, including `packages/` and the lockfile, and no `ignore` command is needed. `netlify.toml` also sets `NODE_VERSION = "26"` (the root `engines` requirement) for the build and `HUSKY = "0"`. Netlify falls back to Node 24 for functions when the build's Node version is not a supported Lambda runtime ([function configuration](https://docs.netlify.com/build/functions/configuration/)), so do not assume the hosted function runs Node 26; check the runtime on a preview deploy. The Vercel function runtime is set by the Nitro preset (`nodejs24.x`), not by the app's Node requirement. Local builds and local handler/runtime checks do not prove a hosted deployment: verify a preview deploy on the platform before relying on it. Netlify's output moved from `app/dist/client` plus `.netlify/v1/functions` to `dist` plus `.netlify/functions-internal` at the repository root, so an existing Netlify site must clear any base directory or package directory set in the Netlify UI, since the old configuration used base `app`.
 
 ### Prebuilt Docker images
 
@@ -89,7 +89,7 @@ docker compose up -d
 
 This brings up:
 
-- `db` — Postgres 17 on the internal network, persisted in `pgdata`.
+- `db` — Postgres 18 on the internal network, persisted in `pgdata`.
 - `migrate` — One-shot service that runs `pnpm db:migrate` against `db`.
 - `app` — The Node server on <http://localhost:3000>, with a health check at `/api/health`.
 
