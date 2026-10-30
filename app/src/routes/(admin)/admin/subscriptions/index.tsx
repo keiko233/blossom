@@ -41,6 +41,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Empty,
+  EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
@@ -62,8 +63,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toastManager } from "@/components/ui/toast";
+import { snapshotDrift } from "@/lib/access-impact";
 import { downloadCsv } from "@/lib/download-csv";
-import { formatDate } from "@/lib/format";
+import { formatDate, formatTraffic } from "@/lib/format";
 import { getPageCount } from "@/lib/pagination";
 import { getEffectiveSubscriptionStatus } from "@/lib/subscription-helpers";
 import {
@@ -132,6 +134,10 @@ function RouteComponent(): React.ReactElement {
     queryKey: PLANS_QUERY_KEY,
     queryFn: () => listPlans(),
   });
+
+  const filteredPlan = search.plan
+    ? plans?.find((candidate) => candidate.id === search.plan)
+    : undefined;
 
   const rows = data?.rows ?? [];
   const total = data?.total ?? 0;
@@ -308,7 +314,15 @@ function RouteComponent(): React.ReactElement {
     }),
     columnHelper.accessor("planName", {
       header: () => m.admin_subscriptions_col_plan(),
-      cell: (info) => <span className="font-medium">{info.getValue()}</span>,
+      cell: (info) => (
+        <Link
+          className="font-medium hover:underline"
+          params={{ planId: info.row.original.planId }}
+          to="/admin/plans/$planId"
+        >
+          {info.getValue()}
+        </Link>
+      ),
     }),
     columnHelper.display({
       id: "status",
@@ -332,22 +346,57 @@ function RouteComponent(): React.ReactElement {
       id: "usage",
       header: () => sortHeader("usage", m.admin_subscriptions_col_traffic()),
       cell: ({ row }) => (
-        <SubscriptionQuotaUsage
-          trafficQuotaBytes={row.original.trafficQuotaBytes}
-          trafficUsedBytes={row.original.trafficUsedBytes}
-        />
+        <div className="flex flex-col gap-0.5">
+          <SubscriptionQuotaUsage
+            trafficQuotaBytes={row.original.trafficQuotaBytes}
+            trafficUsedBytes={row.original.trafficUsedBytes}
+          />
+          {snapshotDrift(row.original, {
+            trafficBytes: row.original.planTrafficBytes,
+            deviceLimit: row.original.planDeviceLimit,
+          }).traffic ? (
+            <span className="text-xs text-muted-foreground">
+              {m.admin_subscriptions_plan_now({
+                value:
+                  row.original.planTrafficBytes === 0
+                    ? m.admin_plans_device_unlimited()
+                    : formatTraffic(row.original.planTrafficBytes),
+              })}
+            </span>
+          ) : null}
+        </div>
       ),
     }),
     columnHelper.accessor("deviceLimit", {
       header: () => m.admin_subscriptions_col_devices(),
-      cell: (info) =>
-        info.getValue() === 0 ? (
-          <span className="text-xs text-muted-foreground">
-            {m.admin_subscriptions_devices_unlimited()}
-          </span>
-        ) : (
-          info.getValue()
-        ),
+      cell: (info) => {
+        const sub = info.row.original;
+        const drifted = snapshotDrift(sub, {
+          trafficBytes: sub.planTrafficBytes,
+          deviceLimit: sub.planDeviceLimit,
+        }).devices;
+        return (
+          <div className="flex flex-col gap-0.5">
+            {info.getValue() === 0 ? (
+              <span className="text-xs text-muted-foreground">
+                {m.admin_subscriptions_devices_unlimited()}
+              </span>
+            ) : (
+              info.getValue()
+            )}
+            {drifted ? (
+              <span className="text-xs text-muted-foreground">
+                {m.admin_subscriptions_plan_now({
+                  value:
+                    sub.planDeviceLimit === 0
+                      ? m.admin_plans_device_unlimited()
+                      : sub.planDeviceLimit,
+                })}
+              </span>
+            ) : null}
+          </div>
+        );
+      },
     }),
     columnHelper.accessor("createdAt", {
       header: () =>
@@ -388,6 +437,16 @@ function RouteComponent(): React.ReactElement {
                   }
                 >
                   {m.admin_subscriptions_row_view_user()}
+                </MenuItem>
+                <MenuItem
+                  render={
+                    <Link
+                      params={{ planId: sub.planId }}
+                      to="/admin/plans/$planId"
+                    />
+                  }
+                >
+                  {m.admin_subscriptions_row_view_plan()}
                 </MenuItem>
                 <MenuItem onClick={() => void actions.requestEdit(sub)}>
                   {m.admin_users_subs_action_edit()}
@@ -441,6 +500,24 @@ function RouteComponent(): React.ReactElement {
           {m.admin_subscriptions_export()}
         </Button>
       </PageHeader>
+
+      {filteredPlan ? (
+        <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          {m.admin_subscriptions_plan_filter_banner({
+            name: filteredPlan.name,
+          })}
+          <Link
+            className="underline underline-offset-4"
+            params={{ planId: filteredPlan.id }}
+            to="/admin/plans/$planId"
+          >
+            {m.admin_subscriptions_plan_filter_open()}
+          </Link>
+        </p>
+      ) : null}
+      <p className="text-xs text-muted-foreground">
+        {m.admin_access_snapshot_note()} {m.admin_access_device_not_enforced()}
+      </p>
 
       <SubscriptionToolbar
         hasFilters={hasFilters}
@@ -568,7 +645,23 @@ function RouteComponent(): React.ReactElement {
                 ? m.admin_subscriptions_empty_filtered()
                 : m.admin_subscriptions_empty_title()}
             </EmptyTitle>
+            {hasFilters ? null : (
+              <EmptyDescription>
+                {plans && plans.length === 0
+                  ? m.admin_subscriptions_empty_need_plans()
+                  : m.admin_subscriptions_empty_description()}
+              </EmptyDescription>
+            )}
           </EmptyHeader>
+          {hasFilters ? null : plans && plans.length === 0 ? (
+            <Button render={<Link to="/admin/plans/new" />}>
+              {m.admin_subscriptions_empty_action_plans()}
+            </Button>
+          ) : (
+            <Button render={<Link to="/admin/users" />}>
+              {m.admin_subscriptions_empty_action_users()}
+            </Button>
+          )}
         </Empty>
       )}
     </div>

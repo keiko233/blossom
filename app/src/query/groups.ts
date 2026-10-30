@@ -3,8 +3,9 @@ import { asc, count, desc, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
 import { db } from "@/db";
-import { planGroup } from "@/db/plan-schema";
+import { plan, planGroup, subscription } from "@/db/plan-schema";
 import { nodeGroup, proxyGroup } from "@/db/proxy-schema";
+import { summarizeGroupImpact } from "@/lib/access-impact";
 import { fromInput, fromResult } from "@/lib/admin-audit";
 import { adminAudit } from "@/lib/admin-audit-middleware";
 import { ensureAdmin } from "@/lib/ensure-admin";
@@ -25,32 +26,40 @@ export const GROUPS_QUERY_KEY = ["admin", "groups"] as const;
 export const listGroups = createServerFn({ method: "GET" }).handler(
   async () => {
     await ensureAdmin();
-    const [groups, nodeCounts, planCounts] = await Promise.all([
+    const [groups, memberships, planCounts] = await Promise.all([
       db
         .select()
         .from(proxyGroup)
         .orderBy(asc(proxyGroup.sortOrder), desc(proxyGroup.createdAt)),
       db
-        .select({ groupId: nodeGroup.groupId, count: count() })
-        .from(nodeGroup)
-        .groupBy(nodeGroup.groupId),
+        .select({ groupId: nodeGroup.groupId, nodeId: nodeGroup.nodeId })
+        .from(nodeGroup),
       db
         .select({ groupId: planGroup.groupId, count: count() })
         .from(planGroup)
         .groupBy(planGroup.groupId),
     ]);
 
-    const nodeCountByGroup = new Map(
-      nodeCounts.map((row) => [row.groupId, row.count]),
-    );
+    // Member ids ride along so the plan form can preview the nodes a set of
+    // groups resolves to without one request per group.
+    const nodeIdsByGroup = new Map<string, string[]>();
+    for (const { groupId, nodeId } of memberships) {
+      const list = nodeIdsByGroup.get(groupId) ?? [];
+      list.push(nodeId);
+      nodeIdsByGroup.set(groupId, list);
+    }
     const planCountByGroup = new Map(
       planCounts.map((row) => [row.groupId, row.count]),
     );
-    return groups.map((group) => ({
-      ...group,
-      nodeCount: nodeCountByGroup.get(group.id) ?? 0,
-      planCount: planCountByGroup.get(group.id) ?? 0,
-    }));
+    return groups.map((group) => {
+      const nodeIds = nodeIdsByGroup.get(group.id) ?? [];
+      return {
+        ...group,
+        nodeIds,
+        nodeCount: nodeIds.length,
+        planCount: planCountByGroup.get(group.id) ?? 0,
+      };
+    });
   },
 );
 
@@ -72,6 +81,30 @@ export const getGroup = createServerFn({ method: "GET" })
       .from(nodeGroup)
       .where(eq(nodeGroup.groupId, data.id));
     return { ...row, nodeIds: members.map((member) => member.nodeId) };
+  });
+
+/**
+ * Read-only: the plans that bind a group and how many subscriptions sit on
+ * each, for the edit page and the delete confirmation. Advisory only; the
+ * mutation does not depend on it.
+ */
+export const getGroupImpact = createServerFn({ method: "GET" })
+  .validator(groupIdSchema)
+  .handler(async ({ data }) => {
+    await ensureAdmin();
+    const rows = await db
+      .select({
+        id: plan.id,
+        name: plan.name,
+        subscriptionCount: count(subscription.id),
+      })
+      .from(planGroup)
+      .innerJoin(plan, eq(plan.id, planGroup.planId))
+      .leftJoin(subscription, eq(subscription.planId, plan.id))
+      .where(eq(planGroup.groupId, data.id))
+      .groupBy(plan.id, plan.name, plan.sortOrder)
+      .orderBy(asc(plan.sortOrder), asc(plan.name));
+    return summarizeGroupImpact(rows);
   });
 
 export const createGroup = createServerFn({ method: "POST" })

@@ -48,6 +48,9 @@ const subscriptionRowColumns = {
   userEmail: user.email,
   planId: plan.id,
   planName: plan.name,
+  // The plan's current values, to show where a subscription's snapshot differs.
+  planTrafficBytes: plan.trafficBytes,
+  planDeviceLimit: plan.deviceLimit,
   status: subscription.status,
   startedAt: subscription.startedAt,
   expiresAt: subscription.expiresAt,

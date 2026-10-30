@@ -20,7 +20,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { distributableCount, previewEffectiveNodes } from "@/lib/access-impact";
+import { formatTraffic } from "@/lib/format";
 import { m } from "@/paraglide/messages";
+import { GROUPS_QUERY_KEY, listGroups } from "@/query/groups";
+import { listNodes, NODES_QUERY_KEY } from "@/query/nodes";
 import { listPlans, PLANS_QUERY_KEY } from "@/query/plans";
 
 const EXIT_MS = 200;
@@ -42,6 +46,24 @@ export const AssignPlanDialog = createCallable<AssignPlanDialogProps, void>(
       queryKey: PLANS_QUERY_KEY,
       queryFn: () => listPlans(),
     });
+
+    const { data: groups } = useQuery({
+      queryKey: GROUPS_QUERY_KEY,
+      queryFn: () => listGroups(),
+    });
+    const { data: nodes } = useQuery({
+      queryKey: NODES_QUERY_KEY,
+      queryFn: () => listNodes(),
+    });
+    const selectedPlan = plans?.find((plan) => plan.id === planId);
+    const preview =
+      selectedPlan && groups && nodes
+        ? previewEffectiveNodes({
+            groupIds: selectedPlan.groupIds,
+            groups,
+            nodes,
+          })
+        : undefined;
 
     const submit = async () => {
       if (!planId) return;
@@ -97,6 +119,40 @@ export const AssignPlanDialog = createCallable<AssignPlanDialogProps, void>(
                 </SelectPopup>
               </Select>
             </Field>
+            {selectedPlan ? (
+              <div className="mt-3 flex flex-col gap-1 text-xs text-muted-foreground">
+                <p>
+                  {m.admin_access_assign_summary({
+                    traffic:
+                      selectedPlan.trafficBytes === 0
+                        ? m.admin_plans_device_unlimited()
+                        : formatTraffic(selectedPlan.trafficBytes),
+                    devices:
+                      selectedPlan.deviceLimit === 0
+                        ? m.admin_plans_device_unlimited()
+                        : selectedPlan.deviceLimit,
+                    days: selectedPlan.durationDays,
+                  })}
+                </p>
+                {selectedPlan.groupIds.length === 0 ? (
+                  <p className="text-warning-foreground">
+                    {m.admin_access_assign_no_groups()}
+                  </p>
+                ) : preview && distributableCount(preview) === 0 ? (
+                  <p className="text-warning-foreground">
+                    {m.admin_access_assign_no_nodes()}
+                  </p>
+                ) : preview ? (
+                  <p>
+                    {m.admin_access_assign_nodes({
+                      count: distributableCount(preview),
+                      attention: preview.needsAttentionCount,
+                    })}
+                  </p>
+                ) : null}
+                <p>{m.admin_access_device_not_enforced()}</p>
+              </div>
+            ) : null}
           </div>
           <DialogFooter>
             <DialogClose

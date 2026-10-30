@@ -31,10 +31,14 @@ import {
 } from "@/components/ui/number-field";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { previewEffectiveNodes } from "@/lib/access-impact";
 import { m } from "@/paraglide/messages";
 import type { GroupListItem } from "@/query/groups";
 import { GROUPS_QUERY_KEY, listGroups } from "@/query/groups";
+import { listNodes, NODES_QUERY_KEY } from "@/query/nodes";
+import { EffectiveNodePreviewPanel } from "@/routes/(admin)/admin/proxies/groups/_modules/effective-node-preview";
 
+import { PlanImpactPanel } from "./plan-impact-panel";
 import { type PlanWithGroups, usePlanFormController } from "./use-plan-form";
 
 const PLANS_LIST = "/admin/plans" as const;
@@ -55,11 +59,27 @@ export function PlanFormPage({ plan }: PlanFormPageProps): React.ReactElement {
     onSuccess: goToList,
   });
 
-  const { data: groups } = useQuery({
+  const {
+    data: groups,
+    isError: groupsFailed,
+    isSuccess: groupsLoaded,
+  } = useQuery({
     queryKey: GROUPS_QUERY_KEY,
     queryFn: () => listGroups(),
   });
+  const { data: nodes, isError: nodesFailed } = useQuery({
+    queryKey: NODES_QUERY_KEY,
+    queryFn: () => listNodes(),
+  });
   const groupOptions = React.useMemo(() => groups ?? [], [groups]);
+  const groupNames = React.useMemo(
+    () => new Map(groupOptions.map((g) => [g.id, g.name])),
+    [groupOptions],
+  );
+  const nodeNames = React.useMemo(
+    () => new Map((nodes ?? []).map((n) => [n.id, n.name])),
+    [nodes],
+  );
 
   return (
     <div className="flex flex-col">
@@ -209,6 +229,9 @@ export function PlanFormPage({ plan }: PlanFormPageProps): React.ReactElement {
                         <NumberFieldIncrement />
                       </NumberFieldGroup>
                     </NumberField>
+                    <p className="text-xs text-muted-foreground">
+                      {m.admin_access_device_not_enforced()}
+                    </p>
                   </Field>
                 )}
               </form.Field>
@@ -291,6 +314,35 @@ export function PlanFormPage({ plan }: PlanFormPageProps): React.ReactElement {
                         </ComboboxList>
                       </ComboboxPopup>
                     </Combobox>
+                    {groupsLoaded && groupOptions.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        {m.admin_access_no_groups()}{" "}
+                        <Link
+                          className="underline underline-offset-4"
+                          rel="noopener noreferrer"
+                          target="_blank"
+                          to="/admin/proxies/groups/new"
+                        >
+                          {m.admin_access_create_group()}
+                        </Link>{" "}
+                        {m.admin_access_new_tab_hint()}
+                      </p>
+                    ) : selected.length > 0 ? (
+                      <p className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
+                        {selected.map((g) => (
+                          <Link
+                            key={g.id}
+                            className="underline underline-offset-4"
+                            params={{ groupId: g.id }}
+                            rel="noopener noreferrer"
+                            target="_blank"
+                            to="/admin/proxies/groups/$groupId"
+                          >
+                            {g.name}
+                          </Link>
+                        ))}
+                      </p>
+                    ) : null}
                   </Field>
                 );
               }}
@@ -308,6 +360,41 @@ export function PlanFormPage({ plan }: PlanFormPageProps): React.ReactElement {
               )}
             </form.Field>
           </div>
+
+          <form.Subscribe selector={(s) => s.values}>
+            {(values) => (
+              <>
+                {plan ? (
+                  <PlanImpactPanel
+                    groups={groupOptions}
+                    nodeNames={nodeNames}
+                    plan={plan}
+                    values={values}
+                  />
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    {m.admin_access_snapshot_note()}
+                  </p>
+                )}
+                <EffectiveNodePreviewPanel
+                  emptyMessage={m.admin_access_preview_empty_plan()}
+                  groupNames={groupNames}
+                  hasSelection={values.groupIds.length > 0}
+                  isError={groupsFailed || nodesFailed}
+                  noNodesMessage={m.admin_access_preview_no_nodes()}
+                  preview={
+                    groups && nodes
+                      ? previewEffectiveNodes({
+                          groupIds: values.groupIds,
+                          groups,
+                          nodes,
+                        })
+                      : undefined
+                  }
+                />
+              </>
+            )}
+          </form.Subscribe>
         </div>
       </form>
     </div>

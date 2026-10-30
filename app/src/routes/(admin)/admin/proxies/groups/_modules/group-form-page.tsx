@@ -28,10 +28,13 @@ import {
   NumberFieldIncrement,
   NumberFieldInput,
 } from "@/components/ui/number-field";
+import { previewNodeSelection } from "@/lib/access-impact";
 import { m } from "@/paraglide/messages";
 import type { NodeListItem } from "@/query/nodes";
 import { listNodes, NODES_QUERY_KEY } from "@/query/nodes";
 
+import { EffectiveNodePreviewPanel } from "./effective-node-preview";
+import { GroupImpactPanel } from "./group-impact-panel";
 import { type GroupWithNodes, useGroupFormController } from "./use-group-form";
 
 const GROUPS_LIST = "/admin/proxies/groups" as const;
@@ -54,11 +57,19 @@ export function GroupFormPage({
     onSuccess: goToList,
   });
 
-  const { data: nodes } = useQuery({
+  const {
+    data: nodes,
+    isError: nodesFailed,
+    isSuccess: nodesLoaded,
+  } = useQuery({
     queryKey: NODES_QUERY_KEY,
     queryFn: () => listNodes(),
   });
   const nodeOptions = React.useMemo(() => nodes ?? [], [nodes]);
+  const nodeNames = React.useMemo(
+    () => new Map(nodeOptions.map((n) => [n.id, n.name])),
+    [nodeOptions],
+  );
 
   return (
     <div className="flex flex-col">
@@ -212,11 +223,53 @@ export function GroupFormPage({
                         </ComboboxList>
                       </ComboboxPopup>
                     </Combobox>
+                    {nodesLoaded && nodeOptions.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        {m.admin_access_no_nodes_hint()}{" "}
+                        <Link
+                          className="underline underline-offset-4"
+                          rel="noopener noreferrer"
+                          target="_blank"
+                          to="/admin/proxies/nodes/new"
+                        >
+                          {m.admin_access_create_node()}
+                        </Link>{" "}
+                        {m.admin_access_new_tab_hint()}
+                      </p>
+                    ) : null}
                   </Field>
                 );
               }}
             </form.Field>
           </div>
+
+          <form.Subscribe selector={(s) => s.values.nodeIds}>
+            {(selectedNodeIds) => (
+              <>
+                {group ? (
+                  <GroupImpactPanel
+                    groupId={group.id}
+                    nodeNames={nodeNames}
+                    savedNodeIds={group.nodeIds}
+                    selectedNodeIds={selectedNodeIds}
+                  />
+                ) : null}
+                <EffectiveNodePreviewPanel
+                  emptyMessage={m.admin_access_preview_empty_group()}
+                  hasSelection={selectedNodeIds.length > 0}
+                  isError={nodesFailed}
+                  preview={
+                    nodes
+                      ? previewNodeSelection({
+                          nodeIds: selectedNodeIds,
+                          nodes,
+                        })
+                      : undefined
+                  }
+                />
+              </>
+            )}
+          </form.Subscribe>
         </div>
       </form>
     </div>

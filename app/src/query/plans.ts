@@ -4,12 +4,13 @@ import {
   updatePlanSchema,
 } from "@blossom/contracts/plan";
 import { createServerFn } from "@tanstack/react-start";
-import { asc, count, desc, eq } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
 import { db } from "@/db";
 import { plan, planGroup, subscription } from "@/db/plan-schema";
 import { redeemBatch } from "@/db/redeem-schema";
+import type { PlanImpact } from "@/lib/access-impact";
 import { fromInput, fromResult } from "@/lib/admin-audit";
 import { adminAudit } from "@/lib/admin-audit-middleware";
 import { ensureAdmin } from "@/lib/ensure-admin";
@@ -24,21 +25,36 @@ export const PLANS_QUERY_KEY = ["admin", "plans"] as const;
 
 export const listPlans = createServerFn({ method: "GET" }).handler(async () => {
   await ensureAdmin();
-  const [plans, groupCounts] = await Promise.all([
+  const [plans, bindings, subscriptionCounts] = await Promise.all([
     db.select().from(plan).orderBy(asc(plan.sortOrder), desc(plan.createdAt)),
     db
-      .select({ planId: planGroup.planId, count: count() })
-      .from(planGroup)
-      .groupBy(planGroup.planId),
+      .select({ planId: planGroup.planId, groupId: planGroup.groupId })
+      .from(planGroup),
+    db
+      .select({ planId: subscription.planId, count: count() })
+      .from(subscription)
+      .groupBy(subscription.planId),
   ]);
 
-  const groupCountByPlan = new Map(
-    groupCounts.map((row) => [row.planId, row.count]),
+  // Group ids ride along so pickers can preview the nodes a plan resolves to.
+  const groupIdsByPlan = new Map<string, string[]>();
+  for (const { planId, groupId } of bindings) {
+    const list = groupIdsByPlan.get(planId) ?? [];
+    list.push(groupId);
+    groupIdsByPlan.set(planId, list);
+  }
+  const subscriptionCountByPlan = new Map(
+    subscriptionCounts.map((row) => [row.planId, row.count]),
   );
-  return plans.map((row) => ({
-    ...row,
-    groupCount: groupCountByPlan.get(row.id) ?? 0,
-  }));
+  return plans.map((row) => {
+    const groupIds = groupIdsByPlan.get(row.id) ?? [];
+    return {
+      ...row,
+      groupIds,
+      groupCount: groupIds.length,
+      subscriptionCount: subscriptionCountByPlan.get(row.id) ?? 0,
+    };
+  });
 });
 
 export type PlanListItem = Awaited<ReturnType<typeof listPlans>>[number];
@@ -56,6 +72,44 @@ export const getPlan = createServerFn({ method: "GET" })
       .from(planGroup)
       .where(eq(planGroup.planId, data.id));
     return { ...row, groupIds: bindings.map((binding) => binding.groupId) };
+  });
+
+/**
+ * Read-only: what refers to a plan, so the edit page and delete confirmation
+ * can show it. These mirror the checks `deletePlan` makes, but the mutation
+ * re-checks on its own; nothing here is a guarantee.
+ */
+export const getPlanImpact = createServerFn({ method: "GET" })
+  .validator(planIdSchema)
+  .handler(async ({ data }): Promise<PlanImpact> => {
+    await ensureAdmin();
+    const [[subs], [activeSubs], [batches], { trial }] = await Promise.all([
+      db
+        .select({ count: count() })
+        .from(subscription)
+        .where(eq(subscription.planId, data.id)),
+      db
+        .select({ count: count() })
+        .from(subscription)
+        .where(
+          and(
+            eq(subscription.planId, data.id),
+            eq(subscription.status, "active"),
+            gt(subscription.expiresAt, new Date()),
+          ),
+        ),
+      db
+        .select({ count: count() })
+        .from(redeemBatch)
+        .where(eq(redeemBatch.planId, data.id)),
+      getSettings(),
+    ]);
+    return {
+      subscriptionCount: subs.count,
+      activeSubscriptionCount: activeSubs.count,
+      redeemBatchCount: batches.count,
+      isTrialPlan: trial.planId === data.id,
+    };
   });
 
 export const createPlan = createServerFn({ method: "POST" })

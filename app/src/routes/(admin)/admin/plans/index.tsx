@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Confirm } from "@/components/ui/confirm";
 import {
   Empty,
+  EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
@@ -39,10 +40,16 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toastManager } from "@/components/ui/toast";
+import {
+  type PlanDeleteBlocker,
+  planDeleteBlockers,
+} from "@/lib/access-impact";
 import { formatAmount, formatTraffic } from "@/lib/format";
 import { m } from "@/paraglide/messages";
+import { GROUPS_QUERY_KEY, listGroups } from "@/query/groups";
 import {
   deletePlan,
+  getPlanImpact,
   listPlans,
   type PlanListItem,
   PLANS_QUERY_KEY,
@@ -63,6 +70,11 @@ function RouteComponent(): React.ReactElement {
     queryFn: () => listPlans(),
   });
 
+  const { data: groups } = useQuery({
+    queryKey: GROUPS_QUERY_KEY,
+    queryFn: () => listGroups(),
+  });
+
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deletePlan({ data: { id } }),
     onSuccess: async () => {
@@ -79,12 +91,54 @@ function RouteComponent(): React.ReactElement {
           ? m.admin_plans_delete_blocked_trial()
           : error.message.includes("subscriptions")
             ? m.admin_plans_delete_blocked()
-            : m.admin_plans_toast_error(),
+            : error.message.includes("redeem batches")
+              ? m.admin_access_plan_delete_blocker_redeem_toast()
+              : m.admin_plans_toast_error(),
       });
     },
   });
 
   const requestDelete = async (plan: PlanListItem) => {
+    // Advisory read: the server re-checks these at delete time.
+    const impact = await getPlanImpact({ data: { id: plan.id } }).catch(
+      () => undefined,
+    );
+    const blockers = impact ? planDeleteBlockers(impact) : [];
+    if (impact && blockers.length > 0) {
+      const reason: Record<PlanDeleteBlocker, string> = {
+        trial: m.admin_access_plan_delete_blocker_trial(),
+        subscriptions: m.admin_access_plan_delete_blocker_subscriptions({
+          count: impact.subscriptionCount,
+        }),
+        redeem_batches: m.admin_access_plan_delete_blocker_redeem({
+          count: impact.redeemBatchCount,
+        }),
+      };
+      // Nothing destructive to confirm: explain, and offer the way to the
+      // subscriptions that are in the way.
+      const viewSubscriptions =
+        blockers.includes("subscriptions") && impact.subscriptionCount > 0;
+      await Confirm.call({
+        title: m.admin_access_plan_delete_blocked_title(),
+        description: [
+          m.admin_access_plan_delete_blocked_intro(),
+          ...blockers.map((blocker) => reason[blocker]),
+        ].join(" "),
+        confirmLabel: viewSubscriptions
+          ? m.admin_access_view_subscriptions()
+          : m.admin_access_close(),
+        cancelLabel: m.admin_access_close(),
+        onConfirm: async () => {
+          if (viewSubscriptions) {
+            await navigate({
+              to: "/admin/subscriptions",
+              search: { plan: plan.id },
+            });
+          }
+        },
+      });
+      return;
+    }
     await Confirm.call({
       title: m.admin_plans_delete_title(),
       description: m.admin_plans_delete_description(),
@@ -147,7 +201,29 @@ function RouteComponent(): React.ReactElement {
     }),
     columnHelper.accessor("groupCount", {
       header: () => m.admin_plans_col_groups(),
-      cell: (info) => <Badge variant="outline">{info.getValue()}</Badge>,
+      cell: (info) =>
+        info.getValue() === 0 ? (
+          <Badge variant="warning" title={m.admin_access_plan_no_groups_hint()}>
+            {m.admin_access_plan_no_groups()}
+          </Badge>
+        ) : (
+          <Badge variant="outline">{info.getValue()}</Badge>
+        ),
+    }),
+    columnHelper.accessor("subscriptionCount", {
+      header: () => m.admin_plans_col_subscriptions(),
+      cell: (info) =>
+        info.getValue() === 0 ? (
+          <Badge variant="outline">0</Badge>
+        ) : (
+          <Link
+            className="underline-offset-4 hover:underline"
+            search={{ plan: info.row.original.id }}
+            to="/admin/subscriptions"
+          >
+            <Badge variant="outline">{info.getValue()}</Badge>
+          </Link>
+        ),
     }),
     columnHelper.accessor("visible", {
       header: () => m.admin_plans_col_visible(),
@@ -269,11 +345,26 @@ function RouteComponent(): React.ReactElement {
               <PackageIcon />
             </EmptyMedia>
             <EmptyTitle>{m.admin_plans_empty_title()}</EmptyTitle>
+            <EmptyDescription>
+              {groups && groups.length === 0
+                ? m.admin_access_plans_empty_need_groups()
+                : m.admin_access_plans_empty_description()}
+            </EmptyDescription>
           </EmptyHeader>
-          <Button render={<Link to="/admin/plans/new" />}>
-            <PlusIcon />
-            {m.admin_plans_add()}
-          </Button>
+          <div className="flex flex-wrap justify-center gap-2">
+            {groups && groups.length === 0 ? (
+              <Button
+                variant="outline"
+                render={<Link to="/admin/proxies/groups/new" />}
+              >
+                {m.admin_access_create_group()}
+              </Button>
+            ) : null}
+            <Button render={<Link to="/admin/plans/new" />}>
+              <PlusIcon />
+              {m.admin_plans_add()}
+            </Button>
+          </div>
         </Empty>
       )}
     </div>

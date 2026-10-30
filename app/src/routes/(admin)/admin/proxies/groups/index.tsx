@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Confirm } from "@/components/ui/confirm";
 import {
   Empty,
+  EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
@@ -42,10 +43,12 @@ import { toastManager } from "@/components/ui/toast";
 import { m } from "@/paraglide/messages";
 import {
   deleteGroup,
+  getGroupImpact,
   type GroupListItem,
   GROUPS_QUERY_KEY,
   listGroups,
 } from "@/query/groups";
+import { listNodes, NODES_QUERY_KEY } from "@/query/nodes";
 
 export const Route = createFileRoute("/(admin)/admin/proxies/groups/")({
   component: RouteComponent,
@@ -60,6 +63,11 @@ function RouteComponent(): React.ReactElement {
   const { data: groups, isPending } = useQuery({
     queryKey: GROUPS_QUERY_KEY,
     queryFn: () => listGroups(),
+  });
+
+  const { data: nodes } = useQuery({
+    queryKey: NODES_QUERY_KEY,
+    queryFn: () => listNodes(),
   });
 
   const deleteMutation = useMutation({
@@ -80,9 +88,24 @@ function RouteComponent(): React.ReactElement {
   });
 
   const requestDelete = async (group: GroupListItem) => {
+    // Advisory read: if it fails the confirmation still works, and the server
+    // decides the outcome either way.
+    const impact = await getGroupImpact({ data: { id: group.id } }).catch(
+      () => undefined,
+    );
+    const impactText = !impact
+      ? ""
+      : impact.plans.length === 0
+        ? m.admin_access_group_delete_unused()
+        : m.admin_access_group_delete_used({
+            plans: impact.plans.map((plan) => plan.name).join(", "),
+            subscriptions: impact.subscriptionCount,
+          });
     await Confirm.call({
       title: m.admin_proxies_groups_delete_title(),
-      description: m.admin_proxies_groups_delete_description(),
+      description: [m.admin_proxies_groups_delete_description(), impactText]
+        .filter(Boolean)
+        .join(" "),
       confirmLabel: m.admin_proxies_groups_action_delete(),
       cancelLabel: m.admin_proxies_groups_form_cancel(),
       destructive: true,
@@ -115,11 +138,29 @@ function RouteComponent(): React.ReactElement {
     }),
     columnHelper.accessor("nodeCount", {
       header: () => m.admin_proxies_groups_col_nodes(),
-      cell: (info) => <Badge variant="outline">{info.getValue()}</Badge>,
+      cell: (info) => (
+        <div className="flex items-center gap-2">
+          <Badge variant="outline">{info.getValue()}</Badge>
+          {info.getValue() === 0 ? (
+            <span className="text-xs text-muted-foreground">
+              {m.admin_access_group_list_empty()}
+            </span>
+          ) : null}
+        </div>
+      ),
     }),
     columnHelper.accessor("planCount", {
       header: () => m.admin_proxies_groups_col_plans(),
-      cell: (info) => <Badge variant="outline">{info.getValue()}</Badge>,
+      cell: (info) => (
+        <div className="flex items-center gap-2">
+          <Badge variant="outline">{info.getValue()}</Badge>
+          {info.getValue() === 0 ? (
+            <span className="text-xs text-muted-foreground">
+              {m.admin_access_group_list_unused()}
+            </span>
+          ) : null}
+        </div>
+      ),
     }),
     columnHelper.accessor("createdAt", {
       header: () => m.admin_proxies_groups_col_created(),
@@ -228,11 +269,26 @@ function RouteComponent(): React.ReactElement {
               <FolderIcon />
             </EmptyMedia>
             <EmptyTitle>{m.admin_proxies_groups_empty_title()}</EmptyTitle>
+            <EmptyDescription>
+              {nodes && nodes.length === 0
+                ? m.admin_access_groups_empty_need_nodes()
+                : m.admin_access_groups_empty_description()}
+            </EmptyDescription>
           </EmptyHeader>
-          <Button render={<Link to="/admin/proxies/groups/new" />}>
-            <PlusIcon />
-            {m.admin_proxies_groups_add()}
-          </Button>
+          <div className="flex flex-wrap justify-center gap-2">
+            {nodes && nodes.length === 0 ? (
+              <Button
+                variant="outline"
+                render={<Link to="/admin/proxies/nodes/new" />}
+              >
+                {m.admin_access_create_node()}
+              </Button>
+            ) : null}
+            <Button render={<Link to="/admin/proxies/groups/new" />}>
+              <PlusIcon />
+              {m.admin_proxies_groups_add()}
+            </Button>
+          </div>
         </Empty>
       )}
     </div>
