@@ -2,6 +2,8 @@
 
 Working notes for people and coding agents changing Blossom. [`AGENTS.md`](../../AGENTS.md) is the short entry point; these guides hold the detail. For setup, deployment and environment variables, start with the [root README](../../README.md).
 
+For the proposed product improvements and their worker task contracts, see the [product improvement plan](../roadmap/README.md). It is a plan, not a description of current behavior.
+
 ## Choose a guide
 
 | When you are working on                                                           | Read                                    |
