@@ -150,6 +150,14 @@ export const getAgentConfigV3 = agentProcedure
       managedTlsBindings,
     );
 
+    // `context.server` (and so the sequence below) was read in the auth
+    // middleware, BEFORE the config above was compiled. Keep that order: a
+    // gate-recorded change commits atomically with its rows, so reading the
+    // sequence first can only pair it with the same or NEWER content (the
+    // subscription then lags, which is safe); reading content first could pair
+    // a newer sequence with older credentials. See
+    // subscription-credential-rotation.integration.test.ts.
+    //
     // The revision pairs the server's monotonic publish-gate sequence with
     // the content hash. The agent treats it as opaque (equality + content
     // byte-compare only); the subscription gate parses the seq prefix back

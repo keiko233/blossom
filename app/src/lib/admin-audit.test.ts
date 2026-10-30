@@ -60,6 +60,10 @@ describe("getActionFamily", () => {
 const USER_FACING_POST_FNS: Readonly<Record<string, string>> = {
   "redeem-user.ts:redeemCode":
     "A user redeeming their own code; acts only on the session user's data.",
+  "subscription-self-service.ts:rotateOwnSubscriptionToken":
+    "An owner rotating their own subscription link; owner comes from the session and the row is scoped to it.",
+  "subscription-self-service.ts:rotateOwnSubscriptionCredentials":
+    "An owner rotating their own proxy credentials; owner comes from the session and the row is scoped to it.",
 };
 
 describe("every admin POST server function is audited", () => {

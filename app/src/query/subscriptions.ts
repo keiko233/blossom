@@ -18,22 +18,16 @@ import { bulkMetadata, fromInput, fromResult } from "@/lib/admin-audit";
 import { adminAudit } from "@/lib/admin-audit-middleware";
 import { ensureAdmin } from "@/lib/ensure-admin";
 import { resolveBulkPatch } from "@/lib/subscription-bulk";
-import {
-  generateSubscriptionCredentials,
-  generateSubscriptionToken,
-} from "@/lib/subscription-credentials";
 import { subscriptionsToCsv } from "@/lib/subscription-csv";
 import {
   buildSubscriptionOrderBy,
   buildSubscriptionWhere,
 } from "@/lib/subscription-filters";
 import {
-  listServerIdsForSubscriptionId,
-  recordConfigChange,
-} from "@/query/config-change";
-import {
   applySubscriptionUpdate,
   insertSubscription,
+  rotateSubscriptionCredentials,
+  rotateSubscriptionToken,
 } from "@/query/subscription-write";
 
 /** TanStack Query key for the admin subscription list. */
@@ -162,36 +156,7 @@ export const resetSubscriptionCredentials = createServerFn({ method: "POST" })
   .validator(subscriptionIdSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
-    const [existing] = await db
-      .select()
-      .from(subscription)
-      .where(eq(subscription.id, data.id));
-    if (!existing) {
-      throw new Error("Not found");
-    }
-    const credentials = generateSubscriptionCredentials();
-    const [row] = await db
-      .update(subscription)
-      .set({
-        credentialUuid: credentials.uuid,
-        credentialPassword: credentials.password,
-      })
-      .where(eq(subscription.id, data.id))
-      .returning();
-    if (!row) {
-      throw new Error("Not found");
-    }
-    // Publish gate: subscriptions keep emitting the previous credentials for
-    // nodes on servers that have not applied the rotation yet.
-    await recordConfigChange(db, {
-      kind: "credential",
-      subjectId: data.id,
-      prevRow: {
-        credentialUuid: existing.credentialUuid,
-        credentialPassword: existing.credentialPassword,
-      },
-      serverIds: await listServerIdsForSubscriptionId(db, data.id),
-    });
+    const { row } = await rotateSubscriptionCredentials(data.id);
     return row;
   });
 
@@ -210,15 +175,7 @@ export const refreshSubscriptionToken = createServerFn({ method: "POST" })
   .validator(subscriptionIdSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
-    const [row] = await db
-      .update(subscription)
-      .set({ token: generateSubscriptionToken() })
-      .where(eq(subscription.id, data.id))
-      .returning();
-    if (!row) {
-      throw new Error("Not found");
-    }
-    return row;
+    return rotateSubscriptionToken(data.id);
   });
 
 async function removeSubscription(id: string): Promise<{ id: string }> {
