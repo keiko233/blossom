@@ -40,6 +40,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toastManager } from "@/components/ui/toast";
+import {
+  filterNodesByServer,
+  serverContextSearchSchema,
+} from "@/lib/server-node-context";
 import { m } from "@/paraglide/messages";
 import {
   deleteNode,
@@ -47,9 +51,10 @@ import {
   NODES_QUERY_KEY,
   type NodeListItem,
 } from "@/query/nodes";
-import { SERVERS_QUERY_KEY } from "@/query/servers";
+import { listServers, SERVERS_QUERY_KEY } from "@/query/servers";
 
 export const Route = createFileRoute("/(admin)/admin/proxies/nodes/")({
+  validateSearch: serverContextSearchSchema,
   component: RouteComponent,
 });
 
@@ -58,12 +63,27 @@ const columnHelper = createColumnHelper<NodeListItem>();
 function RouteComponent(): React.ReactElement {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const { serverId } = Route.useSearch();
 
-  const { data: nodes, isPending } = useQuery({
+  const { data: allNodes, isPending } = useQuery({
     queryKey: NODES_QUERY_KEY,
     queryFn: () => listNodes(),
     refetchInterval: 15_000,
   });
+  // Only needed to name (or recognise) the server a filtered view is for.
+  const { data: servers } = useQuery({
+    queryKey: SERVERS_QUERY_KEY,
+    queryFn: () => listServers(),
+    enabled: Boolean(serverId),
+  });
+  const filterServer = serverId
+    ? servers?.find((server) => server.id === serverId)
+    : undefined;
+  // `servers` is undefined until it loads; only then can a missing server be
+  // told apart from one that is still loading.
+  const filterServerMissing =
+    Boolean(serverId) && servers !== undefined && !filterServer;
+  const nodes = allNodes && filterNodesByServer(allNodes, serverId);
 
   const invalidate = () =>
     Promise.all([
@@ -294,11 +314,40 @@ function RouteComponent(): React.ReactElement {
       <PageHeader>
         <PageHeaderTitle>{m.admin_nav_proxies_item_nodes()}</PageHeaderTitle>
 
-        <Button render={<Link to="/admin/proxies/nodes/new" />}>
+        <Button
+          render={
+            <Link
+              to="/admin/proxies/nodes/new"
+              search={filterServer ? { serverId: filterServer.id } : {}}
+            />
+          }
+        >
           <PlusIcon />
           {m.admin_proxies_nodes_add()}
         </Button>
       </PageHeader>
+
+      {serverId ? (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/20 px-3 py-2 text-sm">
+          {filterServer ? (
+            <span>
+              {m.admin_proxies_nodes_filter_server({
+                server: filterServer.name,
+              })}
+            </span>
+          ) : filterServerMissing ? (
+            <span className="text-destructive">
+              {m.admin_proxies_nodes_filter_server_missing()}
+            </span>
+          ) : null}
+          <Link
+            to="/admin/proxies/nodes"
+            className="text-xs underline underline-offset-4"
+          >
+            {m.admin_proxies_nodes_filter_clear()}
+          </Link>
+        </div>
+      ) : null}
 
       {isPending ? (
         <div className="flex justify-center py-16">
@@ -334,21 +383,38 @@ function RouteComponent(): React.ReactElement {
             ))}
           </TableBody>
         </Table>
-      ) : (
+      ) : filterServerMissing ? null : (
         <Empty>
           <EmptyHeader>
             <EmptyMedia variant="icon">
               <ServerIcon />
             </EmptyMedia>
-            <EmptyTitle>{m.admin_proxies_nodes_empty_title()}</EmptyTitle>
+            <EmptyTitle>
+              {filterServer
+                ? m.admin_proxies_nodes_empty_for_server()
+                : m.admin_proxies_nodes_empty_title()}
+            </EmptyTitle>
           </EmptyHeader>
 
-          <Button render={<Link to="/admin/proxies/nodes/new" />}>
+          <Button
+            render={
+              <Link
+                to="/admin/proxies/nodes/new"
+                search={filterServer ? { serverId: filterServer.id } : {}}
+              />
+            }
+          >
             <PlusIcon />
             {m.admin_proxies_nodes_add()}
           </Button>
         </Empty>
       )}
+
+      {nodes && nodes.length > 0 ? (
+        <p className="text-xs text-muted-foreground">
+          {m.admin_proxies_nodes_status_note()}
+        </p>
+      ) : null}
     </div>
   );
 }

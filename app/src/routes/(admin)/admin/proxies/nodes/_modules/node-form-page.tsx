@@ -1,3 +1,4 @@
+import { isAgentReachable } from "@blossom/domain/agent-status";
 import { isCertificateCurrentlyUsable } from "@blossom/domain/certificate-domain";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -40,11 +41,18 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs";
 import {
+  classifyNodeCertificateUsage,
+  describeNodeCertificateDeployment,
+  summarizeCertificateChoices,
+} from "@/lib/node-certificate-context";
+import { resolveCreateServerId } from "@/lib/server-node-context";
+import {
   isNodeRealityEnabled,
   isNodeTlsEnabled,
   MANAGED_CERTIFICATE_TLS_FIELDS,
   NODE_PROTOCOLS,
   type NodeProtocol,
+  protocolSupportsTls,
   settingsSchemaFor,
 } from "@/orpc/proxy/sing-box-registry";
 import { m } from "@/paraglide/messages";
@@ -52,6 +60,7 @@ import { CERTIFICATES_QUERY_KEY, listCertificates } from "@/query/certificates";
 import type { NodeDetail } from "@/query/nodes";
 import { listServers, SERVERS_QUERY_KEY } from "@/query/servers";
 
+import { NodeCertificateGuidance } from "./node-certificate-guidance";
 import { settingsDefaults, useNodeFormController } from "./use-node-form";
 
 const NODES_LIST = "/admin/proxies/nodes" as const;
@@ -60,58 +69,127 @@ const SERVERS_NEW = "/admin/proxies/servers/new" as const;
 export interface NodeFormPageProps {
   /** Present when editing; absent for the create page. */
   node?: NodeDetail;
+  /**
+   * Server named by the link that opened the create page. It is only a
+   * starting point: an explicit selection in the form always wins, and a
+   * server that no longer exists is reported instead of replaced.
+   */
+  requestedServerId?: string;
 }
 
-export function NodeFormPage({ node }: NodeFormPageProps): React.ReactElement {
+export function NodeFormPage({
+  node,
+  requestedServerId,
+}: NodeFormPageProps): React.ReactElement {
   const navigate = useNavigate();
   const isEdit = Boolean(node);
 
-  const goToList = () => void navigate({ to: NODES_LIST });
-
-  const { data: servers, isPending: isServersPending } = useQuery({
+  const {
+    data: servers,
+    isPending: isServersPending,
+    isError: isServersError,
+    refetch: refetchServers,
+  } = useQuery({
     queryKey: SERVERS_QUERY_KEY,
     queryFn: () => listServers(),
   });
-  const { data: certificates } = useQuery({
+  const {
+    data: certificates,
+    isFetching: isCertificatesFetching,
+    refetch: refetchCertificates,
+  } = useQuery({
     queryKey: CERTIFICATES_QUERY_KEY,
     queryFn: () => listCertificates(),
   });
 
+  const serverOptions = servers ?? [];
+  // Only a server that still exists counts as list context; it keeps the way
+  // back on that server's node list.
+  const contextServerId =
+    !isEdit && serverOptions.some((s) => s.id === requestedServerId)
+      ? requestedServerId
+      : undefined;
+  const listSearch = contextServerId ? { serverId: contextServerId } : {};
+
   const formController = useNodeFormController({
     node,
-    onSuccess: goToList,
+    onSuccess: (values) =>
+      void navigate({
+        to: NODES_LIST,
+        search:
+          !isEdit && values.serverId === contextServerId ? listSearch : {},
+      }),
   });
   const { form } = formController;
-  const serverOptions = servers ?? [];
-  const firstServerId = servers?.[0]?.id;
 
   // Certificate selection is open to every currently usable/issued certificate
   // — the server no longer has to pre-authorize bindings. Selecting one is the
   // one-time "bind and use" operation: the control plane enables the deployment
   // row on save.
-  const usableCertificates = (certificates ?? []).filter((certificate) =>
-    isCertificateCurrentlyUsable(
-      {
-        activeMaterialVersion: certificate.activeMaterialVersion,
-        notBefore: certificate.notBefore,
-        notAfter: certificate.notAfter,
-      },
-      certificate.activeMaterialVersion !== null,
-    ),
-  );
+  const { usable: usableCertificates, unusableCount } =
+    summarizeCertificateChoices(certificates ?? [], (certificate) =>
+      isCertificateCurrentlyUsable(
+        {
+          activeMaterialVersion: certificate.activeMaterialVersion,
+          notBefore: certificate.notBefore,
+          notAfter: certificate.notAfter,
+        },
+        certificate.activeMaterialVersion !== null,
+      ),
+    );
 
-  // The form is created before the server query necessarily resolves. Select
-  // the first server once on create, without mutating form state during render.
+  // Heartbeat recency only: it says whether the agent is still reporting, not
+  // that clients can connect.
+  const agentReachableFor = (serverId: string): boolean | undefined => {
+    const owner = serverOptions.find((item) => item.id === serverId);
+    return owner ? isAgentReachable(owner) : undefined;
+  };
+
+  // The form is created before the server query necessarily resolves. Once it
+  // does, start a new node on the linked server (or the first one without a
+  // link), without mutating form state during render. A server the admin
+  // already chose is never replaced.
   useEffect(() => {
-    if (!isEdit && !form.store.state.values.serverId && firstServerId) {
-      form.setFieldValue("serverId", firstServerId);
+    if (isEdit || !servers) {
+      return;
     }
-  }, [firstServerId, form, isEdit]);
+    const current = form.store.state.values.serverId;
+    const { serverId } = resolveCreateServerId({
+      requestedServerId,
+      currentServerId: current,
+      servers,
+    });
+    if (serverId !== current) {
+      form.setFieldValue("serverId", serverId);
+    }
+  }, [servers, requestedServerId, form, isEdit]);
 
   if (isServersPending) {
     return (
       <div className="flex min-h-40 items-center justify-center p-4">
         <Spinner />
+      </div>
+    );
+  }
+
+  // A failed server list is not "no servers": say so instead of offering to
+  // create one.
+  if (isServersError && !servers) {
+    return (
+      <div className="p-4">
+        <Empty>
+          <EmptyHeader>
+            <EmptyTitle>
+              {m.admin_proxies_nodes_form_servers_error_title()}
+            </EmptyTitle>
+            <EmptyDescription>
+              {m.admin_proxies_nodes_form_servers_error_description()}
+            </EmptyDescription>
+          </EmptyHeader>
+          <Button onClick={() => void refetchServers()}>
+            {m.admin_proxies_nodes_form_servers_error_action()}
+          </Button>
+        </Empty>
       </div>
     );
   }
@@ -126,7 +204,7 @@ export function NodeFormPage({ node }: NodeFormPageProps): React.ReactElement {
             variant="ghost"
             size="icon"
             aria-label={m.admin_proxies_nodes_form_back()}
-            render={<Link to={NODES_LIST} />}
+            render={<Link to={NODES_LIST} search={listSearch} />}
           >
             <ArrowLeftIcon />
           </Button>
@@ -143,6 +221,11 @@ export function NodeFormPage({ node }: NodeFormPageProps): React.ReactElement {
               <EmptyDescription>
                 {m.admin_proxies_nodes_form_no_server_description()}
               </EmptyDescription>
+              {requestedServerId ? (
+                <EmptyDescription className="text-destructive">
+                  {m.admin_proxies_nodes_form_server_missing()}
+                </EmptyDescription>
+              ) : null}
             </EmptyHeader>
             <Button render={<Link to={SERVERS_NEW} />}>
               {m.admin_proxies_nodes_form_no_server_action()}
@@ -161,7 +244,7 @@ export function NodeFormPage({ node }: NodeFormPageProps): React.ReactElement {
             variant="ghost"
             size="icon"
             aria-label={m.admin_proxies_nodes_form_back()}
-            render={<Link to={NODES_LIST} />}
+            render={<Link to={NODES_LIST} search={listSearch} />}
           >
             <ArrowLeftIcon />
           </Button>
@@ -172,7 +255,10 @@ export function NodeFormPage({ node }: NodeFormPageProps): React.ReactElement {
           </PageHeaderTitle>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="ghost" render={<Link to={NODES_LIST} />}>
+          <Button
+            variant="ghost"
+            render={<Link to={NODES_LIST} search={listSearch} />}
+          >
             {m.admin_proxies_nodes_form_cancel()}
           </Button>
           <form.Subscribe
@@ -329,6 +415,16 @@ export function NodeFormPage({ node }: NodeFormPageProps): React.ReactElement {
                               )}
                             </SelectPopup>
                           </Select>
+                          {!isEdit &&
+                          resolveCreateServerId({
+                            requestedServerId,
+                            currentServerId: field.state.value,
+                            servers: serverOptions,
+                          }).notice === "requested_missing" ? (
+                            <p className="text-xs text-destructive">
+                              {m.admin_proxies_nodes_form_server_missing()}
+                            </p>
+                          ) : null}
                         </Field>
                       )}
                     </form.Field>
@@ -426,6 +522,11 @@ export function NodeFormPage({ node }: NodeFormPageProps): React.ReactElement {
                               ))}
                             </SelectPopup>
                           </Select>
+                          {!protocolSupportsTls(field.state.value) ? (
+                            <p className="text-xs text-muted-foreground">
+                              {m.admin_proxies_nodes_tls_protocol_help()}
+                            </p>
+                          ) : null}
                         </Field>
                       )}
                     </form.Field>
@@ -452,12 +553,33 @@ export function NodeFormPage({ node }: NodeFormPageProps): React.ReactElement {
                         <form.Subscribe
                           selector={(state) => ({
                             settings: state.values.settings,
+                            certificateId: state.values.certificateId,
+                            serverId: state.values.serverId,
                           })}
                         >
-                          {({ settings }) => {
+                          {({ settings, certificateId, serverId }) => {
                             const tlsEnabled = isNodeTlsEnabled(settings);
                             const realityEnabled =
                               isNodeRealityEnabled(settings);
+                            const usage = classifyNodeCertificateUsage({
+                              protocolSupportsTls:
+                                protocolSupportsTls(protocol),
+                              tlsEnabled,
+                              realityEnabled,
+                              certificateId,
+                            });
+                            const deployment =
+                              describeNodeCertificateDeployment({
+                                selectedCertificateId: certificateId,
+                                selectedServerId: serverId,
+                                saved: node,
+                                binding: certificates
+                                  ?.find((item) => item.id === certificateId)
+                                  ?.servers.find(
+                                    (binding) => binding.serverId === serverId,
+                                  )?.deploymentStatus,
+                                agentReachable: agentReachableFor(serverId),
+                              });
                             const advancedNode = advancedSections.find(
                               (section) => section.id === s.id,
                             )?.node;
@@ -568,6 +690,13 @@ export function NodeFormPage({ node }: NodeFormPageProps): React.ReactElement {
                                     {m.admin_proxies_nodes_tls_reality_help()}
                                   </p>
                                 ) : null}
+                                <NodeCertificateGuidance
+                                  usage={usage}
+                                  deployment={deployment}
+                                  unusableCount={unusableCount}
+                                  isReloading={isCertificatesFetching}
+                                  onReload={() => void refetchCertificates()}
+                                />
                                 {/* Step 3: non-material TLS advanced options. */}
                                 {tlsEnabled && advancedNode ? (
                                   <div className="flex flex-col gap-4">

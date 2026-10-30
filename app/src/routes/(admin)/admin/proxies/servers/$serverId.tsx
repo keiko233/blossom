@@ -6,6 +6,7 @@ import { m } from "@/paraglide/messages";
 import { getServer } from "@/query/servers";
 
 import { ServerFormPage } from "./_modules/server-form-page";
+import { ServerNodesPanel } from "./_modules/server-nodes-panel";
 
 export const Route = createFileRoute(
   "/(admin)/admin/proxies/servers/$serverId",
@@ -23,7 +24,8 @@ function RouteComponent(): React.ReactElement {
   return (
     <>
       <ServerFormPage key={server.id} server={server} />
-      <div className="mx-auto w-full max-w-3xl px-4 pb-6">
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 pb-6">
+        <ServerNodesPanel key={server.id} serverId={server.id} />
         <TrafficTrend serverId={server.id} />
       </div>
     </>

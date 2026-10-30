@@ -118,10 +118,11 @@ export type NodeForm = ReturnType<typeof useNodeForm>;
 export interface UseNodeFormControllerOptions {
   node?: NodeDetail;
   /**
-   * Called after a successful save. The create flow no longer mints an agent
-   * token (the owning server carries it), so there is no token to reveal.
+   * Called after a successful save with the submitted values. The create flow
+   * no longer mints an agent token (the owning server carries it), so there is
+   * no token to reveal.
    */
-  onSuccess: () => void;
+  onSuccess: (values: NodeFormValues) => void;
 }
 
 /**
@@ -146,7 +147,7 @@ export function useNodeFormController({
       }
       await createNode({ data: payload });
     },
-    onSuccess: async () => {
+    onSuccess: async (_result, values) => {
       await queryClient.invalidateQueries({ queryKey: NODES_QUERY_KEY });
       // Server nodeCount changes on create/delete and (potentially) on
       // server-id edits; invalidate so the servers list reflects it.
@@ -157,7 +158,7 @@ export function useNodeFormController({
           ? m.admin_proxies_nodes_toast_updated()
           : m.admin_proxies_nodes_toast_created(),
       });
-      onSuccess();
+      onSuccess(values);
     },
     onError: () => {
       toastManager.add({

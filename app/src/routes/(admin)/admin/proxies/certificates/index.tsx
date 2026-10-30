@@ -1,6 +1,7 @@
+import { isAgentReachable } from "@blossom/domain/agent-status";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import {
   CopyIcon,
   FileKeyIcon,
@@ -40,6 +41,10 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { toastManager } from "@/components/ui/toast";
+import {
+  type CertificateNodeUsage,
+  nodesUsingCertificate,
+} from "@/lib/node-certificate-context";
 import { m } from "@/paraglide/messages";
 import {
   activatePendingImportedCertificate,
@@ -56,6 +61,8 @@ import {
   renewCertificate,
   replaceImportedCertificate,
 } from "@/query/certificates";
+import { listNodes, NODES_QUERY_KEY } from "@/query/nodes";
+import { listServers, SERVERS_QUERY_KEY } from "@/query/servers";
 
 export const Route = createFileRoute("/(admin)/admin/proxies/certificates/")({
   component: CertificatesPage,
@@ -77,6 +84,40 @@ function FieldErrors({ errors }: { errors: readonly unknown[] }) {
     .filter(Boolean)
     .join(", ");
   return message ? <p className="text-xs text-destructive">{message}</p> : null;
+}
+
+function CertificateUsage({ usages }: { usages: CertificateNodeUsage[] }) {
+  return (
+    <div className="mt-3 space-y-2">
+      <p className="text-sm font-medium">
+        {m.admin_certificates_usage_title()}
+      </p>
+      {usages.length > 0 ? (
+        <ul className="space-y-1 text-sm">
+          {usages.map((usage) => (
+            <li key={usage.nodeId} className="flex flex-wrap gap-x-2">
+              <Link
+                to="/admin/proxies/nodes/$nodeId"
+                params={{ nodeId: usage.nodeId }}
+                className="underline underline-offset-4"
+              >
+                {usage.nodeName}
+              </Link>
+              <span className="text-muted-foreground">
+                {m.admin_certificates_usage_node_server({
+                  server: usage.serverName,
+                })}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          {m.admin_certificates_usage_none()}
+        </p>
+      )}
+    </div>
+  );
 }
 
 function exportUrl(
@@ -172,10 +213,28 @@ function CertificatesPage() {
     },
     refetchInterval: 15_000,
   });
+  // Read-only context for "used by nodes" and agent recency; the certificate
+  // list itself stays the source of truth for deployment state.
+  const { data: nodes = [] } = useQuery({
+    queryKey: NODES_QUERY_KEY,
+    queryFn: () => listNodes(),
+    refetchInterval: 15_000,
+  });
+  const { data: servers = [] } = useQuery({
+    queryKey: SERVERS_QUERY_KEY,
+    queryFn: () => listServers(),
+    refetchInterval: 15_000,
+  });
   const { data: capability } = useQuery({
     queryKey: CERTIFICATE_CAPABILITY_QUERY_KEY,
     queryFn: () => getCertificateCapability(),
   });
+
+  // Heartbeat recency only; unknown servers are not reported as stale.
+  const isAgentStale = (serverId: string): boolean => {
+    const owner = servers.find((item) => item.id === serverId);
+    return owner ? !isAgentReachable(owner) : false;
+  };
 
   const refresh = () =>
     queryClient.invalidateQueries({ queryKey: CERTIFICATES_QUERY_KEY });
@@ -936,10 +995,16 @@ function CertificatesPage() {
                 {certificate.lastError}
               </p>
             ) : null}
+            <CertificateUsage
+              usages={nodesUsingCertificate(certificate.id, nodes)}
+            />
             {certificate.servers.length > 0 ? (
               <div className="mt-3 space-y-2">
                 <p className="text-sm font-medium">
                   {m.admin_certificates_deployment_title()}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {m.admin_certificates_deployment_help()}
                 </p>
                 {certificate.servers.map((binding) => {
                   const deployment = binding.deploymentStatus;
@@ -954,9 +1019,19 @@ function CertificatesPage() {
                       key={binding.serverId}
                       className="flex items-center gap-2 rounded-lg border bg-muted/20 p-2"
                     >
-                      <span className="min-w-0 flex-1 truncate text-sm">
+                      <Link
+                        to="/admin/proxies/servers/$serverId"
+                        params={{ serverId: binding.serverId }}
+                        className="min-w-0 flex-1 truncate text-sm underline-offset-4 hover:underline"
+                      >
                         {binding.server.name}
-                      </span>
+                      </Link>
+                      {deployment.status !== "in_use" &&
+                      isAgentStale(binding.serverId) ? (
+                        <span className="text-xs text-muted-foreground">
+                          {m.admin_certificates_deploy_agent_stale()}
+                        </span>
+                      ) : null}
                       <Badge variant={variant}>
                         {deployLabels[deployment.status]}
                       </Badge>

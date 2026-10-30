@@ -138,6 +138,18 @@ function RouteComponent(): React.ReactElement {
       params: { serverId: server.id },
     });
 
+  const openNodes = (server: ServerListItem) =>
+    void navigate({
+      to: "/admin/proxies/nodes",
+      search: { serverId: server.id },
+    });
+
+  const addNode = (server: ServerListItem) =>
+    void navigate({
+      to: "/admin/proxies/nodes/new",
+      search: { serverId: server.id },
+    });
+
   const copyAgentInfo = async (server: ServerListItem) => {
     setCopyingServerId(server.id);
     const info = JSON.stringify(
@@ -189,7 +201,19 @@ function RouteComponent(): React.ReactElement {
     }),
     columnHelper.accessor("nodeCount", {
       header: () => m.admin_proxies_servers_col_nodes(),
-      cell: (info) => <Badge variant="outline">{info.getValue()}</Badge>,
+      cell: (info) => {
+        const server = info.row.original;
+        return (
+          <Link
+            to="/admin/proxies/nodes"
+            search={{ serverId: server.id }}
+            aria-label={m.admin_proxies_servers_action_view_nodes()}
+            title={m.admin_proxies_servers_action_view_nodes()}
+          >
+            <Badge variant="outline">{info.getValue()}</Badge>
+          </Link>
+        );
+      },
     }),
     columnHelper.display({
       id: "status",
@@ -241,6 +265,16 @@ function RouteComponent(): React.ReactElement {
                 {server.lastErrorMessage}
               </span>
             ) : null}
+            {server.pendingConfigChanges > 0 ? (
+              <span
+                className="text-xs text-muted-foreground"
+                title={m.admin_proxies_servers_pending_changes_help()}
+              >
+                {m.admin_proxies_servers_pending_changes({
+                  count: server.pendingConfigChanges,
+                })}
+              </span>
+            ) : null}
           </div>
         );
       },
@@ -274,6 +308,12 @@ function RouteComponent(): React.ReactElement {
               <MenuPopup align="end">
                 <MenuItem onClick={() => openEdit(server)}>
                   {m.admin_proxies_servers_action_edit()}
+                </MenuItem>
+                <MenuItem onClick={() => openNodes(server)}>
+                  {m.admin_proxies_servers_action_view_nodes()}
+                </MenuItem>
+                <MenuItem onClick={() => addNode(server)}>
+                  {m.admin_proxies_servers_action_add_node()}
                 </MenuItem>
                 <MenuItem onClick={() => void copyAgentInfo(server)}>
                   {m.admin_proxies_servers_action_copy_agent()}
@@ -360,6 +400,12 @@ function RouteComponent(): React.ReactElement {
           </Button>
         </Empty>
       )}
+
+      {servers && servers.length > 0 ? (
+        <p className="text-xs text-muted-foreground">
+          {m.admin_proxies_servers_status_note()}
+        </p>
+      ) : null}
     </div>
   );
 }
