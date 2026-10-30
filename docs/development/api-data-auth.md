@@ -68,6 +68,7 @@ Migrations are folders in `app/drizzle/<timestamp>_<name>/` with `migration.sql`
 
 1. Edit the schema in `app/src/db/`.
 2. `pnpm --filter @blossom/app db:generate` writes the new folder. Review the SQL; check destructive statements and defaults for existing rows.
+   For SQL the schema DSL cannot express (triggers, functions, data backfills) use `pnpm --filter @blossom/app exec drizzle-kit generate --custom --name <name>`, which creates an empty migration (with a snapshot) for hand-written SQL; separate statements with `--> statement-breakpoint` and explain why in a leading comment, as `*_first_admin_trigger` does.
 3. Commit the schema change and the generated folder together. Add a new migration rather than editing or renaming one that may already have been applied: databases that recorded it will not run the edited version.
 4. Apply with `pnpm --filter @blossom/app db:migrate` (Docker Compose runs it through the `migrate` service). The README documents this as the deployment step.
 
@@ -90,6 +91,7 @@ What the commands do, so you can pick a safe target:
 
 - better-auth is configured in `app/src/lib/auth.tsx` with the Drizzle adapter and plugins `admin`, `magicLink`, `jwt`, `oauthProvider` and `tanstackStartCookies`. Call it through `getAuth()`, which builds it lazily on the server.
 - Roles are `admin` and `user` (`user.role`). Admin checks use `role === "admin"` in route `beforeLoad` and in `ensureAdmin()`. `ensureAdmin` caches one session lookup per request.
+- **The first user ever inserted becomes `admin`, in the database, not in better-auth.** The `user_claim_first_admin` trigger (custom migration `*_first_admin_trigger`) claims the single-row `admin_bootstrap` table inside the user insert, so it is atomic, race-free and rolled back with a failed insert on both drivers, and better-auth's returned user, `create.after` hook and session see `role: admin`. Do not re-implement this with a read-then-write in a hook, and do not give `admin_bootstrap` a foreign key to `user` (deleting all users must not reopen the claim). Details and the security implications are in [First admin](../operations/self-hosting.md#first-admin); tests are in `app/src/db/admin-bootstrap.test.ts`.
 - Registration rules (open or closed mode, plus an allowed-email-domain list) are enforced in one place, better-auth's `validateUserInfo` hook, via `createRegistrationHooks`; `emailSignUp` pre-checks only to avoid sending a link that would fail. Change rules in `packages/domain/src/registration-policy.ts` and keep its tests current.
 - Sign-up grants a trial through `grantSignupTrial` when enabled in settings.
 - Social providers are enabled only when both id and secret are set.

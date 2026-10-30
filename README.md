@@ -131,7 +131,7 @@ See `server-agent/.env.example` for agent runtime configuration.
 
 ## Operations
 
-Runbooks for hosting are in [docs/operations](docs/operations/README.md): [self-hosting, secrets and health checks](docs/operations/self-hosting.md), [installing and upgrading the agent](docs/operations/server-agent.md), [backup and recovery](docs/operations/backup-restore.md) and [local validation steps](docs/operations/local-validation.md). The server token shown when you create a server, and the `docker run` command that embeds it, are credentials: do not paste them into shared logs or tickets. There is currently no documented way to create the first administrator account; see [First admin](docs/operations/self-hosting.md#first-admin).
+Runbooks for hosting are in [docs/operations](docs/operations/README.md): [self-hosting, secrets and health checks](docs/operations/self-hosting.md), [installing and upgrading the agent](docs/operations/server-agent.md), [backup and recovery](docs/operations/backup-restore.md) and [local validation steps](docs/operations/local-validation.md). The server token shown when you create a server, and the `docker run` command that embeds it, are credentials: do not paste them into shared logs or tickets. The first account registered on a fresh database automatically becomes the administrator, so create yours before exposing a new deployment; see [First admin](docs/operations/self-hosting.md#first-admin).
 
 ## MCP API
 

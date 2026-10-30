@@ -47,25 +47,25 @@ Verified (code): `BETTER_AUTH_URL` must be `https` unless the host is `localhost
 
 ## First admin
 
-**There is no verified bootstrap mechanism for the first admin. This is a gap.**
+**The first account ever registered becomes the administrator, exactly once.** Everyone registered afterwards is a plain `user`.
 
-What the code shows:
+How it works:
 
-- New accounts get `role = 'user'` (`app/src/db/auth-schema.ts`). The better-auth `admin()` plugin is registered with no options (`app/src/lib/auth.tsx`), so no admin user IDs or default admin role are configured.
-- Every code path that assigns `admin` is itself admin-gated: the `setUserRole` server function (`app/src/query/users.ts`, `ensureAdmin()` first) and the admin-only MCP tool. The admin-only create-user dialog can set a role but requires an existing admin.
-- The repository has no seed script, CLI command or environment variable for creating an admin, and the agent API cannot reach admin operations.
+- A database trigger (`user_claim_first_admin`, migration `*_first_admin_trigger`) runs before every insert into `"user"`. It tries to insert the single row of `admin_bootstrap`; the insert that succeeds gets `role = 'admin'`, every other insert is left alone.
+- The claim and the user insert are one statement, so they commit or roll back together. Simultaneous first registrations queue on the marker row: exactly one wins, and if the winner's insert fails (for example a duplicate email) the claim is still free for the next one. It works the same on `node-postgres` and `neon-http`, and for every sign-up path (email link, social sign-in, admin-created accounts), because better-auth returns the inserted row, so the response and the new session already carry `role: admin`.
+- `admin_bootstrap` has no link to `user`. Deleting or truncating every user does **not** reopen the claim.
+- **Upgrading** an installation that already has users marks the claim as spent and changes nobody's role. If such a database has no administrator, nobody is promoted automatically; this guide still has no supported procedure for that case.
+- Custom SQL was unavoidable because Drizzle's schema DSL cannot express triggers; the table is generated from `app/src/db/admin-bootstrap-schema.ts` and the trigger is a Drizzle custom migration.
 
-So a fresh deployment has no documented, tested way to obtain its first administrator. This guide deliberately does not provide a command or SQL statement, because none is verified or supported. Editing the `role` column of the `user` table by hand is outside any tested procedure; do not treat this note as a recommendation.
+Security implications of "first registrant wins":
 
-### Proposal for a separately scoped bootstrap design
+- **Whoever registers first on a fresh deployment owns it.** If the instance is reachable and registration is open before you create your account, a stranger can take the administrator role. Register your own account immediately after the first migration and before exposing the URL or sharing the address; do not leave a freshly migrated, public instance unattended.
+- The claim is taken by the first *successful user insert*, not by a verified email. better-auth's email/password sign-up endpoint is enabled, so a direct API call can create the first account, and make it admin, with an address its owner never confirmed (`requireEmailVerification` only blocks signing in, it does not stop the insert). Email-link and social sign-ups prove control of the address. The registration rules (open/closed mode, allowed email domains) run before the insert, so a refused attempt does not use up the claim: an allowed-domain list narrows who can race you, and closed registration refuses everyone, including you. Sign up while registration is open and, if needed, close it afterwards.
+- The first admin is created by the registration flow itself. Treat the first account like a root credential: use a strong password or a mail account you control, and check the user list afterwards.
+- An empty database restored from a dump of the schema only, or a database where the `admin_bootstrap` row was deleted by hand, starts a new claim: the next registrant becomes admin. Restore the `admin_bootstrap` table with the rest of the data (see [Backup and recovery](backup-restore.md)).
+- Anyone with direct write access to the database can already set any role; this feature does not change that.
 
-Not implemented. Needs its own task, tests and handbook update:
-
-- A one-shot, explicit operation, for example a script run inside the app image against the configured `DATABASE_URL`, or a single environment variable naming the bootstrap email, honoured **only while zero admins exist**.
-- It must refuse to run once any admin exists, be idempotent, not log the email-link or any credential, and write an audit entry.
-- It must be safe under concurrent execution. A single SQL statement is not assumed to be enough: under PostgreSQL's default isolation, two concurrent "promote if no admin exists" statements can both see zero admins. The design must choose and justify an explicit uniqueness or serialization mechanism (for example a database constraint that permits only one bootstrap record, or an advisory lock or equivalent serialization), and prove it with concurrent tests.
-- That mechanism must work on both database drivers; `neon-http` has no interactive transactions, so a lock held across several statements is not available there.
-- It must be tested against a disposable PostgreSQL database, including many simultaneous bootstrap attempts (exactly one succeeds) and the case where open registration lets someone else register first.
+Tests: `app/src/db/admin-bootstrap.test.ts` runs the migrations and real concurrent inserts, rollbacks, deletions, upgrades and better-auth sign-ups against a disposable PostgreSQL; see [Testing and verification](../development/testing.md).
 
 ## Liveness versus readiness
 

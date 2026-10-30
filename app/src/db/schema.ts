@@ -1,4 +1,5 @@
 export * from "./admin-audit-schema.ts";
+export * from "./admin-bootstrap-schema.ts";
 export * from "./announcement-schema.ts";
 export * from "./mcp-schema.ts";
 export * from "./access-log-schema.ts";

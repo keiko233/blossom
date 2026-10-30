@@ -113,4 +113,4 @@ Not verified when these guides were written; each is worth closing:
 - Publish-gate behaviour after restoring an older database.
 - Secret handling with `env_file` in the app's Compose file.
 - Anything on Cloudflare, Netlify, Vercel, Railway or Neon (backup, health checks, scheduling).
-- A first-admin bootstrap does not exist; see [Self-hosting](self-hosting.md#first-admin).
+- The first-admin claim is covered by `app/src/db/admin-bootstrap.test.ts` against a disposable database, not by these steps; see [Self-hosting](self-hosting.md#first-admin).

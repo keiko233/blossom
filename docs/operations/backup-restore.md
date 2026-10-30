@@ -79,7 +79,7 @@ One practical finding: the Postgres image's entrypoint briefly runs a temporary 
 After the app starts against the restored database, with the original secrets:
 
 1. `GET /api/health` returns ok (this proves only that the process is up; see [Liveness versus readiness](self-hosting.md#liveness-versus-readiness)).
-2. An existing admin can sign in. (If none can, see the [first-admin gap](self-hosting.md#first-admin).)
+2. An existing admin can sign in. (If the database has users but no admin, nobody is promoted automatically; see [First admin](self-hosting.md#first-admin).)
 3. The admin certificate page lists certificates and an export or detail view decrypts one. This is the check that the `CERTIFICATE_MASTER_KEY` is correct.
 4. Servers, nodes, plans and subscriptions counts match the source.
 5. Each agent heartbeats again. Test with a **real client** that a node works end to end; a heartbeat is not a connectivity test.

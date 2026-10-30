@@ -15,6 +15,23 @@ jobs:
   app:
     name: App tests and build
     runs-on: ubuntu-latest
+    # Disposable database for the tests that need real PostgreSQL
+    # (app/src/db/admin-bootstrap.test.ts). Throwaway credentials; the service
+    # is discarded with the job.
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-disposable-only
+          POSTGRES_DB: blossom_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d blossom_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v7
 
@@ -31,6 +48,8 @@ jobs:
 
       - name: Run tests
         run: pnpm test
+        env:
+          BLOSSOM_BOOTSTRAP_TEST_DATABASE_URL: postgres://postgres:ci-disposable-only@127.0.0.1:5432/blossom_test
 
       - name: Build app (Cloudflare)
         run: pnpm build
