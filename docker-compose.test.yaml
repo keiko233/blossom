@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: blossom_test
+      POSTGRES_USER: blossom_test
+      POSTGRES_PASSWORD: blossom_test
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - test-pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U blossom_test -d blossom_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+volumes:
+  test-pgdata:

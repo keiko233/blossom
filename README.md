@@ -76,6 +76,15 @@ When a `HYPERDRIVE` binding is declared, local Cloudflare development supplies `
 
 ## Database migrations
 
+For local development and testing, set `DATABASE_URL` in `app/.env.local` to `postgresql://blossom_test:blossom_test@127.0.0.1:55432/blossom_test` and use `DATABASE_DRIVER=node-postgres` if a driver is explicitly configured. Start the isolated PostgreSQL service and apply migrations:
+
+```bash
+docker compose -p blossom-test -f docker-compose.test.yaml up -d --wait
+pnpm --filter @blossom/app db:migrate
+```
+
+The database uses a persistent `blossom-test` Compose volume and a local-only port; its credentials are for testing only. `docker compose -p blossom-test -f docker-compose.test.yaml down` stops it without deleting data. Adding `-v` deletes the test data.
+
 Migrations live in `app/drizzle/` and are applied with Drizzle Kit:
 
 ```bash
