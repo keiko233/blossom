@@ -17,9 +17,14 @@ import { getDatabaseRequest } from "@/lib/database-connection";
 import { getSettings } from "@/query/settings-store";
 import { grantSignupTrial } from "@/query/trial-grant";
 
+import { createPasswordRecovery } from "./auth-password-recovery";
 import { createRegistrationHooks } from "./auth-registration-hooks";
 import { emailSignInSchema, emailSignUpSchema } from "./auth-schema";
-import { sendMagicLinkEmail } from "./email";
+import {
+  isEmailEnabled,
+  sendMagicLinkEmail,
+  sendPasswordResetEmail,
+} from "./email";
 import { getServerEnv } from "./env";
 
 const buildSocialProviders = createServerOnlyFn(() => {
@@ -41,6 +46,11 @@ const buildAuth = createServerOnlyFn(() => {
     grantTrial: grantSignupTrial,
   });
 
+  const passwordRecovery = createPasswordRecovery({
+    isEmailEnabled: () => isEmailEnabled,
+    sendPasswordResetEmail,
+  });
+
   return betterAuth({
     baseURL: env.BETTER_AUTH_URL,
     database: drizzleAdapter(db, {
@@ -49,6 +59,7 @@ const buildAuth = createServerOnlyFn(() => {
     }),
     emailAndPassword: {
       enabled: true,
+      ...passwordRecovery.emailAndPassword,
     },
     // The single choke point for registration rules: better-auth calls
     // `validateUserInfo` just before it creates a user, whatever the route in
@@ -80,6 +91,7 @@ const buildAuth = createServerOnlyFn(() => {
     },
     plugins: [
       admin(),
+      passwordRecovery.plugin,
       magicLink({
         sendMagicLink: sendMagicLinkEmail,
       }),

@@ -92,7 +92,12 @@ function SignUpCard() {
                 : m.auth_signup_domain_not_allowed_description(),
           });
         }
-      } catch {}
+      } catch {
+        toastManager.add({
+          type: "error",
+          title: m.auth_signup_delivery_error(),
+        });
+      }
     },
   });
 

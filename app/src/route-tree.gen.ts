@@ -30,6 +30,7 @@ import { Route as adminAdminUsersRouteRouteImport } from './routes/(admin)/admin
 import { Route as authAuthForgotRouteImport } from './routes/(auth)/auth/forgot'
 import { Route as authAuthLoginRouteImport } from './routes/(auth)/auth/login'
 import { Route as authAuthMcpConsentRouteImport } from './routes/(auth)/auth/mcp-consent'
+import { Route as authAuthResetRouteImport } from './routes/(auth)/auth/reset'
 import { Route as authAuthSignupRouteImport } from './routes/(auth)/auth/signup'
 import { Route as userDashboardIndexRouteImport } from './routes/(user)/dashboard/index'
 import { Route as userWelcomeIndexRouteImport } from './routes/(user)/welcome/index'
@@ -182,6 +183,11 @@ const authAuthLoginRoute = authAuthLoginRouteImport.update({
 const authAuthMcpConsentRoute = authAuthMcpConsentRouteImport.update({
   id: '/auth/mcp-consent',
   path: '/auth/mcp-consent',
+  getParentRoute: () => authRouteRoute,
+} as any)
+const authAuthResetRoute = authAuthResetRouteImport.update({
+  id: '/auth/reset',
+  path: '/auth/reset',
   getParentRoute: () => authRouteRoute,
 } as any)
 const authAuthSignupRoute = authAuthSignupRouteImport.update({
@@ -416,6 +422,7 @@ export interface FileRoutesByFullPath {
   '/auth/forgot': typeof authAuthForgotRoute
   '/auth/login': typeof authAuthLoginRoute
   '/auth/mcp-consent': typeof authAuthMcpConsentRoute
+  '/auth/reset': typeof authAuthResetRoute
   '/auth/signup': typeof authAuthSignupRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/rpc/$': typeof ApiRpcSplatRoute
@@ -467,6 +474,7 @@ export interface FileRoutesByTo {
   '/auth/forgot': typeof authAuthForgotRoute
   '/auth/login': typeof authAuthLoginRoute
   '/auth/mcp-consent': typeof authAuthMcpConsentRoute
+  '/auth/reset': typeof authAuthResetRoute
   '/auth/signup': typeof authAuthSignupRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/rpc/$': typeof ApiRpcSplatRoute
@@ -527,6 +535,7 @@ export interface FileRoutesById {
   '/(auth)/auth/forgot': typeof authAuthForgotRoute
   '/(auth)/auth/login': typeof authAuthLoginRoute
   '/(auth)/auth/mcp-consent': typeof authAuthMcpConsentRoute
+  '/(auth)/auth/reset': typeof authAuthResetRoute
   '/(auth)/auth/signup': typeof authAuthSignupRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/rpc/$': typeof ApiRpcSplatRoute
@@ -589,6 +598,7 @@ export interface FileRouteTypes {
     | '/auth/forgot'
     | '/auth/login'
     | '/auth/mcp-consent'
+    | '/auth/reset'
     | '/auth/signup'
     | '/api/auth/$'
     | '/api/rpc/$'
@@ -640,6 +650,7 @@ export interface FileRouteTypes {
     | '/auth/forgot'
     | '/auth/login'
     | '/auth/mcp-consent'
+    | '/auth/reset'
     | '/auth/signup'
     | '/api/auth/$'
     | '/api/rpc/$'
@@ -699,6 +710,7 @@ export interface FileRouteTypes {
     | '/(auth)/auth/forgot'
     | '/(auth)/auth/login'
     | '/(auth)/auth/mcp-consent'
+    | '/(auth)/auth/reset'
     | '/(auth)/auth/signup'
     | '/api/auth/$'
     | '/api/rpc/$'
@@ -917,6 +929,13 @@ declare module '@tanstack/react-router' {
       path: '/auth/mcp-consent'
       fullPath: '/auth/mcp-consent'
       preLoaderRoute: typeof authAuthMcpConsentRouteImport
+      parentRoute: typeof authRouteRoute
+    }
+    '/(auth)/auth/reset': {
+      id: '/(auth)/auth/reset'
+      path: '/auth/reset'
+      fullPath: '/auth/reset'
+      preLoaderRoute: typeof authAuthResetRouteImport
       parentRoute: typeof authRouteRoute
     }
     '/(auth)/auth/signup': {
@@ -1426,6 +1445,7 @@ interface authRouteRouteChildren {
   authAuthForgotRoute: typeof authAuthForgotRoute
   authAuthLoginRoute: typeof authAuthLoginRoute
   authAuthMcpConsentRoute: typeof authAuthMcpConsentRoute
+  authAuthResetRoute: typeof authAuthResetRoute
   authAuthSignupRoute: typeof authAuthSignupRoute
 }
 
@@ -1433,6 +1453,7 @@ const authRouteRouteChildren: authRouteRouteChildren = {
   authAuthForgotRoute: authAuthForgotRoute,
   authAuthLoginRoute: authAuthLoginRoute,
   authAuthMcpConsentRoute: authAuthMcpConsentRoute,
+  authAuthResetRoute: authAuthResetRoute,
   authAuthSignupRoute: authAuthSignupRoute,
 }
 

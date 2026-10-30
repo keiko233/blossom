@@ -3,6 +3,7 @@ import { createElement } from "react";
 import { Resend } from "resend";
 
 import MagicLinkEmail from "@/templates/emails/magic-link";
+import PasswordResetEmail from "@/templates/emails/password-reset";
 
 import { getServerEnv } from "./env";
 
@@ -73,6 +74,52 @@ export async function sendMagicLinkEmail(data: {
   if (failed) {
     console.error(
       "Magic-link email delivery failed: the provider returned an error",
+    );
+    throw unavailable();
+  }
+}
+
+/**
+ * Emails a password-reset link, or throws a generic `APIError`. The caller
+ * (`createPasswordRecovery`) swallows the failure so a delivery problem cannot
+ * tell a requester whether the address has an account; the unconfigured case
+ * is refused earlier for every address alike.
+ *
+ * The link carries a single-use bearer token. Like the magic-link sender, this
+ * logs only fixed messages and puts nothing from the provider into the error.
+ */
+export async function sendPasswordResetEmail(data: {
+  email: string;
+  url: string;
+}): Promise<void> {
+  const emailClient = getEmailClient();
+
+  if (!emailClient) {
+    console.warn(
+      "Password reset email not sent: email is not configured (RESEND_API_KEY, RESEND_MAIL_FROM)",
+    );
+    throw unavailable();
+  }
+
+  let failed: boolean;
+  try {
+    const { error } = await emailClient.emails.send({
+      from: serverEnv.RESEND_MAIL_FROM!,
+      to: data.email,
+      subject: `Reset your ${serverEnv.APP_NAME} password`,
+      react: createElement(PasswordResetEmail, { link: data.url }),
+    });
+    failed = Boolean(error);
+  } catch {
+    console.error(
+      "Password reset email delivery failed: the provider call threw",
+    );
+    throw unavailable();
+  }
+
+  if (failed) {
+    console.error(
+      "Password reset email delivery failed: the provider returned an error",
     );
     throw unavailable();
   }
