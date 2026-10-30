@@ -64,6 +64,11 @@ Server env vars are validated at runtime on the first request, so production bui
 | `GITHUB_CLIENT_SECRET` | No | Runtime | GitHub OAuth client secret. |
 | `GOOGLE_CLIENT_ID` | No | Runtime | Google OAuth client ID. |
 | `GOOGLE_CLIENT_SECRET` | No | Runtime | Google OAuth client secret. |
+| `CERTIFICATE_MASTER_KEY` | For certificates | Runtime | 32 random bytes, base64url. Encrypts stored certificate private keys; required for any certificate management. Back it up separately from database dumps; without it stored certificates cannot be decrypted. |
+| `ACME_EAB_KID` | For ZeroSSL | Runtime | ACME external account binding key ID. Set together with `ACME_EAB_HMAC_KEY`. |
+| `ACME_EAB_HMAC_KEY` | For ZeroSSL | Runtime | ACME external account binding HMAC key. |
+| `CLOUDFLARE_DNS_API_TOKEN` | No | Runtime | Cloudflare token with DNS Edit on the zone, for automatic ACME DNS-01 validation. Set together with `CLOUDFLARE_DNS_ZONE_ID`. |
+| `CLOUDFLARE_DNS_ZONE_ID` | No | Runtime | Cloudflare zone ID used with the token above. |
 
 Copy `app/.env.example` to `app/.env.local` for local development.
 
@@ -99,13 +104,17 @@ To skip building locally, point the `app` service at the prebuilt image (`image:
 
 ## Server agent
 
-The Rust server-agent in `server-agent/` consumes the control-plane OpenAPI spec at `/api/agent/*`. Each server owns one agent token and one sing-box process; every enabled node assigned to that server becomes an inbound in the same generated sing-box config. New agents pull the versioned control document from `/api/agent/config/v2`, which carries server-managed polling intervals alongside the sing-box config. Candidates are checked by the target sing-box binary before reload, and the last-known-good config is persisted for rollback. After changing the agent-facing API, regenerate the agent client while the dev server is running:
+The Rust server-agent in `server-agent/` consumes the control-plane OpenAPI spec at `/api/agent/*`. Each server owns one agent token and one sing-box process; every enabled node assigned to that server becomes an inbound in the same generated sing-box config. Agents pull the versioned control document from `/api/agent/config/v3` (they advertise the `config-v3` capability), which carries server-managed polling intervals alongside the sing-box config. Candidates are checked by the target sing-box binary before reload, and the last-known-good config is persisted for rollback. After changing the agent-facing API, regenerate the agent client while the dev server is running:
 
 ```bash
 pnpm --filter @blossom/app agent:spec
 ```
 
 See `server-agent/.env.example` for agent runtime configuration.
+
+## Operations
+
+Runbooks for hosting are in [docs/operations](docs/operations/README.md): [self-hosting, secrets and health checks](docs/operations/self-hosting.md), [installing and upgrading the agent](docs/operations/server-agent.md), [backup and recovery](docs/operations/backup-restore.md) and [local validation steps](docs/operations/local-validation.md). The server token shown when you create a server, and the `docker run` command that embeds it, are credentials: do not paste them into shared logs or tickets. There is currently no documented way to create the first administrator account; see [First admin](docs/operations/self-hosting.md#first-admin).
 
 ## MCP API
 

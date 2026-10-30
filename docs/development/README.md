@@ -29,8 +29,6 @@ Where a guide says "not verified" it means the statement comes from reading conf
 
 Things in the repository that disagree with each other. Do not copy the stale side.
 
-- The README says new agents pull `/api/agent/config/v2`. The router, the committed OpenAPI spec and the Rust client all use `/api/agent/config/v3` (`getAgentConfigV3`), and the agent advertises the capability `config-v3`. Treat v3 as current.
-- The README's environment table omits `CERTIFICATE_MASTER_KEY`, `ACME_EAB_KID`, `ACME_EAB_HMAC_KEY`, `CLOUDFLARE_DNS_API_TOKEN` and `CLOUDFLARE_DNS_ZONE_ID`. They are in `app/src/lib/env-schema.ts` and `app/.env.example`; certificate management needs `CERTIFICATE_MASTER_KEY`.
 - A comment in `app/src/query/config-change.ts` points to `docs/config-versioning.md`, which does not exist. The publish-gate rules are documented in the header comment of `app/src/lib/publish-gate.ts` and summarised in [Architecture](architecture.md#publish-gate).
 
 ## Maintaining these guides
