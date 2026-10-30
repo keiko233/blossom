@@ -433,6 +433,11 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "reportId": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 128
+                  },
                   "windowStartedAt": {
                     "type": "string",
                     "format": "date-time"
@@ -494,6 +499,12 @@
                       "type": "integer",
                       "minimum": -9007199254740991,
                       "maximum": 9007199254740991
+                    },
+                    "reportId": {
+                      "type": "string"
+                    },
+                    "duplicate": {
+                      "type": "boolean"
                     }
                   },
                   "required": [

@@ -1,17 +1,16 @@
 import { formatDesiredRevision } from "@blossom/domain/config-revision";
 import { ORPCError } from "@orpc/server";
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
-import type { NewTrafficRecord } from "@/db/traffic-schema";
 import { hashAgentToken, parseBearerToken } from "@/lib/agent-token";
 import { toSingboxRouteRules } from "@/lib/routing-rules";
 import {
+  computeTrafficReportHash,
   findAgentServerByTokenHash,
-  getSubscriptionUserMap,
   listEnabledServerNodes,
   listServerNodeIds,
   recordAgentTraffic,
+  TrafficReportConflictError,
   updateAgentHeartbeat,
 } from "@/query/agent";
 import {
@@ -25,6 +24,7 @@ import { base } from "../base";
 import {
   agentConfigV3OutputSchema,
   heartbeatSchema,
+  trafficReportOutputSchema,
   trafficReportSchema,
 } from "./schema";
 import {
@@ -197,13 +197,20 @@ export const agentHeartbeat = agentProcedure
 
 /**
  * Ingests per-user traffic deltas the agent read from sing-box's v2ray_api
- * stats (user name = coded identifier). Appends history rows and atomically
- * increments the subscription counters via SQL — never read-modify-write in
- * JS, since multiple agents report concurrently. Unknown subscription ids
- * (from a stale config still on the agent) are counted in `dropped`, not
- * treated as errors. No transactions on the neon-http driver: history is
- * inserted before the counters so a retry after a partial failure over-logs
- * rather than double-counts quota.
+ * stats (user name = coded identifier). History rows, the subscription counter
+ * increments and, when the report has a `reportId`, the idempotency ledger row
+ * are written by ONE SQL statement (`recordAgentTraffic`), so the report is
+ * applied entirely or not at all on both database drivers — never
+ * read-modify-write in JS, since multiple agents report concurrently.
+ *
+ * Reports with a `reportId` are idempotent per server: a retry or concurrent
+ * duplicate of an applied report writes nothing and returns the original
+ * counts with `duplicate: true`; the same id with different content is
+ * rejected with CONFLICT. Reports without one (agents that predate the field)
+ * are still atomic but are NOT replay-safe: a retry after a lost response is
+ * counted again. Unknown subscription ids (from a stale config still on the
+ * agent) are counted in `dropped`, not treated as errors; expired or cancelled
+ * subscriptions still accrue.
  *
  * The agent may still send legacy entries with the bare subscription id as
  * `subscriptionId` (e.g. agents running an older control plane still
@@ -222,12 +229,12 @@ export const reportAgentTraffic = agentProcedure
     operationId: "reportAgentTraffic",
   })
   .input(trafficReportSchema)
-  .output(z.object({ accepted: z.number().int(), dropped: z.number().int() }))
+  .output(trafficReportOutputSchema)
   .handler(async ({ context, input }) => {
     const eligible = input.entries.filter(
       (entry) => entry.uplinkBytes + entry.downlinkBytes > 0,
     );
-    if (eligible.length === 0) {
+    if (eligible.length === 0 && input.reportId === undefined) {
       return { accepted: 0, dropped: 0 };
     }
 
@@ -235,7 +242,7 @@ export const reportAgentTraffic = agentProcedure
     // ids and for legacy single-node attribution.
     const serverNodeIds = new Set(await listServerNodeIds(context.server.id));
 
-    const rekeyed = eligible.map((entry) => {
+    const entries = eligible.map((entry) => {
       const resolved = resolveReportedTrafficUser(
         entry.subscriptionId,
         serverNodeIds,
@@ -248,44 +255,33 @@ export const reportAgentTraffic = agentProcedure
       };
     });
 
-    const subIds = [...new Set(rekeyed.map((r) => r.subscriptionId))];
-    const userBySub = await getSubscriptionUserMap(subIds);
-
-    const known = rekeyed.filter((r) => userBySub.has(r.subscriptionId));
-    if (known.length === 0) {
-      return { accepted: 0, dropped: eligible.length };
+    try {
+      const result = await recordAgentTraffic({
+        serverId: context.server.id,
+        reportId: input.reportId,
+        contentHash:
+          input.reportId === undefined
+            ? undefined
+            : computeTrafficReportHash(input),
+        windowStartedAt: input.windowStartedAt
+          ? new Date(input.windowStartedAt)
+          : null,
+        windowEndedAt: input.windowEndedAt
+          ? new Date(input.windowEndedAt)
+          : null,
+        entries,
+      });
+      return {
+        accepted: result.accepted,
+        dropped: result.dropped,
+        ...(input.reportId === undefined
+          ? {}
+          : { reportId: input.reportId, duplicate: result.duplicate }),
+      };
+    } catch (error) {
+      if (error instanceof TrafficReportConflictError) {
+        throw new ORPCError("CONFLICT", { message: error.message });
+      }
+      throw error;
     }
-
-    const windowStartedAt = input.windowStartedAt
-      ? new Date(input.windowStartedAt)
-      : null;
-    const windowEndedAt = input.windowEndedAt
-      ? new Date(input.windowEndedAt)
-      : null;
-
-    const records: NewTrafficRecord[] = known.map((r) => ({
-      id: randomUUID(),
-      subscriptionId: r.subscriptionId,
-      userId: userBySub.get(r.subscriptionId)!,
-      nodeId: r.nodeId,
-      serverId: context.server.id,
-      uplinkBytes: r.uplinkBytes,
-      downlinkBytes: r.downlinkBytes,
-      windowStartedAt,
-      windowEndedAt,
-    }));
-    // A subscription appears once per report (one stats counter per user), but
-    // sum defensively in case an agent splits entries.
-    const deltaBySub = new Map<string, number>();
-    for (const r of known) {
-      deltaBySub.set(
-        r.subscriptionId,
-        (deltaBySub.get(r.subscriptionId) ?? 0) +
-          r.uplinkBytes +
-          r.downlinkBytes,
-      );
-    }
-    await recordAgentTraffic(records, deltaBySub);
-
-    return { accepted: known.length, dropped: eligible.length - known.length };
   });

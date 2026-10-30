@@ -39,6 +39,12 @@ These are the behaviours the code and its comments establish. Preserve them when
 - **Self-heal.** An equal `desiredRevision` is skipped only while the active config still parses and every referenced generation still validates.
 - **Secrets stay out of logs.** The token header is marked sensitive; keep tokens, keys and full config bodies out of `tracing` output.
 
+## Traffic delivery
+
+The agent reads and resets sing-box user counters, seals each batch with a stable report ID, and stores pending batches under `AGENT_STATE_DIR/traffic/pending` before posting them. Acknowledged batches are removed; retries and restarts reuse the same ID. The control plane deduplicates IDs per server for 30 days and applies history and quota updates in one statement. Older control planes do not acknowledge IDs and cannot guarantee replay-safe accounting. Legacy agents send no IDs and also lack that guarantee.
+
+This is not unconditional zero-loss accounting. Counters can be lost if sing-box or the agent crashes before they are collected and persisted; a full or unavailable state directory also leaves data in memory. Pending batches older than seven days are discarded with an error to avoid replaying after the ledger retention window; permanently rejected batches are moved aside. Protect and monitor the state directory, and report these limits rather than claiming exactly-once collection.
+
 ## Checks
 
 These mirror the `server-agent` job in `.github/workflows/test.yml`:

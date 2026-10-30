@@ -1,4 +1,12 @@
-import { bigint, index, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import {
+  bigint,
+  index,
+  integer,
+  pgTable,
+  text,
+  timestamp,
+  unique,
+} from "drizzle-orm/pg-core";
 
 import { user } from "./auth-schema.ts";
 import { subscription } from "./plan-schema.ts";
@@ -56,3 +64,43 @@ export const trafficRecord = pgTable(
 
 export type TrafficRecord = typeof trafficRecord.$inferSelect;
 export type NewTrafficRecord = typeof trafficRecord.$inferInsert;
+
+/**
+ * Idempotency ledger for agent traffic reports that carry a `reportId`. A row is
+ * inserted in the same SQL statement that writes the history rows and bumps the
+ * subscription counters, so "report applied" and "ledger row exists" are one
+ * atomic fact on both database drivers. `(serverId, reportId)` is the identity:
+ * ids are owned by the agent and only unique per server. `contentHash` lets a
+ * replay with the same id but different content be rejected, and `accepted` /
+ * `dropped` let a duplicate be answered exactly like the first delivery. Rows
+ * are pruned after the retention window (see `TRAFFIC_REPORT_RETENTION_DAYS`
+ * in `@/query/agent`); the agent discards pending reports well before that.
+ */
+export const trafficReport = pgTable(
+  "traffic_report",
+  {
+    id: text("id").primaryKey(),
+    // Cascade: the ledger only protects replays from that server's agent.
+    serverId: text("server_id")
+      .notNull()
+      .references(() => server.id, { onDelete: "cascade" }),
+    reportId: text("report_id").notNull(),
+    contentHash: text("content_hash").notNull(),
+    accepted: integer("accepted").notNull(),
+    dropped: integer("dropped").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique("traffic_report_server_report_unique").on(
+      table.serverId,
+      table.reportId,
+    ),
+    // Serves the retention prune (per server, oldest first).
+    index("traffic_report_server_created_idx").on(
+      table.serverId,
+      table.createdAt,
+    ),
+  ],
+);
+
+export type TrafficReport = typeof trafficReport.$inferSelect;

@@ -97,6 +97,7 @@ async fn main() -> Result<()> {
 
     let bin = resolve_binary(args.sing_box_path);
     let sing_box_version = singbox_version(&bin).await;
+    let traffic_dir = args.state_dir.join("traffic");
     let mut config = ConfigManager::new(client.clone(), args.state_dir)?;
     let (mut manager, startup_error) = if config.has_active_config() {
         match check_config(&bin, config.config_path()).await {
@@ -121,7 +122,7 @@ async fn main() -> Result<()> {
     };
     let mut reporter = config
         .v2ray_api_listen()
-        .and_then(|addr| TrafficReporter::new(addr.to_string()).ok());
+        .and_then(|addr| TrafficReporter::new(addr.to_string(), traffic_dir.clone()).ok());
     let mut status = AgentStatus::from_config(&config);
     if let Some(message) = startup_error {
         status.error = Some(ReportedError {
@@ -141,7 +142,7 @@ async fn main() -> Result<()> {
         Ok(next) => policy = next,
         Err(e) => error!("initial config sync failed: {e}"),
     }
-    reconcile_reporter(config.v2ray_api_listen(), &mut reporter);
+    reconcile_reporter(config.v2ray_api_listen(), &mut reporter, &traffic_dir);
     heartbeat(
         &client,
         &mut config,
@@ -173,7 +174,7 @@ async fn main() -> Result<()> {
                     Ok(next) => policy = next,
                     Err(e) => error!("config sync failed: {e}"),
                 }
-                reconcile_reporter(config.v2ray_api_listen(), &mut reporter);
+                reconcile_reporter(config.v2ray_api_listen(), &mut reporter, &traffic_dir);
                 heartbeat(
                     &client,
                     &mut config,
@@ -460,20 +461,26 @@ fn node_id_from_error(message: &str, candidate: &CandidateConfig) -> Option<Stri
     candidate.materialized_node_ids.get(index).cloned()
 }
 
-fn reconcile_reporter(addr: Option<&str>, reporter: &mut Option<TrafficReporter>) {
+fn reconcile_reporter(
+    addr: Option<&str>,
+    reporter: &mut Option<TrafficReporter>,
+    traffic_dir: &Path,
+) {
     match (addr, reporter.as_mut()) {
         (Some(addr), Some(reporter)) => {
             if let Err(e) = reporter.update_addr(addr) {
                 error!("failed to update traffic stats address: {e}");
             }
         }
-        (Some(addr), None) => match TrafficReporter::new(addr.to_string()) {
-            Ok(r) => {
-                info!("traffic reporting enabled");
-                *reporter = Some(r);
+        (Some(addr), None) => {
+            match TrafficReporter::new(addr.to_string(), traffic_dir.to_path_buf()) {
+                Ok(r) => {
+                    info!("traffic reporting enabled");
+                    *reporter = Some(r);
+                }
+                Err(e) => error!("failed to enable traffic reporting: {e}"),
             }
-            Err(e) => error!("failed to enable traffic reporting: {e}"),
-        },
+        }
         (None, Some(_)) => {
             info!("v2ray_api no longer configured; traffic reporting disabled");
             *reporter = None;

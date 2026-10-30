@@ -1,11 +1,11 @@
 import { parseRevisionSeq } from "@blossom/domain/config-revision";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
+import { createHash, randomUUID } from "node:crypto";
 import type { z } from "zod";
 
 import { db } from "@/db";
-import { subscription } from "@/db/plan-schema";
 import { node, type Server, server } from "@/db/proxy-schema";
-import { type NewTrafficRecord, trafficRecord } from "@/db/traffic-schema";
+import { trafficReport } from "@/db/traffic-schema";
 import type { heartbeatSchema } from "@/orpc/proxy/schema";
 import { pruneAppliedConfigChanges } from "@/query/config-change";
 
@@ -155,36 +155,237 @@ export async function listServerNodeIds(serverId: string): Promise<string[]> {
   return rows.map((row) => row.id);
 }
 
-export async function getSubscriptionUserMap(
-  subscriptionIds: string[],
-): Promise<Map<string, string>> {
-  if (subscriptionIds.length === 0) {
-    return new Map();
+/**
+ * How long a `(serverId, reportId)` ledger row is kept. It must stay longer than
+ * the longest time an agent may keep retrying one batch (7 days, enforced by the
+ * agent), otherwise a very late replay could find no ledger row and be applied
+ * a second time.
+ */
+export const TRAFFIC_REPORT_RETENTION_DAYS = 30;
+const TRAFFIC_REPORT_PRUNE_BATCH = 500;
+
+/** One resolved entry of a traffic report, ready to be applied. */
+export interface TrafficReportRow {
+  subscriptionId: string;
+  nodeId: string | null;
+  uplinkBytes: number;
+  downlinkBytes: number;
+}
+
+export interface RecordTrafficReport {
+  serverId: string;
+  /** Absent for legacy agents; present reports are applied at most once. */
+  reportId?: string;
+  /** Required with `reportId`; see {@link computeTrafficReportHash}. */
+  contentHash?: string;
+  windowStartedAt: Date | null;
+  windowEndedAt: Date | null;
+  entries: TrafficReportRow[];
+}
+
+export interface RecordTrafficResult {
+  accepted: number;
+  dropped: number;
+  /** The report id had already been applied; nothing was written. */
+  duplicate: boolean;
+}
+
+/** The report id was already used by this server for different content. */
+export class TrafficReportConflictError extends Error {
+  constructor() {
+    super("traffic report id was already used with different content");
+    this.name = "TrafficReportConflictError";
   }
-  const rows = await db
-    .select({ id: subscription.id, userId: subscription.userId })
-    .from(subscription)
-    .where(inArray(subscription.id, subscriptionIds));
-  return new Map(rows.map((row) => [row.id, row.userId]));
 }
 
 /**
- * Appends traffic history before incrementing quota counters. The Neon HTTP
- * driver has no interactive transactions, so this preserves the existing
- * retry semantics: a partial failure may over-log but never double-count quota.
+ * Stable digest of the request as the agent sent it (before attribution), used
+ * to tell a genuine retry from a reused id. Entry order is irrelevant.
+ */
+export function computeTrafficReportHash(report: {
+  windowStartedAt?: string;
+  windowEndedAt?: string;
+  entries: {
+    subscriptionId: string;
+    uplinkBytes: number;
+    downlinkBytes: number;
+  }[];
+}): string {
+  const entries = report.entries
+    .map((e) => [e.subscriptionId, e.uplinkBytes, e.downlinkBytes] as const)
+    .sort((a, b) =>
+      a[0] === b[0]
+        ? a[1] === b[1]
+          ? a[2] - b[2]
+          : a[1] - b[1]
+        : a[0] < b[0]
+          ? -1
+          : 1,
+    );
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        report.windowStartedAt ?? null,
+        report.windowEndedAt ?? null,
+        entries,
+      ]),
+    )
+    .digest("hex");
+}
+
+/**
+ * Applies one traffic report: history rows, subscription counters and (when the
+ * report has an id) the idempotency ledger row, all in ONE SQL statement.
+ *
+ * Why one statement: `neon-http` has no interactive transactions, so ordinary
+ * sequential writes can fail half-way and a retry then double-counts what
+ * already landed. A single statement with data-modifying CTEs is atomic on both
+ * drivers (PostgreSQL runs it in one implicit transaction; neon-http sends it
+ * as one request). The `claim` CTE inserts the ledger row with
+ * `ON CONFLICT DO NOTHING`; `history` and `usage` only run when that insert
+ * produced a row. Two concurrent deliveries of the same report both reach the
+ * unique index; the loser blocks until the winner commits, then inserts
+ * nothing, so exactly one of them writes history and counters.
+ *
+ * Without a `reportId` (legacy agents) the statement is still atomic, but a
+ * replay after a lost response is counted again: there is nothing to
+ * recognise it by.
+ *
+ * Unknown subscriptions are dropped (counted in `dropped`); expired or
+ * cancelled ones still accrue, as before.
  */
 export async function recordAgentTraffic(
-  records: NewTrafficRecord[],
-  deltaBySubscription: ReadonlyMap<string, number>,
-): Promise<void> {
-  await db.insert(trafficRecord).values(records);
+  report: RecordTrafficReport,
+): Promise<RecordTrafficResult> {
+  const { serverId, reportId } = report;
+  if (reportId !== undefined && !report.contentHash) {
+    throw new Error("contentHash is required with reportId");
+  }
+  const rows = JSON.stringify(
+    report.entries.map((e) => ({
+      id: randomUUID(),
+      subscription_id: e.subscriptionId,
+      node_id: e.nodeId,
+      uplink_bytes: e.uplinkBytes,
+      downlink_bytes: e.downlinkBytes,
+    })),
+  );
+  const windowStartedAt = report.windowStartedAt?.toISOString() ?? null;
+  const windowEndedAt = report.windowEndedAt?.toISOString() ?? null;
 
-  for (const [subscriptionId, delta] of deltaBySubscription) {
-    await db
-      .update(subscription)
-      .set({
-        trafficUsedBytes: sql`${subscription.trafficUsedBytes} + ${delta}`,
-      })
-      .where(eq(subscription.id, subscriptionId));
+  const claimCte =
+    reportId === undefined
+      ? sql``
+      : sql`claim AS (
+          INSERT INTO traffic_report (id, server_id, report_id, content_hash, accepted, dropped, created_at)
+          SELECT ${randomUUID()}::text, ${serverId}::text, ${reportId}::text, ${report.contentHash}::text,
+                 (SELECT count(*) FROM resolved)::int,
+                 ((SELECT count(*) FROM incoming) - (SELECT count(*) FROM resolved))::int,
+                 timezone('utc', now())
+          ON CONFLICT (server_id, report_id) DO NOTHING
+          RETURNING id
+        ),`;
+  const apply =
+    reportId === undefined ? sql`TRUE` : sql`EXISTS (SELECT 1 FROM claim)`;
+  const claimedColumn =
+    reportId === undefined ? sql`1` : sql`(SELECT count(*) FROM claim)::int`;
+
+  const statement = sql`
+    WITH incoming AS (
+      SELECT * FROM jsonb_to_recordset(${rows}::jsonb)
+        AS e(id text, subscription_id text, node_id text, uplink_bytes bigint, downlink_bytes bigint)
+    ),
+    resolved AS (
+      SELECT i.id, i.subscription_id, s.user_id, i.node_id, i.uplink_bytes, i.downlink_bytes
+      FROM incoming i JOIN subscription s ON s.id = i.subscription_id
+    ),
+    ${claimCte}
+    history AS (
+      INSERT INTO traffic_record (id, subscription_id, user_id, node_id, server_id, uplink_bytes, downlink_bytes, window_started_at, window_ended_at)
+      SELECT r.id, r.subscription_id, r.user_id, r.node_id, ${serverId}::text, r.uplink_bytes, r.downlink_bytes,
+             ${windowStartedAt}::timestamp, ${windowEndedAt}::timestamp
+      FROM resolved r
+      WHERE ${apply}
+      RETURNING id
+    ),
+    usage AS (
+      UPDATE subscription s
+      SET traffic_used_bytes = s.traffic_used_bytes + t.delta::bigint,
+          updated_at = timezone('utc', now())
+      FROM (
+        SELECT subscription_id, sum(uplink_bytes + downlink_bytes) AS delta
+        FROM resolved GROUP BY subscription_id
+      ) t
+      WHERE s.id = t.subscription_id AND ${apply}
+      RETURNING s.id
+    )
+    SELECT ${claimedColumn} AS claimed,
+           (SELECT count(*) FROM history)::int AS accepted,
+           ((SELECT count(*) FROM incoming) - (SELECT count(*) FROM resolved))::int AS dropped,
+           (SELECT count(*) FROM usage)::int AS usage_rows
+  `;
+
+  // A pruned ledger row can vanish between the conflict and the lookup below;
+  // one more attempt then applies the report as a fresh delivery.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const [outcome] = await db.execute<{
+      claimed: number;
+      accepted: number;
+      dropped: number;
+    }>(statement, "objects");
+    if (!outcome) {
+      throw new Error("traffic statement returned no row");
+    }
+    if (Number(outcome.claimed) > 0) {
+      if (reportId !== undefined) {
+        await pruneTrafficReports(serverId);
+      }
+      return {
+        accepted: Number(outcome.accepted),
+        dropped: Number(outcome.dropped),
+        duplicate: false,
+      };
+    }
+
+    const [existing] = await db
+      .select()
+      .from(trafficReport)
+      .where(
+        and(
+          eq(trafficReport.serverId, serverId),
+          eq(trafficReport.reportId, reportId!),
+        ),
+      );
+    if (!existing) continue;
+    if (existing.contentHash !== report.contentHash) {
+      throw new TrafficReportConflictError();
+    }
+    return {
+      accepted: existing.accepted,
+      dropped: existing.dropped,
+      duplicate: true,
+    };
+  }
+  throw new Error("traffic report could not be recorded");
+}
+
+/** Best-effort retention pruning; never fails the report it piggybacks on. */
+async function pruneTrafficReports(serverId: string): Promise<void> {
+  const cutoff = new Date(
+    Date.now() - TRAFFIC_REPORT_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  try {
+    await db.execute(
+      sql`
+      DELETE FROM traffic_report WHERE id IN (
+        SELECT id FROM traffic_report
+        WHERE server_id = ${serverId}::text AND created_at < ${cutoff}::timestamp
+        LIMIT ${TRAFFIC_REPORT_PRUNE_BATCH}
+      )
+    `,
+      "objects",
+    );
+  } catch {
+    // Retention is housekeeping; the next report prunes again.
   }
 }

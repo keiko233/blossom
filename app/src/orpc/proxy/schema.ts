@@ -302,8 +302,26 @@ export type CertificateDeployment = z.infer<typeof certificateDeploymentSchema>;
  * per user. Sing-box user names are subscription ids, so each entry maps
  * straight to a subscription row. Deltas, not totals: the agent resets the
  * stat counters on read (`reset=true`) and posts what accumulated.
+ *
+ * `reportId` makes the report idempotent. It is chosen by the agent when it
+ * seals a batch, persisted with the batch, and reused unchanged on every
+ * retry; it is unique per server (the control plane scopes it by the calling
+ * server). Agents that predate it omit the field and keep the legacy,
+ * not-replay-safe behaviour.
  */
+// The character set is enforced with a refinement rather than `.regex()`: a
+// JSON-schema `pattern` makes the generated Rust client depend on `regress`,
+// and the spec only needs the length bounds. Allowed: A-Z a-z 0-9 . _ -
+export const trafficReportIdSchema = z
+  .string()
+  .min(8)
+  .max(128)
+  .refine((id) => /^[A-Za-z0-9._-]+$/.test(id), {
+    message: "reportId may only contain letters, digits, '.', '_' and '-'",
+  });
+
 export const trafficReportSchema = z.object({
+  reportId: trafficReportIdSchema.optional(),
   // Reporting window bounds as stated by the agent; optional metadata.
   windowStartedAt: z.iso.datetime().optional(),
   windowEndedAt: z.iso.datetime().optional(),
@@ -316,6 +334,18 @@ export const trafficReportSchema = z.object({
       }),
     )
     .max(10_000),
+});
+
+/**
+ * `reportId` is echoed only when the request carried one, which is how an agent
+ * tells an idempotent control plane from one that ignored the field. `duplicate`
+ * is true when the id had already been applied and nothing was written again.
+ */
+export const trafficReportOutputSchema = z.object({
+  accepted: z.number().int(),
+  dropped: z.number().int(),
+  reportId: z.string().optional(),
+  duplicate: z.boolean().optional(),
 });
 
 export type TrafficReportInput = z.infer<typeof trafficReportSchema>;
