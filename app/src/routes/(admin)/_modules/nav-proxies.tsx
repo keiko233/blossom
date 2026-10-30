@@ -17,33 +17,33 @@ import {
 } from "@/components/ui/sidebar";
 import { m } from "@/paraglide/messages";
 
-const items = [
-  {
-    name: m.admin_nav_proxies_item_servers(),
-    url: "/admin/proxies/servers",
-  },
-  {
-    name: m.admin_nav_proxies_item_nodes(),
-    url: "/admin/proxies/nodes",
-  },
-  {
-    name: m.admin_nav_proxies_item_certificates(),
-    url: "/admin/proxies/certificates",
-  },
-  {
-    name: m.admin_nav_proxies_item_groups(),
-    url: "/admin/proxies/groups",
-  },
-  {
-    name: m.admin_nav_proxies_item_rules(),
-    url: "/admin/proxies/rules",
-  },
-] satisfies Array<{
-  name: string;
-  url: ComponentProps<typeof Link>["to"];
-}>;
-
 export function NavProxies() {
+  const items = [
+    {
+      name: m.admin_nav_proxies_item_servers(),
+      url: "/admin/proxies/servers",
+    },
+    {
+      name: m.admin_nav_proxies_item_nodes(),
+      url: "/admin/proxies/nodes",
+    },
+    {
+      name: m.admin_nav_proxies_item_certificates(),
+      url: "/admin/proxies/certificates",
+    },
+    {
+      name: m.admin_nav_proxies_item_groups(),
+      url: "/admin/proxies/groups",
+    },
+    {
+      name: m.admin_nav_proxies_item_rules(),
+      url: "/admin/proxies/rules",
+    },
+  ] satisfies Array<{
+    name: string;
+    url: ComponentProps<typeof Link>["to"];
+  }>;
+
   const { pathname } = useLocation();
 
   return (
