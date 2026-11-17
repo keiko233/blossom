@@ -9,6 +9,7 @@ import {
 } from "@tanstack/react-table";
 import { EllipsisIcon, PlusIcon, ServerIcon } from "lucide-react";
 import type React from "react";
+import { useMemo } from "react";
 
 import {
   PageHeader,
@@ -83,7 +84,10 @@ function RouteComponent(): React.ReactElement {
   // told apart from one that is still loading.
   const filterServerMissing =
     Boolean(serverId) && servers !== undefined && !filterServer;
-  const nodes = allNodes && filterNodesByServer(allNodes, serverId);
+  const nodes = useMemo(
+    () => allNodes && filterNodesByServer(allNodes, serverId),
+    [allNodes, serverId],
+  );
 
   const invalidate = () =>
     Promise.all([
