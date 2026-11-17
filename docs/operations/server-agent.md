@@ -8,7 +8,7 @@ Verified (code):
 
 - Config endpoint: `GET <AGENT_URL>/agent/config/v3` (operation `getAgentConfigV3`). `AGENT_URL` **must include the `/api` prefix**, e.g. `https://blossom.example.com/api`, because spec paths are relative to it.
 - Other endpoints: `POST /agent/heartbeat` and `POST /agent/traffic`. All three authenticate with `Authorization: Bearer <agent token>`, resolved to exactly one server by hash.
-- The agent advertises capabilities `config-v3`, `managed-tls-v3`, `certificate-deployments-v1`, `atomic-config-rollback` in its heartbeat (`server-agent/src/main.rs`).
+- The agent advertises capabilities `config-v3`, `managed-tls-v3`, `certificate-deployments-v1`, `atomic-config-rollback`, `connection-stream-traffic` in its heartbeat (`server-agent/src/main.rs`).
 - Intervals come from the control plane per server (config poll 5–86400 s, heartbeat 5–300 s). `AGENT_INTERVAL` (default 60) is only the bootstrap value.
 - A candidate config is checked with `sing-box check` before it replaces the active one; the previous good config is kept and used for rollback and for startup.
 
@@ -65,7 +65,7 @@ Verified (code):
 
 - The agent itself opens **no listening port**. It makes outbound HTTPS requests to `AGENT_URL`.
 - sing-box inbounds listen on `::` at each node's configured `listenPort` (`app/src/orpc/proxy/singbox.ts`). Host networking means these are real host ports: allow them in the host firewall and any cloud security group. Which of TCP/UDP each protocol needs was not verified here.
-- The v2ray stats API listens on `127.0.0.1:8080` (`V2RAY_API_LISTEN`). It is loopback-only, but it does occupy loopback port 8080 on that host, so another local service using that port would conflict. **Unverified:** the failure mode of such a conflict.
+- The agent injects a traffic-stats `api` service into the sing-box config, bound to `127.0.0.1` on a random free port with a random per-run secret. It is loopback-only and no longer uses the fixed port 8080 from the old `V2RAY_API_LISTEN` config. Requires sing-box >= 1.14 (official release binaries include the `api` service). Traffic is read as a stream of connection events, so a crash loses roughly one stream interval of in-memory deltas instead of everything since the last poll.
 - The control plane listens on 3000 (the Docker image), and PostgreSQL on 5432 inside the Compose network only.
 
 ## Upgrade and rollback

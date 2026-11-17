@@ -13,10 +13,11 @@ Statements are **Established** unless marked **Recommended**.
 | `src/config.rs`    | Fetches the v3 desired state, applies certificate bindings to the base sing-box config, writes candidates, tracks active / last-known-good, reports errors.      |
 | `src/certificate.rs` | Validated, generation-addressed certificate store under `<state_dir>/certificates/<id>/generation-<n>/`.                                                      |
 | `src/process.rs`   | Supervises the sing-box child (`processkit`): log forwarding, restart with backoff, graceful replacement, `sing-box check` preflight.                            |
-| `src/stats.rs`     | Hand-written tonic/prost client for sing-box's v2ray `StatsService` (no `.proto` files, no `tonic-build`).                                                       |
-| `src/traffic.rs`   | Collects per-user counter deltas, maps them to subscription/node ids and reports them.                                                                           |
+| `src/stats.rs`     | Hand-written tonic/prost client for sing-box's built-in `api` service (`StartedService.SubscribeConnections`; no `.proto` files, no `tonic-build`).              |
+| `src/accountant.rs` | Pure per-connection accounting state machine that turns connection events into per-user deltas.                                                                 |
+| `src/traffic.rs`   | Runs the connection stream in the background, accumulates per-user deltas, maps them to subscription/node ids and reports them.                                  |
 | `build.rs`         | Generates the API client from `openapi/spec.json` and stamps the build id (see below).                                                                           |
-| `examples/query_stats.rs` | Manual smoke test for the stats client against a running sing-box built `with_v2ray_api`.                                                               |
+| `examples/query_stats.rs` | Manual smoke test that prints the connection stream of a running sing-box >= 1.14.                                                                     |
 | `tests/mock_control_plane.py`, `scripts/test-managed-tls-docker.sh` | Docker-based end-to-end test of the managed-TLS lifecycle against a mock control plane.                                |
 
 ## Contract with the control plane
@@ -24,7 +25,7 @@ Statements are **Established** unless marked **Recommended**.
 - The agent's build-time contract with the app is the OpenAPI document `openapi/spec.json`; at runtime it talks to the app over that API. `build.rs` reads it, rewrites OAS 3.1 nullable `anyOf: [T, {type: "null"}]` into OAS 3.0 `nullable: true` in memory, and runs progenitor to produce `OUT_DIR/codegen.rs`, included by `src/client.rs`. The generated code is never committed. A missing spec fails the build with a message pointing at `pnpm agent:spec`.
 - Method names come from the spec's `operationId`s (`get_agent_config_v3`, `agent_heartbeat`, `report_agent_traffic`). Renaming an `operationId` in the app breaks the agent build — that is the intended signal.
 - `--url`/`AGENT_URL` must include the `/api` prefix; spec paths are relative to it.
-- The agent advertises capabilities in its heartbeat (`AGENT_CAPABILITIES` in `main.rs`: `config-v3`, `managed-tls-v3`, `certificate-deployments-v1`, `atomic-config-rollback`). Add a capability when the agent gains behaviour the control plane may want to depend on.
+- The agent advertises capabilities in its heartbeat (`AGENT_CAPABILITIES` in `main.rs`: `config-v3`, `managed-tls-v3`, `certificate-deployments-v1`, `atomic-config-rollback`, `connection-stream-traffic`). Add a capability when the agent gains behaviour the control plane may want to depend on.
 - `desiredRevision` is opaque to the agent: equality and content comparison only. The control plane parses its own sequence prefix back out of the reported `appliedRevision` for the [publish gate](architecture.md#publish-gate).
 - The poll and heartbeat intervals come from the control plane per server; `AGENT_INTERVAL` is only the bootstrap value.
 
@@ -38,12 +39,13 @@ These are the behaviours the code and its comments establish. Preserve them when
 - **Report honestly.** `installed` is reported once material is staged and validated; `inUse` only after the candidate has been committed.
 - **Self-heal.** An equal `desiredRevision` is skipped only while the active config still parses and every referenced generation still validates.
 - **Secrets stay out of logs.** The token header is marked sensitive; keep tokens, keys and full config bodies out of `tracing` output.
+- **Do not trust the base config for traffic collection.** The agent strips `experimental.v2ray_api` and any pre-existing `api` service, then injects its own `api` service bound to `127.0.0.1` on a random free port with a random per-run secret. The injected endpoint lives inside the written configs, so a restart of the same agent run stays consistent, and the secret never leaves the process.
 
 ## Traffic delivery
 
-The agent reads and resets sing-box user counters, seals each batch with a stable report ID, and stores pending batches under `AGENT_STATE_DIR/traffic/pending` before posting them. Acknowledged batches are removed; retries and restarts reuse the same ID. The control plane deduplicates IDs per server for 30 days and applies history and quota updates in one statement. Older control planes do not acknowledge IDs and cannot guarantee replay-safe accounting. Legacy agents send no IDs and also lack that guarantee.
+The agent subscribes to sing-box's built-in `api` service (`StartedService.SubscribeConnections`, sing-box >= 1.14) and turns connection events into per-user deltas: UPDATE deltas are counted as they arrive, CLOSED events pay `final total − accounted`, and every stream snapshot is reconciled by connection id (known ids contribute only the unaccounted remainder; unknown ids count in full). Deltas are sealed into batches with a stable report ID and stored under `AGENT_STATE_DIR/traffic/pending` before posting. Acknowledged batches are removed; retries and restarts reuse the same ID. The control plane deduplicates IDs per server for 30 days and applies history and quota updates in one statement. Older control planes do not acknowledge IDs and cannot guarantee replay-safe accounting. Legacy agents send no IDs and also lack that guarantee.
 
-This is not unconditional zero-loss accounting. Counters can be lost if sing-box or the agent crashes before they are collected and persisted; a full or unavailable state directory also leaves data in memory. Pending batches older than seven days are discarded with an error to avoid replaying after the ledger retention window; permanently rejected batches are moved aside. Protect and monitor the state directory, and report these limits rather than claiming exactly-once collection.
+This is not unconditional zero-loss accounting. Traffic that arrived after the last snapshot and before a reconnect, or after the last UPDATE before a crash, is lost; a full or unavailable state directory also leaves sealed batches in memory. Pending batches older than seven days are discarded with an error to avoid replaying after the ledger retention window; permanently rejected batches are moved aside. Protect and monitor the state directory, and report these limits rather than claiming exactly-once collection. The stream model shrinks the crash-loss window for in-memory deltas to roughly one stream interval (upstream default 1 s).
 
 ## Checks
 
@@ -66,7 +68,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 
   The image build compiles sing-box from source and is slow; the script needs Docker, `python3` and `curl`, starts a mock control plane on port 18765 (override with `MOCK_PORT`) and a container, and cleans both up on exit. Run it when you change certificate handling, config application or the heartbeat/reporting contract; skip it for unrelated edits and say so.
 - The pre-commit hook runs `cargo fmt` and `cargo clippy --fix` on staged `.rs` files (see [Workflow](workflow.md#git-hooks)).
-- `cargo run` starts a long-running process. It needs a reachable control plane, an agent token and a sing-box binary (built with the `with_v2ray_api` tag for traffic stats), and it launches and supervises sing-box, which binds the inbound ports the control plane assigns. Its state directory defaults to `/var/lib/blossom-agent`, so pass `--state-dir` (or `AGENT_STATE_DIR`) pointing at a temporary directory when experimenting, point `--url` at a disposable local control plane rather than a production one, and never run it on a host whose real proxy you depend on. The mock control plane used by the Docker lifecycle test is the contained way to exercise the agent end to end. Whether to run any of this is for the task instructions to decide.
+- `cargo run` starts a long-running process. It needs a reachable control plane, an agent token and a sing-box binary >= 1.14 (official release binaries include the `api` service used for traffic stats), and it launches and supervises sing-box, which binds the inbound ports the control plane assigns. Its state directory defaults to `/var/lib/blossom-agent`, so pass `--state-dir` (or `AGENT_STATE_DIR`) pointing at a temporary directory when experimenting, point `--url` at a disposable local control plane rather than a production one, and never run it on a host whose real proxy you depend on. The mock control plane used by the Docker lifecycle test is the contained way to exercise the agent end to end. Whether to run any of this is for the task instructions to decide.
 
 ## Changing the agent
 
