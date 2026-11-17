@@ -9,8 +9,9 @@ import { encodeTrafficUser } from "./traffic-user-codec";
  * Maps a subscription onto a sing-box inbound user for a given node. Which
  * credential fields the user object carries is introspected from the protocol's
  * schema (same philosophy as the registry: no hand-maintained per-protocol
- * table). The user's identifier is the subscription id, so v2ray_api traffic
- * stats map 1:1 back to a subscription.
+ * table). The connection stream reports this identifier in `Connection.user`,
+ * so traffic maps back to a subscription (and, for name-keyed protocols, a
+ * node).
  */
 
 // Zod internals are reached the same loosely-typed way as in the registry.
@@ -72,15 +73,11 @@ export function passwordFor(node: Node, password: string): string {
  *
  * Field selection by shape:
  *  - `name` → coded (node, subscription) identifier. The codec encodes both
- *    so v2ray_api per-user stats map back to the producing inbound; see
- *    `traffic-user-codec` for the wire format. `username`-keyed protocols
- *    (naive/socks/http) have no `name` field at all, so v2ray_api never sees
- *    a per-user counter for them — their traffic is not reported per user,
- *    regardless of whether the value were bare or coded. We therefore keep
- *    their `username` filled with the bare subscription id: it cannot carry
- *    per-node attribution anyway, and the bare id matches the legacy path.
+ *    so connection events map back to the producing inbound; see
+ *    `traffic-user-codec` for the wire format.
  *  - `username` → subscription id (naive/socks/http; per-node attribution
- *    is lost for these protocols as described above, a known limitation)
+ *    is lost for these protocols, a known limitation; quota accounting still
+ *    receives the bare subscription id)
  *  - `uuid` → credentialUuid (vless/vmess/tuic)
  *  - `password` → credentialPassword, SS2022 key-length adjusted (trojan/ss/
  *    hysteria2/anytls/shadowtls/tuic/naive/socks/http)

@@ -159,11 +159,7 @@ describe("compileServerConfig", () => {
       unknown
     >;
     expect((config.inbounds as unknown[]).length).toBe(0);
-    const experimental = config.experimental as {
-      v2ray_api: { stats: { inbounds: string[]; users: string[] } };
-    };
-    expect(experimental.v2ray_api.stats.inbounds).toEqual([]);
-    expect(experimental.v2ray_api.stats.users).toEqual([]);
+    expect(config.experimental).toBeUndefined();
   });
 
   it("emits an empty route rule list by default", () => {
@@ -207,44 +203,36 @@ describe("compileServerConfig", () => {
       string,
       unknown
     >;
-    const experimental = config.experimental as {
-      v2ray_api: { stats: { inbounds: string[]; users: string[] } };
-    };
-    // Each coded name encodes the producing node, so the two entries are
-    // distinct — stats.users distinguishes per node correctly.
-    expect(experimental.v2ray_api.stats.users).toEqual(
-      expect.arrayContaining([codedS1, codedS1FromN2]),
-    );
-    expect(experimental.v2ray_api.stats.users).toHaveLength(2);
-    expect(experimental.v2ray_api.stats.inbounds).toEqual([
+    const compiled = config.inbounds as {
+      tag: string;
+      users: { name?: string }[];
+    }[];
+    expect(compiled.map((inbound) => inbound.tag)).toEqual([
       "node-n1",
       "node-n2",
     ]);
+    expect(
+      compiled.flatMap((inbound) => inbound.users.map((u) => u.name)),
+    ).toEqual([codedS1, codedS1FromN2]);
   });
 
-  it("preserves the v2ray_api hook on an empty config", () => {
+  it("does not emit a legacy v2ray_api hook", () => {
     const config = compileServerConfig({ inbounds: [] }) as unknown as Record<
       string,
       unknown
     >;
-    expect(config.experimental).toBeDefined();
-    expect(
-      (config.experimental as { v2ray_api: unknown }).v2ray_api,
-    ).toBeDefined();
-  });
-
-  it("still parses when v2ray_api is disabled", () => {
     const inbounds: NodeInbound[] = [
       {
         node: makeNode("n1", "vless"),
         users: [{ name: encodeTrafficUser("n1", "s1"), uuid: UUID_A }],
       },
     ];
-    const config = compileServerConfig({
-      inbounds,
-      enableV2rayApi: false,
-    }) as unknown as Record<string, unknown>;
+    const populated = compileServerConfig({ inbounds }) as unknown as Record<
+      string,
+      unknown
+    >;
     expect(config.experimental).toBeUndefined();
+    expect(populated.experimental).toBeUndefined();
   });
 
   it("emits no certificate material or paths in the base config for managed TLS nodes", () => {

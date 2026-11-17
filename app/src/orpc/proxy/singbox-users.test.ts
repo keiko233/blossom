@@ -53,7 +53,7 @@ function makeSubscription(): Subscription {
 describe("buildInboundUser", () => {
   const sub = makeSubscription();
   // All name-keyed protocols now carry the codec-encoded (node, sub) identifier
-  // so v2ray_api per-user stats still attribute traffic to a specific inbound.
+  // so connection events still attribute traffic to a specific inbound.
   const codedName = encodeTrafficUser("node-1", "sub-1");
 
   it("maps vless to name + uuid without flow", () => {
@@ -112,8 +112,8 @@ describe("buildInboundUser", () => {
 
   it("keys naive users by username instead of name", () => {
     // Username-keyed protocols keep the bare subscription id — they have no
-    // `name` field, so per-user v2ray_api stats are already keyed on `username`.
-    // Per-node attribution loss is an accepted limitation for these protocols.
+    // `name` field, so the connection stream reports `username`. Per-node
+    // attribution loss is an accepted limitation for these protocols.
     const user = buildInboundUser(makeNode("naive"), sub);
     expect(user).toEqual({ username: "sub-1", password: PASSWORD });
   });

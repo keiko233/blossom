@@ -5,14 +5,15 @@ import { INBOUND_BY_TYPE } from "@/orpc/proxy/sing-box-registry";
  * Pure and read-only: it describes what the current compiler and agent do, and
  * changes neither authorization nor quota semantics.
  *
- * Per-user accounting exists only through sing-box's `v2ray_api` user stats.
- * `buildInboundUser` gives an inbound user a coded `name` only when the
- * protocol's `users` element has a `name` field; `compileServerConfig`
- * registers exactly those names in `experimental.v2ray_api.stats.users`.
- * Username-keyed protocols (naive/socks/http/mixed) have no `name`, so their
- * traffic never reaches a per-user counter. The classification below reads the
- * same registry shape instead of keeping a protocol-name table, and
- * `traffic-capabilities.test.ts` checks it against the real compiler output.
+ * Per-user accounting comes from the agent's sing-box connection stream
+ * (`StartedService.SubscribeConnections`), whose `user` field is the inbound
+ * user identifier. `buildInboundUser` gives name-keyed protocols a coded node +
+ * subscription identifier and username-keyed protocols (naive/socks/http/mixed)
+ * the bare subscription id. Both reach the subscription quota; username-keyed
+ * traffic loses per-node attribution because the identifier carries no node.
+ * The classification below reads the same registry shape instead of keeping a
+ * protocol-name table, and `traffic-capabilities.test.ts` checks it against the
+ * real compiler output.
  *
  * Three states, deliberately not collapsed:
  *  - `accounted`   per-user counters are produced for this configuration.
@@ -25,9 +26,9 @@ import { INBOUND_BY_TYPE } from "@/orpc/proxy/sing-box-registry";
 export type AccountingStatus = "accounted" | "unaccounted" | "unknown";
 
 export type AccountingReason =
-  /** The inbound user has a `name`, which the compiler registers for stats. */
+  /** The inbound user has a coded `name` (node + subscription). */
   | "name-keyed-user"
-  /** The inbound user is keyed by `username` only; no stats counter exists. */
+  /** The inbound user is keyed by `username`; quota works, per-node does not. */
   | "username-keyed-user"
   /** The protocol is not an inbound type of the sing-box schema we compile. */
   | "unregistered-protocol"
@@ -126,7 +127,7 @@ export function classifyNodeAccounting(
     return { status: "accounted", reason: "name-keyed-user" };
   }
   if (fields.includes("username")) {
-    return { status: "unaccounted", reason: "username-keyed-user" };
+    return { status: "accounted", reason: "username-keyed-user" };
   }
   return { status: "unknown", reason: "no-user-model" };
 }

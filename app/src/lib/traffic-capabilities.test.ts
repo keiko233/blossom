@@ -41,19 +41,15 @@ const SUB = {
   credentialPassword: Buffer.alloc(32, 7).toString("base64"),
 } as unknown as Subscription;
 
-/** What the real compiler registers for per-user stats for this node. */
-function compiledStatsUsers(node: Node): {
-  userName: unknown;
-  statsUsers: string[];
+/** The inbound user the real compiler embeds for this node. */
+function compiledUser(node: Node): {
+  user: NonNullable<ReturnType<typeof buildInboundUser>>;
+  compiledUsers: unknown[];
 } {
   const user = buildInboundUser(node, SUB)!;
   const config = compileServerConfig({ inbounds: [{ node, users: [user] }] });
-  const stats = (
-    config.experimental as unknown as {
-      v2ray_api: { stats: { users: string[] } };
-    }
-  ).v2ray_api.stats;
-  return { userName: user.name, statsUsers: stats.users };
+  const inbounds = config.inbounds as { users?: unknown[] }[];
+  return { user, compiledUsers: inbounds[0]?.users ?? [] };
 }
 
 describe("classifyNodeAccounting", () => {
@@ -74,10 +70,10 @@ describe("classifyNodeAccounting", () => {
   });
 
   it.each(["naive", "socks", "http", "mixed"])(
-    "reports %s as unaccounted (username-keyed, no stats counter)",
+    "accounts %s by username without per-node attribution",
     (protocol) => {
       expect(classifyNodeAccounting({ protocol })).toEqual({
-        status: "unaccounted",
+        status: "accounted",
         reason: "username-keyed-user",
       });
     },
@@ -161,13 +157,13 @@ describe("classifyNodeAccounting", () => {
     }
   });
 
-  it("does not let settings improve a username-keyed protocol", () => {
+  it("does not let settings change a username-keyed protocol", () => {
     expect(
       classifyNodeAccounting({
         protocol: "socks",
         settings: { managed: true, destinations: [{}] },
       }).status,
-    ).toBe("unaccounted");
+    ).toBe("accounted");
   });
 
   it("classifies every node protocol into exactly one non-throwing state", () => {
@@ -185,7 +181,7 @@ describe("classification vs. the real compiler", () => {
 
   const compilable = NODE_PROTOCOLS.filter((protocol) => {
     try {
-      compiledStatsUsers(makeNode(protocol, SETTINGS[protocol]));
+      compiledUser(makeNode(protocol, SETTINGS[protocol]));
       return true;
     } catch {
       return false;
@@ -206,21 +202,20 @@ describe("classification vs. the real compiler", () => {
     }
   });
 
-  it("accounted ⇔ the compiler registers the user's name for v2ray stats", () => {
+  it("accounted ⇔ the compiler embeds a user identifier", () => {
     for (const protocol of compilable) {
       if (protocol === "shadowtls") {
         continue; // `name` exists but classification is deliberately unknown.
       }
       const node = makeNode(protocol, SETTINGS[protocol]);
-      const { userName, statsUsers } = compiledStatsUsers(node);
+      const { user, compiledUsers } = compiledUser(node);
       const { status } = classifyNodeAccounting(node);
       if (status === "accounted") {
-        expect(typeof userName, protocol).toBe("string");
-        expect(statsUsers, protocol).toContain(userName);
+        const identifier = "name" in user ? user.name : user.username;
+        expect(typeof identifier, protocol).toBe("string");
+        expect(compiledUsers, protocol).toContainEqual(user);
       } else {
-        expect(status, protocol).toBe("unaccounted");
-        expect(userName, protocol).toBeUndefined();
-        expect(statsUsers, protocol).toEqual([]);
+        expect(status, protocol).toBe("unknown");
       }
     }
   });
@@ -263,17 +258,18 @@ describe("summarizeAccounting", () => {
     expect(summary.isFullyAccounted).toBe(true);
   });
 
-  it("warns for unaccounted protocols and keeps the caller's items", () => {
+  it("accounts username-keyed protocols without a warning", () => {
     const naive = node("naive", "n-1");
     const summary = summarizeAccounting([node("vless"), naive]);
-    expect(summary.unaccounted).toEqual([naive]);
-    expect(summary.hasUnaccounted).toBe(true);
+    expect(summary.accounted).toEqual([node("vless"), naive]);
+    expect(summary.unaccounted).toEqual([]);
+    expect(summary.hasUnaccounted).toBe(false);
     expect(summary.hasUnknown).toBe(false);
-    expect(summary.shouldWarnQuotaIncomplete).toBe(true);
-    expect(summary.isFullyAccounted).toBe(false);
+    expect(summary.shouldWarnQuotaIncomplete).toBe(false);
+    expect(summary.isFullyAccounted).toBe(true);
   });
 
-  it("warns for unknown protocols exactly as for unaccounted ones", () => {
+  it("warns for unknown protocols", () => {
     const summary = summarizeAccounting([node("vless"), node("future-proto")]);
     expect(summary.unknown).toHaveLength(1);
     expect(summary.hasUnknown).toBe(true);
@@ -282,7 +278,7 @@ describe("summarizeAccounting", () => {
     expect(summary.isFullyAccounted).toBe(false);
   });
 
-  it("keeps unaccounted and unknown distinct in a mixed selection", () => {
+  it("keeps accounted and unknown distinct in a mixed selection", () => {
     const summary = summarizeAccounting([
       node("vmess"),
       node("socks"),
@@ -290,11 +286,12 @@ describe("summarizeAccounting", () => {
       node("wireguard"),
       node("shadowtls"),
     ]);
-    expect(summary.accounted.map((n) => n.protocol)).toEqual(["vmess"]);
-    expect(summary.unaccounted.map((n) => n.protocol)).toEqual([
+    expect(summary.accounted.map((n) => n.protocol)).toEqual([
+      "vmess",
       "socks",
       "http",
     ]);
+    expect(summary.unaccounted).toEqual([]);
     expect(summary.unknown.map((n) => n.protocol)).toEqual([
       "wireguard",
       "shadowtls",

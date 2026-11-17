@@ -94,7 +94,8 @@ export const subscription = pgTable(
     // (node, subscription) identifier (see `traffic-user-codec`) so traffic
     // reports still map 1:1 to a subscription and a node; for username-keyed
     // protocols the bare subscription id is used and per-node attribution is
-    // lost — those protocols are invisible to v2ray_api user stats regardless.
+    // lost. The connection stream still reports the bare subscription id, so
+    // quota accounting works for those protocols.
     // Stored in plaintext by design: sing-box needs the raw secret (contrast
     // `server.agentTokenHash`, which only ever stores a hash).
     credentialUuid: text("credential_uuid").notNull().unique(),

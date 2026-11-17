@@ -1,6 +1,6 @@
 /**
- * Codec for the inbound user identifier the Rust agent reports back via the
- * `v2ray_api` stats counter `user>>>{name}>>>traffic>>>uplink|downlink`.
+ * Codec for the inbound user identifier the Rust agent reads from the
+ * connection stream's `Connection.user` field.
  *
  * Sing-box user names need to map back to a subscription (and, under the
  * multi-inbound server model, also to a node) for traffic reporting to be

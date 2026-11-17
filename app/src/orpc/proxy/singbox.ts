@@ -18,12 +18,11 @@ import {
  * crashing the agent.
  *
  * `node.settings` is already a native sing-box inbound fragment (validated on
- * write); the compiler only injects the managed fields and wraps it. Two
- * forward-looking hooks:
- *  - `experimental.v2ray_api`: the stats/user API the agent uses to add users
- *    and report traffic.
- *  - `route`: carries the server-scoped routing rules (`toSingboxRouteRules`),
- *    empty when none are configured.
+ * write); the compiler only injects the managed fields and wraps it. The agent
+ * adds its own `api` service at runtime for connection-stream traffic, so the
+ * base config deliberately carries no legacy `experimental.v2ray_api` hook.
+ * `route` carries the server-scoped routing rules (`toSingboxRouteRules`),
+ * empty when none are configured.
  */
 
 export type SingboxConfig = Configuration;
@@ -36,8 +35,6 @@ export interface SingboxUser {
 }
 
 type Json = Record<string, unknown>;
-
-const V2RAY_API_LISTEN = "127.0.0.1:8080";
 
 /**
  * One node plus the entitlement-derived user entries to embed as the inbound's
@@ -57,8 +54,6 @@ export interface NodeInbound {
 export interface CompileOptions {
   /** One entry per node to compile. The order is preserved in `inbounds`. */
   inbounds: NodeInbound[];
-  /** Enable the v2ray stats/user API used for traffic reporting. Default on. */
-  enableV2rayApi?: boolean;
   /** Server-side routing rules in sing-box rule-action syntax; default none. */
   routeRules?: SingboxRouteRule[];
 }
@@ -68,20 +63,11 @@ export interface CompileOptions {
  * are dropped before assembly (see `NodeInbound`): only a node with at least
  * one currently-entitled subscription is materialised into the running config.
  * When the resulting `inbounds` is empty (server disabled, or all nodes have no
- * entitled users) a valid config with an empty `inbounds` array is returned —
- * the agent applies it, tears down every previous listener, and keeps the
- * `v2ray_api` experimental hook so a later entitlement change can re-enable
- * listeners without re-architecting the agent.
- *
- * `stats.inbounds` collects every inbound tag, `stats.users` deduplicates
- * every inbound user's `name` across the multi-inbound config: each coded name
- * already encodes the producing node, so a subscription appearing on several
- * nodes still produces distinct, accurate counters. Username-keyed protocols
- * (naive/socks/http) have no `name` at all and are invisible to v2ray_api user
- * stats — their traffic is not reported per-user, a known limitation.
+ * entitled users) a valid config with an empty `inbounds` array is returned.
+ * The agent applies it and tears down every previous listener.
  */
 export function compileServerConfig(options: CompileOptions): SingboxConfig {
-  const { inbounds, enableV2rayApi = true, routeRules = [] } = options;
+  const { inbounds, routeRules = [] } = options;
 
   const compiled = inbounds
     .filter(({ users }) => users.length > 0)
@@ -97,10 +83,6 @@ export function compileServerConfig(options: CompileOptions): SingboxConfig {
     // Server-scoped routing rules (reject only: the sole outbound is `direct`).
     route: { rules: routeRules, rule_set: [], final: "direct" },
   };
-
-  if (enableV2rayApi) {
-    draft.experimental = buildV2rayApi(compiled);
-  }
 
   // Validate the assembled config; throws on a malformed node.
   return Configuration.parse(draft);
@@ -143,36 +125,6 @@ function buildInbound(node: Node, users: SingboxUser[]): Json {
     listen: "::",
     listen_port: node.listenPort,
     users,
-  };
-}
-
-function buildV2rayApi(compiled: Json[]): Json {
-  const tags = compiled.map((inbound) => inbound.tag as string);
-  const userSet = new Set<string>();
-  for (const inbound of compiled) {
-    const users = inbound.users as SingboxUser[] | undefined;
-    if (!Array.isArray(users)) {
-      continue;
-    }
-    for (const user of users) {
-      if (typeof user.name === "string") {
-        userSet.add(user.name);
-      }
-    }
-  }
-  return {
-    v2ray_api: {
-      listen: V2RAY_API_LISTEN,
-      stats: {
-        enabled: true,
-        inbounds: tags,
-        // Username-keyed protocols (naive/socks/http) have no `name` field, so
-        // v2ray_api never sees a per-user counter for them — their traffic is
-        // not reported per user. Accepted limitation, carried over from the
-        // single-inbound design.
-        users: [...userSet],
-      },
-    },
   };
 }
 
