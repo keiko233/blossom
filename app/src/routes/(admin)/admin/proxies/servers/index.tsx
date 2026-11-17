@@ -58,6 +58,25 @@ export const Route = createFileRoute("/(admin)/admin/proxies/servers/")({
 
 const columnHelper = createColumnHelper<ServerListItem>();
 
+function updateStateLabel(state: string): string | null {
+  switch (state) {
+    case "up_to_date":
+      return m.admin_proxies_servers_update_up_to_date();
+    case "checking":
+    case "downloading":
+    case "verifying":
+    case "applying":
+    case "restarting":
+      return m.admin_proxies_servers_update_in_progress();
+    case "failed":
+      return m.admin_proxies_servers_update_failed();
+    case "disabled":
+      return m.admin_proxies_servers_update_disabled();
+    default:
+      return null;
+  }
+}
+
 function RouteComponent(): React.ReactElement {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -199,6 +218,61 @@ function RouteComponent(): React.ReactElement {
         <span className="font-mono text-xs">{info.getValue()}</span>
       ),
     }),
+    columnHelper.display({
+      id: "versions",
+      header: () => m.admin_proxies_servers_col_version(),
+      cell: (info) => {
+        const server = info.row.original;
+        const agentState = updateStateLabel(server.agentUpdateState);
+        const singBoxState = updateStateLabel(server.singBoxUpdateState);
+        return (
+          <div className="flex max-w-72 flex-col gap-1 text-xs">
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="text-muted-foreground">
+                {m.admin_proxies_servers_versions_agent()}
+              </span>
+              <span className="font-mono">
+                {server.agentVersion ? `v${server.agentVersion}` : "—"}
+              </span>
+              {server.desiredAgentVersion ? (
+                <span className="font-mono text-muted-foreground">
+                  → {server.desiredAgentVersion}
+                </span>
+              ) : null}
+              {agentState ? (
+                <Badge
+                  variant="outline"
+                  title={server.agentUpdateError ?? undefined}
+                >
+                  {agentState}
+                </Badge>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="text-muted-foreground">
+                {m.admin_proxies_servers_versions_sing_box()}
+              </span>
+              <span className="font-mono">
+                {server.singBoxVersion ? `v${server.singBoxVersion}` : "—"}
+              </span>
+              {server.desiredSingBoxVersion ? (
+                <span className="font-mono text-muted-foreground">
+                  → {server.desiredSingBoxVersion}
+                </span>
+              ) : null}
+              {singBoxState ? (
+                <Badge
+                  variant="outline"
+                  title={server.singBoxUpdateError ?? undefined}
+                >
+                  {singBoxState}
+                </Badge>
+              ) : null}
+            </div>
+          </div>
+        );
+      },
+    }),
     columnHelper.accessor("nodeCount", {
       header: () => m.admin_proxies_servers_col_nodes(),
       cell: (info) => {
@@ -263,6 +337,14 @@ function RouteComponent(): React.ReactElement {
             ["degraded", "config_error", "runtime_error"].includes(health) ? (
               <span className="line-clamp-2 text-xs text-destructive">
                 {server.lastErrorMessage}
+              </span>
+            ) : null}
+            {server.agentUpdateState === "failed" ||
+            server.singBoxUpdateState === "failed" ? (
+              <span className="line-clamp-2 text-xs text-destructive">
+                {server.agentUpdateError ??
+                  server.singBoxUpdateError ??
+                  m.admin_proxies_servers_update_failed()}
               </span>
             ) : null}
             {server.pendingConfigChanges > 0 ? (

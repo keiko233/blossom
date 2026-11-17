@@ -1,0 +1,306 @@
+{
+  "type": "diff",
+  "version": "9",
+  "dialect": "postgres",
+  "id": "f2c2cd6a-e3bc-4910-bf90-22d6865d80b7",
+  "prevIds": ["683e6fa3-873e-487e-bf58-b544932f6429"],
+  "footprints": [
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "server",
+        "desired_agent_version"
+      ],
+      "writes": [
+        "s|col|public.server.desired_agent_version",
+        "n|col|public.server.desired_agent_version",
+        "e|col|public.server.desired_agent_version"
+      ],
+      "reads": ["n|tbl|public.server", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "server",
+        "desired_sing_box_version"
+      ],
+      "writes": [
+        "s|col|public.server.desired_sing_box_version",
+        "n|col|public.server.desired_sing_box_version",
+        "e|col|public.server.desired_sing_box_version"
+      ],
+      "reads": ["n|tbl|public.server", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": ["column", "public", "server", "agent_update_state"],
+      "writes": [
+        "s|col|public.server.agent_update_state",
+        "n|col|public.server.agent_update_state",
+        "e|col|public.server.agent_update_state"
+      ],
+      "reads": ["n|tbl|public.server", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": ["column", "public", "server", "agent_update_target"],
+      "writes": [
+        "s|col|public.server.agent_update_target",
+        "n|col|public.server.agent_update_target",
+        "e|col|public.server.agent_update_target"
+      ],
+      "reads": ["n|tbl|public.server", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": ["column", "public", "server", "agent_update_error"],
+      "writes": [
+        "s|col|public.server.agent_update_error",
+        "n|col|public.server.agent_update_error",
+        "e|col|public.server.agent_update_error"
+      ],
+      "reads": ["n|tbl|public.server", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "server",
+        "agent_update_checked_at"
+      ],
+      "writes": [
+        "s|col|public.server.agent_update_checked_at",
+        "n|col|public.server.agent_update_checked_at",
+        "e|col|public.server.agent_update_checked_at"
+      ],
+      "reads": ["n|tbl|public.server", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "server",
+        "sing_box_update_state"
+      ],
+      "writes": [
+        "s|col|public.server.sing_box_update_state",
+        "n|col|public.server.sing_box_update_state",
+        "e|col|public.server.sing_box_update_state"
+      ],
+      "reads": ["n|tbl|public.server", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "server",
+        "sing_box_update_target"
+      ],
+      "writes": [
+        "s|col|public.server.sing_box_update_target",
+        "n|col|public.server.sing_box_update_target",
+        "e|col|public.server.sing_box_update_target"
+      ],
+      "reads": ["n|tbl|public.server", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "server",
+        "sing_box_update_error"
+      ],
+      "writes": [
+        "s|col|public.server.sing_box_update_error",
+        "n|col|public.server.sing_box_update_error",
+        "e|col|public.server.sing_box_update_error"
+      ],
+      "reads": ["n|tbl|public.server", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "server",
+        "sing_box_update_checked_at"
+      ],
+      "writes": [
+        "s|col|public.server.sing_box_update_checked_at",
+        "n|col|public.server.sing_box_update_checked_at",
+        "e|col|public.server.sing_box_update_checked_at"
+      ],
+      "reads": ["n|tbl|public.server", "n|sch|public"]
+    }
+  ],
+  "deltas": [
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server",
+        "name": "desired_agent_version",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server",
+        "name": "desired_sing_box_version",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server",
+        "name": "agent_update_state",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "'unknown'",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server",
+        "name": "agent_update_target",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server",
+        "name": "agent_update_error",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server",
+        "name": "agent_update_checked_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server",
+        "name": "sing_box_update_state",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "'unknown'",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server",
+        "name": "sing_box_update_target",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server",
+        "name": "sing_box_update_error",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server",
+        "name": "sing_box_update_checked_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    }
+  ]
+}

@@ -141,6 +141,40 @@ export function ServerFormPage({
             </form.Field>
 
             <div className="grid gap-3 sm:grid-cols-2">
+              <form.Field name="desiredAgentVersion">
+                {(field) => (
+                  <Field>
+                    <FieldLabel>
+                      {m.admin_proxies_servers_field_desired_agent_version()}
+                    </FieldLabel>
+                    <Input
+                      value={field.state.value}
+                      onValueChange={(v) => field.handleChange(v)}
+                      onBlur={field.handleBlur}
+                      placeholder="latest / 0.3.0"
+                    />
+                  </Field>
+                )}
+              </form.Field>
+
+              <form.Field name="desiredSingBoxVersion">
+                {(field) => (
+                  <Field>
+                    <FieldLabel>
+                      {m.admin_proxies_servers_field_desired_sing_box_version()}
+                    </FieldLabel>
+                    <Input
+                      value={field.state.value}
+                      onValueChange={(v) => field.handleChange(v)}
+                      onBlur={field.handleBlur}
+                      placeholder="latest / 1.14.4"
+                    />
+                  </Field>
+                )}
+              </form.Field>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
               <form.Field name="configPollIntervalSeconds">
                 {(field) => (
                   <Field>

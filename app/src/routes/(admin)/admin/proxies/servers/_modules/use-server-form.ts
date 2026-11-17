@@ -11,6 +11,8 @@ export interface ServerFormValues {
   remark: string;
   enabled: boolean;
   address: string;
+  desiredAgentVersion: string;
+  desiredSingBoxVersion: string;
   configPollIntervalSeconds: number;
   heartbeatIntervalSeconds: number;
 }
@@ -21,6 +23,8 @@ function defaultValues(server?: ServerDTO): ServerFormValues {
     remark: server?.remark ?? "",
     enabled: server?.enabled ?? true,
     address: server?.address ?? "",
+    desiredAgentVersion: server?.desiredAgentVersion ?? "",
+    desiredSingBoxVersion: server?.desiredSingBoxVersion ?? "",
     configPollIntervalSeconds: server?.configPollIntervalSeconds ?? 60,
     heartbeatIntervalSeconds: server?.heartbeatIntervalSeconds ?? 30,
   };
@@ -32,6 +36,8 @@ function toPayload(v: ServerFormValues) {
     remark: v.remark || undefined,
     enabled: v.enabled,
     address: v.address,
+    desiredAgentVersion: v.desiredAgentVersion.trim() || null,
+    desiredSingBoxVersion: v.desiredSingBoxVersion.trim() || null,
     configPollIntervalSeconds: v.configPollIntervalSeconds,
     heartbeatIntervalSeconds: v.heartbeatIntervalSeconds,
   };

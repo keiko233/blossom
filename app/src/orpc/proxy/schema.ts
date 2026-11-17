@@ -33,6 +33,28 @@ const serverMetaSchema = z.object({
   remark: z.string().max(512).optional(),
   enabled: z.boolean().default(true),
   address: z.string().min(1),
+  desiredAgentVersion: z
+    .string()
+    .trim()
+    .min(1)
+    .max(64)
+    .refine(
+      (value) => value === "latest" || /^v?\d+\.\d+\.\d+([-.].+)?$/.test(value),
+      { message: "Use latest or a semantic version such as 0.3.0" },
+    )
+    .nullable()
+    .optional(),
+  desiredSingBoxVersion: z
+    .string()
+    .trim()
+    .min(1)
+    .max(64)
+    .refine(
+      (value) => value === "latest" || /^v?\d+\.\d+\.\d+([-.].+)?$/.test(value),
+      { message: "Use latest or a version such as 1.14.4" },
+    )
+    .nullable()
+    .optional(),
   configPollIntervalSeconds: z.number().int().min(5).max(86_400).default(60),
   heartbeatIntervalSeconds: z.number().int().min(5).max(300).default(30),
 });
@@ -206,6 +228,26 @@ export const certificateDeploymentSchema = z.object({
   errorMessage: z.string().min(1).max(16_384).optional(),
 });
 
+export const updateStateSchema = z.enum([
+  "unknown",
+  "idle",
+  "up_to_date",
+  "checking",
+  "downloading",
+  "verifying",
+  "applying",
+  "restarting",
+  "failed",
+  "disabled",
+]);
+
+export const updateStatusSchema = z.object({
+  targetVersion: z.string().min(1).max(64).optional(),
+  state: updateStateSchema,
+  message: z.string().min(1).max(4096).optional(),
+  checkedAt: z.iso.datetime().optional(),
+});
+
 export const heartbeatSchema = z.object({
   agentBuildId: z.string().min(1).max(256),
   agentCapabilities: z.array(z.string().min(1)).max(1024),
@@ -245,6 +287,12 @@ export const heartbeatSchema = z.object({
     })
     .optional(),
   certificateDeployments: z.array(certificateDeploymentSchema).max(10_000),
+  updates: z
+    .object({
+      agent: updateStatusSchema.optional(),
+      singBox: updateStatusSchema.optional(),
+    })
+    .optional(),
 });
 
 /**
@@ -286,6 +334,8 @@ export const agentConfigV3OutputSchema = z.object({
   agent: z.object({
     configPollIntervalSeconds: z.number().int(),
     heartbeatIntervalSeconds: z.number().int(),
+    desiredAgentVersion: z.string().min(1).max(64).optional(),
+    desiredSingBoxVersion: z.string().min(1).max(64).optional(),
   }),
   desiredRevision: z.string().min(1),
   materializedNodeIds: z.array(z.string().min(1)),
@@ -298,10 +348,9 @@ export type AgentConfigV3Output = z.infer<typeof agentConfigV3OutputSchema>;
 export type CertificateDeployment = z.infer<typeof certificateDeploymentSchema>;
 
 /**
- * Traffic deltas the agent reads from sing-box's v2ray_api stats and reports
- * per user. Sing-box user names are subscription ids, so each entry maps
- * straight to a subscription row. Deltas, not totals: the agent resets the
- * stat counters on read (`reset=true`) and posts what accumulated.
+ * Traffic deltas the agent derives from sing-box's connection-event stream and
+ * reports per user. The stream's `user` field is the inbound user identifier,
+ * so each entry maps to a subscription row (and, for coded names, a node).
  *
  * `reportId` makes the report idempotent. It is chosen by the agent when it
  * seals a batch, persisted with the batch, and reused unchanged on every

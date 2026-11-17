@@ -108,10 +108,10 @@ async function compileAgentServerConfig(serverId: string, enabled: boolean) {
  * agent must provision certificates for, the certificate artifacts it may
  * install, and a `desiredRevision` that changes exactly when that desired
  * state changes. A disabled server (or one with no enabled nodes) still
- * receives a valid config — with an empty `inbounds` array and the `v2ray_api`
- * hook kept on — so the agent tears down the previous configuration on next
- * pull. Expiry, bans, quota exhaustion, and credential resets all take effect
- * here: the agent's next pull no longer contains (or contains new) credentials.
+ * receives a valid config with an empty `inbounds` array so the agent tears
+ * down the previous configuration on next pull. Expiry, bans, quota
+ * exhaustion, and credential resets all take effect here: the agent's next
+ * pull no longer contains (or contains new) credentials.
  *
  * The base sing-box config never carries certificate material or on-disk
  * certificate paths; `managedTlsBindings` + `certificateArtifacts` describe
@@ -177,6 +177,12 @@ export const getAgentConfigV3 = agentProcedure
       agent: {
         configPollIntervalSeconds: context.server.configPollIntervalSeconds,
         heartbeatIntervalSeconds: context.server.heartbeatIntervalSeconds,
+        ...(context.server.desiredAgentVersion
+          ? { desiredAgentVersion: context.server.desiredAgentVersion }
+          : {}),
+        ...(context.server.desiredSingBoxVersion
+          ? { desiredSingBoxVersion: context.server.desiredSingBoxVersion }
+          : {}),
       },
       desiredRevision,
       materializedNodeIds,
@@ -204,12 +210,14 @@ export const agentHeartbeat = agentProcedure
   });
 
 /**
- * Ingests per-user traffic deltas the agent read from sing-box's v2ray_api
- * stats (user name = coded identifier). History rows, the subscription counter
- * increments and, when the report has a `reportId`, the idempotency ledger row
- * are written by ONE SQL statement (`recordAgentTraffic`), so the report is
- * applied entirely or not at all on both database drivers — never
- * read-modify-write in JS, since multiple agents report concurrently.
+ * Ingests per-user traffic deltas the agent derived from sing-box's
+ * connection-event stream (user identifier = coded node+subscription name, or
+ * a bare subscription id for username-keyed protocols). History rows, the
+ * subscription counter increments and, when the report has a `reportId`, the
+ * idempotency ledger row are written by ONE SQL statement
+ * (`recordAgentTraffic`), so the report is applied entirely or not at all on
+ * both database drivers — never read-modify-write in JS, since multiple agents
+ * report concurrently.
  *
  * Reports with a `reportId` are idempotent per server: a retry or concurrent
  * duplicate of an applied report writes nothing and returns the original

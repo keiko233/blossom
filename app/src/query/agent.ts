@@ -38,6 +38,7 @@ export async function updateAgentHeartbeat(
     input.configState !== undefined ||
     input.observedRevision !== undefined ||
     input.appliedRevision !== undefined ||
+    input.updates !== undefined ||
     input.error !== undefined ||
     input.clearError !== undefined;
   const error = input.error;
@@ -79,6 +80,30 @@ export async function updateAgentHeartbeat(
         : {}),
       ...(input.singBoxVersion !== undefined
         ? { singBoxVersion: input.singBoxVersion }
+        : {}),
+      ...(input.updates?.agent
+        ? {
+            agentUpdateState: input.updates.agent.state,
+            agentUpdateTarget: input.updates.agent.targetVersion ?? null,
+            agentUpdateError: input.updates.agent.message
+              ? sanitizeMessage(input.updates.agent.message)
+              : null,
+            agentUpdateCheckedAt: input.updates.agent.checkedAt
+              ? new Date(input.updates.agent.checkedAt)
+              : new Date(),
+          }
+        : {}),
+      ...(input.updates?.singBox
+        ? {
+            singBoxUpdateState: input.updates.singBox.state,
+            singBoxUpdateTarget: input.updates.singBox.targetVersion ?? null,
+            singBoxUpdateError: input.updates.singBox.message
+              ? sanitizeMessage(input.updates.singBox.message)
+              : null,
+            singBoxUpdateCheckedAt: input.updates.singBox.checkedAt
+              ? new Date(input.updates.singBox.checkedAt)
+              : new Date(),
+          }
         : {}),
       ...(input.runtimeState !== undefined
         ? { runtimeState: input.runtimeState }

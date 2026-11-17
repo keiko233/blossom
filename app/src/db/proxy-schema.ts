@@ -28,6 +28,18 @@ export type AgentConfigState =
   | "rejected"
   | "apply_failed";
 
+export type AgentUpdateState =
+  | "unknown"
+  | "idle"
+  | "up_to_date"
+  | "checking"
+  | "downloading"
+  | "verifying"
+  | "applying"
+  | "restarting"
+  | "failed"
+  | "disabled";
+
 /**
  * A server is one physical proxy host managed by a single Rust server-agent:
  * it owns the agent token, heartbeat, agent version, and a default public
@@ -64,6 +76,26 @@ export const server = pgTable(
       .$type<string[]>()
       .default([])
       .notNull(),
+    // Desired binary versions pushed to the agent on its next config poll.
+    // "latest" resolves through the GitHub release feed; null leaves updates
+    // entirely to the operator's image/bootstrap settings.
+    desiredAgentVersion: text("desired_agent_version"),
+    desiredSingBoxVersion: text("desired_sing_box_version"),
+    // Last update status reported by the agent for each managed binary.
+    agentUpdateState: text("agent_update_state")
+      .$type<AgentUpdateState>()
+      .default("unknown")
+      .notNull(),
+    agentUpdateTarget: text("agent_update_target"),
+    agentUpdateError: text("agent_update_error"),
+    agentUpdateCheckedAt: timestamp("agent_update_checked_at"),
+    singBoxUpdateState: text("sing_box_update_state")
+      .$type<AgentUpdateState>()
+      .default("unknown")
+      .notNull(),
+    singBoxUpdateTarget: text("sing_box_update_target"),
+    singBoxUpdateError: text("sing_box_update_error"),
+    singBoxUpdateCheckedAt: timestamp("sing_box_update_checked_at"),
     configPollIntervalSeconds: integer("config_poll_interval_seconds")
       .default(60)
       .notNull(),

@@ -44,6 +44,7 @@ export const TokenRevealDialog = createCallable<TokenRevealProps, void>(
       "--device /dev/net/tun",
       `-e AGENT_URL=${window.location.origin}/api`,
       `-e AGENT_TOKEN=${token}`,
+      "-v blossom-agent-data:/data",
       "ghcr.io/keiko233/blossom/server-agent:latest",
     ].join(" ");
 
