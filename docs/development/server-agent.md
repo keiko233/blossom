@@ -75,3 +75,13 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 3. Keep behaviour compatible with the control plane versions that may still be deployed. **Recommended**: when the agent starts depending on a new response field, treat its absence as the old behaviour for at least one release rather than failing.
 4. Add a unit test next to the code you changed. For anything touching certificate or reload flow, run the Docker lifecycle test above.
 5. Docker images: the build id comes from `BUILD_ID` / `AGENT_BUILD_ID`, falling back to `local-<short git sha>` or `local`. CI passes the commit SHA.
+
+## Releasing
+
+Static binaries are published by `.github/workflows/server-agent-release.yml`, which is separate from the Docker image release in `docker.yml`:
+
+1. Bump `version` in `server-agent/Cargo.toml` (and let `cargo check`/`cargo build` update `Cargo.lock`).
+2. Tag and push the tag as `server-agent-vX.Y.Z`; it must match the `Cargo.toml` version or the workflow fails.
+3. The workflow runs `cargo test --locked`, `cargo fmt --check` and `cargo clippy -D warnings`, then builds fully static musl binaries per architecture (amd64 on `ubuntu-latest`, arm64 on `ubuntu-24.04-arm`, both inside a `rust:alpine` container like the Dockerfile's build stage) and publishes a GitHub Release with `server-agent-linux-amd64`, `server-agent-linux-arm64` and a `SHA256SUMS` covering them. Asset names carry no version so `releases/download/<tag>/...` URLs stay stable (`releases/latest/download/...` does not point at these releases); releases are published with `make_latest: false`, and consumers must resolve releases via the `server-agent-v` tag prefix (GitHub API `GET /repos/{owner}/{repo}/releases` filtered by `tag_name`), since this repo also publishes app image `v*` tags that share the `latest` feed.
+
+`workflow_dispatch` runs only build and check; a release is created only from a `server-agent-v*` tag.
