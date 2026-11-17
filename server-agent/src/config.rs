@@ -1,8 +1,9 @@
 //! Fetches the V3 desired-state document, reconciles certificate artifacts and
 //! managed-TLS bindings into the base `singboxConfig`, and materializes it on
 //! disk. The control plane validates the config; the agent owns the two pieces
-//! that must be local and validated: the v2ray API listen address and managed
-//! certificate paths.
+//! that must be local and validated: the `api` service endpoint (loopback,
+//! port and per-run secret chosen by the agent, never trusted from the
+//! control plane) and managed certificate paths.
 //!
 //! Lifecycle rules enforced here:
 //!
@@ -23,6 +24,7 @@
 use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -34,6 +36,86 @@ use crate::certificate::{
 };
 use crate::client::{Client, types};
 
+/// The agent always injects its own `api` service for traffic stats. The
+/// secret is per agent run (OS CSPRNG), the port is any free loopback port;
+/// the control plane's `experimental.v2ray_api` and any pre-existing `api`
+/// service in the base config are stripped, never trusted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApiEndpoint {
+    pub addr: String,
+    pub secret: Option<String>,
+}
+
+/// Generates the per-run api secret from the OS CSPRNG (32 raw bytes).
+fn new_api_secret() -> String {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).expect("OS CSPRNG failure");
+    hex::encode(bytes)
+}
+
+/// Picks a free 127.0.0.1 port by binding a listener, reading its port and
+/// dropping it. There is a tiny race between drop and the sing-box bind,
+/// which is acceptable: sing-box would fail to start and the agent would
+/// surface the error, rather than silently misconfigure.
+fn free_loopback_port() -> u16 {
+    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+        .expect("cannot find a free loopback port");
+    listener
+        .local_addr()
+        .expect("bound listener has an address")
+        .port()
+}
+
+/// Strips control-plane-provided `experimental.v2ray_api` and any existing
+/// `api` service from the base config: the agent owns both.
+fn strip_untrusted_api(config: &mut serde_json::Map<String, serde_json::Value>) {
+    if let Some(experimental) = config
+        .get_mut("experimental")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        experimental.remove("v2ray_api");
+        if experimental.is_empty() {
+            config.remove("experimental");
+        }
+    }
+    if let Some(services) = config
+        .get_mut("services")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        services.retain(|service| {
+            service.get("type").and_then(serde_json::Value::as_str) != Some("api")
+        });
+        if services.is_empty() {
+            config.remove("services");
+        }
+    }
+}
+
+/// Injects the agent's `api` service with the given endpoint.
+fn inject_api_service(
+    config: &mut serde_json::Map<String, serde_json::Value>,
+    addr: &str,
+    secret: &str,
+) {
+    let (host, port) = addr.split_once(':').expect("api addr is host:port");
+    let service = serde_json::json!({
+        "type": "api",
+        "listen": host,
+        "listen_port": port.parse::<u16>().expect("valid api port"),
+        "secret": secret,
+    });
+    let services = config
+        .entry("services")
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    if !services.is_array() {
+        *services = serde_json::Value::Array(Vec::new());
+    }
+    services
+        .as_array_mut()
+        .expect("services is an array")
+        .push(service);
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AgentPolicy {
     pub config_poll_interval_seconds: u64,
@@ -44,7 +126,7 @@ pub struct AgentPolicy {
 pub struct CandidateConfig {
     pub revision: String,
     pub materialized_node_ids: Vec<String>,
-    pub v2ray_listen: Option<String>,
+    pub api_endpoint: ApiEndpoint,
     pub referenced_generations: Vec<CertificateRef>,
 }
 
@@ -90,6 +172,20 @@ impl std::fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
+impl ApiEndpoint {
+    /// Generates a per-run endpoint: a random secret from the OS CSPRNG and
+    /// any free loopback port. Both are used for this agent run only; they
+    /// persist inside the configs this run writes so a restart of the same
+    /// agent (and its sing-box child) stays consistent, but they are never
+    /// logged or reported upstream.
+    pub fn generate() -> Self {
+        Self {
+            addr: format!("127.0.0.1:{}", free_loopback_port()),
+            secret: Some(new_api_secret()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeploymentRecord {
     pub certificate_id: String,
@@ -119,7 +215,7 @@ pub struct ConfigManager {
     state_path: PathBuf,
     observed_revision: Option<String>,
     persisted: PersistedState,
-    v2ray_listen: Option<String>,
+    api_endpoint: ApiEndpoint,
     needs_reapply: bool,
     startup_error: Option<String>,
 }
@@ -179,7 +275,10 @@ impl ConfigManager {
             let _ = std::fs::remove_file(&active_path);
         }
 
-        let v2ray_listen = read_v2ray_listen(&active_path);
+        // The endpoint is per agent run; a config on disk still carries the
+        // same endpoint from the run that wrote it, so restarts stay
+        // consistent. The secret is never logged and never leaves this process.
+        let api_endpoint = read_api_endpoint(&active_path).unwrap_or_else(ApiEndpoint::generate);
         let needs_reapply = startup_error.is_some();
         let mut manager = Self {
             client,
@@ -191,7 +290,7 @@ impl ConfigManager {
             state_path,
             observed_revision: None,
             persisted,
-            v2ray_listen,
+            api_endpoint,
             needs_reapply,
             startup_error,
         };
@@ -227,8 +326,8 @@ impl ConfigManager {
         self.persisted.applied_at
     }
 
-    pub fn v2ray_api_listen(&self) -> Option<&str> {
-        self.v2ray_listen.as_deref()
+    pub fn api_endpoint(&self) -> &ApiEndpoint {
+        &self.api_endpoint
     }
 
     pub fn startup_error(&self) -> Option<&str> {
@@ -393,7 +492,12 @@ impl ConfigManager {
             ));
         }
 
-        let v2ray_listen = extract_v2ray_listen(&config);
+        strip_untrusted_api(&mut config);
+        inject_api_service(
+            &mut config,
+            &self.api_endpoint.addr,
+            self.api_endpoint.secret.as_deref().unwrap_or(""),
+        );
         let serialized = serde_json::to_vec_pretty(&config).map_err(|error| {
             ConfigError::new(
                 "reconcile",
@@ -440,7 +544,7 @@ impl ConfigManager {
                     .iter()
                     .map(|id| id.to_string())
                     .collect(),
-                v2ray_listen,
+                api_endpoint: self.api_endpoint.clone(),
                 referenced_generations,
             },
         })
@@ -602,7 +706,7 @@ impl ConfigManager {
         self.persisted.applied_revision = Some(candidate.revision.clone());
         self.persisted.active_node_ids = candidate.materialized_node_ids.clone();
         self.persisted.applied_at = Some(chrono::Utc::now());
-        self.v2ray_listen = candidate.v2ray_listen.clone();
+        self.api_endpoint = candidate.api_endpoint.clone();
         let referenced: HashSet<&CertificateRef> =
             candidate.referenced_generations.iter().collect();
         for record in &mut self.persisted.deployments {
@@ -631,7 +735,7 @@ impl ConfigManager {
             self.persisted.applied_revision = None;
             self.persisted.active_node_ids.clear();
             self.persisted.applied_at = None;
-            self.v2ray_listen = None;
+            self.api_endpoint = ApiEndpoint::generate();
             self.recompute_installed_deployments();
             return Ok(false);
         }
@@ -640,7 +744,8 @@ impl ConfigManager {
             &self.active_path,
             &self.state_dir.join("active.json.rollback"),
         )?;
-        self.v2ray_listen = read_v2ray_listen(&self.active_path);
+        self.api_endpoint =
+            read_api_endpoint(&self.active_path).unwrap_or_else(ApiEndpoint::generate);
         self.recompute_installed_deployments();
         Ok(true)
     }
@@ -845,18 +950,32 @@ fn write_config_atomic(
     write_secret_file(path, &bytes)
 }
 
-fn read_v2ray_listen(path: &Path) -> Option<String> {
+fn read_api_endpoint(path: &Path) -> Option<ApiEndpoint> {
     let config = read_config_map(path).ok()?;
-    extract_v2ray_listen(&config)
+    extract_api_endpoint(&config)
 }
 
-fn extract_v2ray_listen(config: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
-    config
-        .get("experimental")?
-        .get("v2ray_api")?
-        .get("listen")?
-        .as_str()
-        .map(String::from)
+fn extract_api_endpoint(
+    config: &serde_json::Map<String, serde_json::Value>,
+) -> Option<ApiEndpoint> {
+    let services = config.get("services")?.as_array()?;
+    let service = services
+        .iter()
+        .find(|service| service.get("type").and_then(serde_json::Value::as_str) == Some("api"))?;
+    let listen = service.get("listen")?.as_str()?;
+    let port = service.get("listen_port")?.as_u64()?;
+    if port > u16::MAX as u64 {
+        return None;
+    }
+    let secret = service
+        .get("secret")
+        .and_then(serde_json::Value::as_str)
+        .filter(|secret| !secret.is_empty())
+        .map(String::from);
+    Some(ApiEndpoint {
+        addr: format!("{listen}:{port}"),
+        secret,
+    })
 }
 
 fn sanitize_error(value: &str) -> String {
@@ -877,8 +996,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        DeploymentRecord, extract_v2ray_listen, materialize_bindings, sanitize_error,
-        strip_base_tls_material,
+        ApiEndpoint, DeploymentRecord, extract_api_endpoint, inject_api_service,
+        materialize_bindings, sanitize_error, strip_base_tls_material, strip_untrusted_api,
     };
     use crate::certificate::StagedMaterial;
     use crate::client::types;
@@ -1034,23 +1153,84 @@ mod tests {
     }
 
     #[test]
-    fn extracts_listen_when_present() {
-        let config = json!({
-            "experimental": { "v2ray_api": { "listen": "127.0.0.1:8080" } }
+    fn injects_api_service_and_reads_it_back() {
+        let mut config = json!({ "log": {} }).as_object().unwrap().clone();
+        inject_api_service(&mut config, "127.0.0.1:39001", "secret-value");
+
+        let endpoint = extract_api_endpoint(&config).expect("injected service is discoverable");
+        assert_eq!(endpoint.addr, "127.0.0.1:39001");
+        assert_eq!(endpoint.secret.as_deref(), Some("secret-value"));
+        assert_eq!(config["services"][0]["type"], "api");
+        assert_eq!(config["services"][0]["listen"], "127.0.0.1");
+        assert_eq!(config["services"][0]["listen_port"], 39001);
+        assert_eq!(config["services"][0]["secret"], "secret-value");
+    }
+
+    #[test]
+    fn injected_endpoint_survives_a_serialization_round_trip() {
+        let mut config = json!({}).as_object().unwrap().clone();
+        inject_api_service(&mut config, "127.0.0.1:39002", "another-secret");
+        let bytes = serde_json::to_vec_pretty(&config).unwrap();
+        let reread: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_slice(&bytes).unwrap();
+        let endpoint = extract_api_endpoint(&reread).unwrap();
+        assert_eq!(endpoint.addr, "127.0.0.1:39002");
+        assert_eq!(endpoint.secret.as_deref(), Some("another-secret"));
+    }
+
+    #[test]
+    fn strip_removes_v2ray_api_and_foreign_api_services() {
+        let mut config = json!({
+            "experimental": {
+                "v2ray_api": { "listen": "127.0.0.1:8080" },
+                "clash_api": { "external_controller": "127.0.0.1:9090" }
+            },
+            "services": [
+                { "type": "api", "listen": "0.0.0.0", "listen_port": 1, "secret": "attacker" },
+                { "type": "ssm-api", "listen": "127.0.0.1", "listen_port": 2 }
+            ]
         })
         .as_object()
         .unwrap()
         .clone();
-        assert_eq!(
-            extract_v2ray_listen(&config),
-            Some("127.0.0.1:8080".to_string())
-        );
+
+        strip_untrusted_api(&mut config);
+
+        let experimental = config["experimental"].as_object().unwrap();
+        assert!(!experimental.contains_key("v2ray_api"));
+        assert!(experimental.contains_key("clash_api"));
+        let services = config["services"].as_array().unwrap();
+        assert_eq!(services.len(), 1);
+        assert_eq!(services[0]["type"], "ssm-api");
     }
 
     #[test]
-    fn returns_none_when_v2ray_api_missing() {
-        let config = json!({ "experimental": {} }).as_object().unwrap().clone();
-        assert_eq!(extract_v2ray_listen(&config), None);
+    fn strip_removes_empty_containers() {
+        let mut config = json!({
+            "experimental": { "v2ray_api": { "listen": "127.0.0.1:8080" } },
+            "services": [{ "type": "api" }]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        strip_untrusted_api(&mut config);
+        assert!(!config.contains_key("experimental"));
+        assert!(!config.contains_key("services"));
+    }
+
+    #[test]
+    fn generated_secrets_are_random_and_endpoints_are_localhost() {
+        let first = ApiEndpoint::generate();
+        let second = ApiEndpoint::generate();
+        assert!(first.addr.starts_with("127.0.0.1:"));
+        assert_ne!(first.secret, second.secret);
+        assert!(first.secret.as_ref().is_some_and(|s| s.len() >= 32));
+    }
+
+    #[test]
+    fn read_api_endpoint_returns_none_without_a_service() {
+        let config = json!({ "log": {} }).as_object().unwrap().clone();
+        assert_eq!(extract_api_endpoint(&config), None);
     }
 
     #[test]

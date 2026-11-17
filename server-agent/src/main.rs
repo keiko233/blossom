@@ -6,6 +6,7 @@
 //! A server owns one agent token and one running sing-box process; each "node"
 //! on that server is compiled as one inbound inside that single config.
 
+mod accountant;
 mod certificate;
 mod client;
 mod config;
@@ -29,11 +30,12 @@ use crate::traffic::TrafficReporter;
 
 const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const AGENT_BUILD_ID: &str = env!("AGENT_BUILD_ID");
-const AGENT_CAPABILITIES: [&str; 4] = [
+const AGENT_CAPABILITIES: [&str; 5] = [
     "config-v3",
     "managed-tls-v3",
     "certificate-deployments-v1",
     "atomic-config-rollback",
+    "connection-stream-traffic",
 ];
 const RUNTIME_PROBATION: Duration = Duration::from_secs(11);
 
@@ -120,9 +122,18 @@ async fn main() -> Result<()> {
     } else {
         (None, config.startup_error().map(str::to_owned))
     };
-    let mut reporter = config
-        .v2ray_api_listen()
-        .and_then(|addr| TrafficReporter::new(addr.to_string(), traffic_dir.clone()).ok());
+    let api_endpoint = config.api_endpoint().clone();
+    let mut reporter = match TrafficReporter::new(
+        api_endpoint.addr.clone(),
+        api_endpoint.secret.clone(),
+        traffic_dir.clone(),
+    ) {
+        Ok(reporter) => Some(reporter),
+        Err(error) => {
+            error!("failed to start traffic reporter: {error}");
+            None
+        }
+    };
     let mut status = AgentStatus::from_config(&config);
     if let Some(message) = startup_error {
         status.error = Some(ReportedError {
@@ -142,7 +153,7 @@ async fn main() -> Result<()> {
         Ok(next) => policy = next,
         Err(e) => error!("initial config sync failed: {e}"),
     }
-    reconcile_reporter(config.v2ray_api_listen(), &mut reporter, &traffic_dir);
+    reconcile_reporter(config.api_endpoint(), &mut reporter, &traffic_dir);
     heartbeat(
         &client,
         &mut config,
@@ -174,7 +185,7 @@ async fn main() -> Result<()> {
                     Ok(next) => policy = next,
                     Err(e) => error!("config sync failed: {e}"),
                 }
-                reconcile_reporter(config.v2ray_api_listen(), &mut reporter, &traffic_dir);
+                reconcile_reporter(config.api_endpoint(), &mut reporter, &traffic_dir);
                 heartbeat(
                     &client,
                     &mut config,
@@ -462,30 +473,26 @@ fn node_id_from_error(message: &str, candidate: &CandidateConfig) -> Option<Stri
 }
 
 fn reconcile_reporter(
-    addr: Option<&str>,
+    endpoint: &crate::config::ApiEndpoint,
     reporter: &mut Option<TrafficReporter>,
     traffic_dir: &Path,
 ) {
-    match (addr, reporter.as_mut()) {
-        (Some(addr), Some(reporter)) => {
-            if let Err(e) = reporter.update_addr(addr) {
-                error!("failed to update traffic stats address: {e}");
-            }
+    if let Some(current) = reporter.as_mut() {
+        if let Err(error) = current.update_endpoint(&endpoint.addr, endpoint.secret.as_deref()) {
+            error!("failed to update traffic stream endpoint: {error}");
         }
-        (Some(addr), None) => {
-            match TrafficReporter::new(addr.to_string(), traffic_dir.to_path_buf()) {
-                Ok(r) => {
-                    info!("traffic reporting enabled");
-                    *reporter = Some(r);
-                }
-                Err(e) => error!("failed to enable traffic reporting: {e}"),
-            }
+        return;
+    }
+    match TrafficReporter::new(
+        endpoint.addr.clone(),
+        endpoint.secret.clone(),
+        traffic_dir.to_path_buf(),
+    ) {
+        Ok(created) => {
+            info!("traffic reporting enabled");
+            *reporter = Some(created);
         }
-        (None, Some(_)) => {
-            info!("v2ray_api no longer configured; traffic reporting disabled");
-            *reporter = None;
-        }
-        (None, None) => {}
+        Err(error) => error!("failed to enable traffic reporting: {error}"),
     }
 }
 
@@ -597,7 +604,10 @@ mod tests {
         let candidate = CandidateConfig {
             revision: "sha256:test".to_string(),
             materialized_node_ids: vec!["node-a".to_string(), "node-b".to_string()],
-            v2ray_listen: None,
+            api_endpoint: crate::config::ApiEndpoint {
+                addr: "127.0.0.1:0".to_string(),
+                secret: None,
+            },
             referenced_generations: vec![],
         };
         assert_eq!(

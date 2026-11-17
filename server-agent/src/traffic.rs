@@ -1,21 +1,28 @@
-//! Collects per-user traffic deltas from sing-box and reports them upstream.
+//! Collects per-user traffic from sing-box's connection-event stream and
+//! reports it upstream.
 //!
 //! Delivery model (details in docs/development/server-agent.md):
 //!
-//! 1. `QueryStats(reset=true)` hands us the deltas and zeroes sing-box's
-//!    counters, so from that moment this process holds the only copy.
-//! 2. The deltas are immediately *sealed* into a [`Batch`] with a fresh report
-//!    id and written durably (temp file, fsync, rename, directory fsync) to
-//!    `<state_dir>/traffic/pending/`. A sealed batch never changes: retries and
-//!    restarts resend the same id with the same content.
+//! 1. A background task subscribes to sing-box's `SubscribeConnections`
+//!    stream and accumulates per-user deltas as UPDATE / CLOSED events
+//!    arrive (see [`crate::accountant::ConnectionAccountant`]). The accumulator
+//!    is shared with the reporter through a mutex, so the periodic reporter
+//!    drains whatever has arrived since the last cycle.
+//! 2. Drained deltas are immediately *sealed* into a [`Batch`] with a fresh
+//!    report id and written durably (temp file, fsync, rename, directory
+//!    fsync) to `<state_dir>/traffic/pending/`. A sealed batch never
+//!    changes: retries and restarts resend the same id with the same
+//!    content.
 //! 3. Batches are posted oldest first. A batch is deleted only after the
 //!    control plane acknowledged it; the control plane applies a given
-//!    `(server, reportId)` at most once, so resending after a lost response or
-//!    a crash cannot double count.
+//!    `(server, reportId)` at most once, so resending after a lost response
+//!    or a crash cannot double count.
 //!
 //! This is at-least-once delivery plus server-side deduplication, not
-//! exactly-once accounting: traffic that sing-box counted but we had not yet
-//! read (or read but not yet sealed) is lost if sing-box or the agent dies.
+//! exactly-once accounting: traffic produced but not yet observed by the
+//! stream (or drained but not yet sealed) is lost if sing-box or the agent
+//! dies. With the stream model the loss window shrinks to roughly one
+//! stream interval for in-memory deltas; sealed batches remain durable.
 
 use std::collections::HashMap;
 use std::fs;
@@ -28,11 +35,17 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
 
+use crate::accountant::ConnectionAccountant;
 use crate::client::types::{
     ReportAgentTrafficBody, ReportAgentTrafficBodyEntriesItem,
     ReportAgentTrafficBodyEntriesItemSubscriptionId,
 };
-use crate::stats::{Direction, Stat, StatsClient, parse_user_counter};
+use crate::stats::{ConnectionEvents, StatsClient};
+
+/// How often the stream's periodic UPDATE flush fires (upstream default 1s).
+const STREAM_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+/// Reconnect backoff for the connection stream.
+const STREAM_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(30);
 
 const MAX_ENTRIES_PER_REPORT: usize = 10_000;
 /// Upper bound on entries held in sealed batches (disk and memory). Beyond it,
@@ -469,10 +482,18 @@ impl Outbox {
         }
     }
 
-    /// Takes freshly read counters and seals them straight away: this is the
-    /// durable-enqueue step that follows `QueryStats(reset=true)`.
-    fn ingest(&mut self, stats: &[Stat], now: DateTime<Utc>) {
-        merge_stats(&mut self.unsealed, stats);
+    /// Takes freshly drained per-user deltas and seals them straight away:
+    /// this is the durable-enqueue step that follows draining the shared
+    /// connection-event accumulator.
+    fn ingest(&mut self, deltas: &HashMap<String, (u64, u64)>, now: DateTime<Utc>) {
+        for (user, (uplink, downlink)) in deltas {
+            if *uplink == 0 && *downlink == 0 {
+                continue;
+            }
+            let entry = self.unsealed.entry(user.clone()).or_insert((0, 0));
+            entry.0 = entry.0.saturating_add(*uplink);
+            entry.1 = entry.1.saturating_add(*downlink);
+        }
         self.seal(now);
     }
 
@@ -549,68 +570,147 @@ impl Outbox {
     }
 }
 
+/// Accountant plus the deltas it produced since the last drain. Lock is held
+/// only for the (synchronous) apply/drain, never across an await.
+#[derive(Default)]
+struct Shared {
+    accountant: ConnectionAccountant,
+    pending: HashMap<String, (u64, u64)>,
+}
+
+/// Handle shared between the background stream consumer and the reporter.
+#[derive(Clone)]
+struct SharedHandle(std::sync::Arc<std::sync::Mutex<Shared>>);
+
+impl SharedHandle {
+    fn new() -> Self {
+        Self(std::sync::Arc::new(std::sync::Mutex::new(Shared {
+            accountant: ConnectionAccountant::new(),
+            pending: HashMap::new(),
+        })))
+    }
+
+    /// Applies one stream message to the accumulator. A poisoned mutex is
+    /// treated as a lost accumulator; it only ever held unsealed in-memory
+    /// deltas, which the at-least-once contract already covers.
+    fn apply(&self, message: &ConnectionEvents) {
+        let Ok(mut shared) = self.0.lock() else {
+            return;
+        };
+        for (user, delta) in shared.accountant.apply(message) {
+            let entry = shared.pending.entry(user).or_insert((0, 0));
+            entry.0 = entry.0.saturating_add(delta.0);
+            entry.1 = entry.1.saturating_add(delta.1);
+        }
+    }
+
+    fn drain(&self) -> HashMap<String, (u64, u64)> {
+        let Ok(mut shared) = self.0.lock() else {
+            return HashMap::new();
+        };
+        std::mem::take(&mut shared.pending)
+    }
+}
+
+/// Subscribes to the connection stream until the task is aborted. Reconnects
+/// with backoff; every first message of a stream is a snapshot, reconciled by
+/// the accountant against what it already knows (same-instance recovery).
+async fn stream_loop(addr: String, secret: Option<String>, shared: SharedHandle) {
+    let mut backoff = std::time::Duration::from_secs(1);
+    loop {
+        let mut client = match StatsClient::connect_lazy(&addr, secret.as_deref()) {
+            Ok(client) => client,
+            Err(e) => {
+                warn!("invalid traffic stream endpoint {addr}: {e}; retrying in {backoff:?}");
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(STREAM_BACKOFF_MAX);
+                continue;
+            }
+        };
+        match client.subscribe_connections(STREAM_INTERVAL).await {
+            Ok(stream) => {
+                info!("connection stream established to {addr}");
+                backoff = std::time::Duration::from_secs(1);
+                consume_stream(stream, &shared).await;
+                warn!("connection stream to {addr} ended; reconnecting in {backoff:?}");
+            }
+            Err(e) => {
+                warn!(
+                    "cannot subscribe to connection stream on {addr}: {e}; retrying in {backoff:?}"
+                );
+            }
+        }
+        tokio::time::sleep(backoff).await;
+        backoff = (backoff * 2).min(STREAM_BACKOFF_MAX);
+    }
+}
+
+async fn consume_stream(mut stream: tonic::Streaming<ConnectionEvents>, shared: &SharedHandle) {
+    loop {
+        match stream.message().await {
+            Ok(Some(message)) => shared.apply(&message),
+            Ok(None) => return,
+            Err(e) => {
+                warn!("connection stream error: {e}");
+                return;
+            }
+        }
+    }
+}
+
 pub struct TrafficReporter {
     addr: String,
-    stats: StatsClient,
+    secret: Option<String>,
+    stream: Option<tokio::task::JoinHandle<()>>,
+    shared: SharedHandle,
     outbox: Outbox,
 }
 
 impl TrafficReporter {
     /// `traffic_dir` holds the durable queue (`<state_dir>/traffic`); batches
     /// left by a previous run are recovered here.
-    pub fn new(addr: String, traffic_dir: PathBuf) -> Result<Self> {
-        let stats = StatsClient::connect_lazy(&addr)?;
+    pub fn new(addr: String, secret: Option<String>, traffic_dir: PathBuf) -> Result<Self> {
+        let shared = SharedHandle::new();
+        let stream = tokio::spawn(stream_loop(addr.clone(), secret.clone(), shared.clone()));
         Ok(Self {
             addr,
-            stats,
+            secret,
+            stream: Some(stream),
+            shared,
             outbox: Outbox::open(traffic_dir, Utc::now()),
         })
     }
 
-    /// Rebuild the lazy channel only if the address actually changed.
-    pub fn update_addr(&mut self, addr: &str) -> Result<()> {
-        if self.addr == addr {
+    /// Restarts the stream consumer only if the endpoint actually changed.
+    /// A restart is a fresh subscription to the same sing-box process; the
+    /// accountant reconciles the snapshot against what it already knows; ids
+    /// from a replaced sing-box process never appear in it, so stale state
+    /// cannot leak across process generations.
+    pub fn update_endpoint(&mut self, addr: &str, secret: Option<&str>) -> Result<()> {
+        if self.addr == addr && self.secret.as_deref() == secret {
             return Ok(());
         }
-        self.stats = StatsClient::connect_lazy(addr)?;
+        if let Some(handle) = self.stream.take() {
+            handle.abort();
+        }
         self.addr = addr.to_string();
+        self.secret = secret.map(str::to_owned);
+        self.stream = Some(tokio::spawn(stream_loop(
+            self.addr.clone(),
+            self.secret.clone(),
+            self.shared.clone(),
+        )));
         Ok(())
     }
 
-    /// One cycle: QueryStats(reset=true) -> seal durably -> POST pending
-    /// batches -> forget acknowledged ones. A failed stats query still lets
-    /// previously sealed batches go out. Every failure path logs
-    /// (warn!/error!) and returns; never panics/crashes.
+    /// One cycle: drain the shared accumulator -> seal durably -> POST
+    /// pending batches -> forget acknowledged ones. Stream failures are the
+    /// consumer task's problem; this only reports what has arrived. Every
+    /// failure path logs (warn!/error!) and returns; never panics/crashes.
     pub async fn collect_and_report(&mut self, client: &crate::client::Client) {
-        match self
-            .stats
-            .query_stats(vec!["user>>>".to_string()], true)
-            .await
-        {
-            Ok(stats) => self.outbox.ingest(&stats, Utc::now()),
-            Err(e) => warn!("traffic stats query failed: {e}"),
-        }
+        let deltas = self.shared.drain();
+        self.outbox.ingest(&deltas, Utc::now());
         self.outbox.flush(&ClientSink(client), Utc::now()).await;
-    }
-}
-
-fn merge_stats(pending: &mut HashMap<String, (u64, u64)>, stats: &[Stat]) {
-    for stat in stats {
-        let Some((sub, direction)) = parse_user_counter(&stat.name) else {
-            continue;
-        };
-        if sub.is_empty() {
-            continue;
-        }
-        let delta = if stat.value < 0 { 0 } else { stat.value as u64 };
-        if delta == 0 {
-            continue;
-        }
-        let entry = pending.entry(sub.to_string()).or_insert((0, 0));
-        match direction {
-            Direction::Uplink => entry.0 = entry.0.saturating_add(delta),
-            Direction::Downlink => entry.1 = entry.1.saturating_add(delta),
-        }
     }
 }
 
@@ -654,16 +754,8 @@ mod tests {
 
     use super::{
         Batch, BatchEntry, Limits, Outbox, ReportSink, SendOutcome, clamp_i64, drain_entries,
-        merge_stats, new_report_id,
+        new_report_id,
     };
-    use crate::stats::{Direction, Stat, parse_user_counter};
-
-    fn stat(name: &str, value: i64) -> Stat {
-        Stat {
-            name: name.to_string(),
-            value,
-        }
-    }
 
     fn at(seconds: i64) -> DateTime<Utc> {
         DateTime::from_timestamp(1_800_000_000 + seconds, 0).unwrap()
@@ -678,15 +770,10 @@ mod tests {
         ))
     }
 
-    /// Counters as sing-box reports them after `QueryStats(reset=true)`.
-    fn counters(rows: &[(&str, i64, i64)]) -> Vec<Stat> {
+    /// Per-user deltas as the stream accumulator reports them.
+    fn deltas(rows: &[(&str, u64, u64)]) -> HashMap<String, (u64, u64)> {
         rows.iter()
-            .flat_map(|(sub, up, down)| {
-                [
-                    stat(&format!("user>>>{sub}>>>traffic>>>uplink"), *up),
-                    stat(&format!("user>>>{sub}>>>traffic>>>downlink"), *down),
-                ]
-            })
+            .map(|(user, up, down)| ((*user).to_string(), (*up, *down)))
             .collect()
     }
 
@@ -793,76 +880,6 @@ mod tests {
     }
 
     #[test]
-    fn merge_accumulates_across_two_merges() {
-        let mut pending = HashMap::new();
-        merge_stats(
-            &mut pending,
-            &[
-                stat("user>>>a>>>traffic>>>uplink", 100),
-                stat("user>>>a>>>traffic>>>downlink", 200),
-            ],
-        );
-        merge_stats(
-            &mut pending,
-            &[
-                stat("user>>>a>>>traffic>>>uplink", 50),
-                stat("user>>>b>>>traffic>>>downlink", 30),
-            ],
-        );
-        assert_eq!(pending.get("a"), Some(&(150, 200)));
-        assert_eq!(pending.get("b"), Some(&(0, 30)));
-    }
-
-    #[test]
-    fn merge_clamps_negative_values_to_zero() {
-        let mut pending = HashMap::new();
-        merge_stats(&mut pending, &[stat("user>>>neg>>>traffic>>>uplink", -42)]);
-        assert!(pending.is_empty());
-    }
-
-    #[test]
-    fn merge_skips_zero_value_stat() {
-        let mut pending = HashMap::new();
-        merge_stats(&mut pending, &[stat("user>>>z>>>traffic>>>uplink", 0)]);
-        assert!(pending.is_empty());
-    }
-
-    #[test]
-    fn merge_records_nonzero_direction_when_other_is_zero() {
-        let mut pending = HashMap::new();
-        merge_stats(
-            &mut pending,
-            &[
-                stat("user>>>mixed>>>traffic>>>uplink", 0),
-                stat("user>>>mixed>>>traffic>>>downlink", 5),
-            ],
-        );
-        assert_eq!(pending.get("mixed"), Some(&(0, 5)));
-    }
-
-    #[test]
-    fn merge_ignores_unknown_counter_names() {
-        let mut pending = HashMap::new();
-        merge_stats(
-            &mut pending,
-            &[
-                stat("inbound>>>node-x>>>traffic>>>uplink", 999),
-                stat("user>>>x>>>traffic>>>total", 1),
-                stat("user>>>x", 2),
-            ],
-        );
-        assert!(pending.is_empty());
-    }
-
-    #[test]
-    fn merge_saturates_u64_addition() {
-        let mut pending = HashMap::new();
-        pending.insert("max".to_string(), (u64::MAX, 0));
-        merge_stats(&mut pending, &[stat("user>>>max>>>traffic>>>uplink", 1)]);
-        assert_eq!(pending.get("max"), Some(&(u64::MAX, 0)));
-    }
-
-    #[test]
     fn drain_removes_keys_and_skips_zeros() {
         let mut pending = HashMap::new();
         pending.insert("zero".to_string(), (0, 0));
@@ -907,18 +924,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_direction_round_trips() {
-        assert_eq!(
-            parse_user_counter("user>>>id>>>traffic>>>uplink"),
-            Some(("id", Direction::Uplink))
-        );
-        assert_eq!(
-            parse_user_counter("user>>>id>>>traffic>>>downlink"),
-            Some(("id", Direction::Downlink))
-        );
-    }
-
-    #[test]
     fn report_ids_are_unique_and_match_the_control_plane_format() {
         let ids: HashSet<String> = (0..500).map(|_| new_report_id(at(0))).collect();
         assert_eq!(ids.len(), 500);
@@ -938,7 +943,7 @@ mod tests {
         let root = unique_dir();
         let mut outbox = Outbox::open(root.clone(), at(0));
 
-        outbox.ingest(&counters(&[("a", 10, 20)]), at(60));
+        outbox.ingest(&deltas(&[("a", 10, 20)]), at(60));
 
         assert_eq!(pending_files(&root).len(), 1);
         #[cfg(unix)]
@@ -959,7 +964,7 @@ mod tests {
         let plane = FakeControlPlane::new();
         let mut outbox = Outbox::open(root.clone(), at(0));
 
-        outbox.ingest(&counters(&[("a", 10, 20)]), at(60));
+        outbox.ingest(&deltas(&[("a", 10, 20)]), at(60));
         outbox.flush(&plane, at(61)).await;
 
         assert_eq!(plane.total("a"), (10, 20));
@@ -970,7 +975,7 @@ mod tests {
             (at(0), at(60))
         );
 
-        outbox.ingest(&counters(&[("a", 1, 1)]), at(120));
+        outbox.ingest(&deltas(&[("a", 1, 1)]), at(120));
         assert_eq!(outbox.queue.items[0].batch.window_started_at, at(60));
         fs::remove_dir_all(&root).unwrap();
     }
@@ -982,10 +987,10 @@ mod tests {
         plane.script([Fault::LoseResponse]);
         let mut outbox = Outbox::open(root.clone(), at(0));
 
-        outbox.ingest(&counters(&[("a", 10, 0), ("b", 0, 7)]), at(60));
+        outbox.ingest(&deltas(&[("a", 10, 0), ("b", 0, 7)]), at(60));
         outbox.flush(&plane, at(61)).await;
         // Next cycle: new traffic is sealed separately, the old batch is resent.
-        outbox.ingest(&counters(&[("a", 5, 0)]), at(120));
+        outbox.ingest(&deltas(&[("a", 5, 0)]), at(120));
         outbox.flush(&plane, at(121)).await;
 
         let attempts = plane.attempted_ids();
@@ -1007,7 +1012,7 @@ mod tests {
         let plane = FakeControlPlane::new();
         plane.script([Fault::LoseResponse, Fault::Unavailable]);
         let mut first_run = Outbox::open(root.clone(), at(0));
-        first_run.ingest(&counters(&[("a", 10, 0), ("b", 0, 7)]), at(60));
+        first_run.ingest(&deltas(&[("a", 10, 0), ("b", 0, 7)]), at(60));
         first_run.flush(&plane, at(61)).await;
         let sealed = first_run.queue.items[0].batch.clone();
         drop(first_run); // agent crash: only the files remain
@@ -1036,7 +1041,7 @@ mod tests {
         plane.script([Fault::LoseResponse]);
         let mut outbox = Outbox::with_limits(root.clone(), at(0), small_limits());
         outbox.ingest(
-            &counters(&[
+            &deltas(&[
                 ("a", 1, 2),
                 ("b", 3, 4),
                 ("c", 5, 6),
@@ -1073,7 +1078,7 @@ mod tests {
         let plane = FakeControlPlane::new();
         plane.script([Fault::Reject]);
         let mut outbox = Outbox::with_limits(root.clone(), at(0), small_limits());
-        outbox.ingest(&counters(&[("a", 1, 0), ("b", 1, 0), ("c", 1, 0)]), at(60));
+        outbox.ingest(&deltas(&[("a", 1, 0), ("b", 1, 0), ("c", 1, 0)]), at(60));
 
         outbox.flush(&plane, at(61)).await;
 
@@ -1094,7 +1099,7 @@ mod tests {
         };
         let mut outbox = Outbox::with_limits(root.clone(), at(0), limits);
         outbox.ingest(
-            &counters(&[
+            &deltas(&[
                 ("a", 1, 0),
                 ("b", 1, 0),
                 ("c", 1, 0),
@@ -1118,10 +1123,10 @@ mod tests {
         plane.script([Fault::Unavailable]);
         let mut outbox = Outbox::open(root.clone(), at(0));
 
-        outbox.ingest(&counters(&[("a", 10, 0)]), at(60));
+        outbox.ingest(&deltas(&[("a", 10, 0)]), at(60));
         assert!(!outbox.queue.items[0].persisted);
         outbox.flush(&plane, at(61)).await; // unavailable: stays in memory
-        outbox.ingest(&counters(&[("a", 5, 0)]), at(120));
+        outbox.ingest(&deltas(&[("a", 5, 0)]), at(120));
         outbox.flush(&plane, at(121)).await;
 
         assert_eq!(plane.total("a"), (15, 0));
@@ -1136,7 +1141,7 @@ mod tests {
         let plane = FakeControlPlane::new();
         plane.script([Fault::Unavailable]);
         let mut outbox = Outbox::open(root.clone(), at(0));
-        outbox.ingest(&counters(&[("a", 10, 0)]), at(60));
+        outbox.ingest(&deltas(&[("a", 10, 0)]), at(60));
         fs::remove_file(&root).unwrap(); // the disk problem is fixed
 
         outbox.flush(&plane, at(61)).await;
@@ -1159,7 +1164,7 @@ mod tests {
         let mut outbox = Outbox::with_limits(root.clone(), at(0), limits);
 
         outbox.ingest(
-            &counters(&[("a", 1, 0), ("b", 1, 0), ("c", 1, 0), ("d", 1, 0)]),
+            &deltas(&[("a", 1, 0), ("b", 1, 0), ("c", 1, 0), ("d", 1, 0)]),
             at(60),
         );
         assert_eq!(outbox.queue.entry_count(), 2);
@@ -1170,9 +1175,9 @@ mod tests {
         );
 
         outbox.flush(&plane, at(61)).await; // unavailable
-        outbox.ingest(&counters(&[("a", 4, 0)]), at(120)); // still full, merges
+        outbox.ingest(&deltas(&[("a", 4, 0)]), at(120)); // still full, merges
         outbox.flush(&plane, at(121)).await; // drains the queue
-        outbox.ingest(&[], at(180)); // room again: remainder is sealed
+        outbox.ingest(&HashMap::new(), at(180)); // room again: remainder is sealed
         outbox.flush(&plane, at(181)).await;
 
         assert_eq!(plane.total("a"), (5, 0));
@@ -1192,7 +1197,7 @@ mod tests {
             ..Limits::default()
         };
         let mut outbox = Outbox::with_limits(root.clone(), at(0), limits);
-        outbox.ingest(&counters(&[("a", 10, 0)]), at(60));
+        outbox.ingest(&deltas(&[("a", 10, 0)]), at(60));
 
         outbox.flush(&plane, at(60 + 2 * 3600)).await;
 
@@ -1206,7 +1211,7 @@ mod tests {
     fn corrupt_and_interrupted_files_are_set_aside_on_startup() {
         let root = unique_dir();
         let mut writer = Outbox::open(root.clone(), at(0));
-        writer.ingest(&counters(&[("a", 10, 0)]), at(60));
+        writer.ingest(&deltas(&[("a", 10, 0)]), at(60));
         let good = writer.queue.items[0].batch.clone();
         let pending = root.join("pending");
         fs::write(pending.join("garbage.json"), "{ not json").unwrap();
@@ -1238,7 +1243,7 @@ mod tests {
             ..FakeControlPlane::default()
         };
         let mut outbox = Outbox::open(root.clone(), at(0));
-        outbox.ingest(&counters(&[("a", 10, 0)]), at(60));
+        outbox.ingest(&deltas(&[("a", 10, 0)]), at(60));
 
         outbox.flush(&plane, at(61)).await;
 
@@ -1253,7 +1258,7 @@ mod tests {
         let plane = FakeControlPlane::new();
         let mut outbox = Outbox::open(root.clone(), at(0));
 
-        outbox.ingest(&counters(&[("a", 0, 0)]), at(60));
+        outbox.ingest(&deltas(&[("a", 0, 0)]), at(60));
         outbox.flush(&plane, at(61)).await;
 
         assert!(plane.attempts.borrow().is_empty());
