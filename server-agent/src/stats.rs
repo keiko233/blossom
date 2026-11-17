@@ -47,6 +47,10 @@ pub struct ConnectionEvents {
 pub struct Connection {
     #[prost(string, tag = "10")]
     pub user: String,
+    /// Unix milliseconds; non-zero on connections that were already closed
+    /// when a snapshot was taken (sing-box replays up to 1000 of them).
+    #[prost(int64, tag = "13")]
+    pub closed_at: i64,
     #[prost(int64, tag = "16")]
     pub uplink_total: i64,
     #[prost(int64, tag = "17")]

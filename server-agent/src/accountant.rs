@@ -56,7 +56,16 @@ impl ConnectionEventType {
 #[derive(Default)]
 pub struct ConnectionAccountant {
     tracked: HashMap<String, Accounted>,
+    /// Ids whose final totals have already been paid, newest last. sing-box
+    /// replays its last 1000 closed connections in every snapshot; without
+    /// this memory a reconnect would pay them a second time.
+    finalised: std::collections::VecDeque<String>,
+    finalised_set: std::collections::HashSet<String>,
 }
+
+/// Larger than sing-box's own closed-connection history (1000) so a replayed
+/// id is always still remembered.
+const FINALISED_LIMIT: usize = 4096;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Accounted {
@@ -81,6 +90,32 @@ impl ConnectionAccountant {
                 let Some((user, totals)) = Self::snapshot_totals(event) else {
                     continue;
                 };
+                let closed = event
+                    .connection
+                    .as_ref()
+                    .is_some_and(|connection| connection.closed_at != 0);
+                if closed {
+                    // Replayed history entry. Pay only what was never paid
+                    // and remember the id so the next snapshot skips it.
+                    if self.finalised_set.contains(&event.id) {
+                        self.tracked.remove(&event.id);
+                        continue;
+                    }
+                    let (uplink_delta, downlink_delta) = match self.tracked.remove(&event.id) {
+                        Some(accounted) => (
+                            totals.0.saturating_sub(accounted.uplink),
+                            totals.1.saturating_sub(accounted.downlink),
+                        ),
+                        None => totals,
+                    };
+                    if uplink_delta > 0 || downlink_delta > 0 {
+                        let (uplink, downlink) = out.entry(user).or_insert((0, 0));
+                        *uplink = uplink.saturating_add(uplink_delta);
+                        *downlink = downlink.saturating_add(downlink_delta);
+                    }
+                    self.mark_finalised(&event.id);
+                    continue;
+                }
                 seen.insert(event.id.as_str());
                 let known = self.tracked.remove(&event.id);
                 let (uplink_delta, downlink_delta) = match known {
@@ -131,6 +166,7 @@ impl ConnectionAccountant {
                     let Some(tracked) = self.tracked.remove(&event.id) else {
                         continue;
                     };
+                    self.mark_finalised(&event.id);
                     let Some(final_totals) = Self::connection_totals(event) else {
                         continue;
                     };
@@ -161,6 +197,18 @@ impl ConnectionAccountant {
             }
         }
         out
+    }
+
+    fn mark_finalised(&mut self, id: &str) {
+        if !self.finalised_set.insert(id.to_owned()) {
+            return;
+        }
+        self.finalised.push_back(id.to_owned());
+        while self.finalised.len() > FINALISED_LIMIT {
+            if let Some(old) = self.finalised.pop_front() {
+                self.finalised_set.remove(&old);
+            }
+        }
     }
 
     #[cfg(test)]
@@ -195,6 +243,7 @@ mod tests {
     fn connection(user: &str, uplink_total: i64, downlink_total: i64) -> Connection {
         Connection {
             user: user.to_string(),
+            closed_at: 0,
             uplink_total,
             downlink_total,
         }
@@ -384,5 +433,49 @@ mod tests {
             "c1", "user-a", 60, 10,
         )]));
         assert!(deltas.is_empty());
+    }
+
+    fn closed_snapshot_event(id: &str, user: &str, up: i64, down: i64) -> ConnectionEvent {
+        let mut event = new_event_with_totals(id, user, up, down);
+        event.connection.as_mut().unwrap().closed_at = 1;
+        event
+    }
+
+    #[test]
+    fn replayed_closed_history_is_not_paid_twice_after_reconnect() {
+        let mut accountant = ConnectionAccountant::new();
+        accountant.apply(&snapshot(vec![new_event_with_totals("c1", "user-a", 0, 0)]));
+        accountant.apply(&updates(vec![update_event("c1", "user-a", 100, 40)]));
+        let paid = accountant.apply(&updates(vec![closed_event("c1", "user-a", 150, 100)]));
+        assert_eq!(paid.get("user-a"), Some(&(50, 60)));
+
+        // Reconnect: sing-box replays c1 from its closed history.
+        let deltas = accountant.apply(&snapshot(vec![closed_snapshot_event(
+            "c1", "user-a", 150, 100,
+        )]));
+        assert!(deltas.is_empty());
+        assert!(accountant.is_empty());
+    }
+
+    #[test]
+    fn connection_closed_during_the_gap_is_paid_once() {
+        let mut accountant = ConnectionAccountant::new();
+        accountant.apply(&snapshot(vec![new_event_with_totals("c1", "user-a", 0, 0)]));
+        accountant.apply(&updates(vec![update_event("c1", "user-a", 100, 0)]));
+
+        // c1 closed while the stream was down; its history entry carries the
+        // final totals. Only the unpaid remainder is added, and only once.
+        let replay = || snapshot(vec![closed_snapshot_event("c1", "user-a", 130, 20)]);
+        assert_eq!(accountant.apply(&replay()).get("user-a"), Some(&(30, 20)));
+        assert!(accountant.apply(&replay()).is_empty());
+        assert!(accountant.is_empty());
+    }
+
+    #[test]
+    fn closed_history_of_a_fresh_instance_is_counted_in_full_once() {
+        let mut accountant = ConnectionAccountant::new();
+        let message = || snapshot(vec![closed_snapshot_event("old", "user-a", 10, 5)]);
+        assert_eq!(accountant.apply(&message()).get("user-a"), Some(&(10, 5)));
+        assert!(accountant.apply(&message()).is_empty());
     }
 }
