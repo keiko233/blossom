@@ -1,63 +1,31 @@
 # syntax=docker/dockerfile:1
 
-# Build ID stamped into the agent binary (OCI revision / CI build arg). Defaults
-# to "local"; build.rs falls back to the short local git sha when unset.
+# Thin runtime image. It deliberately does not contain server-agent or
+# sing-box: both are downloaded into the persistent /data volume on first
+# start (and upgraded there by the agent). Rebuilding this image therefore
+# never pins a sing-box version.
+
 ARG BUILD_ID=local
 
-# ── Stage 1: build a full-featured sing-box from source ───────────────
-# Start with the upstream full non-CGO build tags for this exact sing-box
-# release, then add v2ray-api because the agent uses it for traffic stats.
-FROM golang:alpine AS singbox
-RUN apk add --no-cache git build-base
-ENV CGO_ENABLED=0
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    module_json="$(go mod download -json github.com/sagernet/sing-box@latest)" && \
-    sing_box_version="$(printf '%s\n' "${module_json}" | sed -n 's/^[[:space:]]*"Version": "\([^"]*\)",$/\1/p')" && \
-    module_dir="$(printf '%s\n' "${module_json}" | sed -n 's/^[[:space:]]*"Dir": "\([^"]*\)",$/\1/p')" && \
-    test -n "${sing_box_version}" && test -n "${module_dir}" && \
-    build_tags="$(cat "${module_dir}/release/DEFAULT_BUILD_TAGS_OTHERS"),with_v2ray_api" && \
-    make -C "${module_dir}" install PREFIX=/out TAGS="${build_tags}" VERSION="${sing_box_version}"
-# -> /out/bin/sing-box
-
-# ── Stage 2: build the Rust agent against musl (fully static) ─────────────────
-FROM rust:alpine AS agent
-# musl-dev/build-base for the C toolchain; openssl (static) for reqwest's
-# default-tls; pkgconf so openssl-sys can find it.
-RUN apk add --no-cache musl-dev build-base openssl-dev openssl-libs-static pkgconf
-# Statically link OpenSSL so the final binary needs no shared libs at runtime.
-ENV OPENSSL_STATIC=1 OPENSSL_NO_VENDOR=1 PKG_CONFIG_ALL_STATIC=1
-
-ARG BUILD_ID
-ENV AGENT_BUILD_ID=$BUILD_ID
-
-WORKDIR /app
-# build.rs generates the API client from this spec, so it must be present before
-# any cargo build touches the crate.
-COPY Cargo.toml Cargo.lock build.rs ./
-COPY openapi ./openapi
-COPY src ./src
-
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/app/target \
-    cargo build --release && \
-    cp target/release/server-agent /server-agent
-
-# ── Stage 3: runtime ──────────────────────────────────────────────────────────
 FROM alpine:latest
-# ca-certificates for TLS to the blossom API; tzdata since sing-box logs local time.
-RUN apk add --no-cache ca-certificates tzdata
-
 ARG BUILD_ID
-ENV AGENT_BUILD_ID=$BUILD_ID
-ENV AGENT_SING_BOX_PATH=/usr/local/bin/sing-box
-ENV AGENT_STATE_DIR=/var/lib/blossom-agent
+LABEL org.opencontainers.image.revision=$BUILD_ID
 
-COPY --from=singbox /out/bin/sing-box /usr/local/bin/sing-box
-COPY --from=agent   /server-agent /usr/local/bin/server-agent
+RUN apk add --no-cache ca-certificates tzdata tini curl jq tar
 
-# The agent resolves sing-box via PATH when no explicit path is given.
+COPY scripts/entrypoint.sh /usr/local/bin/blossom-entrypoint
+RUN chmod 0755 /usr/local/bin/blossom-entrypoint
 
-VOLUME ["/var/lib/blossom-agent"]
+# /data is the only durable location: binaries, state, certificates and
+# download cache all live below it. AGENT_STATE_DIR is kept separate so state
+# remains the same when the binaries are upgraded.
+ENV AGENT_DATA_DIR=/data \
+    AGENT_STATE_DIR=/data/state \
+    AGENT_DOWNLOAD_DIR=/data/downloads \
+    AGENT_BIN_PATH=/data/bin/server-agent \
+    AGENT_SING_BOX_PATH=/data/bin/sing-box \
+    AGENT_SELF_UPDATE=1
 
-ENTRYPOINT ["server-agent"]
+VOLUME ["/data"]
+
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/blossom-entrypoint"]

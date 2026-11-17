@@ -42,7 +42,7 @@ Every push to `main` (and `v*` tags) runs `.github/workflows/docker.yml`, which 
 | Image | Contents |
 |---|---|
 | `ghcr.io/keiko233/blossom` | The app as a self-contained Node server on port 3000 (built with `DEPLOY_TARGET=node`). |
-| `ghcr.io/keiko233/blossom/server-agent` | The Rust server-agent bundled with sing-box (compiled with `with_v2ray_api`). |
+| `ghcr.io/keiko233/blossom/server-agent` | Thin runtime (`curl`, `jq`, `tar`, `tini`, entrypoint). On first start it downloads the agent and official sing-box into the persistent `/data` volume. |
 
 Tags: `latest` tracks `main`, `sha-<commit>` pins a build, and `v*` releases also get semver tags (`1.2.3`, `1.2`). Note the app image only runs the server — database migrations still need to be applied separately (see below). `VITE_APP_NAME` is baked in at build time, so a custom app name requires building the image yourself with `--build-arg VITE_APP_NAME=<name>`.
 
@@ -121,7 +121,7 @@ To skip building locally, point the `app` service at the prebuilt image (`image:
 
 ## Server agent
 
-The Rust server-agent in `server-agent/` consumes the control-plane OpenAPI spec at `/api/agent/*`. Each server owns one agent token and one sing-box process; every enabled node assigned to that server becomes an inbound in the same generated sing-box config. Agents pull the versioned control document from `/api/agent/config/v3` (they advertise the `config-v3` capability), which carries server-managed polling intervals alongside the sing-box config. Candidates are checked by the target sing-box binary before reload, and the last-known-good config is persisted for rollback. After changing the agent-facing API, regenerate the agent client while the dev server is running:
+The Rust server-agent in `server-agent/` consumes the control-plane OpenAPI spec at `/api/agent/*`. Each server owns one agent token and one sing-box process; every enabled node assigned to that server becomes an inbound in the same generated sing-box config. Agents pull the versioned control document from `/api/agent/config/v3` (they advertise the `config-v3` capability), which carries server-managed polling intervals, desired agent/sing-box versions and the sing-box config. Candidates are checked by the target sing-box binary before reload, and the last-known-good config is persisted for rollback. The container stores both binaries, configs, certificates and update state under `/data`; first start downloads the binaries, and later updates are driven by the per-server desired versions in the admin UI. After changing the agent-facing API, regenerate the agent client while the dev server is running:
 
 ```bash
 pnpm --filter @blossom/app agent:spec

@@ -88,8 +88,11 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
-      - name: Build server agent image
-        run: docker build --build-arg BUILD_ID=managed-tls-test -t blossom/server-agent:managed-tls-test .
+      - name: Build thin server agent image
+        run: docker build -t blossom/server-agent:runtime-test .
+
+      - name: Build server agent test image
+        run: docker build -f Dockerfile.test --build-arg BUILD_ID=managed-tls-test -t blossom/server-agent:managed-tls-test .
 
       - name: Test managed TLS lifecycle
         run: scripts/test-managed-tls-docker.sh blossom/server-agent:managed-tls-test

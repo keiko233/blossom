@@ -26,9 +26,13 @@ Older notes and agents may refer to `/agent/config/v2`. The control plane no lon
    docker compose up -d
    ```
 
-   Verified (code): `server-agent/docker-compose.yaml` requires `AGENT_URL` and `AGENT_TOKEN` (`:?` guards), uses host networking, `NET_ADMIN` and `/dev/net/tun`, a named volume `agent-state` at `/var/lib/blossom-agent`, `restart: unless-stopped` and log rotation (10 MB × 3). By default it **builds** the image locally, which compiles sing-box and is slow; the file has a commented `image:` line for a prebuilt image.
+   Verified (code): `server-agent/docker-compose.yaml` requires `AGENT_URL` and `AGENT_TOKEN` (`:?` guards), uses host networking, `NET_ADMIN` and `/dev/net/tun`, a named volume `agent-data` at `/data`, `restart: unless-stopped` and log rotation (10 MB × 3). The image is a thin runtime: it contains `curl`, `jq`, `tar`, `tini` and the entrypoint, not sing-box or the agent binary.
 
-3. Prefer a pinned prebuilt image over `latest`: `ghcr.io/keiko233/blossom/server-agent:sha-<commit>` or a semver tag (tags are listed in the root README).
+3. On first start the entrypoint downloads the requested agent and sing-box releases into `/data/bin` and verifies the SHA-256 digest GitHub reports for each asset. Defaults are `AGENT_BOOTSTRAP_VERSION=latest` and `AGENT_SING_BOX_BOOTSTRAP_VERSION=latest`. Set either to an exact version (or `none` to refuse an automatic download) for a pinned bootstrap. Existing binaries are never overwritten by the bootstrap; later upgrades are driven by the control plane.
+   The agent download requires a published `server-agent-v*` GitHub release. Until one exists (or when using a fork/mirror), set `AGENT_RELEASE_REPO`/`AGENT_GITHUB_API` to the release source, or provide `AGENT_SEED_DIR` with `server-agent` and `sing-box` binaries for an offline first start.
+4. Prefer a pinned prebuilt image over `latest`: `ghcr.io/keiko233/blossom/server-agent:sha-<commit>` or a semver tag (tags are listed in the root README). Pinning the image now pins only the runtime/entrypoint, not sing-box.
+
+The first start needs outbound access to `api.github.com`, `github.com` release downloads and the blossom API. If unauthenticated GitHub API rate limits are a problem, set `AGENT_GITHUB_TOKEN` (a read-only token is enough); it is used only for release API/download requests and is never logged.
 
 ### The generated Docker command embeds the secret
 
@@ -39,21 +43,25 @@ Recommended handling:
 - Use the `.env` + Compose route above. The token then lives in a `0600` file instead of shell history and process listings. It is still visible to anyone who can run `docker inspect` on the container, so restrict Docker access on that host.
 - The agent reads the token only from `AGENT_TOKEN` or `--token` (verified in `main.rs`); there is no `*_FILE` variant, so Docker/Compose file-based secrets cannot be consumed without a wrapper.
 - If a command or token was exposed, reset the server's token in the admin UI and update the agent's `.env`. A reset replaces the stored hash, so the old token stops authenticating on its next request (code path inspected; not exercised).
-- The generated command has no volume for the state directory; see below before using it for anything beyond a trial.
+- The generated command now mounts `-v blossom-agent-data:/data`; without a persistent volume, recreating the container loses both binaries and state.
 
 ## State persistence
 
-The agent's state directory defaults to `/var/lib/blossom-agent` (`AGENT_STATE_DIR`; the image sets it and declares it a `VOLUME`). Verified (code):
+The image declares `/data` as a volume. Do not mount only a subdirectory: mount the whole `/data` volume so the downloaded binaries and the agent state travel together. Verified (code):
 
-| Path under the state dir                      | Contents                                                          |
-| --------------------------------------------- | ----------------------------------------------------------------- |
-| `active.json`, `candidate.json`, `last-known-good.json` | sing-box configs: running, being checked, and previous good |
-| `state.json`                                  | applied revision, active node IDs, certificate deployment records |
-| `certificates/<id>/generation-<n>/`           | `fullchain.pem` and `private-key.pem`, files `0600`, directories `0700` |
+| Path under `/data`                                         | Contents                                                          |
+| ---------------------------------------------------------- | ----------------------------------------------------------------- |
+| `bin/server-agent`, `bin/server-agent.prev`                | running agent and the previous binary kept for crash rollback    |
+| `bin/sing-box`, `bin/sing-box.prev`                        | running sing-box and the previous binary kept for rollback       |
+| `state/active.json`, `state/candidate.json`, `state/last-known-good.json` | sing-box configs: running, being checked, and previous good |
+| `state/state.json`                                         | applied revision, active node IDs, certificate deployment records |
+| `state/certificates/<id>/generation-<n>/`                  | `fullchain.pem` and `private-key.pem`, files `0600`, directories `0700` |
+| `state/agent-update.json`, `state/*-update-failed.json`    | in-flight/failed update markers used for rollback and retry cooldown |
+| `downloads/`                                               | bootstrap/update cache; safe to delete while the agent is stopped |
 
 Implications:
 
-- The generated `docker run` command mounts nothing, so Docker creates an **anonymous** volume. It survives `docker restart`, but if you remove and re-create the container (the normal upgrade flow) the new container gets a fresh empty volume and the old state is orphaned. Add `-v blossom-agent-state:/var/lib/blossom-agent` to that command, or use the Compose file's named volume. **Unverified:** anonymous-volume behaviour is general Docker semantics, not tested here.
+- The generated `docker run` command mounts `blossom-agent-data:/data`, and Compose uses a named volume with the same intent. A container without a volume gets an anonymous one: it survives `docker restart`, but recreating the container strands both the binaries and the state.
 - Losing the state volume is recoverable: the next successful pull re-fetches config and certificate artifacts from the control plane. What is lost is the ability to start the last-known-good config while the control plane is unreachable.
 - The volume holds certificate **private keys** in plaintext files. Protect any backup of it like a key store. See [Backup and recovery](backup-restore.md#agent-state).
 - The token is not stored in the state directory; keep it in your secret store.
@@ -70,17 +78,23 @@ Verified (code):
 
 ## Upgrade and rollback
 
-1. Note the currently running tag/digest and keep the `.env` (token) unchanged.
-2. Change the image tag (or pull the new build) and run `docker compose up -d`. Compose recreates the container and reuses the named `agent-state` volume.
-3. On start, the agent runs `sing-box check` on its last-known-good config, starts sing-box from it, then syncs with the control plane. If the new agent cannot start the stored config it reports the error in its heartbeat and keeps retrying (`SINGBOX_START_FAILED`/`LKG_CONFIG_INVALID` in `main.rs`).
-4. Roll back by setting the previous tag and running `docker compose up -d` again, with the same volume.
+There are two independent upgrade paths:
+
+- **Runtime image:** change the image tag and run `docker compose up -d`. The image supplies only the entrypoint and tools; the same `/data` volume supplies both binaries and state. Recreating the container is safe as long as `/data` is preserved.
+- **agent and sing-box:** set the desired version on the server in the admin UI (or leave it blank and pin `AGENT_BOOTSTRAP_VERSION`/`AGENT_SING_BOX_BOOTSTRAP_VERSION` for first start only). The agent polls the directive, resolves the release through the GitHub API, verifies the SHA-256 digest, and installs atomically.
+
+Sing-box upgrades are preflighted with `sing-box check` against the active config. The old process is stopped, the new binary must survive the normal runtime probation, and a failure restores `sing-box.prev` and the previous process. Agent self-updates replace `server-agent`, write a pending-update marker and exit with code `75`; the entrypoint restarts the new binary. If the new agent crashes three times within two minutes, the entrypoint restores `server-agent.prev`. Failed updates are retried after `AGENT_UPDATE_RETRY_SECONDS` (default 3600) unless the desired version changes.
+
+The admin server list shows the running and desired versions plus the last update state. The heartbeat reports failures in `agentUpdateError`/`singBoxUpdateError`.
+
+To roll back manually, set the desired version back to the previous exact version. If the agent cannot reach the control plane, stop the container, replace `/data/bin/sing-box` with `sing-box.prev` (or `/data/bin/server-agent` with `server-agent.prev`), and start it again.
 
 **Unverified:** that state files written by a newer agent are readable by an older one. If you must roll back across a release that changed persisted formats, discard the volume and let the agent re-pull (accepting a short outage).
 
-**Unverified:** `docker stop` sends SIGTERM, and `main.rs` installs a handler only for Ctrl-C (SIGINT); as container PID 1 the agent may therefore not shut down gracefully and Docker may kill it after the stop timeout. This was not tested. [Local validation](local-validation.md#agent-shutdown-timing) has a rehearsal.
+The agent handles both SIGINT and SIGTERM and shuts down its sing-box process before exiting; the entrypoint forwards the container stop signal to the agent. This is still covered by [local validation](local-validation.md#agent-shutdown-timing) rather than a hosted check.
 
 Compatibility: only `config-v3` is served by the control plane, so agents older than that cannot sync. Upgrade such agents before (or together with) the control plane.
 
 ## Health of an agent
 
-The agent image has no `HEALTHCHECK`, and the Compose file defines none. The control plane records each server's last-seen time and applied revision (`server.last_seen_at`, `applied_revision` in `app/src/db/proxy-schema.ts`); which of these the admin UI displays was not checked. Remember that this proves the agent reaches the control plane with a valid token. It does not prove clients can connect: verify with a real client.
+The runtime image has no `HEALTHCHECK`, and the Compose file defines none. The control plane records each server's last-seen time, applied revision and per-binary update state (`server.last_seen_at`, `applied_revision`, `agent_update_state`, `sing_box_update_state` in `app/src/db/proxy-schema.ts`). Remember that this proves the agent reaches the control plane with a valid token. It does not prove clients can connect: verify with a real client.

@@ -13,6 +13,7 @@ mod config;
 mod process;
 mod stats;
 mod traffic;
+mod update;
 
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
@@ -22,11 +23,14 @@ use anyhow::Result;
 use chrono::Utc;
 use clap::Parser;
 use tokio::signal;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::config::{AgentPolicy, CandidateConfig, ConfigManager, FetchStatus};
 use crate::process::{ProcessState, SingBoxManager, check_config, resolve_binary, singbox_version};
 use crate::traffic::TrafficReporter;
+use crate::update::{
+    AGENT_RESTART_EXIT_CODE, UpdateConfig, UpdateManager, UpdateStatus, supports_singbox_version,
+};
 
 const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const AGENT_BUILD_ID: &str = env!("AGENT_BUILD_ID");
@@ -75,6 +79,52 @@ struct Args {
         env = "AGENT_STATE_DIR"
     )]
     state_dir: PathBuf,
+
+    /// Directory for release download/extraction scratch files.
+    #[arg(long, env = "AGENT_DOWNLOAD_DIR")]
+    download_dir: Option<PathBuf>,
+
+    /// Allow the agent to replace its own binary and exit for a supervisor restart.
+    #[arg(
+        long,
+        default_value_t = false,
+        env = "AGENT_SELF_UPDATE",
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
+    self_update: bool,
+
+    /// GitHub API base used to resolve release assets.
+    #[arg(
+        long,
+        default_value = "https://api.github.com",
+        env = "AGENT_GITHUB_API"
+    )]
+    github_api: String,
+
+    /// Repository that publishes `server-agent-v*` static binaries.
+    #[arg(long, default_value = "keiko233/blossom", env = "AGENT_RELEASE_REPO")]
+    release_repo: String,
+
+    /// Repository that publishes official sing-box releases.
+    #[arg(
+        long,
+        default_value = "SagerNet/sing-box",
+        env = "AGENT_SING_BOX_RELEASE_REPO"
+    )]
+    sing_box_release_repo: String,
+
+    /// Optional GitHub token for release API/download rate limits.
+    #[arg(long, env = "AGENT_GITHUB_TOKEN", hide_env_values = true)]
+    github_token: Option<String>,
+
+    /// Minimum delay before retrying a failed update to the same version.
+    #[arg(
+        long,
+        default_value_t = 3600,
+        env = "AGENT_UPDATE_RETRY_SECONDS",
+        value_parser = clap::value_parser!(u64).range(60..)
+    )]
+    update_retry_seconds: u64,
 }
 
 fn parse_level(level: &str) -> tracing::Level {
@@ -98,9 +148,34 @@ async fn main() -> Result<()> {
     let client = client::new_client(&args.url, &args.token)?;
 
     let bin = resolve_binary(args.sing_box_path);
-    let sing_box_version = singbox_version(&bin).await;
-    let traffic_dir = args.state_dir.join("traffic");
-    let mut config = ConfigManager::new(client.clone(), args.state_dir)?;
+    let mut sing_box_version = singbox_version(&bin).await;
+    if let Some(version) = sing_box_version.as_deref()
+        && !supports_singbox_version(version)
+    {
+        warn!(
+            "sing-box {version} is too old for connection-stream traffic; set a desired sing-box version >= 1.14"
+        );
+    }
+    let state_dir = args.state_dir.clone();
+    let traffic_dir = state_dir.join("traffic");
+    let mut config = ConfigManager::new(client.clone(), state_dir.clone())?;
+    let mut updates = UpdateManager::new(
+        UpdateConfig {
+            state_dir: state_dir.clone(),
+            download_dir: args
+                .download_dir
+                .clone()
+                .unwrap_or_else(|| state_dir.join("downloads")),
+            github_api: args.github_api.clone(),
+            agent_repo: args.release_repo.clone(),
+            singbox_repo: args.sing_box_release_repo.clone(),
+            github_token: args.github_token.clone(),
+            self_update: args.self_update,
+            retry_after: Duration::from_secs(args.update_retry_seconds),
+        },
+        AGENT_VERSION.to_string(),
+        sing_box_version.clone(),
+    )?;
     let (mut manager, startup_error) = if config.has_active_config() {
         match check_config(&bin, config.config_path()).await {
             Ok(()) => {
@@ -147,11 +222,39 @@ async fn main() -> Result<()> {
     let mut policy = AgentPolicy {
         config_poll_interval_seconds: args.interval,
         heartbeat_interval_seconds: args.interval.min(300),
+        desired_agent_version: None,
+        desired_sing_box_version: None,
     };
 
     match sync_config(&mut config, &mut manager, &bin, &mut status).await {
         Ok(next) => policy = next,
         Err(e) => error!("initial config sync failed: {e}"),
+    }
+    if reconcile_updates(
+        &mut updates,
+        &policy,
+        &mut manager,
+        &bin,
+        &mut config,
+        &mut sing_box_version,
+    )
+    .await
+    {
+        heartbeat(
+            &client,
+            &mut config,
+            manager.as_ref(),
+            &status,
+            policy.clone(),
+            sing_box_version.as_deref(),
+            &updates,
+        )
+        .await;
+        if let Some(manager) = manager.take() {
+            manager.shutdown().await;
+        }
+        info!("agent update installed; exiting for supervisor restart");
+        std::process::exit(AGENT_RESTART_EXIT_CODE);
     }
     reconcile_reporter(config.api_endpoint(), &mut reporter, &traffic_dir);
     heartbeat(
@@ -159,8 +262,9 @@ async fn main() -> Result<()> {
         &mut config,
         manager.as_ref(),
         &status,
-        policy,
+        policy.clone(),
         sing_box_version.as_deref(),
+        &updates,
     )
     .await;
 
@@ -185,14 +289,41 @@ async fn main() -> Result<()> {
                     Ok(next) => policy = next,
                     Err(e) => error!("config sync failed: {e}"),
                 }
+                if reconcile_updates(
+                    &mut updates,
+                    &policy,
+                    &mut manager,
+                    &bin,
+                    &mut config,
+                    &mut sing_box_version,
+                )
+                .await
+                {
+                    heartbeat(
+                        &client,
+                        &mut config,
+                        manager.as_ref(),
+                        &status,
+                        policy.clone(),
+                        sing_box_version.as_deref(),
+                        &updates,
+                    )
+                    .await;
+                    if let Some(manager) = manager.take() {
+                        manager.shutdown().await;
+                    }
+                    info!("agent update installed; exiting for supervisor restart");
+                    std::process::exit(AGENT_RESTART_EXIT_CODE);
+                }
                 reconcile_reporter(config.api_endpoint(), &mut reporter, &traffic_dir);
                 heartbeat(
                     &client,
                     &mut config,
                     manager.as_ref(),
                     &status,
-                    policy,
+                    policy.clone(),
                     sing_box_version.as_deref(),
+                    &updates,
                 ).await;
                 config_sleep.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(policy.config_poll_interval_seconds));
                 heartbeat_sleep.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(policy.heartbeat_interval_seconds));
@@ -203,13 +334,14 @@ async fn main() -> Result<()> {
                     &mut config,
                     manager.as_ref(),
                     &status,
-                    policy,
+                    policy.clone(),
                     sing_box_version.as_deref(),
+                    &updates,
                 ).await;
                 heartbeat_sleep.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(policy.heartbeat_interval_seconds));
             }
-            _ = signal::ctrl_c() => {
-                info!("received ctrl-c, shutting down");
+            _ = shutdown_signal() => {
+                info!("received shutdown signal");
                 break;
             }
         }
@@ -496,6 +628,156 @@ fn reconcile_reporter(
     }
 }
 
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut terminate = signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
+        tokio::select! {
+            _ = signal::ctrl_c() => {}
+            _ = terminate.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = signal::ctrl_c().await;
+    }
+}
+
+/// Applies version directives from the polled agent document. Returns true
+/// when the agent replaced itself and must exit for the supervisor.
+///
+/// sing-box is updated first: its candidate is preflighted against the active
+/// config, the old process is stopped, and the new binary must survive the same
+/// probation as a config candidate. A failed probation restores the previous
+/// binary and process.
+async fn reconcile_updates(
+    updates: &mut UpdateManager,
+    policy: &AgentPolicy,
+    manager: &mut Option<SingBoxManager>,
+    bin: &Path,
+    config: &mut ConfigManager,
+    sing_box_version: &mut Option<String>,
+) -> bool {
+    if let Some(desired) = policy.desired_sing_box_version.as_deref() {
+        match updates
+            .stage_singbox_update(desired, sing_box_version.as_deref())
+            .await
+        {
+            Ok(Some(staged)) => {
+                let preflight = if config.has_active_config() {
+                    check_config(&staged.path, config.config_path()).await
+                } else {
+                    Ok(())
+                };
+                if let Err(error) = preflight {
+                    let _ = std::fs::remove_file(&staged.path);
+                    updates.singbox_update_failed(
+                        desired,
+                        &format!("sing-box preflight failed: {error}"),
+                    );
+                    error!("sing-box {} preflight failed: {error}", staged.version);
+                } else {
+                    if let Some(current) = manager.take() {
+                        current.shutdown().await;
+                    }
+                    if let Err(error) = updates.install_singbox(&staged, bin, desired) {
+                        error!("failed to install sing-box {}: {error}", staged.version);
+                        *manager = start_singbox_if_configured(bin, config).await;
+                    } else {
+                        let mut healthy = true;
+                        if config.has_active_config() {
+                            match SingBoxManager::start(
+                                bin.to_path_buf(),
+                                config.config_path().clone(),
+                            )
+                            .await
+                            {
+                                Ok(started) => {
+                                    *manager = Some(started);
+                                    tokio::time::sleep(RUNTIME_PROBATION).await;
+                                    healthy = manager.as_ref().map(SingBoxManager::state)
+                                        == Some(ProcessState::Running);
+                                }
+                                Err(error) => {
+                                    error!("failed to start sing-box {}: {error}", staged.version);
+                                    healthy = false;
+                                }
+                            }
+                        }
+                        if healthy {
+                            *sing_box_version = singbox_version(bin).await;
+                            updates.singbox_update_succeeded(&staged.version);
+                            info!("sing-box updated to {}", staged.version);
+                        } else {
+                            if let Some(current) = manager.take() {
+                                current.shutdown().await;
+                            }
+                            let backup = bin.with_extension("prev");
+                            if backup.exists()
+                                && let Err(error) = std::fs::rename(&backup, bin)
+                            {
+                                error!("failed to restore previous sing-box: {error}");
+                            }
+                            *sing_box_version = singbox_version(bin).await;
+                            *manager = start_singbox_if_configured(bin, config).await;
+                            updates.singbox_update_failed(
+                                desired,
+                                "new sing-box did not become healthy; restored previous binary",
+                            );
+                        }
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(error) => error!("sing-box update failed: {error}"),
+        }
+    }
+
+    if let Some(desired) = policy.desired_agent_version.as_deref() {
+        let executable = match std::env::current_exe() {
+            Ok(path) => path,
+            Err(error) => {
+                error!("cannot determine agent executable for self-update: {error}");
+                return false;
+            }
+        };
+        match updates.maybe_update_agent(desired, &executable).await {
+            Ok(restart) => return restart,
+            Err(error) => error!("agent update failed: {error}"),
+        }
+    }
+    false
+}
+
+async fn start_singbox_if_configured(bin: &Path, config: &ConfigManager) -> Option<SingBoxManager> {
+    if !config.has_active_config() {
+        return None;
+    }
+    match SingBoxManager::start(bin.to_path_buf(), config.config_path().clone()).await {
+        Ok(manager) => Some(manager),
+        Err(error) => {
+            error!("failed to restart sing-box after binary update: {error}");
+            None
+        }
+    }
+}
+
+fn update_status_body(status: &UpdateStatus) -> client::types::AgentHeartbeatBodyUpdatesAgent {
+    client::types::AgentHeartbeatBodyUpdatesAgent {
+        target_version: status
+            .target_version
+            .as_deref()
+            .and_then(|version| version.try_into().ok()),
+        state: status.state.as_str().parse().expect("valid update state"),
+        message: status
+            .message
+            .as_deref()
+            .and_then(|message| message.try_into().ok()),
+        checked_at: status.checked_at,
+    }
+}
+
 async fn heartbeat(
     client: &client::Client,
     config: &mut ConfigManager,
@@ -503,6 +785,7 @@ async fn heartbeat(
     status: &AgentStatus,
     policy: AgentPolicy,
     sing_box_version: Option<&str>,
+    updates: &UpdateManager,
 ) {
     use client::types;
 
@@ -588,6 +871,28 @@ async fn heartbeat(
             .and_then(|revision| revision.try_into().ok()),
         runtime_state: runtime_state.parse().ok(),
         sing_box_version: sing_box_version.map(str::to_owned),
+        updates: Some(types::AgentHeartbeatBodyUpdates {
+            agent: Some(update_status_body(updates.agent_status())),
+            sing_box: Some(types::AgentHeartbeatBodyUpdatesSingBox {
+                target_version: updates
+                    .singbox_status()
+                    .target_version
+                    .as_deref()
+                    .and_then(|version| version.try_into().ok()),
+                state: updates
+                    .singbox_status()
+                    .state
+                    .as_str()
+                    .parse()
+                    .expect("valid update state"),
+                message: updates
+                    .singbox_status()
+                    .message
+                    .as_deref()
+                    .and_then(|message| message.try_into().ok()),
+                checked_at: updates.singbox_status().checked_at,
+            }),
+        }),
     };
     match client.agent_heartbeat(&body).await {
         Ok(_) => info!("heartbeat ok"),

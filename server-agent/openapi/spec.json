@@ -94,6 +94,16 @@
                           "type": "integer",
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
+                        },
+                        "desiredAgentVersion": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64
+                        },
+                        "desiredSingBoxVersion": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64
                         }
                       },
                       "required": [
@@ -389,6 +399,85 @@
                         "installed",
                         "inUse"
                       ]
+                    }
+                  },
+                  "updates": {
+                    "type": "object",
+                    "properties": {
+                      "agent": {
+                        "type": "object",
+                        "properties": {
+                          "targetVersion": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "state": {
+                            "enum": [
+                              "unknown",
+                              "idle",
+                              "up_to_date",
+                              "checking",
+                              "downloading",
+                              "verifying",
+                              "applying",
+                              "restarting",
+                              "failed",
+                              "disabled"
+                            ],
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4096
+                          },
+                          "checkedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        },
+                        "required": [
+                          "state"
+                        ]
+                      },
+                      "singBox": {
+                        "type": "object",
+                        "properties": {
+                          "targetVersion": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "state": {
+                            "enum": [
+                              "unknown",
+                              "idle",
+                              "up_to_date",
+                              "checking",
+                              "downloading",
+                              "verifying",
+                              "applying",
+                              "restarting",
+                              "failed",
+                              "disabled"
+                            ],
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 4096
+                          },
+                          "checkedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        },
+                        "required": [
+                          "state"
+                        ]
+                      }
                     }
                   }
                 },

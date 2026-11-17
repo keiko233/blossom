@@ -74,11 +74,11 @@ Needs `pnpm install --frozen-lockfile` in a checkout. Use a published port on `1
 The repository already contains a contained harness; see [Server agent handbook](../development/server-agent.md#checks):
 
 ```bash
-docker build --build-arg BUILD_ID=ops-validation -t blossom/server-agent:ops-validation server-agent
+docker build -f server-agent/Dockerfile.test --build-arg BUILD_ID=ops-validation -t blossom/server-agent:ops-validation server-agent
 server-agent/scripts/test-managed-tls-docker.sh blossom/server-agent:ops-validation
 ```
 
-The image build compiles sing-box and is slow. The script starts a mock control plane on port 18765 (`MOCK_PORT` overrides it) and cleans up on exit.
+`Dockerfile.test` is test-only and seeds the agent plus a pinned official sing-box; the production image is thin. The script starts a mock control plane on port 18765 (`MOCK_PORT` overrides it) and cleans up on exit.
 
 ### Agent shutdown timing
 
@@ -90,11 +90,11 @@ time docker stop "$CONTAINER"      # default grace is 10 s
 docker inspect -f '{{.State.ExitCode}}' "$CONTAINER"
 ```
 
-A time near 10 s with exit code 137 means the agent did not handle SIGTERM and was killed.
+A time near 10 s with exit code 137 means the agent did not handle SIGTERM and was killed. The current entrypoint forwards the signal and the agent handles both SIGINT and SIGTERM.
 
 ### State persistence
 
-With a named volume, run the agent until it reports an applied revision, `docker rm -f` the container, start a new one with the same volume and a **blocked** control-plane URL, and confirm sing-box starts from `last-known-good.json` (the log shows the startup preflight). Repeat with the anonymous-volume `docker run` command from the admin UI to confirm the state is orphaned after re-creation.
+With a named volume mounted at `/data`, run the agent until it reports an applied revision, `docker rm -f` the container, start a new one with the same volume and a **blocked** control-plane URL, and confirm sing-box starts from `last-known-good.json` (the log shows the startup preflight). Repeat without the volume to confirm both binaries and state are orphaned after re-creation.
 
 ## 5. Liveness behaviour
 

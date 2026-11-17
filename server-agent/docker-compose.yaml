@@ -1,6 +1,6 @@
 services:
   agent:
-    # Build the image (agent + bundled sing-box) from the local Dockerfile.
+    # Thin runtime image; both binaries and all state live in /data.
     build:
       context: .
       dockerfile: Dockerfile
@@ -27,11 +27,17 @@ services:
       AGENT_TOKEN: ${AGENT_TOKEN:?set AGENT_TOKEN in .env}
       # trace | debug | info | warn | error
       AGENT_LOG_LEVEL: ${AGENT_LOG_LEVEL:-info}
+      # First-start downloads. Omit to use the latest published releases;
+      # afterwards the control plane's per-server desired versions take over.
+      AGENT_BOOTSTRAP_VERSION: ${AGENT_BOOTSTRAP_VERSION:-latest}
+      AGENT_SING_BOX_BOOTSTRAP_VERSION: ${AGENT_SING_BOX_BOOTSTRAP_VERSION:-latest}
+      # Optional GitHub token to avoid unauthenticated API rate limits.
+      # AGENT_GITHUB_TOKEN: ${AGENT_GITHUB_TOKEN:-}
 
     volumes:
-      # Persists the last-known-good config so an invalid future candidate can
-      # never strand the host after an agent/container restart.
-      - agent-state:/var/lib/blossom-agent
+      # Binaries, last-known-good config, certificates, download cache.
+      # Keep this volume across image upgrades.
+      - agent-data:/data
 
     logging:
       driver: json-file
@@ -40,4 +46,4 @@ services:
         max-file: "3"
 
 volumes:
-  agent-state:
+  agent-data:

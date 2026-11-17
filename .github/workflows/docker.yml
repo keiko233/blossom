@@ -64,13 +64,8 @@ jobs:
                 name: "server-agent",
                 context: "./server-agent",
                 image: ($repo + "/server-agent"),
-                "cache-path": "go-pkg-mod\ngo-build-cache\ncargo-registry\ncargo-target",
-                "cache-map": {
-                  "go-pkg-mod": "/go/pkg/mod",
-                  "go-build-cache": "/root/.cache/go-build",
-                  "cargo-registry": "/usr/local/cargo/registry",
-                  "cargo-target": "/app/target"
-                }
+                "cache-path": "",
+                "cache-map": {}
               }] else [] end)')
           echo "targets=$targets" >> "$GITHUB_OUTPUT"
           echo "building: $(jq -r 'map(.name) | join(", ") | if . == "" then "(nothing)" else . end' <<< "$targets")"
@@ -104,6 +99,7 @@ jobs:
       # Persist the Dockerfile RUN cache mounts (pnpm store, go mod/build,
       # cargo registry/target) across runs — ephemeral runners lose them.
       - name: Restore build cache mounts
+        if: matrix.target['cache-path'] != ''
         id: cache-mounts
         uses: actions/cache@v6
         with:
@@ -113,6 +109,7 @@ jobs:
             cache-mounts-${{ matrix.target.name }}-${{ matrix.platform.arch }}-
 
       - name: Inject cache mounts into buildkit
+        if: matrix.target['cache-path'] != ''
         uses: reproducible-containers/buildkit-cache-dance@v3
         with:
           cache-map: ${{ toJSON(matrix.target['cache-map']) }}

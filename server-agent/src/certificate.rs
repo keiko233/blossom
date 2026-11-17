@@ -27,8 +27,10 @@ use x509_parser::{extensions::GeneralName, parse_x509_certificate};
 
 use crate::client::types;
 
-/// Legacy control-plane layout the agent must never trust for runtime paths.
-pub const CONTROL_PLANE_CERTIFICATE_ROOT: &str = "/var/lib/blossom-agent/certificates";
+/// Control-plane layout the agent must never trust for runtime paths.
+pub const CONTROL_PLANE_CERTIFICATE_ROOT: &str = "/data/state/certificates";
+/// Pre-/data layout, still rejected after upgrades.
+pub const LEGACY_CONTROL_PLANE_CERTIFICATE_ROOT: &str = "/var/lib/blossom-agent/certificates";
 /// TLS fields that carried inline material in the V2 config and caused sing-box
 /// to reject otherwise-valid managed certificate paths.
 pub const MANAGED_TLS_INLINE_FIELDS: [&str; 4] =
@@ -470,11 +472,19 @@ fn parse_rfc3339(value: &str) -> Option<DateTime<Utc>> {
 /// generation. Returns `None` for paths that are not managed material.
 fn parse_managed_material_path(path: &str, local_root: &Path) -> Option<(String, Option<u64>)> {
     let candidate = Path::new(path);
-    let relative = candidate.strip_prefix(local_root).ok().or_else(|| {
-        candidate
-            .strip_prefix(Path::new(CONTROL_PLANE_CERTIFICATE_ROOT))
-            .ok()
-    })?;
+    let relative = candidate
+        .strip_prefix(local_root)
+        .ok()
+        .or_else(|| {
+            candidate
+                .strip_prefix(Path::new(CONTROL_PLANE_CERTIFICATE_ROOT))
+                .ok()
+        })
+        .or_else(|| {
+            candidate
+                .strip_prefix(Path::new(LEGACY_CONTROL_PLANE_CERTIFICATE_ROOT))
+                .ok()
+        })?;
     let mut components = relative.components();
     let certificate_id = components.next()?.as_os_str().to_str()?.to_owned();
     if validate_certificate_id(&certificate_id).is_err() {

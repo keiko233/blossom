@@ -16,8 +16,10 @@ Statements are **Established** unless marked **Recommended**.
 | `src/stats.rs`     | Hand-written tonic/prost client for sing-box's built-in `api` service (`StartedService.SubscribeConnections`; no `.proto` files, no `tonic-build`).              |
 | `src/accountant.rs` | Pure per-connection accounting state machine that turns connection events into per-user deltas.                                                                 |
 | `src/traffic.rs`   | Runs the connection stream in the background, accumulates per-user deltas, maps them to subscription/node ids and reports them.                                  |
+| `src/update.rs`    | Resolves GitHub releases, verifies the published SHA-256 digest, stages atomically replaced agent/sing-box binaries and tracks retry/rollback state.             |
 | `build.rs`         | Generates the API client from `openapi/spec.json` and stamps the build id (see below).                                                                           |
 | `examples/query_stats.rs` | Manual smoke test that prints the connection stream of a running sing-box >= 1.14.                                                                     |
+| `scripts/entrypoint.sh` | Thin-image PID-1 helper: first-start downloads, `/data` layout, signal forwarding and crash rollback.                                                       |
 | `tests/mock_control_plane.py`, `scripts/test-managed-tls-docker.sh` | Docker-based end-to-end test of the managed-TLS lifecycle against a mock control plane.                                |
 
 ## Contract with the control plane
@@ -28,12 +30,13 @@ Statements are **Established** unless marked **Recommended**.
 - The agent advertises capabilities in its heartbeat (`AGENT_CAPABILITIES` in `main.rs`: `config-v3`, `managed-tls-v3`, `certificate-deployments-v1`, `atomic-config-rollback`, `connection-stream-traffic`). Add a capability when the agent gains behaviour the control plane may want to depend on.
 - `desiredRevision` is opaque to the agent: equality and content comparison only. The control plane parses its own sequence prefix back out of the reported `appliedRevision` for the [publish gate](architecture.md#publish-gate).
 - The poll and heartbeat intervals come from the control plane per server; `AGENT_INTERVAL` is only the bootstrap value.
+- The same polled `agent` object may carry `desiredAgentVersion` and `desiredSingBoxVersion` (`latest` or an exact version). The heartbeat reports the per-binary `updates` state back. A future WebSocket/SSE transport can feed the same `AgentPolicy` directives without changing the reconciler.
 
 ## Safety invariants
 
 These are the behaviours the code and its comments establish. Preserve them when editing; each has unit tests worth extending.
 
-- **Never strand the host.** A candidate config is written, then checked by the target sing-box binary (`sing-box check`), and only then replaces the active config. The previous good config is persisted as last-known-good in `AGENT_STATE_DIR` (default `/var/lib/blossom-agent`) and used for rollback and for startup after a restart. A new process must survive a probation period (`RUNTIME_PROBATION`) before the candidate is committed.
+- **Never strand the host.** A candidate config is written, then checked by the target sing-box binary (`sing-box check`), and only then replaces the active config. The previous good config is persisted as last-known-good in `AGENT_STATE_DIR` (the container uses `/data/state`; a bare run defaults to `/var/lib/blossom-agent`) and used for rollback and for startup after a restart. A new process must survive a probation period (`RUNTIME_PROBATION`) before the candidate is committed.
 - **Do not trust the base config for certificates.** Bindings are matched by exact `inboundTag`, artifacts by exact `certificateId` + `generation`, and only local `certificate_path`/`key_path` are injected. Inline material or control-plane paths in the base config are never trusted.
 - **Validate before staging.** Certificate artifacts are checked (PEM chain, key, key-pair match, SANs, validity, fingerprint), line endings are normalised, and files are written atomically with `0600`/`0700` permissions. Generations are never garbage-collected by the agent.
 - **Report honestly.** `installed` is reported once material is staged and validated; `inUse` only after the candidate has been committed.
@@ -46,6 +49,19 @@ These are the behaviours the code and its comments establish. Preserve them when
 The agent subscribes to sing-box's built-in `api` service (`StartedService.SubscribeConnections`, sing-box >= 1.14) and turns connection events into per-user deltas: UPDATE deltas are counted as they arrive, CLOSED events pay `final total − accounted`, and every stream snapshot is reconciled by connection id (known ids contribute only the unaccounted remainder; unknown ids count in full). Deltas are sealed into batches with a stable report ID and stored under `AGENT_STATE_DIR/traffic/pending` before posting. Acknowledged batches are removed; retries and restarts reuse the same ID. The control plane deduplicates IDs per server for 30 days and applies history and quota updates in one statement. Older control planes do not acknowledge IDs and cannot guarantee replay-safe accounting. Legacy agents send no IDs and also lack that guarantee.
 
 This is not unconditional zero-loss accounting. Traffic that arrived after the last snapshot and before a reconnect, or after the last UPDATE before a crash, is lost; a full or unavailable state directory also leaves sealed batches in memory. Pending batches older than seven days are discarded with an error to avoid replaying after the ledger retention window; permanently rejected batches are moved aside. Protect and monitor the state directory, and report these limits rather than claiming exactly-once collection. The stream model shrinks the crash-loss window for in-memory deltas to roughly one stream interval (upstream default 1 s).
+
+## Binary updates
+
+The thin image contains no agent or sing-box binary. `scripts/entrypoint.sh` creates `/data/{bin,state,downloads}`; on first start it resolves `AGENT_BOOTSTRAP_VERSION` / `AGENT_SING_BOX_BOOTSTRAP_VERSION` (default `latest`) through the GitHub API, downloads `server-agent-linux-<arch>` and the official `sing-box-<version>-linux-<arch>-musl.tar.gz`, verifies the release asset `digest`, and only then moves them into `/data/bin`. Existing binaries are left alone.
+
+At runtime `src/update.rs` compares the polled desired versions with the running versions:
+
+- Exact versions are fetched by tag (`server-agent-v<version>`, `v<version>` for sing-box); `latest` resolves the newest non-draft, non-prerelease release and is cached for six hours.
+- Every downloaded asset is checked against the SHA-256 `digest` returned by the GitHub API. There is no unverified fallback.
+- sing-box is extracted to `downloads/`, preflighted with `sing-box check` against the active config, installed atomically over `/data/bin/sing-box` (previous kept as `sing-box.prev`), and must survive `RUNTIME_PROBATION`. A failed start restores `sing-box.prev` and the previous process.
+- The agent copies itself to `server-agent.prev`, replaces `/data/bin/server-agent`, writes `state/agent-update.json`, and exits with code `75`. The entrypoint restarts it; if the replacement exits three times within two minutes it restores `server-agent.prev`. On startup an unresolved pending marker is turned into a failure record.
+- Failed targets are recorded in `state/*-update-failed.json` and retried after `AGENT_UPDATE_RETRY_SECONDS` (default 3600), not on every poll.
+- `AGENT_SELF_UPDATE=0` disables replacing the agent binary but leaves control-plane updates of sing-box available. `AGENT_RELEASE_REPO`, `AGENT_SING_BOX_RELEASE_REPO` and `AGENT_GITHUB_API` support forks and mirrors. `AGENT_SEED_DIR` copies prebuilt binaries into an empty `/data/bin` before bootstrap and is used by the test image.
 
 ## Checks
 
@@ -62,11 +78,11 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 - CI additionally builds the agent image and runs the managed-TLS lifecycle test:
 
   ```bash
-  docker build --build-arg BUILD_ID=managed-tls-test -t blossom/server-agent:managed-tls-test .
+  docker build -f Dockerfile.test --build-arg BUILD_ID=managed-tls-test -t blossom/server-agent:managed-tls-test .
   scripts/test-managed-tls-docker.sh blossom/server-agent:managed-tls-test
   ```
 
-  The image build compiles sing-box from source and is slow; the script needs Docker, `python3` and `curl`, starts a mock control plane on port 18765 (override with `MOCK_PORT`) and a container, and cleans both up on exit. Run it when you change certificate handling, config application or the heartbeat/reporting contract; skip it for unrelated edits and say so.
+  `Dockerfile.test` is test-only: it builds the agent and downloads the pinned official sing-box, seeding both under `/data/bin`, so the test does not need GitHub at container start. The production `Dockerfile` remains thin. The script needs Docker, `python3` and `curl`, starts a mock control plane on port 18765 (override with `MOCK_PORT`) and a container, and cleans both up on exit. Run it when you change certificate handling, config application or the heartbeat/reporting contract; skip it for unrelated edits and say so.
 - The pre-commit hook runs `cargo fmt` and `cargo clippy --fix` on staged `.rs` files (see [Workflow](workflow.md#git-hooks)).
 - `cargo run` starts a long-running process. It needs a reachable control plane, an agent token and a sing-box binary >= 1.14 (official release binaries include the `api` service used for traffic stats), and it launches and supervises sing-box, which binds the inbound ports the control plane assigns. Its state directory defaults to `/var/lib/blossom-agent`, so pass `--state-dir` (or `AGENT_STATE_DIR`) pointing at a temporary directory when experimenting, point `--url` at a disposable local control plane rather than a production one, and never run it on a host whose real proxy you depend on. The mock control plane used by the Docker lifecycle test is the contained way to exercise the agent end to end. Whether to run any of this is for the task instructions to decide.
 
@@ -76,7 +92,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 2. `cargo build` (or `cargo test`) regenerates the client; fix compile errors at the call sites.
 3. Keep behaviour compatible with the control plane versions that may still be deployed. **Recommended**: when the agent starts depending on a new response field, treat its absence as the old behaviour for at least one release rather than failing.
 4. Add a unit test next to the code you changed. For anything touching certificate or reload flow, run the Docker lifecycle test above.
-5. Docker images: the build id comes from `BUILD_ID` / `AGENT_BUILD_ID`, falling back to `local-<short git sha>` or `local`. CI passes the commit SHA.
+5. The production Dockerfile has no Rust or Go build stage. The agent's build id comes from the release workflow (`AGENT_BUILD_ID`), falling back to `local-<short git sha>` or `local`; `Dockerfile.test` uses `BUILD_ID` explicitly.
 
 ## Releasing
 
@@ -84,6 +100,6 @@ Static binaries are published by `.github/workflows/server-agent-release.yml`, w
 
 1. Bump `version` in `server-agent/Cargo.toml` (and let `cargo check`/`cargo build` update `Cargo.lock`).
 2. Tag and push the tag as `server-agent-vX.Y.Z`; it must match the `Cargo.toml` version or the workflow fails.
-3. The workflow runs `cargo test --locked`, `cargo fmt --check` and `cargo clippy -D warnings`, then builds fully static musl binaries per architecture (amd64 on `ubuntu-latest`, arm64 on `ubuntu-24.04-arm`, both inside a `rust:alpine` container like the Dockerfile's build stage) and publishes a GitHub Release with `server-agent-linux-amd64`, `server-agent-linux-arm64` and a `SHA256SUMS` covering them. Asset names carry no version so `releases/download/<tag>/...` URLs stay stable (`releases/latest/download/...` does not point at these releases); releases are published with `make_latest: false`, and consumers must resolve releases via the `server-agent-v` tag prefix (GitHub API `GET /repos/{owner}/{repo}/releases` filtered by `tag_name`), since this repo also publishes app image `v*` tags that share the `latest` feed.
+3. The workflow runs `cargo test --locked`, `cargo fmt --check` and `cargo clippy -D warnings`, then builds fully static musl binaries per architecture (amd64 on `ubuntu-latest`, arm64 on `ubuntu-24.04-arm`, both inside a `rust:alpine` container like `Dockerfile.test`'s build stage) and publishes a GitHub Release with `server-agent-linux-amd64`, `server-agent-linux-arm64` and a `SHA256SUMS` covering them. Asset names carry no version so `releases/download/<tag>/...` URLs stay stable (`releases/latest/download/...` does not point at these releases); releases are published with `make_latest: false`, and consumers must resolve releases via the `server-agent-v` tag prefix (GitHub API `GET /repos/{owner}/{repo}/releases` filtered by `tag_name`), since this repo also publishes app image `v*` tags that share the `latest` feed.
 
 `workflow_dispatch` runs only build and check; a release is created only from a `server-agent-v*` tag.

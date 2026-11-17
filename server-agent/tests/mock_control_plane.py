@@ -54,9 +54,9 @@ def v3_document(
                         # never trust. The V3 agent strips and replaces these.
                         "server_name": "edge.example.com",
                         "certificate": ["stale-non-pem-certificate"],
-                        "certificate_path": "/var/lib/blossom-agent/certificates/test-cert/current/fullchain.pem",
+                        "certificate_path": "/data/state/certificates/test-cert/current/fullchain.pem",
                         "key": ["stale-non-pem-key"],
-                        "key_path": "/var/lib/blossom-agent/certificates/test-cert/current/private-key.pem",
+                        "key_path": "/data/state/certificates/test-cert/current/private-key.pem",
                     },
                 }
             ],

@@ -5,7 +5,8 @@ image=${1:-blossom/server-agent:managed-tls-test}
 mock_port=${MOCK_PORT:-18765}
 export EXPECTED_BUILD_ID=${EXPECTED_BUILD_ID:-managed-tls-test}
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/blossom-managed-tls.XXXXXX")
-state_dir="$test_dir/state"
+data_dir="$test_dir/data"
+state_dir="$data_dir/state"
 container="blossom-managed-tls-test-$$"
 mock_pid=""
 
@@ -66,7 +67,7 @@ start_agent() {
     --user "$(id -u):$(id -g)" \
     --add-host host.docker.internal:host-gateway \
     -p 127.0.0.1::18443 \
-    -v "$state_dir:/var/lib/blossom-agent" \
+    -v "$data_dir:/data" \
     -e AGENT_URL="http://host.docker.internal:$mock_port/api" \
     -e AGENT_TOKEN=integration-test-token \
     -e AGENT_INTERVAL=5 \
@@ -168,10 +169,10 @@ sys.exit(0 if rolled_back else 1)
 
 assert_clean_active() {
   docker exec "$container" sh -c '
-    ! grep -q "\"certificate\":" /var/lib/blossom-agent/active.json
-    ! grep -q "\"key\":" /var/lib/blossom-agent/active.json
-    ! grep -q "$1" /var/lib/blossom-agent/active.json
-    grep -q "generation-1/fullchain.pem" /var/lib/blossom-agent/active.json
+    ! grep -q "\"certificate\":" /data/state/active.json
+    ! grep -q "\"key\":" /data/state/active.json
+    ! grep -q "$1" /data/state/active.json
+    grep -q "generation-1/fullchain.pem" /data/state/active.json
   ' sh "$1"
 }
 
@@ -193,8 +194,8 @@ wait_log "sing-box config .* applied"
 wait_healthy_heartbeat
 
 docker exec "$container" sh -c '
-  test -s /var/lib/blossom-agent/certificates/test-cert/generation-1/fullchain.pem
-  test -s /var/lib/blossom-agent/certificates/test-cert/generation-1/private-key.pem
+  test -s /data/state/certificates/test-cert/generation-1/fullchain.pem
+  test -s /data/state/certificates/test-cert/generation-1/private-key.pem
 '
 assert_clean_active "ESCAPED-NOT-REAL-PEM"
 handshake
@@ -233,12 +234,12 @@ cat >"$state_dir/last-known-good.json" <<'JSON'
         "certificate": [
           "-----BEGIN CERTIFICATE-----\\nESCAPED-NOT-REAL-PEM-CONTENT\\n-----END CERTIFICATE-----"
         ],
-        "certificate_path": "/var/lib/blossom-agent/certificates/test-cert/current/fullchain.pem",
+        "certificate_path": "/data/state/certificates/test-cert/current/fullchain.pem",
         "enabled": true,
         "key": [
           "-----BEGIN PRIVATE KEY-----\\nESCAPED-NOT-REAL-PEM-CONTENT\\n-----END PRIVATE KEY-----"
         ],
-        "key_path": "/var/lib/blossom-agent/certificates/test-cert/current/private-key.pem",
+        "key_path": "/data/state/certificates/test-cert/current/private-key.pem",
         "server_name": "edge.example.com"
       },
       "type": "vless",

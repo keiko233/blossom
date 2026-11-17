@@ -116,10 +116,15 @@ fn inject_api_service(
         .push(service);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentPolicy {
     pub config_poll_interval_seconds: u64,
     pub heartbeat_interval_seconds: u64,
+    /// Version directives carried by the same polled document. A future
+    /// WebSocket/SSE control channel can update these without changing the
+    /// reconciler.
+    pub desired_agent_version: Option<String>,
+    pub desired_sing_box_version: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -415,6 +420,16 @@ impl ConfigManager {
                 .clamp(5, 86_400) as u64,
             heartbeat_interval_seconds: document.agent.heartbeat_interval_seconds.clamp(5, 3_600)
                 as u64,
+            desired_agent_version: document
+                .agent
+                .desired_agent_version
+                .as_ref()
+                .map(|version| version.as_str().to_string()),
+            desired_sing_box_version: document
+                .agent
+                .desired_sing_box_version
+                .as_ref()
+                .map(|version| version.as_str().to_string()),
         };
         let desired_revision = document.desired_revision.to_string();
         self.observed_revision = Some(desired_revision.clone());

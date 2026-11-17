@@ -1,0 +1,73 @@
+# syntax=docker/dockerfile:1
+
+# Test-only image for the managed-TLS lifecycle test. It seeds both binaries so
+# the test does not depend on GitHub availability; the production Dockerfile is
+# the thin runtime image.
+
+ARG BUILD_ID=managed-tls-test
+
+FROM rust:alpine AS agent
+RUN apk add --no-cache musl-dev build-base openssl-dev openssl-libs-static pkgconf
+ENV OPENSSL_STATIC=1 OPENSSL_NO_VENDOR=1 PKG_CONFIG_ALL_STATIC=1
+
+ARG BUILD_ID
+ENV AGENT_BUILD_ID=$BUILD_ID
+
+WORKDIR /app
+COPY Cargo.toml Cargo.lock build.rs ./
+COPY openapi ./openapi
+COPY src ./src
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo build --release --locked && \
+    mkdir -p /seed && \
+    cp target/release/server-agent /seed/server-agent
+
+FROM alpine:latest
+ARG SING_BOX_VERSION=1.14.4
+
+RUN apk add --no-cache ca-certificates tzdata tini curl jq tar
+
+COPY --from=agent /seed/server-agent /opt/blossom-seed/server-agent
+COPY scripts/entrypoint.sh /usr/local/bin/blossom-entrypoint
+RUN chmod 0755 /opt/blossom-seed/server-agent /usr/local/bin/blossom-entrypoint
+
+RUN set -eux; \
+    arch="$(uname -m)"; \
+    case "$arch" in \
+      x86_64|amd64) release_arch=amd64 ;; \
+      aarch64|arm64) release_arch=arm64 ;; \
+      *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
+    esac; \
+    version="${SING_BOX_VERSION#v}"; \
+    asset="sing-box-${version}-linux-${release_arch}-musl.tar.gz"; \
+    case "${version}:${release_arch}" in \
+      1.14.4:amd64) digest="sha256:8f7c5f0651238850d96a0e488e5473cd77ec1a0098f63942e943f475a12057ca" ;; \
+      1.14.4:arm64) digest="sha256:b95e25f921dc5e17a4cf13327243d1177642c7e35425bf5372862c477c359f56" ;; \
+      *) echo "add the official sing-box digest for ${version}:${release_arch}" >&2; exit 1 ;; \
+    esac; \
+    url="https://github.com/SagerNet/sing-box/releases/download/v${version}/${asset}"; \
+    curl -fsSL "$url" -o "/tmp/$asset"; \
+    actual="sha256:$(sha256sum "/tmp/$asset" | awk '{print $1}')"; \
+    test "$actual" = "$digest"; \
+    mkdir -p /tmp/sing-box; \
+    tar -xzf "/tmp/$asset" -C /tmp/sing-box; \
+    binary="$(find /tmp/sing-box -type f -name sing-box | head -n 1)"; \
+    test -n "$binary"; \
+    mv "$binary" /opt/blossom-seed/sing-box; \
+    chmod 0755 /opt/blossom-seed/sing-box; \
+    /opt/blossom-seed/sing-box version; \
+    rm -rf /tmp/sing-box "/tmp/$asset"
+
+ENV AGENT_DATA_DIR=/data \
+    AGENT_STATE_DIR=/data/state \
+    AGENT_DOWNLOAD_DIR=/data/downloads \
+    AGENT_BIN_PATH=/data/bin/server-agent \
+    AGENT_SING_BOX_PATH=/data/bin/sing-box \
+    AGENT_SEED_DIR=/opt/blossom-seed \
+    AGENT_SELF_UPDATE=1 \
+    AGENT_SKIP_BOOTSTRAP=1
+
+VOLUME ["/data"]
+
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/blossom-entrypoint"]
