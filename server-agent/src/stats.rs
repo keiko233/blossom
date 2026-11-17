@@ -1,151 +1,127 @@
-//! Minimal client for sing-box's v2ray StatsService.
+//! Minimal client for sing-box's built-in `api` service (sing-box >= 1.14).
 //!
-//! The service is queried directly via tonic's low-level `Grpc` client using
-//! hand-written prost message structs. No .proto files or tonic-build are used.
+//! The service is a plain gRPC server serving `StartedService` over h2c. The
+//! client talks to it directly via tonic's low-level `Grpc` API with
+//! hand-written prost message structs — no `.proto` files and no tonic-build.
+//! Only the fields the agent consumes are declared; prost skips unknown
+//! fields, so upstream adding fields stays compatible.
 
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use tonic::metadata::{MetadataKey, MetadataValue};
 use tonic::transport::{Channel, Endpoint};
 
 #[derive(Clone, PartialEq, prost::Message)]
-pub struct QueryStatsRequest {
-    #[prost(string, tag = "1")]
-    pub pattern: String,
+pub struct SubscribeConnectionsRequest {
+    #[prost(int64, tag = "1")]
+    pub interval: i64,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct ConnectionEvent {
+    #[prost(int32, tag = "1")]
+    pub r#type: i32,
+    #[prost(string, tag = "2")]
+    pub id: String,
+    #[prost(message, optional, tag = "3")]
+    pub connection: Option<Connection>,
+    #[prost(int64, tag = "4")]
+    pub uplink_delta: i64,
+    #[prost(int64, tag = "5")]
+    pub downlink_delta: i64,
+    #[prost(int64, tag = "6")]
+    pub closed_at: i64,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct ConnectionEvents {
+    #[prost(message, repeated, tag = "1")]
+    pub events: Vec<ConnectionEvent>,
     #[prost(bool, tag = "2")]
     pub reset: bool,
-    #[prost(string, repeated, tag = "3")]
-    pub patterns: Vec<String>,
-    #[prost(bool, tag = "4")]
-    pub regexp: bool,
 }
 
+/// Only the fields sing-box actually fills and the agent consumes.
 #[derive(Clone, PartialEq, prost::Message)]
-pub struct Stat {
-    #[prost(string, tag = "1")]
-    pub name: String,
-    #[prost(int64, tag = "2")]
-    pub value: i64,
+pub struct Connection {
+    #[prost(string, tag = "10")]
+    pub user: String,
+    #[prost(int64, tag = "16")]
+    pub uplink_total: i64,
+    #[prost(int64, tag = "17")]
+    pub downlink_total: i64,
 }
 
-#[derive(Clone, PartialEq, prost::Message)]
-pub struct QueryStatsResponse {
-    #[prost(message, repeated, tag = "1")]
-    pub stat: Vec<Stat>,
-}
-
+/// Long-lived streaming client for `StartedService.SubscribeConnections`.
 pub struct StatsClient {
     grpc: tonic::client::Grpc<Channel>,
+    authorization: Option<MetadataValue<tonic::metadata::Ascii>>,
+    path: http::uri::PathAndQuery,
 }
 
 impl StatsClient {
     /// addr is host:port (no scheme). Lazy connect: no I/O until first call.
-    pub fn connect_lazy(addr: &str) -> Result<Self> {
+    pub fn connect_lazy(addr: &str, secret: Option<&str>) -> Result<Self> {
         let endpoint = Endpoint::from_shared(format!("http://{addr}"))
             .with_context(|| format!("invalid stats endpoint address: {addr}"))?
             .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(10));
-        let channel = endpoint.connect_lazy();
+            // A server that accepts the call and never streams (old sing-box,
+            // firewall) would otherwise block forever; disconnecting lets the
+            // reporter reconnect and the restart logic see the outage.
+            .timeout(Duration::from_secs(30));
+        let authorization = secret
+            .filter(|secret| !secret.is_empty())
+            .map(|secret| {
+                format!("Bearer {secret}")
+                    .parse::<MetadataValue<_>>()
+                    .context("invalid api secret")
+            })
+            .transpose()?;
         Ok(Self {
-            grpc: tonic::client::Grpc::new(channel),
+            grpc: tonic::client::Grpc::new(endpoint.connect_lazy()),
+            authorization,
+            path: http::uri::PathAndQuery::from_static(
+                "/daemon.StartedService/SubscribeConnections",
+            ),
         })
     }
 
-    /// Query stats from sing-box.
-    ///
-    /// sing-box ignores the deprecated singular `pattern` field and only
-    /// honours the v2ray-v5 `patterns` repeated field, so callers should pass
-    /// patterns via `patterns`.
-    pub async fn query_stats(&mut self, patterns: Vec<String>, reset: bool) -> Result<Vec<Stat>> {
-        self.grpc.ready().await.context("stats service not ready")?;
-
-        let req = QueryStatsRequest {
-            pattern: String::new(),
-            reset,
-            patterns,
-            regexp: false,
-        };
-        let path = http::uri::PathAndQuery::from_static(
-            "/v2ray.core.app.stats.command.StatsService/QueryStats",
-        );
-        let codec = tonic_prost::ProstCodec::<QueryStatsRequest, QueryStatsResponse>::default();
-
+    /// Opens the connection-event stream. Yields `ConnectionEvents` until the
+    /// server or transport drops the call.
+    pub async fn subscribe_connections(
+        &mut self,
+        interval: Duration,
+    ) -> Result<tonic::Streaming<ConnectionEvents>> {
+        self.grpc.ready().await.context("api service not ready")?;
+        let mut request = tonic::Request::new(SubscribeConnectionsRequest {
+            interval: interval.as_nanos().min(i64::MAX as u128) as i64,
+        });
+        if let Some(authorization) = self.authorization.clone() {
+            request
+                .metadata_mut()
+                .insert(MetadataKey::from_static("authorization"), authorization);
+        }
+        let codec =
+            tonic_prost::ProstCodec::<SubscribeConnectionsRequest, ConnectionEvents>::default();
         let response = self
             .grpc
-            .unary(tonic::Request::new(req), path, codec)
+            .server_streaming(request, self.path.clone(), codec)
             .await
-            .context("stats query failed")?;
-
-        Ok(response.into_inner().stat)
+            .context("subscribe_connections failed")?;
+        Ok(response.into_inner())
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Direction {
-    Uplink,
-    Downlink,
-}
-
-/// Parse `user>>>{sub}>>>traffic>>>uplink` -> Some((sub, Direction::Uplink)); anything else -> None.
-pub fn parse_user_counter(name: &str) -> Option<(&str, Direction)> {
-    let rest = name.strip_prefix("user>>>")?;
-    let (sub, suffix) = rest.split_once(">>>traffic>>>")?;
-    let direction = match suffix {
-        "uplink" => Direction::Uplink,
-        "downlink" => Direction::Downlink,
-        _ => return None,
-    };
-    Some((sub, direction))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Direction, parse_user_counter};
+    use super::SubscribeConnectionsRequest;
 
     #[test]
-    fn parses_uplink() {
-        assert_eq!(
-            parse_user_counter("user>>>sub-123>>>traffic>>>uplink"),
-            Some(("sub-123", Direction::Uplink))
-        );
-    }
-
-    #[test]
-    fn parses_downlink() {
-        assert_eq!(
-            parse_user_counter("user>>>sub-123>>>traffic>>>downlink"),
-            Some(("sub-123", Direction::Downlink))
-        );
-    }
-
-    #[test]
-    fn parses_subscription_with_odd_chars() {
-        assert_eq!(
-            parse_user_counter("user>>>abc_DEF.789>>>traffic>>>downlink"),
-            Some(("abc_DEF.789", Direction::Downlink))
-        );
-    }
-
-    #[test]
-    fn ignores_non_user_counter() {
-        assert_eq!(
-            parse_user_counter("inbound>>>node-x>>>traffic>>>uplink"),
-            None
-        );
-    }
-
-    #[test]
-    fn rejects_truncated_name() {
-        assert_eq!(parse_user_counter("user>>>sub"), None);
-    }
-
-    #[test]
-    fn rejects_missing_direction() {
-        assert_eq!(parse_user_counter("user>>>sub>>>traffic>>>"), None);
-    }
-
-    #[test]
-    fn rejects_wrong_suffix() {
-        assert_eq!(parse_user_counter("user>>>sub>>>traffic>>>total"), None);
+    fn request_encodes_interval_in_nanoseconds() {
+        let request = SubscribeConnectionsRequest {
+            interval: 2_000_000_000,
+        };
+        assert_eq!(request.interval, 2_000_000_000);
     }
 }
