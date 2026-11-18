@@ -367,7 +367,7 @@ importers:
         version: 1.66.0(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))(workerd@1.20261023.1)(wrangler@4.154.0(@types/node@26.6.6))
       '@iconify/json':
         specifier: ^2.2.549
-        version: 2.2.549
+        version: 2.2.558
       '@inlang/paraglide-js':
         specifier: ^2.29.3
         version: 2.29.3(typescript@7.0.2)(vite@8.3.8(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
@@ -1278,8 +1278,8 @@ packages:
     peerDependencies:
       hono: ^4 || ^5.0.0-0
 
-  '@iconify/json@2.2.549':
-    resolution: {integrity: sha512-H6GtiY/PVO59KPWF3yFFOdoZQGcU9p0MWyp8k0hsqyOhfSQUWdcbPxXCxmFjawNDcasFCL6wF47e8aNjQKkbyg==}
+  '@iconify/json@2.2.558':
+    resolution: {integrity: sha512-pvSPA4pJdgYvoaoyqs8qfBypZdbjJOys8xGB8DvVZo3k0MeCVzGotdHg0OYjHD5UXwt+FbvNib45m8CT3Wo3zQ==}
 
   '@iconify/types@2.0.0':
     resolution: {integrity: sha512-+wluvCrRhXrhyOmRDJ3q8mux9JkKy5SJ/v8ol2tu4FVjyYvtEzkc/3pK15ET6RKg4b4w4BmTk1+gsCUhf21Ykg==}
@@ -6403,7 +6403,7 @@ snapshots:
     dependencies:
       hono: 4.13.14
 
-  '@iconify/json@2.2.549':
+  '@iconify/json@2.2.558':
     dependencies:
       '@iconify/types': 2.0.0
       pathe: 2.0.3
