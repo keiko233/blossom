@@ -71,6 +71,7 @@ import { Route as adminAdminProxiesServersServerIdRouteImport } from './routes/(
 import { Route as adminAdminProxiesServersNewRouteImport } from './routes/(admin)/admin/proxies/servers/new'
 import { Route as ApiAdminServersIdStreamRouteImport } from './routes/api/admin/servers/$id/stream'
 import { Route as ApiAdminCertificatesCertificateIdExportPartRouteImport } from './routes/api/admin/certificates/$certificateId/export/$part'
+import { Route as ApiAdminServersIdPtyWsRouteImport } from './routes/api/admin/servers/$id/pty/ws'
 
 const adminRouteRoute = adminRouteRouteImport.update({
   id: '/(admin)',
@@ -413,6 +414,11 @@ const ApiAdminCertificatesCertificateIdExportPartRoute =
     path: '/api/admin/certificates/$certificateId/export/$part',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiAdminServersIdPtyWsRoute = ApiAdminServersIdPtyWsRouteImport.update({
+  id: '/api/admin/servers/$id/pty/ws',
+  path: '/api/admin/servers/$id/pty/ws',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof staticIndexRoute
@@ -476,6 +482,7 @@ export interface FileRoutesByFullPath {
   '/admin/proxies/rules/': typeof adminAdminProxiesRulesIndexRoute
   '/admin/proxies/servers/': typeof adminAdminProxiesServersIndexRoute
   '/api/admin/certificates/$certificateId/export/$part': typeof ApiAdminCertificatesCertificateIdExportPartRoute
+  '/api/admin/servers/$id/pty/ws': typeof ApiAdminServersIdPtyWsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof staticIndexRoute
@@ -526,6 +533,7 @@ export interface FileRoutesByTo {
   '/admin/proxies/rules': typeof adminAdminProxiesRulesIndexRoute
   '/admin/proxies/servers': typeof adminAdminProxiesServersIndexRoute
   '/api/admin/certificates/$certificateId/export/$part': typeof ApiAdminCertificatesCertificateIdExportPartRoute
+  '/api/admin/servers/$id/pty/ws': typeof ApiAdminServersIdPtyWsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -593,6 +601,7 @@ export interface FileRoutesById {
   '/(admin)/admin/proxies/rules/': typeof adminAdminProxiesRulesIndexRoute
   '/(admin)/admin/proxies/servers/': typeof adminAdminProxiesServersIndexRoute
   '/api/admin/certificates/$certificateId/export/$part': typeof ApiAdminCertificatesCertificateIdExportPartRoute
+  '/api/admin/servers/$id/pty/ws': typeof ApiAdminServersIdPtyWsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -658,6 +667,7 @@ export interface FileRouteTypes {
     | '/admin/proxies/rules/'
     | '/admin/proxies/servers/'
     | '/api/admin/certificates/$certificateId/export/$part'
+    | '/api/admin/servers/$id/pty/ws'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -708,6 +718,7 @@ export interface FileRouteTypes {
     | '/admin/proxies/rules'
     | '/admin/proxies/servers'
     | '/api/admin/certificates/$certificateId/export/$part'
+    | '/api/admin/servers/$id/pty/ws'
   id:
     | '__root__'
     | '/(admin)'
@@ -774,6 +785,7 @@ export interface FileRouteTypes {
     | '/(admin)/admin/proxies/rules/'
     | '/(admin)/admin/proxies/servers/'
     | '/api/admin/certificates/$certificateId/export/$part'
+    | '/api/admin/servers/$id/pty/ws'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -792,6 +804,7 @@ export interface RootRouteChildren {
   ApiSubTokenRoute: typeof ApiSubTokenRoute
   ApiAdminServersIdStreamRoute: typeof ApiAdminServersIdStreamRoute
   ApiAdminCertificatesCertificateIdExportPartRoute: typeof ApiAdminCertificatesCertificateIdExportPartRoute
+  ApiAdminServersIdPtyWsRoute: typeof ApiAdminServersIdPtyWsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -1244,6 +1257,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminCertificatesCertificateIdExportPartRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/servers/$id/pty/ws': {
+      id: '/api/admin/servers/$id/pty/ws'
+      path: '/api/admin/servers/$id/pty/ws'
+      fullPath: '/api/admin/servers/$id/pty/ws'
+      preLoaderRoute: typeof ApiAdminServersIdPtyWsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -1577,6 +1597,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAdminServersIdStreamRoute: ApiAdminServersIdStreamRoute,
   ApiAdminCertificatesCertificateIdExportPartRoute:
     ApiAdminCertificatesCertificateIdExportPartRoute,
+  ApiAdminServersIdPtyWsRoute: ApiAdminServersIdPtyWsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

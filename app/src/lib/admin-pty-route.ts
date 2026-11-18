@@ -1,0 +1,196 @@
+import { eq } from "drizzle-orm";
+
+import { db } from "@/db";
+import { server } from "@/db/proxy-schema";
+import { getAuth } from "@/lib/auth";
+import { getClientIp } from "@/lib/client-ip";
+import {
+  clampPtyDimensions,
+  isValidPtySessionId,
+  PTY_CAPABILITY,
+} from "@/lib/pty-protocol";
+import { acceptAdminPty } from "@/lib/pty-relay";
+import type { AdminPtyAcceptContext } from "@/lib/pty-relay-types";
+import {
+  type AdminPtyActor,
+  type AdminPtySession,
+  recordPtySessionOpen,
+} from "@/query/pty-audit";
+
+export type AdminPtyAuthSession = NonNullable<
+  Awaited<ReturnType<ReturnType<typeof getAuth>["api"]["getSession"]>>
+>;
+
+export interface AdminPtyServerState {
+  id: string;
+  name: string;
+  enabled: boolean;
+  transportMode: string;
+  wsConnectedAt: Date | null;
+  agentCapabilities: string[];
+}
+
+export interface AdminPtyRouteDependencies {
+  authenticate(request: Request): Promise<AdminPtyAuthSession | null>;
+  loadServer(serverId: string): Promise<AdminPtyServerState | null>;
+  accept(request: Request, context: AdminPtyAcceptContext): Promise<Response>;
+  recordOpen(
+    session: AdminPtySession,
+    outcome: { failed: boolean; error?: unknown },
+  ): Promise<void>;
+}
+
+const defaultDependencies: AdminPtyRouteDependencies = {
+  async authenticate(request) {
+    const session = await getAuth().api.getSession({
+      headers: request.headers,
+    });
+    return session?.user.role === "admin" ? session : null;
+  },
+  async loadServer(serverId) {
+    const [row] = await db
+      .select({
+        id: server.id,
+        name: server.name,
+        enabled: server.enabled,
+        transportMode: server.transportMode,
+        wsConnectedAt: server.wsConnectedAt,
+        agentCapabilities: server.agentCapabilities,
+      })
+      .from(server)
+      .where(eq(server.id, serverId));
+    return row ?? null;
+  },
+  accept: acceptAdminPty,
+  recordOpen: recordPtySessionOpen,
+};
+
+export function isWebSocketUpgrade(request: Request): boolean {
+  return request.headers.get("upgrade")?.toLowerCase() === "websocket";
+}
+
+/** Rejects cross-site WebSocket attempts that would ride the admin cookie. */
+export function isSameOriginWebSocket(request: Request): boolean {
+  const origin = request.headers.get("origin");
+  if (!origin) {
+    return false;
+  }
+  try {
+    const originUrl = new URL(origin);
+    const requestUrl = new URL(request.url);
+    return (
+      (originUrl.protocol === "http:" || originUrl.protocol === "https:") &&
+      originUrl.host === requestUrl.host
+    );
+  } catch {
+    return false;
+  }
+}
+
+function plain(status: number, message: string): Response {
+  return new Response(message, {
+    status,
+    headers: { "cache-control": "no-store" },
+  });
+}
+
+function availability(row: AdminPtyServerState): string | null {
+  if (!row.enabled) {
+    return "disabled";
+  }
+  if (row.transportMode !== "ws" || !row.wsConnectedAt) {
+    return "offline";
+  }
+  if (!row.agentCapabilities.includes(PTY_CAPABILITY)) {
+    return "unsupported";
+  }
+  return null;
+}
+
+/**
+ * Authenticated browser-to-agent terminal upgrade. There is deliberately no
+ * server function or MCP surface for starting a shell: only a human admin
+ * session with a same-origin WebSocket can reach an enrolled agent.
+ */
+export async function handleAdminPtyRequest(
+  request: Request,
+  options: { serverId: string },
+  dependencies: AdminPtyRouteDependencies = defaultDependencies,
+): Promise<Response> {
+  if (!isWebSocketUpgrade(request)) {
+    return plain(426, "WebSocket upgrade required");
+  }
+  if (!isSameOriginWebSocket(request)) {
+    return plain(403, "Cross-origin WebSocket denied");
+  }
+
+  const auth = await dependencies.authenticate(request);
+  if (!auth) {
+    return plain(403, "Forbidden");
+  }
+
+  const row = await dependencies.loadServer(options.serverId);
+  if (!row) {
+    return plain(404, "Not found");
+  }
+  const unavailable = availability(row);
+  if (unavailable) {
+    return Response.json(
+      { error: unavailable },
+      { status: 409, headers: { "cache-control": "no-store" } },
+    );
+  }
+
+  const url = new URL(request.url);
+  const sessionId = url.searchParams.get("sessionId") ?? "";
+  if (!isValidPtySessionId(sessionId)) {
+    return plain(400, "Invalid session id");
+  }
+  const dimensions = clampPtyDimensions(
+    Number(url.searchParams.get("cols")),
+    Number(url.searchParams.get("rows")),
+  );
+
+  const actor: AdminPtyActor = {
+    id: auth.user.id,
+    email: auth.user.email,
+    impersonatedBy: auth.session.impersonatedBy ?? null,
+    ip: getClientIp(request),
+    userAgent: request.headers.get("user-agent"),
+  };
+  const session: AdminPtySession = {
+    serverId: row.id,
+    sessionId,
+    cols: dimensions.cols,
+    rows: dimensions.rows,
+    startedAt: new Date(),
+    actor,
+  };
+
+  try {
+    const response = await dependencies.accept(request, {
+      serverId: row.id,
+      connectedAt: row.wsConnectedAt!.toISOString(),
+      sessionId,
+      cols: dimensions.cols,
+      rows: dimensions.rows,
+      session,
+    });
+    const failed = response.status !== 101 && response.status !== 426;
+    await dependencies
+      .recordOpen(session, { failed })
+      .catch((error: unknown) => {
+        console.warn("PTY open audit failed", error);
+      });
+    return response;
+  } catch (error) {
+    await dependencies
+      .recordOpen(session, { failed: true, error })
+      .catch((auditError: unknown) => {
+        console.warn("PTY open audit failed", auditError);
+      });
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`PTY upgrade failed: ${message}`);
+    return plain(503, "Terminal unavailable");
+  }
+}

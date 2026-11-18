@@ -96,6 +96,14 @@ const config = defineConfig(({ mode, command }) => {
             import.meta.url,
           ),
         ),
+        "@/lib/pty-relay": fileURLToPath(
+          new URL(
+            isCloudflare
+              ? "./src/lib/pty-relay.cloudflare.ts"
+              : "./src/lib/pty-relay.ts",
+            import.meta.url,
+          ),
+        ),
         "@/durable-objects/agent-session": fileURLToPath(
           new URL(
             isCloudflare

@@ -11,6 +11,7 @@ mod certificate;
 mod client;
 mod config;
 mod process;
+mod pty;
 mod stats;
 #[cfg(target_os = "linux")]
 mod telemetry;
@@ -21,7 +22,7 @@ mod ws;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use chrono::Utc;
@@ -29,7 +30,7 @@ use clap::Parser;
 use tokio::signal;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::config::{AgentPolicy, CandidateConfig, ConfigManager, FetchStatus};
 use crate::process::{ProcessState, SingBoxManager, check_config, resolve_binary, singbox_version};
@@ -56,7 +57,16 @@ const AGENT_CAPABILITIES: &[&str] = &[
     "connection-stream-traffic",
     "ws-v1",
 ];
+const PTY_CAPABILITY: &str = "pty-v1";
 const RUNTIME_PROBATION: Duration = Duration::from_secs(11);
+
+fn agent_capabilities(pty_enabled: bool) -> Vec<&'static str> {
+    let mut capabilities = AGENT_CAPABILITIES.to_vec();
+    if pty_enabled {
+        capabilities.push(PTY_CAPABILITY);
+    }
+    capabilities
+}
 
 #[derive(Parser)]
 #[command(name = "server-agent", version, about = "blossom proxy server agent")]
@@ -150,6 +160,44 @@ struct Args {
         value_parser = clap::builder::BoolishValueParser::new()
     )]
     ws_enabled: bool,
+
+    /// Enable interactive PTY sessions over the authenticated agent WebSocket.
+    /// Off by default; the control plane only offers the terminal when the
+    /// agent advertises `pty-v1`.
+    #[arg(
+        long,
+        default_value_t = false,
+        env = "AGENT_PTY_ENABLED",
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
+    pty_enabled: bool,
+
+    /// Maximum concurrent PTY sessions (1-4).
+    #[arg(
+        long,
+        default_value_t = pty::DEFAULT_MAX_SESSIONS as u8,
+        env = "AGENT_PTY_MAX_SESSIONS",
+        value_parser = clap::value_parser!(u8).range(1..=4)
+    )]
+    pty_max_sessions: u8,
+
+    /// Idle timeout for a PTY session in seconds (30-3600).
+    #[arg(
+        long,
+        default_value_t = pty::DEFAULT_IDLE_TIMEOUT.as_secs(),
+        env = "AGENT_PTY_IDLE_TIMEOUT_SECONDS",
+        value_parser = clap::value_parser!(u64).range(30..=3600)
+    )]
+    pty_idle_timeout_seconds: u64,
+
+    /// Hard maximum PTY session lifetime in seconds (60-86400).
+    #[arg(
+        long,
+        default_value_t = pty::DEFAULT_MAX_SESSION.as_secs(),
+        env = "AGENT_PTY_MAX_SESSION_SECONDS",
+        value_parser = clap::value_parser!(u64).range(60..=86_400)
+    )]
+    pty_max_session_seconds: u64,
 }
 
 fn parse_level(level: &str) -> tracing::Level {
@@ -250,12 +298,37 @@ async fn main() -> Result<()> {
         desired_agent_version: None,
         desired_sing_box_version: None,
     };
+    let capabilities = agent_capabilities(args.pty_enabled);
 
     // The push channel is optional: it is never required for correctness, and
     // every failure path leaves the HTTP poll/heartbeat loop untouched.
     let (command_sink, command_receiver) = ws::ports::command_channel(64);
     let command_sink = Arc::new(command_sink);
-    let hello_snapshot = Arc::new(Mutex::new(HelloSnapshot::capture(&config, &updates)));
+    let hello_snapshot = Arc::new(Mutex::new(HelloSnapshot::capture(
+        &config,
+        &updates,
+        &capabilities,
+    )));
+    let (pty_event_sender, mut pty_events) = mpsc::channel::<pty::PtyEvent>(64);
+    let mut pty_manager = pty::PtyManager::new(
+        pty::PtyLimits::new(
+            args.pty_enabled,
+            args.pty_max_sessions as usize,
+            Duration::from_secs(args.pty_idle_timeout_seconds),
+            Duration::from_secs(args.pty_max_session_seconds),
+        ),
+        Box::new(pty::session::PortablePtyFactory::new(pty_event_sender)),
+    );
+    if args.pty_enabled {
+        info!(
+            max_sessions = pty_manager.limits().max_sessions(),
+            idle_timeout_seconds = pty_manager.limits().idle_timeout().as_secs(),
+            max_session_seconds = pty_manager.limits().max_session().as_secs(),
+            "agent PTY terminal enabled"
+        );
+    } else {
+        info!("agent PTY terminal disabled; set AGENT_PTY_ENABLED=true to opt in");
+    }
     if args.ws_enabled {
         let sink = command_sink.clone();
         updates.set_status_observer(Arc::new(move |agent, singbox| {
@@ -306,6 +379,7 @@ async fn main() -> Result<()> {
             policy.clone(),
             sing_box_version.as_deref(),
             &updates,
+            &capabilities,
         )
         .await;
         if let Some(manager) = manager.take() {
@@ -323,6 +397,7 @@ async fn main() -> Result<()> {
         policy.clone(),
         sing_box_version.as_deref(),
         &updates,
+        &capabilities,
     )
     .await;
 
@@ -338,6 +413,9 @@ async fn main() -> Result<()> {
     let mut heartbeat_sleep = Box::pin(tokio::time::sleep(Duration::from_secs(
         policy.heartbeat_interval_seconds,
     )));
+    let mut pty_tick = tokio::time::interval(Duration::from_secs(15));
+    pty_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    pty_tick.tick().await;
 
     loop {
         let ws_event = async {
@@ -347,6 +425,16 @@ async fn main() -> Result<()> {
             }
         };
         tokio::select! {
+            _ = pty_tick.tick() => {
+                for exit in pty_manager.reap_expired(Instant::now()) {
+                    send_pty_exit(&command_sink, exit);
+                }
+            }
+            event = pty_events.recv() => {
+                if let Some(event) = event {
+                    handle_pty_event(event, &mut pty_manager, &command_sink);
+                }
+            }
             _ = &mut config_sleep => {
                 if let Some(reporter) = reporter.as_mut() {
                     reporter.collect_and_report(&client).await;
@@ -362,7 +450,17 @@ async fn main() -> Result<()> {
                 )
                 .await;
                 if exit {
-                    exit_for_restart(manager.take(), &client, &mut config, &status, &policy, sing_box_version.as_deref(), &updates).await;
+                    exit_for_restart(
+                        manager.take(),
+                        &client,
+                        &mut config,
+                        &status,
+                        &policy,
+                        sing_box_version.as_deref(),
+                        &updates,
+                        &capabilities,
+                    )
+                    .await;
                 }
                 reconcile_reporter(config.api_endpoint(), &mut reporter, &traffic_dir);
                 refresh_hello(&hello_snapshot, &config, &updates);
@@ -374,6 +472,7 @@ async fn main() -> Result<()> {
                     policy.clone(),
                     sing_box_version.as_deref(),
                     &updates,
+                    &capabilities,
                 ).await;
                 config_sleep.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(policy.config_poll_interval_seconds));
                 heartbeat_sleep.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(policy.heartbeat_interval_seconds));
@@ -387,6 +486,7 @@ async fn main() -> Result<()> {
                     policy.clone(),
                     sing_box_version.as_deref(),
                     &updates,
+                    &capabilities,
                 ).await;
                 heartbeat_sleep.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(policy.heartbeat_interval_seconds));
             }
@@ -420,12 +520,18 @@ async fn main() -> Result<()> {
                     }
                     WsEvent::Fallback { reason } => {
                         ws_transport = "http-fallback";
+                        for exit in pty_manager.close_all(pty::PtyExitReason::AgentDisconnected) {
+                            send_pty_exit(&command_sink, exit);
+                        }
                         warn!(
                             "agent websocket unavailable ({reason}); using HTTP config poll and heartbeat"
                         );
                     }
                     WsEvent::Disconnected { reason } => {
                         ws_transport = "http-fallback";
+                        for exit in pty_manager.close_all(pty::PtyExitReason::AgentDisconnected) {
+                            send_pty_exit(&command_sink, exit);
+                        }
                         info!("agent websocket disconnected: {reason}");
                     }
                     WsEvent::Frame(message) => {
@@ -440,6 +546,8 @@ async fn main() -> Result<()> {
                             &mut updates,
                             &mut sing_box_version,
                             &command_sink,
+                            &capabilities,
+                            &mut pty_manager,
                         )
                         .await;
                         reconcile_reporter(config.api_endpoint(), &mut reporter, &traffic_dir);
@@ -693,6 +801,10 @@ async fn config_cycle(
     reconcile_updates(updates, policy, manager, bin, config, sing_box_version).await
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the reconciliation context passed to heartbeat"
+)]
 async fn exit_for_restart(
     manager: Option<SingBoxManager>,
     client: &client::Client,
@@ -701,6 +813,7 @@ async fn exit_for_restart(
     policy: &AgentPolicy,
     sing_box_version: Option<&str>,
     updates: &UpdateManager,
+    capabilities: &[&str],
 ) -> ! {
     heartbeat(
         client,
@@ -710,6 +823,7 @@ async fn exit_for_restart(
         policy.clone(),
         sing_box_version,
         updates,
+        capabilities,
     )
     .await;
     if let Some(manager) = manager {
@@ -738,12 +852,12 @@ struct HelloSnapshot {
 }
 
 impl HelloSnapshot {
-    fn capture(config: &ConfigManager, updates: &UpdateManager) -> Self {
+    fn capture(config: &ConfigManager, updates: &UpdateManager, capabilities: &[&str]) -> Self {
         let mut snapshot = Self {
             payload: HelloPayload {
                 agent_version: AGENT_VERSION.to_string(),
                 agent_build_id: AGENT_BUILD_ID.to_string(),
-                capabilities: AGENT_CAPABILITIES
+                capabilities: capabilities
                     .iter()
                     .map(|capability| capability.to_string())
                     .collect(),
@@ -833,6 +947,8 @@ async fn handle_ws_frame(
     updates: &mut UpdateManager,
     sing_box_version: &mut Option<String>,
     sink: &Arc<ChannelCommandSink>,
+    capabilities: &[&str],
+    pty: &mut pty::PtyManager,
 ) {
     match message {
         AgentMessage::ConfigNotify(notify) => {
@@ -862,6 +978,7 @@ async fn handle_ws_frame(
                     policy,
                     sing_box_version.as_deref(),
                     updates,
+                    capabilities,
                 )
                 .await;
             }
@@ -913,6 +1030,7 @@ async fn handle_ws_frame(
                     policy,
                     sing_box_version.as_deref(),
                     updates,
+                    capabilities,
                 )
                 .await;
             }
@@ -925,11 +1043,236 @@ async fn handle_ws_frame(
         | AgentMessage::Pong(_)
         | AgentMessage::ConfigAck(_)
         | AgentMessage::UpdateStatus(_) => {}
-        AgentMessage::Telemetry(frame) | AgentMessage::Pty(frame) | AgentMessage::Acme(frame) => {
+        AgentMessage::Pty(frame) => {
+            handle_pty_frame(frame, pty, sink);
+        }
+        AgentMessage::Telemetry(frame) | AgentMessage::Acme(frame) => {
             tracing::debug!(frame_type = %frame.frame_type, "ignoring reserved websocket channel");
         }
         AgentMessage::Unknown { frame_type } => {
             tracing::debug!(frame_type = %frame_type, "ignoring unknown websocket frame");
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PtyOpenRequest {
+    session_id: String,
+    cols: u32,
+    rows: u32,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PtyDataRequest {
+    session_id: String,
+    data: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PtyResizeRequest {
+    session_id: String,
+    cols: u32,
+    rows: u32,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PtyCloseRequest {
+    session_id: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PtyDataPayload<'a> {
+    session_id: &'a str,
+    data: &'a str,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PtyExitPayload<'a> {
+    session_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signal: Option<&'a str>,
+    reason: &'static str,
+}
+
+fn handle_pty_frame(
+    frame: crate::ws::codec::ReservedFrame,
+    manager: &mut pty::PtyManager,
+    sink: &Arc<ChannelCommandSink>,
+) {
+    match frame.frame_type.as_str() {
+        frame_type::PTY_OPEN => {
+            let Ok(payload) = serde_json::from_value::<PtyOpenRequest>(frame.payload) else {
+                warn!("ignoring pty.open with an invalid payload");
+                return;
+            };
+            let dimensions = pty::PtyDimensions::clamped(payload.cols, payload.rows);
+            if let Err(error) = manager.open(&payload.session_id, dimensions) {
+                let reason = match &error {
+                    pty::PtyError::Disabled => pty::PtyExitReason::Disabled,
+                    pty::PtyError::SessionLimit => pty::PtyExitReason::SessionLimit,
+                    pty::PtyError::DuplicateSession | pty::PtyError::InvalidSessionId => {
+                        pty::PtyExitReason::InvalidSession
+                    }
+                    pty::PtyError::Spawn(_) => pty::PtyExitReason::SpawnFailed,
+                    pty::PtyError::InputBackpressure => pty::PtyExitReason::InputBackpressure,
+                    pty::PtyError::Closed => pty::PtyExitReason::Closed,
+                    pty::PtyError::Io(_) => pty::PtyExitReason::IoError,
+                };
+                warn!(
+                    session = %payload.session_id,
+                    "pty.open rejected: {error}"
+                );
+                send_pty_exit(
+                    sink,
+                    pty::PtyExit {
+                        session_id: payload.session_id,
+                        reason,
+                        code: None,
+                        signal: None,
+                    },
+                );
+            }
+        }
+        frame_type::PTY_DATA => {
+            let Ok(payload) = serde_json::from_value::<PtyDataRequest>(frame.payload) else {
+                warn!("ignoring pty.data with an invalid payload");
+                return;
+            };
+            if payload.data.len() > pty::MAX_INPUT_FRAME_BYTES {
+                if let Some(exit) =
+                    manager.close(&payload.session_id, pty::PtyExitReason::FrameTooLarge)
+                {
+                    send_pty_exit(sink, exit);
+                }
+                return;
+            }
+            if let Err(error) = manager.write(&payload.session_id, payload.data.as_bytes()) {
+                match error {
+                    pty::PtyError::InputBackpressure => {
+                        warn!(
+                            session = %payload.session_id,
+                            "pty input queue is full; closing the session"
+                        );
+                        if let Some(exit) = manager
+                            .close(&payload.session_id, pty::PtyExitReason::InputBackpressure)
+                        {
+                            send_pty_exit(sink, exit);
+                        }
+                    }
+                    pty::PtyError::Closed => {}
+                    other => {
+                        warn!(
+                            session = %payload.session_id,
+                            "pty input failed: {other}"
+                        );
+                    }
+                }
+            }
+        }
+        frame_type::PTY_RESIZE => {
+            let Ok(payload) = serde_json::from_value::<PtyResizeRequest>(frame.payload) else {
+                warn!("ignoring pty.resize with an invalid payload");
+                return;
+            };
+            let dimensions = pty::PtyDimensions::clamped(payload.cols, payload.rows);
+            if let Err(error) = manager.resize(&payload.session_id, dimensions) {
+                warn!(
+                    session = %payload.session_id,
+                    "pty.resize failed: {error}"
+                );
+            }
+        }
+        frame_type::PTY_CLOSE => {
+            let Ok(payload) = serde_json::from_value::<PtyCloseRequest>(frame.payload) else {
+                warn!("ignoring pty.close with an invalid payload");
+                return;
+            };
+            if let Some(exit) = manager.close(&payload.session_id, pty::PtyExitReason::Closed) {
+                send_pty_exit(sink, exit);
+            }
+        }
+        other => {
+            tracing::debug!(frame_type = %other, "ignoring agent-to-agent PTY frame");
+        }
+    }
+}
+
+fn handle_pty_event(
+    event: pty::PtyEvent,
+    manager: &mut pty::PtyManager,
+    sink: &Arc<ChannelCommandSink>,
+) {
+    match event {
+        pty::PtyEvent::Data { session_id, data } => {
+            manager.note_output(&session_id, Instant::now());
+            if !send_pty_data(sink, &session_id, &data)
+                && let Some(exit) =
+                    manager.close(&session_id, pty::PtyExitReason::OutputBackpressure)
+            {
+                send_pty_exit(sink, exit);
+            }
+        }
+        pty::PtyEvent::Exited {
+            session_id,
+            code,
+            signal,
+        } => {
+            if let Some(exit) = manager.remove_exited(&session_id, code, signal) {
+                send_pty_exit(sink, exit);
+            }
+        }
+        pty::PtyEvent::ReadError { session_id } => {
+            if let Some(exit) = manager.close(&session_id, pty::PtyExitReason::IoError) {
+                send_pty_exit(sink, exit);
+            }
+        }
+    }
+}
+
+fn send_pty_data(sink: &Arc<ChannelCommandSink>, session_id: &str, data: &str) -> bool {
+    if data.is_empty() {
+        return true;
+    }
+    match AgentWsFrame::new(frame_type::PTY_DATA, PtyDataPayload { session_id, data }) {
+        Ok(frame) => enqueue_pty_frame(sink, frame),
+        Err(error) => {
+            warn!("failed to encode pty.data: {error}");
+            false
+        }
+    }
+}
+
+fn send_pty_exit(sink: &Arc<ChannelCommandSink>, exit: pty::PtyExit) {
+    match AgentWsFrame::new(
+        frame_type::PTY_EXIT,
+        PtyExitPayload {
+            session_id: &exit.session_id,
+            code: exit.code,
+            signal: exit.signal.as_deref(),
+            reason: exit.reason.as_str(),
+        },
+    ) {
+        Ok(frame) => {
+            let _ = enqueue_pty_frame(sink, frame);
+        }
+        Err(error) => warn!("failed to encode pty.exit: {error}"),
+    }
+}
+
+fn enqueue_pty_frame(sink: &Arc<ChannelCommandSink>, frame: AgentWsFrame) -> bool {
+    match sink.enqueue(WsCommand::Send(frame)) {
+        Ok(()) => true,
+        Err(error) => {
+            debug!("pty outbound queue backpressure: {error}");
+            false
         }
     }
 }
@@ -1257,6 +1600,10 @@ fn update_status_body(status: &UpdateStatus) -> client::types::AgentHeartbeatBod
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "heartbeat mirrors the agent's reconciliation inputs"
+)]
 async fn heartbeat(
     client: &client::Client,
     config: &mut ConfigManager,
@@ -1265,6 +1612,7 @@ async fn heartbeat(
     policy: AgentPolicy,
     sing_box_version: Option<&str>,
     updates: &UpdateManager,
+    capabilities: &[&str],
 ) {
     use client::types;
 
@@ -1326,7 +1674,7 @@ async fn heartbeat(
             .filter_map(|id| id.as_str().try_into().ok())
             .collect(),
         agent_build_id: AGENT_BUILD_ID.parse().expect("valid compile-time build id"),
-        agent_capabilities: AGENT_CAPABILITIES
+        agent_capabilities: capabilities
             .iter()
             .map(|capability| capability.parse().expect("valid capability"))
             .collect(),
@@ -1382,7 +1730,8 @@ async fn heartbeat(
 #[cfg(test)]
 mod tests {
     use super::{
-        AGENT_CAPABILITIES, CandidateConfig, HelloSnapshot, apply_ws_policy, node_id_from_error,
+        AGENT_CAPABILITIES, CandidateConfig, HelloSnapshot, PTY_CAPABILITY, agent_capabilities,
+        apply_ws_policy, node_id_from_error,
     };
     use crate::config::AgentPolicy;
     use crate::ws::codec::WelcomePayload;
@@ -1410,6 +1759,12 @@ mod tests {
     #[test]
     fn advertises_the_websocket_capability() {
         assert!(AGENT_CAPABILITIES.contains(&"ws-v1"));
+    }
+
+    #[test]
+    fn advertises_pty_only_when_opted_in() {
+        assert!(!agent_capabilities(false).contains(&PTY_CAPABILITY));
+        assert!(agent_capabilities(true).contains(&PTY_CAPABILITY));
     }
 
     #[test]
@@ -1460,7 +1815,7 @@ mod tests {
             None,
         )
         .expect("update manager builds");
-        let snapshot = HelloSnapshot::capture(&config, &updates);
+        let snapshot = HelloSnapshot::capture(&config, &updates, &["ws-v1"]);
         let payload = snapshot.payload();
         assert!(payload.capabilities.iter().any(|value| value == "ws-v1"));
         assert!(!payload.agent_build_id.is_empty());
