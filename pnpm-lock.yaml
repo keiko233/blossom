@@ -306,7 +306,7 @@ importers:
         version: 1.63.0(@types/react@19.3.0)(react@19.3.1)
       mcp-handler:
         specifier: ^2.3.0
-        version: 2.3.0(@modelcontextprotocol/server@2.4.0)(next@16.4.3(@babel/core@7.29.7(supports-color@10.2.2))(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(babel-plugin-react-compiler@1.0.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))
+        version: 2.4.0(@modelcontextprotocol/server@2.4.0)(@opentelemetry/api@1.9.1)(next@16.4.3(@babel/core@7.29.7(supports-color@10.2.2))(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(babel-plugin-react-compiler@1.0.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))
       meta-json-schema:
         specifier: ^1.19.32
         version: 1.19.33
@@ -4380,14 +4380,20 @@ packages:
     resolution: {integrity: sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==}
     engines: {node: '>= 0.4'}
 
-  mcp-handler@2.3.0:
-    resolution: {integrity: sha512-mvs+fJTLTa6kFv71CKPr+2ey+yXeuooM6WHz96pHhSvXe9m83qPizswU5NJ0yrUnJ2T+70VFPjsdstZtdB3evQ==}
+  mcp-handler@2.4.0:
+    resolution: {integrity: sha512-jJYsZ9lCswOiRQXaAtWuFLWGslw+O4+sLmnbiDBwSTBwR3fkbg0Ji/7/j7UvqJXo6QIQHxXybqZVSWm3NX/oFQ==}
     engines: {node: '>=20'}
     hasBin: true
     peerDependencies:
       '@modelcontextprotocol/server': ^2.0.0
+      '@opentelemetry/api': ^1.9.0
+      '@vercel/otel': ^2.0.0
       next: '>=13.0.0'
     peerDependenciesMeta:
+      '@opentelemetry/api':
+        optional: true
+      '@vercel/otel':
+        optional: true
       next:
         optional: true
 
@@ -8898,12 +8904,13 @@ snapshots:
 
   math-intrinsics@1.1.0: {}
 
-  mcp-handler@2.3.0(@modelcontextprotocol/server@2.4.0)(next@16.4.3(@babel/core@7.29.7(supports-color@10.2.2))(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(babel-plugin-react-compiler@1.0.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)):
+  mcp-handler@2.4.0(@modelcontextprotocol/server@2.4.0)(@opentelemetry/api@1.9.1)(next@16.4.3(@babel/core@7.29.7(supports-color@10.2.2))(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(babel-plugin-react-compiler@1.0.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)):
     dependencies:
       '@modelcontextprotocol/server': 2.4.0
       chalk: 5.6.2
       commander: 11.1.0
     optionalDependencies:
+      '@opentelemetry/api': 1.9.1
       next: 16.4.3(@babel/core@7.29.7(supports-color@10.2.2))(@opentelemetry/api@1.9.1)(@types/node@26.6.6)(babel-plugin-react-compiler@1.0.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
 
   mdn-data@2.27.1: {}
