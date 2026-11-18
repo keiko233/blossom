@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "pnpm --parallel dev",
     "build": "pnpm --parallel build",
-    "test": "pnpm --parallel test",
+    "test": "pnpm --parallel test && node --test scripts/src/release.test.ts",
     "fmt": "oxfmt",
     "lint": "oxlint",
     "prepare": "husky"

@@ -12,32 +12,31 @@ pnpm dev
 ```
 
 - `pnpm dev` starts the app dev server on <http://localhost:3000>.
-- `pnpm test` runs the Vitest test suites in parallel across workspace packages.
+- `pnpm test` runs the Vitest test suites in parallel across workspace packages and the release-script tests.
 - `pnpm build` builds all workspace packages in parallel.
 
 For app-only commands, use `pnpm --filter @blossom/app <script>`.
 
 ## Deployment
 
-The app selects its deploy target through the `DEPLOY_TARGET` build switch in `app/vite.config.ts`. Valid values are `cloudflare` (default), `netlify`, `vercel`, and `node`. Because `cloudflare` is the default, plain `pnpm build` and `pnpm dev` behave exactly as before; platform-specific builds use `pnpm build:<target>`.
+The app selects its deploy target through the `DEPLOY_TARGET` build switch in `app/vite.config.ts`. Valid values are `cloudflare` (default), `vercel`, and `node`. Because `cloudflare` is the default, plain `pnpm build` and `pnpm dev` behave exactly as before; platform-specific builds use `pnpm build:<target>`.
 
-Netlify, Vercel and Node are built by [Nitro](https://nitro.build) (`netlify`, `vercel` and `node-server` presets). The preset is pinned per target rather than auto-detected, so the `build:<target>` scripts are reproducible and keep working if a host's detection changes. Cloudflare Workers keeps `@cloudflare/vite-plugin` because Nitro's `cloudflare_module` preset is not yet a drop-in replacement (see [Runtimes and deploy targets](docs/development/architecture.md#runtimes-and-deploy-targets)).
+Vercel and Node are built by [Nitro](https://nitro.build) (`vercel` and `node-server` presets). The preset is pinned per target rather than auto-detected, so the `build:<target>` scripts are reproducible and keep working if a host's detection changes. Cloudflare Workers keeps `@cloudflare/vite-plugin` because Nitro's `cloudflare_module` preset is not yet a drop-in replacement (see [Runtimes and deploy targets](docs/development/architecture.md#runtimes-and-deploy-targets)).
 
 > The `pnpm build:*` scripts below are defined in `app/package.json`. From the repo root, run them as `pnpm --filter @blossom/app build:<target>`.
 
 | Platform | Build command | Config | How |
 |---|---|---|---|
 | Cloudflare Workers (primary) | `pnpm build:cloudflare` | `app/wrangler.jsonc` | `cd app && wrangler deploy` |
-| Netlify | `pnpm build:netlify` | `netlify.toml` | Connect the repo and leave the base and package directories empty; `netlify.toml` installs and builds from the repository root and publishes `dist` |
 | Vercel | `pnpm build:vercel` | `app/vercel.json` | Connect the repo, set root directory to `app` |
 | Railway | (Docker) | `railway.toml` | Connect the repo; Railway builds from `Dockerfile` |
 | Self-host Docker | (Docker) | `Dockerfile`, `docker-compose.yaml` | `docker compose up -d` |
 
-For Cloudflare, push secrets with `wrangler secret put <NAME>` and non-secret vars through `vars` in `app/wrangler.jsonc`. `app/wrangler.jsonc` declares the `HYPERDRIVE` binding for this deployment; replace the config ID with one from your own Cloudflare account, or remove the binding to use `DATABASE_URL` directly. Workers use a separate database client per request. `DATABASE_URL` is still required at runtime and is used by Drizzle Kit migrations. For Netlify and Vercel, configure environment variables in their dashboards; the Nitro presets handle the rest. The app depends on the private packages under `packages/`, so these hosts must install the whole pnpm workspace from the repository root. On Vercel keep "Include source files outside of the Root Directory in the Build Step" enabled (the default); Vercel then also rebuilds when a package the app declares in `package.json` changes. Netlify is configured from the repository root with no `base`: `netlify.toml` runs `pnpm --filter @blossom/app build:netlify`, and the build writes the static files to `dist` and the server function to `.netlify/functions-internal` at the repository root, where Netlify looks for them (`app/vite.config.ts` redirects Nitro's `app/`-relative defaults). Because the base is the repository root, Netlify rebuilds on any change in the repository, including `packages/` and the lockfile, and no `ignore` command is needed. `netlify.toml` also sets `NODE_VERSION = "26"` (the root `engines` requirement) for the build and `HUSKY = "0"`. Netlify falls back to Node 24 for functions when the build's Node version is not a supported Lambda runtime ([function configuration](https://docs.netlify.com/build/functions/configuration/)), so do not assume the hosted function runs Node 26; check the runtime on a preview deploy. The Vercel function runtime is set by the Nitro preset (`nodejs24.x`), not by the app's Node requirement. Local builds and local handler/runtime checks do not prove a hosted deployment: verify a preview deploy on the platform before relying on it. Netlify's output moved from `app/dist/client` plus `.netlify/v1/functions` to `dist` plus `.netlify/functions-internal` at the repository root, so an existing Netlify site must clear any base directory or package directory set in the Netlify UI, since the old configuration used base `app`.
+For Cloudflare, push secrets with `wrangler secret put <NAME>` and non-secret vars through `vars` in `app/wrangler.jsonc`. `app/wrangler.jsonc` declares the `HYPERDRIVE` binding for this deployment; replace the config ID with one from your own Cloudflare account, or remove the binding to use `DATABASE_URL` directly. Workers use a separate database client per request. `DATABASE_URL` is still required at runtime and is used by Drizzle Kit migrations. For Vercel, configure environment variables in its dashboard; the Nitro preset handles the rest. The app depends on the private packages under `packages/`, so the host must install the whole pnpm workspace from the repository root. On Vercel keep "Include source files outside of the Root Directory in the Build Step" enabled (the default); Vercel then also rebuilds when a package the app declares in `package.json` changes. The Vercel function runtime is set by the Nitro preset (`nodejs24.x`), not by the app's Node requirement. Local builds and local handler/runtime checks do not prove a hosted deployment: verify a preview deploy on the platform before relying on it.
 
 ### Prebuilt Docker images
 
-Every push to `main` (and `v*` tags) runs `.github/workflows/docker.yml`, which builds and publishes multi-arch (amd64/arm64) images to GHCR:
+`v*` and `server-agent-v*` tags run `.github/workflows/docker.yml`, which builds and publishes multi-arch (amd64/arm64) images to GHCR:
 
 | Image | Contents |
 |---|---|
