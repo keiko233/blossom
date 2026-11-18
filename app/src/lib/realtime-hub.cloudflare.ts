@@ -10,6 +10,7 @@ import { env } from "cloudflare:workers";
 import type { Server } from "@/db/proxy-schema";
 import { markAgentWsConnected, markAgentWsDisconnected } from "@/query/agent";
 
+import type { TelemetryKind, TelemetryResult } from "./agent-telemetry";
 import {
   AGENT_WS_INTERNAL_CONNECTED_AT,
   AGENT_WS_INTERNAL_SERVER_ID,
@@ -67,6 +68,26 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     } catch (error) {
       await markAgentWsDisconnected(server.id, connectedAt).catch(() => {});
       throw error;
+    }
+  }
+
+  async requestTelemetry(
+    serverId: string,
+    kind: TelemetryKind,
+    connectedAt: string,
+  ): Promise<TelemetryResult | null> {
+    try {
+      const response = await durableObjectStub(serverId).fetch(
+        new Request(
+          `https://agent-session.internal/internal/telemetry?kind=${kind}&connectedAt=${encodeURIComponent(connectedAt)}`,
+          { method: "POST" },
+        ),
+      );
+      return response.status === 200
+        ? ((await response.json()) as TelemetryResult)
+        : null;
+    } catch {
+      return null;
     }
   }
 

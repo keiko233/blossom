@@ -35,7 +35,7 @@ export async function authenticateAgentWsRequest(
 export interface AgentWsRouteDependencies {
   authenticate(request: Request): Promise<Server | null>;
   buildWelcome(server: Server): Promise<AgentWsWelcomePayload>;
-  hub: RealtimeHub;
+  hub: Pick<RealtimeHub, "acceptAgent">;
 }
 
 const defaultDependencies: AgentWsRouteDependencies = {
@@ -43,10 +43,6 @@ const defaultDependencies: AgentWsRouteDependencies = {
   buildWelcome: buildAgentWelcome,
   hub: {
     acceptAgent: (...args) => getRealtimeHub().acceptAgent(...args),
-    notifyConfigChanged: (...args) =>
-      getRealtimeHub().notifyConfigChanged(...args),
-    notifyUpdateTrigger: (...args) =>
-      getRealtimeHub().notifyUpdateTrigger(...args),
   },
 };
 

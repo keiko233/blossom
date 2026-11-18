@@ -6,6 +6,7 @@ import { DurableObject, env } from "cloudflare:workers";
 import { drizzle } from "drizzle-orm/node-postgres";
 
 import type { Database } from "@/db";
+import { telemetryReply, TelemetryRequests } from "@/lib/agent-telemetry";
 import {
   closeAgentWsSession,
   handleAgentWsMessage,
@@ -60,6 +61,8 @@ function decodeMessage(message: string | ArrayBuffer): string {
 }
 
 export class AgentSessionDO extends DurableObject {
+  private readonly telemetry = new TelemetryRequests();
+
   private async withDatabase<T>(
     run: (database: Database) => Promise<T>,
   ): Promise<T> {
@@ -83,6 +86,28 @@ export class AgentSessionDO extends DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     const pathname = new URL(request.url).pathname;
+    if (pathname === "/internal/telemetry" && request.method === "POST") {
+      const params = new URL(request.url).searchParams;
+      const kind = params.get("kind");
+      const connectedAt = params.get("connectedAt");
+      const ws =
+        connectedAt &&
+        this.ctx
+          .getWebSockets()
+          .find(
+            (candidate) =>
+              readAttachment(candidate)?.connectedAt === connectedAt,
+          );
+      if (!connectedAt || !ws || (kind !== "sample" && kind !== "snapshot")) {
+        return new Response(null, { status: 204 });
+      }
+      const result = await this.telemetry.request(connectedAt, kind, (frame) =>
+        ws.send(frame),
+      );
+      return result
+        ? Response.json(result)
+        : new Response(null, { status: 204 });
+    }
     if (pathname === "/internal/notify") {
       return this.notify(request);
     }
@@ -171,10 +196,16 @@ export class AgentSessionDO extends DurableObject {
       ws.close(1008, "missing session attachment");
       return;
     }
+    const raw = decodeMessage(message);
+    const reply = telemetryReply(raw);
+    if (reply) {
+      this.telemetry.accept(attachment.connectedAt, reply);
+      return;
+    }
     await this.withDatabase(async (database) => {
       const store = createAgentWsStore(database);
       const session = await this.session(attachment, store);
-      await handleAgentWsMessage(session, ws, decodeMessage(message));
+      await handleAgentWsMessage(session, ws, raw);
     });
   }
 
