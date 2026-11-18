@@ -6,7 +6,8 @@ The investigation was based on source, not a live deployment or browser verifica
 
 ## Start here
 
-- [Work packages and acceptance criteria](work-packages.md): scope, dependencies, file ownership, tests and completion criteria for Claude Code.
+- [2026-11-18 Architecture Redesign Investigation](../spec/2026-11-18-agent-ws-release-ops-redesign/investigation-report.md) & [Worktree PR Roadmap](../spec/2026-11-18-agent-ws-release-ops-redesign/worktree-roadmap.md): bidirectional agent WebSocket, serverless/Nitro compatibility, semver publish workflow, agent ACME issuance, and ephemeral Web SSH ops (PR 1–PR 7).
+- [Work packages and acceptance criteria](work-packages.md): scope, dependencies, file ownership, tests and completion criteria for Claude Code (2026-10-30 product improvement plan).
 - [Parallel execution and integration](execution.md): worktrees, Sonnet 5.5, scheduling, review and cherry-picking.
 - [Development handbook](../development/README.md): established project behavior and implementation rules. This roadmap is a proposal and does not replace `AGENTS.md` or the handbook.
 
