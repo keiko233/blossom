@@ -52,7 +52,7 @@ This is not unconditional zero-loss accounting. Traffic that arrived after the l
 
 ## Binary updates
 
-The thin image contains no agent or sing-box binary. `scripts/entrypoint.sh` creates `/data/{bin,state,downloads}`; on first start it resolves `AGENT_BOOTSTRAP_VERSION` / `AGENT_SING_BOX_BOOTSTRAP_VERSION` (default `latest`) through the GitHub API, downloads `server-agent-linux-<arch>` and the official `sing-box-<version>-linux-<arch>-musl.tar.gz`, verifies the release asset `digest`, and only then moves them into `/data/bin`. Existing binaries are left alone.
+The thin image contains no agent or sing-box binary. `scripts/entrypoint.sh` creates `/data/{bin,state,downloads}`; on first start it resolves `AGENT_BOOTSTRAP_VERSION` / `AGENT_SING_BOX_BOOTSTRAP_VERSION` (default `latest`) through the GitHub API, downloads `server-agent-linux-<arch>` and the official `sing-box-<version>-linux-<arch>-musl.tar.gz`, verifies the release asset `digest`, and only then moves them into `/data/bin`. Existing binaries are left alone. `AGENT_GITHUB_IPV6` (`prefer` default, `only`, `off`) controls the address family those entrypoint requests use; it does not affect `src/update.rs`.
 
 At runtime `src/update.rs` compares the polled desired versions with the running versions:
 
@@ -61,7 +61,7 @@ At runtime `src/update.rs` compares the polled desired versions with the running
 - sing-box is extracted to `downloads/`, preflighted with `sing-box check` against the active config, installed atomically over `/data/bin/sing-box` (previous kept as `sing-box.prev`), and must survive `RUNTIME_PROBATION`. A failed start restores `sing-box.prev` and the previous process.
 - The agent copies itself to `server-agent.prev`, replaces `/data/bin/server-agent`, writes `state/agent-update.json`, and exits with code `75`. The entrypoint restarts it; if the replacement exits three times within two minutes it restores `server-agent.prev`. On startup an unresolved pending marker is turned into a failure record.
 - Failed targets are recorded in `state/*-update-failed.json` and retried after `AGENT_UPDATE_RETRY_SECONDS` (default 3600), not on every poll.
-- `AGENT_SELF_UPDATE=0` disables replacing the agent binary but leaves control-plane updates of sing-box available. `AGENT_RELEASE_REPO`, `AGENT_SING_BOX_RELEASE_REPO` and `AGENT_GITHUB_API` support forks and mirrors. `AGENT_SEED_DIR` copies prebuilt binaries into an empty `/data/bin` before bootstrap and is used by the test image.
+- `AGENT_SELF_UPDATE=0` disables replacing the agent binary but leaves control-plane updates of sing-box available. `AGENT_RELEASE_REPO`, `AGENT_SING_BOX_RELEASE_REPO` and `AGENT_GITHUB_API` support forks and mirrors. `AGENT_SEED_DIR` copies prebuilt binaries into an empty `/data/bin` before bootstrap and is used by the test image. `AGENT_GITHUB_IPV6` (`prefer` | `only` | `off`) applies to the entrypoint's bootstrap requests only.
 
 ## Checks
 

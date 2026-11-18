@@ -30,9 +30,31 @@ Older notes and agents may refer to `/agent/config/v2`. The control plane no lon
 
 3. On first start the entrypoint downloads the requested agent and sing-box releases into `/data/bin` and verifies the SHA-256 digest GitHub reports for each asset. Defaults are `AGENT_BOOTSTRAP_VERSION=latest` and `AGENT_SING_BOX_BOOTSTRAP_VERSION=latest`. Set either to an exact version (or `none` to refuse an automatic download) for a pinned bootstrap. Existing binaries are never overwritten by the bootstrap; later upgrades are driven by the control plane.
    The agent download requires a published `server-agent-v*` GitHub release. Until one exists (or when using a fork/mirror), set `AGENT_RELEASE_REPO`/`AGENT_GITHUB_API` to the release source, or provide `AGENT_SEED_DIR` with `server-agent` and `sing-box` binaries for an offline first start.
+
+   For that offline start, drop the two binaries in a directory on the host and mount it read-only; any binary already executable under `/data/bin` is left alone, so nothing is fetched:
+
+   ```yaml
+       volumes:
+         - agent-data:/data
+         - /opt/blossom-seed:/seed:ro
+       environment:
+         AGENT_SEED_DIR: /seed
+   ```
+
+   Seeding can also be done without a rebuild by copying into the volume directly (`docker create -v agent-data:/data …`, `docker cp server-agent <container>:/data/bin/server-agent`, then `docker rm`). `AGENT_SKIP_BOOTSTRAP=1` additionally refuses any download on start; it needs both binaries present.
 4. Prefer a pinned prebuilt image over `latest`: `ghcr.io/keiko233/blossom/server-agent:sha-<commit>` or a semver tag (tags are listed in the root README). Pinning the image now pins only the runtime/entrypoint, not sing-box.
 
 The first start needs outbound access to `api.github.com`, `github.com` release downloads and the blossom API. If unauthenticated GitHub API rate limits are a problem, set `AGENT_GITHUB_TOKEN` (a read-only token is enough); it is used only for release API/download requests and is never logged.
+
+`AGENT_GITHUB_IPV6` selects the address family for those entrypoint requests (never for the agent's own API/update traffic):
+
+| Value             | Behaviour                                                                                     |
+| ----------------- | --------------------------------------------------------------------------------------------- |
+| `prefer` (default) | One short IPv6 attempt per request, then the default resolution order                         |
+| `only`            | IPv6 only; bootstrap fails when an AAAA record or route is missing                             |
+| `off`             | No family preference (curl's default)                                                          |
+
+This only helps when the host has IPv6 connectivity *and* the name resolves to AAAA: some resolvers (and `api.github.com` on some networks) return A records only, and then the request stays on IPv4 regardless. A rate-limited IPv4 egress is fixed by `AGENT_GITHUB_TOKEN` or by seeding binaries, not by the family preference.
 
 ### The generated Docker command embeds the secret
 
