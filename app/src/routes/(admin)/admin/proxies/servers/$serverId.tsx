@@ -7,6 +7,7 @@ import { getServer } from "@/query/servers";
 
 import { AgentTerminalPanel } from "./_modules/agent-terminal-panel";
 import { ServerFormPage } from "./_modules/server-form-page";
+import { ServerLivePanel } from "./_modules/server-live-panel";
 import { ServerNodesPanel } from "./_modules/server-nodes-panel";
 
 export const Route = createFileRoute(
@@ -26,6 +27,7 @@ function RouteComponent(): React.ReactElement {
     <>
       <ServerFormPage key={server.id} server={server} />
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 pb-6">
+        <ServerLivePanel key={server.id} serverId={server.id} />
         <ServerNodesPanel key={server.id} serverId={server.id} />
         <AgentTerminalPanel server={server} />
         <TrafficTrend serverId={server.id} />

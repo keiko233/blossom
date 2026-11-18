@@ -6,6 +6,7 @@ import { DurableObject, env } from "cloudflare:workers";
 import { drizzle } from "drizzle-orm/node-postgres";
 
 import type { Database } from "@/db";
+import { telemetryReply, TelemetryRequests } from "@/lib/agent-telemetry";
 import {
   closeAgentWsSession,
   handleAgentWsMessage,
@@ -96,6 +97,7 @@ export class AgentSessionDO extends DurableObject {
       ),
     );
   };
+  private readonly telemetry = new TelemetryRequests();
 
   private async withDatabase<T>(
     run: (database: Database) => Promise<T>,
@@ -122,6 +124,28 @@ export class AgentSessionDO extends DurableObject {
     const pathname = new URL(request.url).pathname;
     if (pathname === "/internal/pty/connect") {
       return handlePtyConnect(this.ctx, request);
+    }
+    if (pathname === "/internal/telemetry" && request.method === "POST") {
+      const params = new URL(request.url).searchParams;
+      const kind = params.get("kind");
+      const connectedAt = params.get("connectedAt");
+      const ws =
+        connectedAt &&
+        this.ctx
+          .getWebSockets()
+          .find(
+            (candidate) =>
+              readAttachment(candidate)?.connectedAt === connectedAt,
+          );
+      if (!connectedAt || !ws || (kind !== "sample" && kind !== "snapshot")) {
+        return new Response(null, { status: 204 });
+      }
+      const result = await this.telemetry.request(connectedAt, kind, (frame) =>
+        ws.send(frame),
+      );
+      return result
+        ? Response.json(result)
+        : new Response(null, { status: 204 });
     }
     if (pathname === "/internal/notify") {
       return this.notify(request);
@@ -235,6 +259,11 @@ export class AgentSessionDO extends DurableObject {
         this.recordPtyClose,
       )
     ) {
+      return;
+    }
+    const reply = telemetryReply(raw);
+    if (reply) {
+      this.telemetry.accept(attachment.connectedAt, reply);
       return;
     }
     await this.withDatabase(async (database) => {

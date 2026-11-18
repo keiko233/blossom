@@ -13,6 +13,11 @@ import type { Server } from "@/db/proxy-schema";
 import { getServerEnv } from "@/lib/env";
 
 import {
+  telemetryReply,
+  TelemetryRequests,
+  type TelemetryKind,
+} from "./agent-telemetry";
+import {
   closeAgentWsSession,
   handleAgentWsMessage,
   openAgentWsSession,
@@ -134,7 +139,8 @@ export class NitroRealtimeHub implements RealtimeHub {
   private readonly ptyRelays = new Map<string, Map<string, LocalPtyRelay>>();
   private readonly backplane: RealtimeBackplane | undefined;
   private readonly store: ReturnType<typeof createAgentWsStore>;
-  private backplaneStarted = false;
+  private readonly telemetry = new TelemetryRequests();
+  private backplaneReady: Promise<void> | undefined;
 
   constructor(
     options: {
@@ -193,6 +199,28 @@ export class NitroRealtimeHub implements RealtimeHub {
         if (
           this.routePtyFrame(serverId, session.connectedAt.toISOString(), raw)
         ) {
+          return;
+        }
+        const reply = telemetryReply(raw);
+        if (reply) {
+          if (!session.welcomeSent) return;
+          const connectedAt = session.connectedAt.toISOString();
+          this.telemetry.accept(JSON.stringify([serverId, connectedAt]), reply);
+          // Relay only the parsed fields.
+          if (this.backplane) {
+            const frame = encodeAgentWsFrame(
+              createAgentWsFrame(`telemetry.${reply.kind}`, reply.data),
+            );
+            void this.backplane
+              .publish({
+                origin: this.id,
+                serverId,
+                frame,
+                telemetryReply: true,
+                connectedAt,
+              })
+              .catch(() => {});
+          }
           return;
         }
         await handleAgentWsMessage(session, peer, raw);
@@ -331,6 +359,7 @@ export class NitroRealtimeHub implements RealtimeHub {
       return false;
     }
     try {
+      await this.startBackplane();
       await this.backplane.publish({
         origin: this.id,
         serverId,
@@ -423,12 +452,11 @@ export class NitroRealtimeHub implements RealtimeHub {
     }
   }
 
-  private startBackplane(): void {
-    if (!this.backplane || this.backplaneStarted) {
-      return;
+  private startBackplane(): Promise<void> | undefined {
+    if (!this.backplane || this.backplaneReady) {
+      return this.backplaneReady;
     }
-    this.backplaneStarted = true;
-    void this.backplane
+    this.backplaneReady = this.backplane
       .subscribe((message) => {
         if (message.origin === this.id) {
           return;
@@ -454,16 +482,42 @@ export class NitroRealtimeHub implements RealtimeHub {
           );
           return;
         }
-        this.sendLocal(message.serverId, message.frame);
+        if (message.telemetryReply) {
+          const reply = telemetryReply(message.frame);
+          if (reply && message.connectedAt)
+            this.telemetry.accept(
+              JSON.stringify([message.serverId, message.connectedAt]),
+              reply,
+            );
+          return;
+        }
+        this.sendLocal(message.serverId, message.frame, message.connectedAt);
       })
       .catch((error: unknown) => {
         const reason = error instanceof Error ? error.message : String(error);
         console.warn(`realtime backplane subscribe failed: ${reason}`);
       });
+    return this.backplaneReady;
   }
 
-  private sendLocal(serverId: string, frame: string): void {
-    for (const { peer } of this.connections.get(serverId) ?? []) {
+  private sendLocal(
+    serverId: string,
+    frame: string,
+    connectedAt?: string,
+  ): void {
+    for (const { peer, session } of this.connections.get(serverId) ?? []) {
+      if (connectedAt) {
+        void session
+          .then((state) => {
+            if (
+              state.welcomeSent &&
+              state.connectedAt.toISOString() === connectedAt
+            )
+              peer.send(frame);
+          })
+          .catch(() => {});
+        continue;
+      }
       try {
         peer.send(frame);
       } catch {
@@ -503,18 +557,36 @@ export class NitroRealtimeHub implements RealtimeHub {
     }
   }
 
-  private publish(serverId: string, frame: string): void {
-    this.sendLocal(serverId, frame);
-    this.startBackplane();
-    if (!this.backplane) {
-      return;
-    }
-    void this.backplane
-      .publish({ origin: this.id, serverId, frame })
-      .catch((error: unknown) => {
-        const reason = error instanceof Error ? error.message : String(error);
-        console.warn(`realtime backplane publish failed: ${reason}`);
+  private publish(serverId: string, frame: string, connectedAt?: string): void {
+    this.sendLocal(serverId, frame, connectedAt);
+    const ready = this.startBackplane();
+    const backplane = this.backplane;
+    if (!backplane) return;
+    const relay = () =>
+      backplane.publish({
+        origin: this.id,
+        serverId,
+        frame,
+        ...(connectedAt ? { connectedAt } : {}),
       });
+    const delivery = connectedAt && ready ? ready.then(relay) : relay();
+    void delivery.catch((error: unknown) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.warn(`realtime backplane publish failed: ${reason}`);
+    });
+  }
+
+  async requestTelemetry(
+    serverId: string,
+    kind: TelemetryKind,
+    connectedAt: string,
+  ) {
+    if (!this.connections.has(serverId) && !this.backplane) return null;
+    return this.telemetry.request(
+      JSON.stringify([serverId, connectedAt]),
+      kind,
+      (frame) => this.publish(serverId, frame, connectedAt),
+    );
   }
 
   async notifyConfigChanged(

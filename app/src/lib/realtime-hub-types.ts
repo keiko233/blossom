@@ -6,6 +6,8 @@ import type {
 
 import type { Server } from "@/db/proxy-schema";
 
+import type { TelemetryKind, TelemetryResult } from "./agent-telemetry";
+
 export interface RealtimeHub {
   /**
    * Completes an already-authenticated agent upgrade. Nitro returns the 426
@@ -16,6 +18,11 @@ export interface RealtimeHub {
     server: Server,
     welcome: AgentWsWelcomePayload,
   ): Promise<Response>;
+  requestTelemetry(
+    serverId: string,
+    kind: TelemetryKind,
+    connectedAt: string,
+  ): Promise<TelemetryResult | null>;
   notifyConfigChanged(
     serverId: string,
     payload: AgentWsConfigNotifyPayload,
@@ -35,6 +42,7 @@ export interface RealtimeBackplaneMessage {
   ptySessionId?: string;
   connectedAt?: string;
   agentDisconnected?: true;
+  telemetryReply?: true;
 }
 
 export interface RealtimeBackplane {

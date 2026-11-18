@@ -50,6 +50,7 @@ export const ADMIN_AUDIT_ACTIONS = [
   "node.create",
   "node.update",
   "node.delete",
+  "server.check_update",
   "server.create",
   "server.update",
   "server.delete",
