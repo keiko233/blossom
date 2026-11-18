@@ -31,6 +31,11 @@ pub mod frame_type {
     pub const CONFIG_ACK: &str = "config.ack";
     pub const UPDATE_TRIGGER: &str = "update.trigger";
     pub const UPDATE_STATUS: &str = "update.status";
+    pub const PTY_OPEN: &str = "pty.open";
+    pub const PTY_DATA: &str = "pty.data";
+    pub const PTY_RESIZE: &str = "pty.resize";
+    pub const PTY_CLOSE: &str = "pty.close";
+    pub const PTY_EXIT: &str = "pty.exit";
 }
 
 const TELEMETRY_PREFIX: &str = "telemetry.";

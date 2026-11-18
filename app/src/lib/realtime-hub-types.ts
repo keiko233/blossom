@@ -30,6 +30,11 @@ export interface RealtimeBackplaneMessage {
   origin: string;
   serverId: string;
   frame: string;
+  /** Admin PTY frames are routed to one side, not broadcast to agents. */
+  ptyTarget?: "agent" | "browser";
+  ptySessionId?: string;
+  connectedAt?: string;
+  agentDisconnected?: true;
 }
 
 export interface RealtimeBackplane {

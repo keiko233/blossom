@@ -19,6 +19,18 @@ import {
   AGENT_WS_INTERNAL_SERVER_ID,
   AGENT_WS_INTERNAL_WELCOME,
 } from "@/lib/realtime-hub-types";
+import { recordPtySessionClose } from "@/query/pty-audit";
+
+import {
+  closePtySocketsForAgent,
+  handleAgentPtyFrame,
+  handlePtyBrowserClose,
+  handlePtyBrowserMessage,
+  handlePtyConnect,
+  readPtyAttachment,
+  type PtySocketAttachment,
+  type RecordPtyClose,
+} from "./pty-session.cloudflare";
 
 interface AgentSessionAttachment {
   serverId: string;
@@ -60,6 +72,31 @@ function decodeMessage(message: string | ArrayBuffer): string {
 }
 
 export class AgentSessionDO extends DurableObject {
+  private readonly recordPtyClose: RecordPtyClose = async (
+    attachment: PtySocketAttachment,
+    reason,
+    outcome,
+  ) => {
+    await this.withDatabase((database) =>
+      recordPtySessionClose(
+        {
+          session: {
+            serverId: attachment.serverId,
+            sessionId: attachment.sessionId,
+            cols: attachment.cols,
+            rows: attachment.rows,
+            startedAt: new Date(attachment.startedAt),
+            actor: attachment.actor,
+          },
+          reason,
+          ...(outcome?.code === undefined ? {} : { code: outcome.code }),
+          ...(outcome?.signal === undefined ? {} : { signal: outcome.signal }),
+        },
+        database,
+      ),
+    );
+  };
+
   private async withDatabase<T>(
     run: (database: Database) => Promise<T>,
   ): Promise<T> {
@@ -83,6 +120,9 @@ export class AgentSessionDO extends DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     const pathname = new URL(request.url).pathname;
+    if (pathname === "/internal/pty/connect") {
+      return handlePtyConnect(this.ctx, request);
+    }
     if (pathname === "/internal/notify") {
       return this.notify(request);
     }
@@ -101,6 +141,9 @@ export class AgentSessionDO extends DurableObject {
       return new Response("Bad Request", { status: 400 });
     }
     for (const ws of this.ctx.getWebSockets()) {
+      if (readPtyAttachment(ws)) {
+        continue;
+      }
       try {
         ws.send(body.frame);
       } catch {
@@ -166,15 +209,38 @@ export class AgentSessionDO extends DurableObject {
     ws: WebSocket,
     message: string | ArrayBuffer,
   ): Promise<void> {
+    const pty = readPtyAttachment(ws);
+    if (pty) {
+      await handlePtyBrowserMessage(
+        this.ctx,
+        ws,
+        pty,
+        decodeMessage(message),
+        this.recordPtyClose,
+      );
+      return;
+    }
     const attachment = readAttachment(ws);
     if (!attachment) {
       ws.close(1008, "missing session attachment");
       return;
     }
+    const raw = decodeMessage(message);
+    if (
+      await handleAgentPtyFrame(
+        this.ctx,
+        attachment.serverId,
+        attachment.connectedAt,
+        raw,
+        this.recordPtyClose,
+      )
+    ) {
+      return;
+    }
     await this.withDatabase(async (database) => {
       const store = createAgentWsStore(database);
       const session = await this.session(attachment, store);
-      await handleAgentWsMessage(session, ws, decodeMessage(message));
+      await handleAgentWsMessage(session, ws, raw);
     });
   }
 
@@ -184,10 +250,21 @@ export class AgentSessionDO extends DurableObject {
     _reason: string,
     _wasClean: boolean,
   ): Promise<void> {
+    const pty = readPtyAttachment(ws);
+    if (pty) {
+      await handlePtyBrowserClose(this.ctx, ws, pty, this.recordPtyClose);
+      return;
+    }
     const attachment = readAttachment(ws);
     if (!attachment) {
       return;
     }
+    await closePtySocketsForAgent(
+      this.ctx,
+      attachment.serverId,
+      attachment.connectedAt,
+      this.recordPtyClose,
+    );
     await this.withDatabase(async (database) => {
       const session = await this.session(
         attachment,
@@ -198,7 +275,27 @@ export class AgentSessionDO extends DurableObject {
   }
 
   async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
+    const pty = readPtyAttachment(ws);
+    if (pty) {
+      await handlePtyBrowserClose(
+        this.ctx,
+        ws,
+        pty,
+        this.recordPtyClose,
+        "io_error",
+      );
+      return;
+    }
     const attachment = readAttachment(ws);
+    if (attachment) {
+      await closePtySocketsForAgent(
+        this.ctx,
+        attachment.serverId,
+        attachment.connectedAt,
+        this.recordPtyClose,
+        "io_error",
+      );
+    }
     const message = error instanceof Error ? error.message : String(error);
     console.warn(
       `agent durable object websocket error${attachment ? ` for ${attachment.serverId}` : ""}: ${message}`,

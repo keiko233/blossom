@@ -17,6 +17,16 @@ import {
 
 const ACTION_RE = /^[a-z]+\.[a-z]+(_[a-z]+)*$/;
 
+/**
+ * Admin actions recorded by authenticated API routes instead of server
+ * functions. The terminal session spans a WebSocket, so its open/close rows
+ * are written directly by the PTY relay.
+ */
+const ROUTE_AUDIT_ACTIONS: readonly string[] = [
+  "server.pty_open",
+  "server.pty_close",
+];
+
 describe("ADMIN_AUDIT_ACTIONS", () => {
   it("uses unique dotted snake_case names", () => {
     expect(new Set(ADMIN_AUDIT_ACTIONS).size).toBe(ADMIN_AUDIT_ACTIONS.length);
@@ -111,8 +121,21 @@ describe("every admin POST server function is audited", () => {
     );
   });
 
-  it("uses each declared action exactly once", () => {
-    expect([...seen].sort()).toEqual([...ADMIN_AUDIT_ACTIONS].sort());
+  it("uses each server-function action exactly once", () => {
+    const serverFunctionActions = ADMIN_AUDIT_ACTIONS.filter(
+      (action) => !ROUTE_AUDIT_ACTIONS.includes(action),
+    );
+    expect([...seen].sort()).toEqual([...serverFunctionActions].sort());
+  });
+
+  it("emits route-only audit actions from the PTY audit helper", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("../query/pty-audit.ts", import.meta.url)),
+      "utf8",
+    );
+    for (const action of ROUTE_AUDIT_ACTIONS) {
+      expect(source, action).toContain(`"${action}"`);
+    }
   });
 });
 

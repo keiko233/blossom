@@ -54,6 +54,8 @@ export const ADMIN_AUDIT_ACTIONS = [
   "server.update",
   "server.delete",
   "server.regenerate_token",
+  "server.pty_open",
+  "server.pty_close",
   "certificate.create",
   "certificate.import",
   "certificate.delete",

@@ -70,6 +70,7 @@ import { Route as adminAdminProxiesServersIndexRouteImport } from './routes/(adm
 import { Route as adminAdminProxiesServersServerIdRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId'
 import { Route as adminAdminProxiesServersNewRouteImport } from './routes/(admin)/admin/proxies/servers/new'
 import { Route as ApiAdminCertificatesCertificateIdExportPartRouteImport } from './routes/api/admin/certificates/$certificateId/export/$part'
+import { Route as ApiAdminServersIdPtyWsRouteImport } from './routes/api/admin/servers/$id/pty/ws'
 
 const adminRouteRoute = adminRouteRouteImport.update({
   id: '/(admin)',
@@ -407,8 +408,14 @@ const ApiAdminCertificatesCertificateIdExportPartRoute =
     path: '/api/admin/certificates/$certificateId/export/$part',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiAdminServersIdPtyWsRoute = ApiAdminServersIdPtyWsRouteImport.update({
+  id: '/api/admin/servers/$id/pty/ws',
+  path: '/api/admin/servers/$id/pty/ws',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
+  '/': typeof staticIndexRoute
   '/admin': typeof adminAdminRouteRouteWithChildren
   '/dashboard': typeof userDashboardRouteRouteWithChildren
   '/.well-known/oauth-authorization-server': typeof DotwellKnownOauthAuthorizationServerRouteWithChildren
@@ -416,7 +423,6 @@ export interface FileRoutesByFullPath {
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
-  '/': typeof staticIndexRoute
   '/admin/audit': typeof adminAdminAuditRouteRouteWithChildren
   '/admin/mcp': typeof adminAdminMcpRouteRouteWithChildren
   '/admin/plans': typeof adminAdminPlansRouteRouteWithChildren
@@ -469,14 +475,15 @@ export interface FileRoutesByFullPath {
   '/admin/proxies/rules/': typeof adminAdminProxiesRulesIndexRoute
   '/admin/proxies/servers/': typeof adminAdminProxiesServersIndexRoute
   '/api/admin/certificates/$certificateId/export/$part': typeof ApiAdminCertificatesCertificateIdExportPartRoute
+  '/api/admin/servers/$id/pty/ws': typeof ApiAdminServersIdPtyWsRoute
 }
 export interface FileRoutesByTo {
+  '/': typeof staticIndexRoute
   '/.well-known/oauth-authorization-server': typeof DotwellKnownOauthAuthorizationServerRouteWithChildren
   '/.well-known/oauth-protected-resource': typeof DotwellKnownOauthProtectedResourceRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
-  '/': typeof staticIndexRoute
   '/admin/proxies': typeof adminAdminProxiesRouteRouteWithChildren
   '/auth/forgot': typeof authAuthForgotRoute
   '/auth/login': typeof authAuthLoginRoute
@@ -518,6 +525,7 @@ export interface FileRoutesByTo {
   '/admin/proxies/rules': typeof adminAdminProxiesRulesIndexRoute
   '/admin/proxies/servers': typeof adminAdminProxiesServersIndexRoute
   '/api/admin/certificates/$certificateId/export/$part': typeof ApiAdminCertificatesCertificateIdExportPartRoute
+  '/api/admin/servers/$id/pty/ws': typeof ApiAdminServersIdPtyWsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -584,10 +592,12 @@ export interface FileRoutesById {
   '/(admin)/admin/proxies/rules/': typeof adminAdminProxiesRulesIndexRoute
   '/(admin)/admin/proxies/servers/': typeof adminAdminProxiesServersIndexRoute
   '/api/admin/certificates/$certificateId/export/$part': typeof ApiAdminCertificatesCertificateIdExportPartRoute
+  '/api/admin/servers/$id/pty/ws': typeof ApiAdminServersIdPtyWsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
+    | '/'
     | '/admin'
     | '/dashboard'
     | '/.well-known/oauth-authorization-server'
@@ -595,7 +605,6 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/api/health'
     | '/api/mcp'
-    | '/'
     | '/admin/audit'
     | '/admin/mcp'
     | '/admin/plans'
@@ -648,14 +657,15 @@ export interface FileRouteTypes {
     | '/admin/proxies/rules/'
     | '/admin/proxies/servers/'
     | '/api/admin/certificates/$certificateId/export/$part'
+    | '/api/admin/servers/$id/pty/ws'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/'
     | '/.well-known/oauth-authorization-server'
     | '/.well-known/oauth-protected-resource'
     | '/api/$'
     | '/api/health'
     | '/api/mcp'
-    | '/'
     | '/admin/proxies'
     | '/auth/forgot'
     | '/auth/login'
@@ -697,6 +707,7 @@ export interface FileRouteTypes {
     | '/admin/proxies/rules'
     | '/admin/proxies/servers'
     | '/api/admin/certificates/$certificateId/export/$part'
+    | '/api/admin/servers/$id/pty/ws'
   id:
     | '__root__'
     | '/(admin)'
@@ -762,6 +773,7 @@ export interface FileRouteTypes {
     | '/(admin)/admin/proxies/rules/'
     | '/(admin)/admin/proxies/servers/'
     | '/api/admin/certificates/$certificateId/export/$part'
+    | '/api/admin/servers/$id/pty/ws'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -779,6 +791,7 @@ export interface RootRouteChildren {
   ApiRpcSplatRoute: typeof ApiRpcSplatRoute
   ApiSubTokenRoute: typeof ApiSubTokenRoute
   ApiAdminCertificatesCertificateIdExportPartRoute: typeof ApiAdminCertificatesCertificateIdExportPartRoute
+  ApiAdminServersIdPtyWsRoute: typeof ApiAdminServersIdPtyWsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -786,21 +799,21 @@ declare module '@tanstack/react-router' {
     '/(admin)': {
       id: '/(admin)'
       path: ''
-      fullPath: ''
+      fullPath: '/'
       preLoaderRoute: typeof adminRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/(auth)': {
       id: '/(auth)'
       path: ''
-      fullPath: ''
+      fullPath: '/'
       preLoaderRoute: typeof authRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/(user)': {
       id: '/(user)'
       path: ''
-      fullPath: ''
+      fullPath: '/'
       preLoaderRoute: typeof userRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
@@ -1224,6 +1237,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminCertificatesCertificateIdExportPartRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/servers/$id/pty/ws': {
+      id: '/api/admin/servers/$id/pty/ws'
+      path: '/api/admin/servers/$id/pty/ws'
+      fullPath: '/api/admin/servers/$id/pty/ws'
+      preLoaderRoute: typeof ApiAdminServersIdPtyWsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -1556,6 +1576,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiSubTokenRoute: ApiSubTokenRoute,
   ApiAdminCertificatesCertificateIdExportPartRoute:
     ApiAdminCertificatesCertificateIdExportPartRoute,
+  ApiAdminServersIdPtyWsRoute: ApiAdminServersIdPtyWsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

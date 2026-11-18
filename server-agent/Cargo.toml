@@ -31,6 +31,7 @@ futures-util = { version = "0.3.34", default-features = false, features = ["sink
 tar = "0.4.46"
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 tokio-util = { version = "0.7.20", features = ["rt"] }
+portable-pty = "0.9.0"
 
 [build-dependencies]
 openapiv3 = "2.2"

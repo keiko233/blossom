@@ -8,6 +8,7 @@ import {
   createAgentWsFrame,
   encodeAgentWsFrame,
   parseAgentWsFrame,
+  parseAgentWsPtyMessage,
 } from "./agent-ws";
 
 const TS = "2026-11-19T00:00:00.000Z";
@@ -125,6 +126,56 @@ describe("agent WebSocket contract", () => {
     if (pty.ok) {
       expect(pty.message.kind).toBe("reserved");
     }
+  });
+
+  it("parses the PTY extension payloads and rejects bad dimensions", () => {
+    const open = parseAgentWsPtyMessage("pty.open", {
+      sessionId: "term-1",
+      cols: 120,
+      rows: 40,
+    });
+    expect(open).toEqual({
+      ok: true,
+      message: {
+        type: "pty.open",
+        payload: { sessionId: "term-1", cols: 120, rows: 40 },
+      },
+    });
+
+    expect(
+      parseAgentWsPtyMessage("pty.data", {
+        sessionId: "term-1",
+        data: "ls\r",
+      }),
+    ).toEqual({
+      ok: true,
+      message: {
+        type: "pty.data",
+        payload: { sessionId: "term-1", data: "ls\r" },
+      },
+    });
+
+    expect(
+      parseAgentWsPtyMessage("pty.exit", {
+        sessionId: "term-1",
+        reason: "idle_timeout",
+      }),
+    ).toEqual({
+      ok: true,
+      message: {
+        type: "pty.exit",
+        payload: { sessionId: "term-1", reason: "idle_timeout" },
+      },
+    });
+
+    expect(
+      parseAgentWsPtyMessage("pty.resize", {
+        sessionId: "term-1",
+        cols: 0,
+        rows: 40,
+      }),
+    ).toEqual({ ok: false, type: "pty.resize" });
+    expect(parseAgentWsPtyMessage("config.notify", {})).toBeNull();
   });
 
   it("reports malformed known payloads without throwing", () => {

@@ -237,11 +237,96 @@ export const agentWsPtyClosePayloadSchema = z.object({
   sessionId: z.string().min(1).max(128),
 });
 
+export const AGENT_WS_PTY_CAPABILITY = "pty-v1" as const;
+export const AGENT_WS_PTY_MAX_DATA_BYTES = 1024 * 1024;
+
+export const AGENT_WS_PTY_EXIT_REASONS = [
+  "closed",
+  "idle_timeout",
+  "agent_shutdown",
+  "agent_disconnected",
+  "session_limit",
+  "invalid_session",
+  "spawn_failed",
+  "output_backpressure",
+  "input_backpressure",
+  "frame_too_large",
+  "io_error",
+  "disabled",
+  "session_expired",
+  "shell_exit",
+] as const;
+
+export type AgentWsPtyExitReason = (typeof AGENT_WS_PTY_EXIT_REASONS)[number];
+
+export const agentWsPtyExitReasonSchema = z.enum(AGENT_WS_PTY_EXIT_REASONS);
+
 export const agentWsPtyExitPayloadSchema = z.object({
   sessionId: z.string().min(1).max(128),
   code: z.number().int().optional(),
   signal: z.string().max(64).optional(),
+  reason: agentWsPtyExitReasonSchema.optional(),
 });
+
+export const AGENT_WS_PTY_MESSAGE_TYPES = [
+  "pty.open",
+  "pty.data",
+  "pty.resize",
+  "pty.close",
+  "pty.exit",
+] as const;
+
+export type AgentWsPtyMessageType = (typeof AGENT_WS_PTY_MESSAGE_TYPES)[number];
+
+export type AgentWsPtyMessage =
+  | { type: "pty.open"; payload: AgentWsPtyOpenPayload }
+  | { type: "pty.data"; payload: AgentWsPtyDataPayload }
+  | { type: "pty.resize"; payload: AgentWsPtyResizePayload }
+  | { type: "pty.close"; payload: AgentWsPtyClosePayload }
+  | { type: "pty.exit"; payload: AgentWsPtyExitPayload };
+
+export type AgentWsPtyOpenPayload = z.infer<typeof agentWsPtyOpenPayloadSchema>;
+export type AgentWsPtyDataPayload = z.infer<typeof agentWsPtyDataPayloadSchema>;
+export type AgentWsPtyResizePayload = z.infer<
+  typeof agentWsPtyResizePayloadSchema
+>;
+export type AgentWsPtyClosePayload = z.infer<
+  typeof agentWsPtyClosePayloadSchema
+>;
+export type AgentWsPtyExitPayload = z.infer<typeof agentWsPtyExitPayloadSchema>;
+
+export function isAgentWsPtyMessageType(
+  type: string,
+): type is AgentWsPtyMessageType {
+  return (AGENT_WS_PTY_MESSAGE_TYPES as readonly string[]).includes(type);
+}
+
+export type AgentWsPtyParseResult =
+  | { ok: true; message: AgentWsPtyMessage }
+  | { ok: false; type: AgentWsPtyMessageType };
+
+/**
+ * Parses a PTY payload without reinterpreting the base envelope. Returns
+ * `null` for non-PTY frame types so callers can leave unknown/reserved
+ * channels alone.
+ */
+export function parseAgentWsPtyMessage(
+  type: string,
+  payload: unknown,
+): AgentWsPtyParseResult | null {
+  if (!isAgentWsPtyMessageType(type)) {
+    return null;
+  }
+  const schema = agentWsPtyPayloadSchemas[type];
+  const parsed = schema.safeParse(payload);
+  if (!parsed.success) {
+    return { ok: false, type };
+  }
+  return {
+    ok: true,
+    message: { type, payload: parsed.data } as AgentWsPtyMessage,
+  };
+}
 
 export const agentWsAcmeIssuePayloadSchema = z.object({
   jobId: z.string().min(1).max(128),
@@ -283,16 +368,20 @@ export const agentWsPayloadSchemas = {
   "update.status": agentWsUpdateStatusesSchema,
 } as const satisfies Record<AgentWsMessageType, z.ZodType>;
 
-export const agentWsReservedPayloadSchemas = {
-  "telemetry.subscribe": agentWsTelemetrySubscribePayloadSchema,
-  "telemetry.sample": agentWsTelemetrySamplePayloadSchema,
-  "telemetry.inspect": agentWsTelemetryInspectPayloadSchema,
-  "telemetry.snapshot": agentWsTelemetrySnapshotPayloadSchema,
+export const agentWsPtyPayloadSchemas = {
   "pty.open": agentWsPtyOpenPayloadSchema,
   "pty.data": agentWsPtyDataPayloadSchema,
   "pty.resize": agentWsPtyResizePayloadSchema,
   "pty.close": agentWsPtyClosePayloadSchema,
   "pty.exit": agentWsPtyExitPayloadSchema,
+} as const satisfies Record<AgentWsPtyMessageType, z.ZodType>;
+
+export const agentWsReservedPayloadSchemas = {
+  "telemetry.subscribe": agentWsTelemetrySubscribePayloadSchema,
+  "telemetry.sample": agentWsTelemetrySamplePayloadSchema,
+  "telemetry.inspect": agentWsTelemetryInspectPayloadSchema,
+  "telemetry.snapshot": agentWsTelemetrySnapshotPayloadSchema,
+  ...agentWsPtyPayloadSchemas,
   "acme.issue": agentWsAcmeIssuePayloadSchema,
   "acme.dns_present": agentWsAcmeDnsPresentPayloadSchema,
   "acme.dns_cleanup": agentWsAcmeDnsCleanupPayloadSchema,

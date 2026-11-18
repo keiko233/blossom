@@ -8,11 +8,15 @@ Verified (code):
 
 - Config endpoint: `GET <AGENT_URL>/agent/config/v3` (operation `getAgentConfigV3`). `AGENT_URL` **must include the `/api` prefix**, e.g. `https://blossom.example.com/api`, because spec paths are relative to it.
 - Other endpoints: `POST /agent/heartbeat` and `POST /agent/traffic`. All three authenticate with `Authorization: Bearer <agent token>`, resolved to exactly one server by hash.
-- The agent advertises capabilities `config-v3`, `managed-tls-v3`, `certificate-deployments-v1`, `atomic-config-rollback`, `connection-stream-traffic` in its heartbeat (`server-agent/src/main.rs`).
+- The agent advertises capabilities `config-v3`, `managed-tls-v3`, `certificate-deployments-v1`, `atomic-config-rollback`, `connection-stream-traffic` and `ws-v1` in its heartbeat (`server-agent/src/main.rs`). It adds `pty-v1` only when the interactive terminal is enabled.
 - Intervals come from the control plane per server (config poll 5–86400 s, heartbeat 5–300 s). `AGENT_INTERVAL` (default 60) is only the bootstrap value.
 - A candidate config is checked with `sing-box check` before it replaces the active one; the previous good config is kept and used for rollback and for startup.
 
 Older notes and agents may refer to `/agent/config/v2`. The control plane no longer serves it; v3 is the only config endpoint.
+
+### Interactive terminal (opt-in)
+
+The admin server page can open an interactive shell through the agent's existing outbound WebSocket. This is **off by default**: restart the agent with `AGENT_PTY_ENABLED=true` (or `--pty-enabled`) to advertise `pty-v1`. Optional bounds are `AGENT_PTY_MAX_SESSIONS` (default 2, maximum 4), `AGENT_PTY_IDLE_TIMEOUT_SECONDS` (default 900) and `AGENT_PTY_MAX_SESSION_SECONDS` (default 3600). The shell runs as the agent's OS user, with that user's filesystem and network permissions; session start and end are written to the admin audit log, but terminal input and output are never stored. No inbound agent port is opened. If the agent is not on the WebSocket transport, the terminal is unavailable.
 
 ## Install
 

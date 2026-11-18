@@ -1,6 +1,8 @@
 import {
   createAgentWsFrame,
   encodeAgentWsFrame,
+  parseAgentWsFrame,
+  parseAgentWsPtyMessage,
   type AgentWsConfigNotifyPayload,
   type AgentWsUpdateTriggerPayload,
   type AgentWsWelcomePayload,
@@ -115,9 +117,21 @@ type LocalConnection = {
   session: Promise<AgentWsSession>;
 };
 
+export type PtyRelayEvent =
+  | { type: "frame"; frame: string }
+  | { type: "agent_disconnected" };
+
+export type PtyRelayHandler = (event: PtyRelayEvent) => void;
+
+interface LocalPtyRelay {
+  connectedAt: string;
+  handler: PtyRelayHandler;
+}
+
 export class NitroRealtimeHub implements RealtimeHub {
   readonly id = crypto.randomUUID();
   private readonly connections = new Map<string, Set<LocalConnection>>();
+  private readonly ptyRelays = new Map<string, Map<string, LocalPtyRelay>>();
   private readonly backplane: RealtimeBackplane | undefined;
   private readonly store: ReturnType<typeof createAgentWsStore>;
   private backplaneStarted = false;
@@ -175,7 +189,13 @@ export class NitroRealtimeHub implements RealtimeHub {
           return;
         }
         const session = await connection.session;
-        await handleAgentWsMessage(session, peer, message.text());
+        const raw = message.text();
+        if (
+          this.routePtyFrame(serverId, session.connectedAt.toISOString(), raw)
+        ) {
+          return;
+        }
+        await handleAgentWsMessage(session, peer, raw);
       },
       close: async (peer) => {
         const connection = this.removeConnection(serverId, peer);
@@ -183,6 +203,20 @@ export class NitroRealtimeHub implements RealtimeHub {
           return;
         }
         const session = await connection.session;
+        const connectedAt = session.connectedAt.toISOString();
+        this.closePtyRelays(serverId, connectedAt);
+        if (this.backplane) {
+          void this.backplane
+            .publish({
+              origin: this.id,
+              serverId,
+              frame: "",
+              connectedAt,
+              ptyTarget: "browser",
+              agentDisconnected: true,
+            })
+            .catch(() => undefined);
+        }
         await closeAgentWsSession(session);
       },
       error: (peer, error) => {
@@ -220,6 +254,175 @@ export class NitroRealtimeHub implements RealtimeHub {
     return connection;
   }
 
+  private async findConnectionByConnectedAt(
+    serverId: string,
+    connectedAt: string,
+  ): Promise<LocalConnection | undefined> {
+    for (const connection of this.connections.get(serverId) ?? []) {
+      const session = await connection.session;
+      if (session.connectedAt.toISOString() === connectedAt) {
+        return connection;
+      }
+    }
+    return undefined;
+  }
+
+  async hasAgentConnection(
+    serverId: string,
+    connectedAt: string,
+  ): Promise<boolean> {
+    return (
+      Boolean(await this.findConnectionByConnectedAt(serverId, connectedAt)) ||
+      Boolean(this.backplane)
+    );
+  }
+
+  registerPtyRelay(
+    serverId: string,
+    connectedAt: string,
+    sessionId: string,
+    handler: PtyRelayHandler,
+  ): () => void {
+    let relays = this.ptyRelays.get(serverId);
+    if (!relays) {
+      relays = new Map();
+      this.ptyRelays.set(serverId, relays);
+    }
+    const relay = { connectedAt, handler };
+    relays.set(sessionId, relay);
+    return () => {
+      const current = this.ptyRelays.get(serverId);
+      if (current?.get(sessionId) === relay) {
+        current.delete(sessionId);
+        if (current.size === 0) {
+          this.ptyRelays.delete(serverId);
+        }
+      }
+    };
+  }
+
+  countPtyRelays(serverId: string): number {
+    return this.ptyRelays.get(serverId)?.size ?? 0;
+  }
+
+  hasPtyRelay(serverId: string, sessionId: string): boolean {
+    return Boolean(this.ptyRelays.get(serverId)?.has(sessionId));
+  }
+
+  async sendPtyFrame(
+    serverId: string,
+    connectedAt: string,
+    sessionId: string,
+    frame: string,
+  ): Promise<boolean> {
+    const connection = await this.findConnectionByConnectedAt(
+      serverId,
+      connectedAt,
+    );
+    if (connection) {
+      try {
+        connection.peer.send(frame);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    if (!this.backplane) {
+      return false;
+    }
+    try {
+      await this.backplane.publish({
+        origin: this.id,
+        serverId,
+        frame,
+        connectedAt,
+        ptyTarget: "agent",
+        ptySessionId: sessionId,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private routePtyFrame(
+    serverId: string,
+    connectedAt: string,
+    raw: string,
+  ): boolean {
+    const parsed = parseAgentWsFrame(raw);
+    if (!parsed.ok || !parsed.frame.type.startsWith("pty.")) {
+      return false;
+    }
+    const message = parseAgentWsPtyMessage(
+      parsed.frame.type,
+      parsed.frame.payload,
+    );
+    if (!message?.ok) {
+      return true;
+    }
+    const frame = encodeAgentWsFrame(
+      createAgentWsFrame(message.message.type, message.message.payload),
+    );
+    this.deliverPtyFrame(
+      serverId,
+      connectedAt,
+      message.message.payload.sessionId,
+      frame,
+    );
+    if (this.backplane) {
+      void this.backplane
+        .publish({
+          origin: this.id,
+          serverId,
+          frame,
+          connectedAt,
+          ptyTarget: "browser",
+          ptySessionId: message.message.payload.sessionId,
+        })
+        .catch(() => undefined);
+    }
+    return true;
+  }
+
+  private deliverPtyFrame(
+    serverId: string,
+    connectedAt: string,
+    sessionId: string,
+    frame: string,
+  ): void {
+    const relay = this.ptyRelays.get(serverId)?.get(sessionId);
+    if (!relay || relay.connectedAt !== connectedAt) {
+      return;
+    }
+    try {
+      relay.handler({ type: "frame", frame });
+    } catch {
+      // A broken browser relay is closed by its own hook.
+    }
+  }
+
+  private closePtyRelays(serverId: string, connectedAt: string): void {
+    const relays = this.ptyRelays.get(serverId);
+    if (!relays) {
+      return;
+    }
+    for (const [sessionId, relay] of relays) {
+      if (relay.connectedAt !== connectedAt) {
+        continue;
+      }
+      relays.delete(sessionId);
+      try {
+        relay.handler({ type: "agent_disconnected" });
+      } catch {
+        // The relay is being discarded anyway.
+      }
+    }
+    if (relays.size === 0) {
+      this.ptyRelays.delete(serverId);
+    }
+  }
+
   private startBackplane(): void {
     if (!this.backplane || this.backplaneStarted) {
       return;
@@ -228,6 +431,27 @@ export class NitroRealtimeHub implements RealtimeHub {
     void this.backplane
       .subscribe((message) => {
         if (message.origin === this.id) {
+          return;
+        }
+        if (message.agentDisconnected) {
+          this.closePtyRelays(message.serverId, message.connectedAt ?? "");
+          return;
+        }
+        if (message.ptyTarget === "browser" && message.ptySessionId) {
+          this.deliverPtyFrame(
+            message.serverId,
+            message.connectedAt ?? "",
+            message.ptySessionId,
+            message.frame,
+          );
+          return;
+        }
+        if (message.ptyTarget === "agent" && message.connectedAt) {
+          void this.sendLocalAgentFrame(
+            message.serverId,
+            message.connectedAt,
+            message.frame,
+          );
           return;
         }
         this.sendLocal(message.serverId, message.frame);
@@ -245,6 +469,37 @@ export class NitroRealtimeHub implements RealtimeHub {
       } catch {
         // A stale peer is removed by its close hook.
       }
+    }
+  }
+
+  private async sendLocalAgentFrame(
+    serverId: string,
+    connectedAt: string,
+    frame: string,
+  ): Promise<void> {
+    const connection = await this.findConnectionByConnectedAt(
+      serverId,
+      connectedAt,
+    );
+    if (!connection) {
+      if (this.backplane) {
+        void this.backplane
+          .publish({
+            origin: this.id,
+            serverId,
+            frame: "",
+            connectedAt,
+            ptyTarget: "browser",
+            agentDisconnected: true,
+          })
+          .catch(() => undefined);
+      }
+      return;
+    }
+    try {
+      connection.peer.send(frame);
+    } catch {
+      // The agent close hook clears the relay and its PTY sessions.
     }
   }
 
@@ -292,8 +547,8 @@ function defaultBackplane(): RealtimeBackplane | undefined {
   }
 }
 
-let hub: RealtimeHub | undefined;
+let hub: NitroRealtimeHub | undefined;
 
-export function getRealtimeHub(): RealtimeHub {
+export function getRealtimeHub(): NitroRealtimeHub {
   return (hub ??= new NitroRealtimeHub());
 }
