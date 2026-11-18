@@ -1,4 +1,7 @@
 import type {
+  AgentWsAcmeDnsCleanupPayload,
+  AgentWsAcmeDnsPresentPayload,
+  AgentWsAcmeResultPayload,
   AgentWsCertificateDeployment,
   AgentWsConfigAckPayload,
   AgentWsHelloPayload,
@@ -6,6 +9,11 @@ import type {
 } from "@blossom/contracts/agent-ws";
 
 import { type Database, db } from "@/db";
+import {
+  handleAcmeDnsCleanup,
+  handleAcmeDnsPresent,
+  handleAcmeResult,
+} from "@/lib/certificate-issuance";
 import {
   markAgentWsConnected,
   markAgentWsDisconnected,
@@ -32,5 +40,11 @@ export function createAgentWsStore(database: Database = db): AgentWsStore {
       serverId,
       deployments: AgentWsCertificateDeployment[],
     ) => applyAgentCertificateDeployments(serverId, deployments, database),
+    handleAcmeDnsPresent: (serverId, payload: AgentWsAcmeDnsPresentPayload) =>
+      handleAcmeDnsPresent(serverId, payload, database),
+    handleAcmeDnsCleanup: (serverId, payload: AgentWsAcmeDnsCleanupPayload) =>
+      handleAcmeDnsCleanup(serverId, payload, database),
+    handleAcmeResult: (serverId, payload: AgentWsAcmeResultPayload) =>
+      handleAcmeResult(serverId, payload, database),
   };
 }

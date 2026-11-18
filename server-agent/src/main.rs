@@ -7,6 +7,7 @@
 //! on that server is compiled as one inbound inside that single config.
 
 mod accountant;
+mod acme;
 mod certificate;
 mod client;
 mod config;
@@ -16,6 +17,7 @@ mod traffic;
 mod update;
 mod ws;
 
+use std::net::SocketAddr;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -29,6 +31,10 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
+use crate::acme::AcmeManager;
+use crate::acme::instant_backend::InstantAcmeBackend;
+use crate::acme::ports::DEFAULT_CHALLENGE_TIMEOUT;
+use crate::acme::solver_dns01::DnsAck;
 use crate::config::{AgentPolicy, CandidateConfig, ConfigManager, FetchStatus};
 use crate::process::{ProcessState, SingBoxManager, check_config, resolve_binary, singbox_version};
 use crate::traffic::TrafficReporter;
@@ -44,13 +50,14 @@ use crate::ws::ports::{AgentCommandSink as _, ChannelCommandSink, WsCommand, WsE
 
 const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const AGENT_BUILD_ID: &str = env!("AGENT_BUILD_ID");
-const AGENT_CAPABILITIES: [&str; 6] = [
+const AGENT_CAPABILITIES: [&str; 7] = [
     "config-v3",
     "managed-tls-v3",
     "certificate-deployments-v1",
     "atomic-config-rollback",
     "connection-stream-traffic",
     "ws-v1",
+    "acme-v1",
 ];
 const RUNTIME_PROBATION: Duration = Duration::from_secs(11);
 
@@ -146,6 +153,21 @@ struct Args {
         value_parser = clap::builder::BoolishValueParser::new()
     )]
     ws_enabled: bool,
+
+    /// Address the ephemeral HTTP-01 responder binds while an http-01 job is
+    /// active. It is closed again as soon as the order finishes.
+    #[arg(long, default_value = "0.0.0.0:80", env = "AGENT_ACME_HTTP_BIND")]
+    acme_http_bind: SocketAddr,
+
+    /// Delay after the control plane acknowledges a DNS TXT record and before
+    /// the agent asks the CA to validate it.
+    #[arg(
+        long,
+        default_value_t = 5,
+        env = "AGENT_ACME_DNS_SETTLE_SECONDS",
+        value_parser = clap::value_parser!(u64).range(0..=300)
+    )]
+    acme_dns_settle_seconds: u64,
 }
 
 fn parse_level(level: &str) -> tracing::Level {
@@ -275,6 +297,13 @@ async fn main() -> Result<()> {
         info!("agent websocket disabled; using HTTP config poll and heartbeat");
         WsLink::disabled()
     };
+    let acme = Arc::new(AcmeManager::new(
+        Arc::new(InstantAcmeBackend::new()),
+        args.acme_http_bind,
+        command_sink.clone(),
+        DEFAULT_CHALLENGE_TIMEOUT + Duration::from_secs(30),
+        Duration::from_secs(args.acme_dns_settle_seconds),
+    ));
 
     match sync_config(&mut config, &mut manager, &bin, &mut status).await {
         Ok(next) => policy = next,
@@ -436,6 +465,7 @@ async fn main() -> Result<()> {
                             &mut updates,
                             &mut sing_box_version,
                             &command_sink,
+                            &acme,
                         )
                         .await;
                         reconcile_reporter(config.api_endpoint(), &mut reporter, &traffic_dir);
@@ -453,6 +483,7 @@ async fn main() -> Result<()> {
     if let Some(manager) = manager {
         manager.shutdown().await;
     }
+    acme.shutdown().await;
     ws_link.shutdown().await;
     info!("agent stopped; last transport={ws_transport}");
     Ok(())
@@ -829,6 +860,7 @@ async fn handle_ws_frame(
     updates: &mut UpdateManager,
     sing_box_version: &mut Option<String>,
     sink: &Arc<ChannelCommandSink>,
+    acme: &Arc<AcmeManager>,
 ) {
     match message {
         AgentMessage::ConfigNotify(notify) => {
@@ -921,6 +953,31 @@ async fn handle_ws_frame(
         | AgentMessage::Pong(_)
         | AgentMessage::ConfigAck(_)
         | AgentMessage::UpdateStatus(_) => {}
+        AgentMessage::AcmeIssue(issue) => {
+            info!(
+                job_id = %issue.job_id,
+                certificate_id = %issue.certificate_id,
+                generation = issue.generation,
+                challenge = %issue.challenge_type,
+                "ACME issuance job received"
+            );
+            if let Err(error) = acme.handle_issue(issue).await {
+                warn!(
+                    phase = error.phase.as_str(),
+                    "ACME job rejected: {}", error.message
+                );
+            }
+        }
+        AgentMessage::AcmeDnsAck(ack) => {
+            acme.handle_dns_ack(DnsAck {
+                job_id: ack.job_id,
+                fqdn: ack.fqdn,
+                txt_value: ack.txt_value,
+                accepted: ack.accepted,
+                error: ack.error,
+            })
+            .await;
+        }
         AgentMessage::Telemetry(frame) | AgentMessage::Pty(frame) | AgentMessage::Acme(frame) => {
             tracing::debug!(frame_type = %frame.frame_type, "ignoring reserved websocket channel");
         }
@@ -1406,6 +1463,7 @@ mod tests {
     #[test]
     fn advertises_the_websocket_capability() {
         assert!(AGENT_CAPABILITIES.contains(&"ws-v1"));
+        assert!(AGENT_CAPABILITIES.contains(&"acme-v1"));
     }
 
     #[test]

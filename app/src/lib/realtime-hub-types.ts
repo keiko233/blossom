@@ -1,4 +1,6 @@
 import type {
+  AgentWsAcmeDnsAckPayload,
+  AgentWsAcmeIssuePayload,
   AgentWsConfigNotifyPayload,
   AgentWsUpdateTriggerPayload,
   AgentWsWelcomePayload,
@@ -23,6 +25,14 @@ export interface RealtimeHub {
   notifyUpdateTrigger(
     serverId: string,
     payload: AgentWsUpdateTriggerPayload,
+  ): Promise<void>;
+  notifyAcmeIssue(
+    serverId: string,
+    payload: AgentWsAcmeIssuePayload,
+  ): Promise<void>;
+  notifyAcmeDnsAck(
+    serverId: string,
+    payload: AgentWsAcmeDnsAckPayload,
   ): Promise<void>;
 }
 

@@ -47,6 +47,8 @@ const defaultDependencies: AgentWsRouteDependencies = {
       getRealtimeHub().notifyConfigChanged(...args),
     notifyUpdateTrigger: (...args) =>
       getRealtimeHub().notifyUpdateTrigger(...args),
+    notifyAcmeIssue: (...args) => getRealtimeHub().notifyAcmeIssue(...args),
+    notifyAcmeDnsAck: (...args) => getRealtimeHub().notifyAcmeDnsAck(...args),
   },
 };
 

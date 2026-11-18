@@ -160,10 +160,19 @@ export type NewServer = typeof server.$inferInsert;
 
 export const CERTIFICATE_KINDS = ["acme", "self_signed", "imported"] as const;
 export const CERTIFICATE_DNS_MODES = ["cloudflare", "manual"] as const;
+export const CERTIFICATE_CHALLENGE_TYPES = ["dns-01", "http-01"] as const;
+export const CERTIFICATE_ISSUANCE_MODES = [
+  "agent_delegated",
+  "legacy_control_plane",
+] as const;
 export const ACME_PROVIDERS = ["letsencrypt", "zerossl"] as const;
 
 export type CertificateKind = (typeof CERTIFICATE_KINDS)[number];
 export type CertificateDnsMode = (typeof CERTIFICATE_DNS_MODES)[number];
+export type CertificateChallengeType =
+  (typeof CERTIFICATE_CHALLENGE_TYPES)[number];
+export type CertificateIssuanceMode =
+  (typeof CERTIFICATE_ISSUANCE_MODES)[number];
 export type AcmeProvider = (typeof ACME_PROVIDERS)[number];
 export type CertificateInstanceState =
   | "pending"
@@ -189,6 +198,27 @@ export const managedCertificate = pgTable(
       .default("letsencrypt")
       .notNull(),
     acmeStaging: boolean("acme_staging").default(false).notNull(),
+    /**
+     * Legacy rows keep their active material and bindings while the new
+     * issuer is selected lazily on the next renewal. Once a delegated job is
+     * created the row moves to `agent_delegated`; no CA call is made here.
+     */
+    issuanceMode: text("issuance_mode")
+      .$type<CertificateIssuanceMode>()
+      .default("legacy_control_plane")
+      .notNull(),
+    issuerServerId: text("issuer_server_id").references(() => server.id, {
+      onDelete: "set null",
+    }),
+    /**
+     * Legacy `dnsMode` remains for display and migration compatibility. New
+     * issuance reads `challengeType`; `dns-01` without Cloudflare automation
+     * is completed by an administrator through the same TXT records.
+     */
+    challengeType: text("challenge_type")
+      .$type<CertificateChallengeType>()
+      .default("dns-01")
+      .notNull(),
     dnsMode: text("dns_mode").$type<CertificateDnsMode>(),
     selfSignedValidityDays: integer("self_signed_validity_days")
       .default(365)
@@ -245,6 +275,84 @@ export const managedCertificateInsertSchema = createInsertSchema(
 );
 
 export type ManagedCertificate = typeof managedCertificate.$inferSelect;
+
+export const CERTIFICATE_ISSUANCE_JOB_STATES = [
+  "dispatched",
+  "awaiting_dns",
+  "finalizing",
+  "completed",
+  "failed",
+  "expired",
+] as const;
+
+export type CertificateIssuanceJobState =
+  (typeof CERTIFICATE_ISSUANCE_JOB_STATES)[number];
+
+export interface CertificateDnsBrokerRecord {
+  fqdn: string;
+  value: string;
+  providerRecordId: string | null;
+}
+
+/**
+ * One fenced attempt to issue one certificate generation through one
+ * designated agent. The job id is the result fence: a late result from an
+ * older job, a different server, or a stale generation is rejected even if
+ * the server token is otherwise valid. Historical rows stay for audit, while
+ * challenge records are deleted after cleanup/expiry.
+ */
+export const certificateIssuanceJob = pgTable(
+  "certificate_issuance_job",
+  {
+    id: text("id").primaryKey(),
+    certificateId: text("certificate_id")
+      .notNull()
+      .references(() => managedCertificate.id, { onDelete: "cascade" }),
+    generation: integer("generation").notNull(),
+    issuerServerId: text("issuer_server_id")
+      .notNull()
+      .references(() => server.id, { onDelete: "cascade" }),
+    challengeType: text("challenge_type")
+      .$type<CertificateChallengeType>()
+      .notNull(),
+    acmeProvider: text("acme_provider").$type<AcmeProvider>().notNull(),
+    acmeStaging: boolean("acme_staging").default(false).notNull(),
+    domains: jsonb("domains").$type<string[]>().notNull(),
+    state: text("state")
+      .$type<CertificateIssuanceJobState>()
+      .default("dispatched")
+      .notNull(),
+    dnsRecords: jsonb("dns_records")
+      .$type<CertificateDnsBrokerRecord[]>()
+      .default([])
+      .notNull(),
+    challengeApprovedAt: timestamp("challenge_approved_at"),
+    challengeExpiresAt: timestamp("challenge_expires_at").notNull(),
+    dispatchCount: integer("dispatch_count").default(0).notNull(),
+    lastDispatchedAt: timestamp("last_dispatched_at"),
+    lastErrorPhase: text("last_error_phase"),
+    lastError: text("last_error"),
+    completedAt: timestamp("completed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("certificate_issuance_job_certificate_idx").on(
+      table.certificateId,
+      table.createdAt,
+    ),
+    index("certificate_issuance_job_issuer_idx").on(
+      table.issuerServerId,
+      table.state,
+    ),
+    index("certificate_issuance_job_state_idx").on(table.state),
+  ],
+);
+
+export type CertificateIssuanceJob = typeof certificateIssuanceJob.$inferSelect;
 
 /**
  * A proxy node is one sing-box inbound on a server. Node-level metadata lives

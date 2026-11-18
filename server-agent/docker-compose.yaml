@@ -35,6 +35,9 @@ services:
       # AGENT_GITHUB_TOKEN: ${AGENT_GITHUB_TOKEN:-}
       # Address family for the entrypoint's GitHub requests: prefer | only | off.
       # AGENT_GITHUB_IPV6: ${AGENT_GITHUB_IPV6:-prefer}
+      # Ephemeral ACME HTTP-01 responder (only open while an http-01 job runs).
+      # AGENT_ACME_HTTP_BIND: ${AGENT_ACME_HTTP_BIND:-0.0.0.0:80}
+      # AGENT_ACME_DNS_SETTLE_SECONDS: ${AGENT_ACME_DNS_SETTLE_SECONDS:-5}
 
     volumes:
       # Binaries, last-known-good config, certificates, download cache.

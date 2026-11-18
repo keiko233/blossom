@@ -80,6 +80,14 @@ server-agent/scripts/test-managed-tls-docker.sh blossom/server-agent:ops-validat
 
 `Dockerfile.test` is test-only and seeds the agent plus a pinned official sing-box; the production image is thin. The script starts a mock control plane on port 18765 (`MOCK_PORT` overrides it) and cleans up on exit.
 
+### Agent ACME without a production CA or DNS
+
+PR 6's ACME path is covered offline by unit tests, not by a live CA:
+
+- In `server-agent/`, `cargo test --locked` exercises the bounded order state machine, ephemeral HTTP-01 responder, exact TXT acknowledgement fence, result replay, and redacted secrets with fake ports. No test contacts a production CA or DNS provider.
+- In the app, `pnpm --filter @blossom/app exec vitest run src/lib/certificate-acme.test.ts src/lib/dns-providers/cloudflare.test.ts src/lib/self-signed-certificate.test.ts src/lib/certificate-material.test.ts` covers issuer/generation/expiry fencing, authorized TXT names, the Cloudflare adapter with a mocked `fetch`, and native certificate parsing/self-signed generation.
+- Do not point a local test at Let's Encrypt or ZeroSSL. The app has no CA-directory override, and the agent's provider allowlist only contains the production/staging URLs; a fake ACME server would require adding a test-only transport port first.
+
 ### Agent shutdown timing
 
 To resolve the SIGTERM question in [Server agent](server-agent.md#upgrade-and-rollback), run the image against the mock control plane (or a disposable local app), then:

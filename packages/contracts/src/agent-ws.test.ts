@@ -127,6 +127,118 @@ describe("agent WebSocket contract", () => {
     }
   });
 
+  it("decodes bounded ACME issue and broker frames as typed messages", () => {
+    const issue = parseAgentWsFrame(
+      encodeAgentWsFrame(
+        createAgentWsFrame("acme.issue", {
+          jobId: "job-1",
+          certificateId: "cert-1",
+          generation: 2,
+          domains: ["example.com", "*.example.com"],
+          acmeProvider: "letsencrypt",
+          acmeStaging: true,
+          challengeType: "dns-01",
+        }),
+      ),
+    );
+    expect(issue.ok).toBe(true);
+    if (issue.ok) {
+      expect(issue.message.kind).toBe("acme.issue");
+      expect(issue.message.payload).toMatchObject({
+        jobId: "job-1",
+        generation: 2,
+        challengeType: "dns-01",
+      });
+    }
+
+    const present = parseAgentWsFrame(
+      JSON.stringify({
+        v: 1,
+        type: "acme.dns_present",
+        payload: {
+          jobId: "job-1",
+          fqdn: "_acme-challenge.example.com",
+          txtValue: "challenge-digest",
+        },
+      }),
+    );
+    expect(present.ok).toBe(true);
+    if (present.ok) {
+      expect(present.message.kind).toBe("acme.dns_present");
+    }
+  });
+
+  it("requires an ACME result to be either material or an error", () => {
+    const missing = parseAgentWsFrame(
+      JSON.stringify({
+        v: 1,
+        type: "acme.result",
+        payload: { jobId: "job-1" },
+      }),
+    );
+    expect(missing).toEqual({
+      ok: false,
+      code: "invalid-payload",
+      type: "acme.result",
+    });
+
+    const failed = parseAgentWsFrame(
+      JSON.stringify({
+        v: 1,
+        type: "acme.result",
+        payload: {
+          jobId: "job-1",
+          error: "authorization failed",
+          errorPhase: "validation",
+        },
+      }),
+    );
+    expect(failed.ok).toBe(true);
+  });
+
+  it("rejects unbounded ACME jobs and challenge values", () => {
+    const tooManyDomains = parseAgentWsFrame(
+      JSON.stringify({
+        v: 1,
+        type: "acme.issue",
+        payload: {
+          jobId: "job-1",
+          certificateId: "cert-1",
+          generation: 1,
+          domains: Array.from(
+            { length: 101 },
+            (_, index) => `d${index}.example.com`,
+          ),
+          acmeProvider: "letsencrypt",
+          challengeType: "dns-01",
+        },
+      }),
+    );
+    expect(tooManyDomains).toEqual({
+      ok: false,
+      code: "invalid-payload",
+      type: "acme.issue",
+    });
+
+    const oversizedValue = parseAgentWsFrame(
+      JSON.stringify({
+        v: 1,
+        type: "acme.dns_ack",
+        payload: {
+          jobId: "job-1",
+          fqdn: "_acme-challenge.example.com",
+          txtValue: "x".repeat(513),
+          accepted: true,
+        },
+      }),
+    );
+    expect(oversizedValue).toEqual({
+      ok: false,
+      code: "invalid-payload",
+      type: "acme.dns_ack",
+    });
+  });
+
   it("reports malformed known payloads without throwing", () => {
     expect(
       parseAgentWsFrame(JSON.stringify({ v: 1, type: "welcome", payload: {} })),

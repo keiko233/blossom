@@ -2,6 +2,9 @@ import {
   createAgentWsFrame,
   encodeAgentWsFrame,
   parseAgentWsFrame,
+  type AgentWsAcmeDnsCleanupPayload,
+  type AgentWsAcmeDnsPresentPayload,
+  type AgentWsAcmeResultPayload,
   type AgentWsCertificateDeployment,
   type AgentWsConfigAckPayload,
   type AgentWsHelloPayload,
@@ -32,6 +35,18 @@ export interface AgentWsStore {
   applyCertificateDeployments(
     serverId: string,
     deployments: AgentWsCertificateDeployment[],
+  ): Promise<void>;
+  handleAcmeDnsPresent(
+    serverId: string,
+    payload: AgentWsAcmeDnsPresentPayload,
+  ): Promise<void>;
+  handleAcmeDnsCleanup(
+    serverId: string,
+    payload: AgentWsAcmeDnsCleanupPayload,
+  ): Promise<void>;
+  handleAcmeResult(
+    serverId: string,
+    payload: AgentWsAcmeResultPayload,
   ): Promise<void>;
 }
 
@@ -166,6 +181,33 @@ export async function handleAgentWsMessage(
         logFailure("update status", error);
       }
       return;
+    case "acme.dns_present":
+      try {
+        await session.store.handleAcmeDnsPresent(
+          session.serverId,
+          message.payload,
+        );
+      } catch (error) {
+        logFailure("acme dns present", error);
+      }
+      return;
+    case "acme.dns_cleanup":
+      try {
+        await session.store.handleAcmeDnsCleanup(
+          session.serverId,
+          message.payload,
+        );
+      } catch (error) {
+        logFailure("acme dns cleanup", error);
+      }
+      return;
+    case "acme.result":
+      try {
+        await session.store.handleAcmeResult(session.serverId, message.payload);
+      } catch (error) {
+        logFailure("acme result", error);
+      }
+      return;
     case "ping": {
       const options = frame.id ? { id: frame.id } : {};
       const pong = createAgentWsFrame("pong", message.payload, options);
@@ -176,6 +218,8 @@ export async function handleAgentWsMessage(
     case "welcome":
     case "config.notify":
     case "update.trigger":
+    case "acme.issue":
+    case "acme.dns_ack":
     case "reserved":
     case "unknown":
       return;

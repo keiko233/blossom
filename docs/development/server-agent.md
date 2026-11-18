@@ -15,6 +15,11 @@ Statements are **Established** unless marked **Recommended**.
 | `src/ws/ports.rs`  | Narrow `WsTransport`/`WsConnection`/`AgentCommandSink` traits, the bounded outbound queue, and the jittered backoff/fallback policy.                            |
 | `src/ws/adapters.rs` | `tokio-tungstenite` transport: `/api/agent/ws` URL derivation, sensitive bearer header, `rustls` (`ring`) TLS.                                                |
 | `src/ws/mod.rs`    | Reconnect loop: `hello` on every connect, keepalive ping/pong, proactive reconnect, and HTTP-fallback signalling.                                               |
+| `src/acme/mod.rs`  | Bounded ACME job manager: typed issue/ack dispatch, per-job deadline, duplicate-result replay, and challenge solver wiring.                                      |
+| `src/acme/ports.rs` | Consumer-owned ACME/DNS/challenge ports, redacting secret wrappers, typed error phases, and the order state machine.                                             |
+| `src/acme/instant_backend.rs` | `instant-acme` adapter for Let's Encrypt/ZeroSSL, EAB decoding, order/finalize/certificate flow, and cleanup on every exit path.                           |
+| `src/acme/solver_http01.rs` | Ephemeral bounded HTTP-01 responder that serves only exact registered challenge tokens.                                                                   |
+| `src/acme/solver_dns01.rs` | DNS-01 relay over the agent WebSocket with exact TXT-value acknowledgement matching and cleanup tracking.                                                |
 | `src/certificate.rs` | Validated, generation-addressed certificate store under `<state_dir>/certificates/<id>/generation-<n>/`.                                                      |
 | `src/process.rs`   | Supervises the sing-box child (`processkit`): log forwarding, restart with backoff, graceful replacement, `sing-box check` preflight.                            |
 | `src/stats.rs`     | Hand-written tonic/prost client for sing-box's built-in `api` service (`StartedService.SubscribeConnections`; no `.proto` files, no `tonic-build`).              |
@@ -31,20 +36,40 @@ Statements are **Established** unless marked **Recommended**.
 - The agent's build-time contract with the app is the OpenAPI document `openapi/spec.json`; at runtime it talks to the app over that API. `build.rs` reads it, rewrites OAS 3.1 nullable `anyOf: [T, {type: "null"}]` into OAS 3.0 `nullable: true` in memory, and runs progenitor to produce `OUT_DIR/codegen.rs`, included by `src/client.rs`. The generated code is never committed. A missing spec fails the build with a message pointing at `pnpm agent:spec`.
 - Method names come from the spec's `operationId`s (`get_agent_config_v3`, `agent_heartbeat`, `report_agent_traffic`). Renaming an `operationId` in the app breaks the agent build — that is the intended signal.
 - `--url`/`AGENT_URL` must include the `/api` prefix; spec paths are relative to it.
-- The agent advertises capabilities in its heartbeat (`AGENT_CAPABILITIES` in `main.rs`: `config-v3`, `managed-tls-v3`, `certificate-deployments-v1`, `atomic-config-rollback`, `connection-stream-traffic`, `ws-v1`). Add a capability when the agent gains behaviour the control plane may want to depend on.
+- The agent advertises capabilities in its heartbeat (`AGENT_CAPABILITIES` in `main.rs`: `config-v3`, `managed-tls-v3`, `certificate-deployments-v1`, `atomic-config-rollback`, `connection-stream-traffic`, `ws-v1`, `acme-v1`). Add a capability when the agent gains behaviour the control plane may want to depend on.
 - `desiredRevision` is opaque to the agent: equality and content comparison only. The control plane parses its own sequence prefix back out of the reported `appliedRevision` for the [publish gate](architecture.md#publish-gate).
 - The poll and heartbeat intervals come from the control plane per server; `AGENT_INTERVAL` is only the bootstrap value.
 - The same polled `agent` object may carry `desiredAgentVersion` and `desiredSingBoxVersion` (`latest` or an exact version). The heartbeat reports the per-binary `updates` state back. The WebSocket channel feeds the same `AgentPolicy` directives without changing the reconciler.
 
 ### WebSocket push channel
 
-The agent opens one outbound WebSocket to `<AGENT_URL>/agent/ws` (`https` -> `wss`, `http` -> `ws`) with the same per-server bearer token on the upgrade request. `--ws-enabled` / `AGENT_WS_ENABLED` (default `true`) turns it off; the token is never logged. The wire protocol is the frozen v1 JSON envelope `{ v, id, type, ts, payload }` decoded in `src/ws/codec.rs`. Unknown frame types and the reserved `telemetry.*` / `pty.*` / `acme.*` channels decode without error so a newer control plane never tears down an older agent.
+The agent opens one outbound WebSocket to `<AGENT_URL>/agent/ws` (`https` -> `wss`, `http` -> `ws`) with the same per-server bearer token on the upgrade request. `--ws-enabled` / `AGENT_WS_ENABLED` (default `true`) turns it off; the token is never logged. The wire protocol is the frozen v1 JSON envelope `{ v, id, type, ts, payload }` decoded in `src/ws/codec.rs`. Unknown frame types and the still-reserved `telemetry.*` / `pty.*` channels decode without error so a newer control plane never tears down an older agent.
 
 - `hello` is sent on every connect and reconnect with the current version, build id, capabilities, applied revision, certificate deployments and update state; the control plane answers with `welcome`, whose intervals replace the polled `AgentPolicy` cadence (clamped identically).
 - `config.notify` re-fetches the full v3 document and runs the ordinary apply path, so `sing-box check`, `RUNTIME_PROBATION`, last-known-good rollback and certificate handling are unchanged. The agent then sends `config.ack` with the committed revision (or the failure) and its deployments.
 - `update.trigger` runs the ordinary update reconciler and streams `update.status` transitions through the status observer. SHA-256 verification and `server-agent.prev` / `sing-box.prev` rollback are untouched.
 - Keepalive pings are answered with `pong`; `welcome.reconnectBeforeSeconds` arms a proactive reconnect for serverless targets that cap connection lifetime.
 - Reconnect uses 1s -> 2s -> 5s -> 15s -> 30s backoff with jitter. A rejected upgrade (400/403/404/426/501) or a failure streak announces HTTP fallback, and the poll/heartbeat loops plus `TrafficReporter` keep running throughout.
+
+### Agent-executed ACME
+
+The agent advertises `acme-v1`. A job is bounded to 100 unique lowercase DNS
+names, one current job per id, at most two running jobs, 15 minutes of execution,
+and a fixed provider allowlist (Let's Encrypt production/staging or ZeroSSL
+with per-job EAB). It never accepts an arbitrary CA directory URL.
+
+- `http-01` binds a temporary listener (`--acme-http-bind` /
+  `AGENT_ACME_HTTP_BIND`, default `0.0.0.0:80`) and serves only the exact
+  registered `/.well-known/acme-challenge/<token>` paths. The listener and
+  challenge map are dropped when the job ends.
+- `dns-01` sends `acme.dns_present` with the exact TXT name/value and waits for
+  `acme.dns_ack` for that same value before marking the challenge ready. The
+  control plane owns DNS credentials. After validation (or failure) the agent
+  sends `acme.dns_cleanup`.
+- `acme.result` contains either the fullchain and private-key PEMs or a typed
+  error phase. Private keys and EAB HMAC values use redacting/zeroizing wrappers
+  and never appear in logs. A duplicate job id replays the cached result until
+  the bounded in-memory expiry; a different job id is a separate order.
 
 ## Safety invariants
 
@@ -56,6 +81,7 @@ These are the behaviours the code and its comments establish. Preserve them when
 - **Report honestly.** `installed` is reported once material is staged and validated; `inUse` only after the candidate has been committed.
 - **Self-heal.** An equal `desiredRevision` is skipped only while the active config still parses and every referenced generation still validates.
 - **Secrets stay out of logs.** The token header is marked sensitive; keep tokens, keys and full config bodies out of `tracing` output.
+- **ACME secrets stay bounded.** The agent accepts only the built-in ACME providers, validates every job/domain/challenge value, never logs or persists the generated private key, and returns it only over the authenticated WebSocket for control-plane encryption.
 - **Do not trust the base config for traffic collection.** The agent strips `experimental.v2ray_api` and any pre-existing `api` service, then injects its own `api` service bound to `127.0.0.1` on a random free port with a random per-run secret. The injected endpoint lives inside the written configs, so a restart of the same agent run stays consistent, and the secret never leaves the process.
 
 ## Traffic delivery

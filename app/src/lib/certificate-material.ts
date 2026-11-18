@@ -1,15 +1,16 @@
 import { isValidCertificateDomain } from "@blossom/domain/certificate-domain";
-import type {
-  SubjectAlternativeNameExtension,
-  X509Certificate,
-} from "@peculiar/x509";
 import {
   createHash,
   createPrivateKey,
   createPublicKey,
   type KeyObject,
-  webcrypto,
 } from "node:crypto";
+
+import {
+  type DerCertificateInfo,
+  parseDerCertificate,
+  verifyDerCertificateChain,
+} from "./certificate-der";
 
 export interface ParsedCertificateMaterial {
   certificatePem: string;
@@ -66,14 +67,11 @@ function parsePemBlocks(pem: string): PemBlock[] {
   return blocks;
 }
 
-function chainPem(certs: X509Certificate[]): string {
-  return certs.map((cert) => cert.toString("pem")).join("");
+function chainPem(certs: DerCertificateInfo[]): string {
+  return certs.map((cert) => toPem(cert.raw)).join("");
 }
 
-function parseChain(
-  chainPemValue: string,
-  Certificate: typeof X509Certificate,
-): X509Certificate[] {
+function parseChain(chainPemValue: string): DerCertificateInfo[] {
   if (Buffer.byteLength(chainPemValue, "utf8") > MAX_CHAIN_BYTES) {
     throw new Error("Certificate chain exceeds 1 MiB limit");
   }
@@ -82,7 +80,7 @@ function parseChain(
     .filter((block) => block.label === "CERTIFICATE")
     .map((block) => {
       try {
-        return new Certificate(Buffer.from(block.body, "base64"));
+        return parseDerCertificate(Buffer.from(block.body, "base64"));
       } catch {
         throw new Error("Malformed certificate PEM block");
       }
@@ -137,31 +135,23 @@ function parsePrivateKey(privateKeyPemValue: string): {
   return { keyObject, normalizedPem };
 }
 
-function extractDnsNames(
-  cert: X509Certificate,
-  SanExtension: typeof SubjectAlternativeNameExtension,
-): string[] {
+function extractDnsNames(cert: DerCertificateInfo): string[] {
   const names = new Set<string>();
-  const sanExtension = cert.getExtension(SanExtension);
-  if (sanExtension) {
-    for (const entry of sanExtension.names.items) {
-      if (entry.type === "dns") {
-        const value = entry.value.toLowerCase();
-        if (!isValidCertificateDomain(value)) {
-          throw new Error(`Leaf certificate has an invalid DNS SAN: ${value}`);
-        }
-        names.add(value);
-      }
+  for (const name of cert.dnsNames) {
+    const value = name.toLowerCase();
+    if (!isValidCertificateDomain(value)) {
+      throw new Error(`Leaf certificate has an invalid DNS SAN: ${value}`);
     }
+    names.add(value);
   }
   return [...names];
 }
 
 function leafMatchesPrivateKey(
-  leaf: X509Certificate,
+  leaf: DerCertificateInfo,
   keyObject: KeyObject,
 ): boolean {
-  const publicKeySpki = leaf.publicKey.rawData;
+  const publicKeySpki = leaf.publicKeySpki;
   const derivedPublicKey = createPublicKey(keyObject).export({
     type: "spki",
     format: "der",
@@ -169,28 +159,8 @@ function leafMatchesPrivateKey(
   return Buffer.from(publicKeySpki).equals(Buffer.from(derivedPublicKey));
 }
 
-async function verifyChainOrder(certs: X509Certificate[]): Promise<void> {
-  for (let i = 0; i < certs.length - 1; i++) {
-    const subject = certs[i]!;
-    const issuer = certs[i + 1]!;
-    if (subject.issuer !== issuer.subject) {
-      throw new Error(
-        `Chain order broken at position ${i}: subject issuer does not match next certificate subject`,
-      );
-    }
-    let verified: boolean;
-    try {
-      verified = await subject.verify(
-        { publicKey: issuer.publicKey },
-        webcrypto as Crypto,
-      );
-    } catch {
-      throw new Error(`Chain signature verification failed at position ${i}`);
-    }
-    if (!verified) {
-      throw new Error(`Chain signature verification failed at position ${i}`);
-    }
-  }
+async function verifyChainOrder(certs: DerCertificateInfo[]): Promise<void> {
+  await verifyDerCertificateChain(certs);
 }
 
 export type ImportedValidity = "current" | "future" | "past";
@@ -216,18 +186,13 @@ export async function parseCertificateMaterial(
   chainPemValue: string,
   privateKeyPemValue: string,
 ): Promise<ParsedCertificateMaterial> {
-  // Keep x509 lazy for the same reason as the issuer: Cloudflare's production
-  // bundle must finish installing reflect-metadata before tsyringe initializes.
-  await import("reflect-metadata");
-  const { SubjectAlternativeNameExtension, X509Certificate } =
-    await import("@peculiar/x509");
-  const certs = parseChain(chainPemValue, X509Certificate);
+  const certs = parseChain(chainPemValue);
   const { keyObject, normalizedPem } = parsePrivateKey(privateKeyPemValue);
 
   await verifyChainOrder(certs);
 
   const leaf = certs[0]!;
-  const domains = extractDnsNames(leaf, SubjectAlternativeNameExtension);
+  const domains = extractDnsNames(leaf);
   if (domains.length === 0) {
     throw new Error("Leaf certificate has no DNS subject alternative names");
   }
@@ -237,9 +202,7 @@ export async function parseCertificateMaterial(
   }
 
   const normalizedChain = chainPem(certs);
-  const fingerprintSha256 = createHash("sha256")
-    .update(Buffer.from(leaf.rawData))
-    .digest("hex");
+  const fingerprintSha256 = createHash("sha256").update(leaf.raw).digest("hex");
 
   return {
     certificatePem: normalizedChain,
@@ -249,4 +212,13 @@ export async function parseCertificateMaterial(
     notAfter: leaf.notAfter,
     fingerprintSha256,
   };
+}
+
+function toPem(der: Buffer): string {
+  const body =
+    der
+      .toString("base64")
+      .match(/.{1,64}/g)
+      ?.join("\n") ?? "";
+  return `-----BEGIN CERTIFICATE-----\n${body}\n-----END CERTIFICATE-----\n`;
 }

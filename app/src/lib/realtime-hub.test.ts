@@ -35,6 +35,9 @@ function fakeStore(): AgentWsStore {
     recordConfigAck: vi.fn(async () => undefined),
     recordUpdateStatus: vi.fn(async () => undefined),
     applyCertificateDeployments: vi.fn(async () => undefined),
+    handleAcmeDnsPresent: vi.fn(async () => undefined),
+    handleAcmeDnsCleanup: vi.fn(async () => undefined),
+    handleAcmeResult: vi.fn(async () => undefined),
   };
 }
 

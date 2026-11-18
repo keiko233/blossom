@@ -41,6 +41,8 @@ function makeHub() {
     ),
     notifyConfigChanged: vi.fn(async () => undefined),
     notifyUpdateTrigger: vi.fn(async () => undefined),
+    notifyAcmeIssue: vi.fn(async () => undefined),
+    notifyAcmeDnsAck: vi.fn(async () => undefined),
   } satisfies RealtimeHub;
 }
 

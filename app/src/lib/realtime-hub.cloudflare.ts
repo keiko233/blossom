@@ -1,6 +1,8 @@
 import {
   createAgentWsFrame,
   encodeAgentWsFrame,
+  type AgentWsAcmeDnsAckPayload,
+  type AgentWsAcmeIssuePayload,
   type AgentWsConfigNotifyPayload,
   type AgentWsUpdateTriggerPayload,
   type AgentWsWelcomePayload,
@@ -87,6 +89,26 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     await this.sendFrame(
       serverId,
       encodeAgentWsFrame(createAgentWsFrame("update.trigger", payload)),
+    );
+  }
+
+  async notifyAcmeIssue(
+    serverId: string,
+    payload: AgentWsAcmeIssuePayload,
+  ): Promise<void> {
+    await this.sendFrame(
+      serverId,
+      encodeAgentWsFrame(createAgentWsFrame("acme.issue", payload)),
+    );
+  }
+
+  async notifyAcmeDnsAck(
+    serverId: string,
+    payload: AgentWsAcmeDnsAckPayload,
+  ): Promise<void> {
+    await this.sendFrame(
+      serverId,
+      encodeAgentWsFrame(createAgentWsFrame("acme.dns_ack", payload)),
     );
   }
 
