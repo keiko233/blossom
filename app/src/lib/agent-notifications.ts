@@ -1,4 +1,6 @@
 import type {
+  AgentWsAcmeDnsAckPayload,
+  AgentWsAcmeIssuePayload,
   AgentWsConfigNotifyPayload,
   AgentWsUpdateTriggerPayload,
 } from "@blossom/contracts/agent-ws";
@@ -91,5 +93,31 @@ export async function notifyAgentUpdateTrigger(
     await targetHub.notifyUpdateTrigger(serverId, payload);
   } catch (error) {
     logFailure("update.trigger", error);
+  }
+}
+
+export async function notifyAgentAcmeIssue(
+  serverId: string,
+  payload: AgentWsAcmeIssuePayload,
+  hub?: RealtimeHub,
+): Promise<void> {
+  try {
+    const targetHub =
+      hub ?? (await import("@/lib/realtime-hub")).getRealtimeHub();
+    await targetHub.notifyAcmeIssue(serverId, payload);
+  } catch (error) {
+    logFailure("acme.issue", error);
+  }
+}
+
+export async function notifyAgentAcmeDnsAck(
+  serverId: string,
+  payload: AgentWsAcmeDnsAckPayload,
+): Promise<void> {
+  try {
+    const targetHub = (await import("@/lib/realtime-hub")).getRealtimeHub();
+    await targetHub.notifyAcmeDnsAck(serverId, payload);
+  } catch (error) {
+    logFailure("acme.dns_ack", error);
   }
 }

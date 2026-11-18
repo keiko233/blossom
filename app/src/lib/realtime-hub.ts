@@ -1,6 +1,8 @@
 import {
   createAgentWsFrame,
   encodeAgentWsFrame,
+  type AgentWsAcmeDnsAckPayload,
+  type AgentWsAcmeIssuePayload,
   parseAgentWsFrame,
   parseAgentWsPtyMessage,
   type AgentWsConfigNotifyPayload,
@@ -606,6 +608,26 @@ export class NitroRealtimeHub implements RealtimeHub {
     this.publish(
       serverId,
       encodeAgentWsFrame(createAgentWsFrame("update.trigger", payload)),
+    );
+  }
+
+  async notifyAcmeIssue(
+    serverId: string,
+    payload: AgentWsAcmeIssuePayload,
+  ): Promise<void> {
+    this.publish(
+      serverId,
+      encodeAgentWsFrame(createAgentWsFrame("acme.issue", payload)),
+    );
+  }
+
+  async notifyAcmeDnsAck(
+    serverId: string,
+    payload: AgentWsAcmeDnsAckPayload,
+  ): Promise<void> {
+    this.publish(
+      serverId,
+      encodeAgentWsFrame(createAgentWsFrame("acme.dns_ack", payload)),
     );
   }
 }

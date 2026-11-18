@@ -45,6 +45,34 @@ The root README's table is the reference for the variables it lists. These addit
 
 Verified (code): `BETTER_AUTH_URL` must be `https` unless the host is `localhost` or `127.0.0.1`. `BETTER_AUTH_SECRET` is **not** in the zod schema (`grep` finds it only in docs and the Compose file); better-auth reads it itself, so a missing or placeholder value is not caught by the app's own env validation. **Unverified:** what better-auth does at runtime when it is absent.
 
+## Certificate issuance migration (agent ACME)
+
+The PR 6 migration adds `managed_certificate.issuer_server_id`,
+`challenge_type`, `issuance_mode`, and `certificate_issuance_job`. It does not
+rewrite active certificate material or `certificate_server` bindings.
+
+- Existing ACME rows keep `issuance_mode = legacy_control_plane` and continue
+  deploying their current material. When the next renewal is needed, the app
+  selects an enabled bound server whose agent advertises `acme-v1`, moves the
+  row to `agent_delegated`, and starts a job. If no such server exists, the
+  policy records an error but the currently active material remains available.
+- Existing in-flight control-plane ACME state is not resumed. Any active
+  material is untouched; use the certificate's **Renew** action after upgrading
+  the issuer agent to start a fresh agent job.
+- New ACME certificates require an issuer server and a challenge type. DNS-01
+  uses the Cloudflare token/zone when both are set; without them the UI shows
+  the TXT values and waits for **Continue DNS**. HTTP-01 temporarily opens port
+  80 on the issuer server.
+- The private key is generated on the agent, returned over the authenticated
+  WebSocket, validated with the fullchain, and encrypted by the control plane
+  with `CERTIFICATE_MASTER_KEY`. The plaintext key is never stored in the job
+  table or logged.
+
+Remaining scope: only Cloudflare is implemented behind the DNS provider
+interface; the agent does not yet persist reusable ACME account credentials;
+and HTTP-01 binds the configured address/port rather than discovering an
+existing web server or reverse proxy.
+
 ## First admin
 
 **The first account ever registered becomes the administrator, exactly once.** Everyone registered afterwards is a plain `user`.

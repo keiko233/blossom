@@ -149,6 +149,10 @@ function CertificatesPage() {
   const [replaceTarget, setReplaceTarget] = useState<string | null>(null);
   const [pendingOperation, setPendingOperation] = useState<string | null>(null);
   const [copyingRecord, setCopyingRecord] = useState<string | null>(null);
+  const [issuerServerId, setIssuerServerId] = useState("");
+  const [challengeType, setChallengeType] = useState<"dns-01" | "http-01">(
+    "dns-01",
+  );
 
   const issueFormSchema = z.object({
     name: z.string().trim().min(1, m.admin_certificates_validation_required()),
@@ -229,6 +233,10 @@ function CertificatesPage() {
     queryKey: CERTIFICATE_CAPABILITY_QUERY_KEY,
     queryFn: () => getCertificateCapability(),
   });
+  const capableIssuers = servers.filter(
+    (item) => item.enabled && item.agentCapabilities.includes("acme-v1"),
+  );
+  const issuerNameById = new Map(servers.map((item) => [item.id, item.name]));
 
   // Heartbeat recency only; unknown servers are not reported as stale.
   const isAgentStale = (serverId: string): boolean => {
@@ -277,6 +285,8 @@ function CertificatesPage() {
           acmeEmail:
             values.kind === "acme" && values.email ? values.email : undefined,
           acmeStaging: false,
+          issuerServerId: values.kind === "acme" ? issuerServerId : undefined,
+          challengeType,
           selfSignedValidityDays: 365,
           renewalDaysBeforeExpiry: 30,
         },
@@ -304,6 +314,8 @@ function CertificatesPage() {
         return;
       }
       issueForm.reset();
+      setIssuerServerId("");
+      setChallengeType("dns-01");
       setIssueSheetOpen(false);
     },
   });
@@ -427,6 +439,10 @@ function CertificatesPage() {
             open={issueSheetOpen}
             onOpenChange={(open) => {
               if (createMutation.isPending) return;
+              if (open) {
+                setIssuerServerId(capableIssuers[0]?.id ?? "");
+                setChallengeType("dns-01");
+              }
               setIssueSheetOpen(open);
               if (!open) issueForm.reset();
             }}
@@ -533,11 +549,7 @@ function CertificatesPage() {
                             selector={(state) => state.values.acmeProvider}
                           >
                             {(provider) =>
-                              provider === "letsencrypt" ? (
-                                <p className="rounded-lg border border-amber-500/32 bg-amber-500/8 p-3 text-xs">
-                                  {m.admin_certificates_letsencrypt_workers_notice()}
-                                </p>
-                              ) : (
+                              provider === "zerossl" ? (
                                 <p
                                   className={
                                     capability?.acmeProviders.zerossl.available
@@ -552,9 +564,60 @@ function CertificatesPage() {
                                       ? m.admin_certificates_zerossl_env_incomplete_notice()
                                       : m.admin_certificates_zerossl_env_missing_notice()}
                                 </p>
-                              )
+                              ) : null
                             }
                           </issueForm.Subscribe>
+                          <div>
+                            <label className="mb-1 block text-sm font-medium">
+                              {m.admin_certificates_issuer_label()}
+                            </label>
+                            <Select
+                              value={issuerServerId}
+                              onValueChange={(value) =>
+                                value && setIssuerServerId(value)
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectPopup>
+                                {capableIssuers.map((issuer) => (
+                                  <SelectItem key={issuer.id} value={issuer.id}>
+                                    {issuer.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectPopup>
+                            </Select>
+                            {capableIssuers.length === 0 ? (
+                              <p className="mt-1 text-xs text-destructive">
+                                {m.admin_certificates_issuer_missing()}
+                              </p>
+                            ) : null}
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-sm font-medium">
+                              {m.admin_certificates_challenge_type_label()}
+                            </label>
+                            <Select
+                              value={challengeType}
+                              onValueChange={(value) =>
+                                value &&
+                                setChallengeType(value as "dns-01" | "http-01")
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectPopup>
+                                <SelectItem value="dns-01">
+                                  {m.admin_certificates_challenge_dns()}
+                                </SelectItem>
+                                <SelectItem value="http-01">
+                                  {m.admin_certificates_challenge_http()}
+                                </SelectItem>
+                              </SelectPopup>
+                            </Select>
+                          </div>
                           <issueForm.Field name="email">
                             {(field) => (
                               <div>
@@ -570,9 +633,11 @@ function CertificatesPage() {
                             )}
                           </issueForm.Field>
                           <p className="rounded-lg border bg-muted/32 p-3 text-xs text-muted-foreground">
-                            {capability?.automatic
-                              ? m.admin_certificates_dns_automatic_notice()
-                              : m.admin_certificates_dns_manual_notice()}
+                            {challengeType === "http-01"
+                              ? m.admin_certificates_http_notice()
+                              : capability?.automatic
+                                ? m.admin_certificates_dns_automatic_notice()
+                                : m.admin_certificates_dns_manual_notice()}
                           </p>
                         </>
                       ) : null
@@ -601,6 +666,8 @@ function CertificatesPage() {
                         disabled={
                           !name ||
                           !domains ||
+                          (kind === "acme" &&
+                            (!issuerServerId || capableIssuers.length === 0)) ||
                           (kind === "acme" &&
                             acmeProvider === "zerossl" &&
                             capability?.acmeProviders.zerossl.available ===
@@ -766,6 +833,25 @@ function CertificatesPage() {
                   <Badge variant="outline">
                     {stateLabels[certificate.state]}
                   </Badge>
+                  {certificate.kind === "acme" ? (
+                    <>
+                      <Badge variant="outline">
+                        {certificate.challengeType === "http-01"
+                          ? m.admin_certificates_challenge_http()
+                          : m.admin_certificates_challenge_dns()}
+                      </Badge>
+                      <Badge variant="outline">
+                        {certificate.issuerServerId
+                          ? m.admin_certificates_issuer_value({
+                              server:
+                                issuerNameById.get(
+                                  certificate.issuerServerId,
+                                ) ?? certificate.issuerServerId,
+                            })
+                          : m.admin_certificates_issuer_auto()}
+                      </Badge>
+                    </>
+                  ) : null}
                 </div>
                 <p className="mt-1 font-mono text-xs text-muted-foreground">
                   {certificate.domains.join(", ")}

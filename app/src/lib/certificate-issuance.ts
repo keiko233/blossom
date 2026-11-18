@@ -1,69 +1,58 @@
-import * as acme from "acme-client";
-import { and, desc, eq, isNull, lt, notInArray, or } from "drizzle-orm";
-import { createHash, randomUUID } from "node:crypto";
-
-import { db } from "@/db";
+import type { AgentWsAcmeResultPayload } from "@blossom/contracts/agent-ws";
 import {
+  and,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNull,
+  lt,
+  notInArray,
+  or,
+} from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+
+import { type Database, db } from "@/db";
+import {
+  certificateIssuanceJob,
   certificateMaterial,
   certificateServer,
   managedCertificate,
+  server,
 } from "@/db/proxy-schema";
-import type { AcmeProvider } from "@/db/proxy-schema";
+import type {
+  AcmeProvider,
+  CertificateDnsBrokerRecord,
+  CertificateIssuanceJob,
+  ManagedCertificate,
+} from "@/db/proxy-schema";
+import { ACME_PROVIDER_ENV_REQUIREMENTS } from "@/lib/acme-providers";
 import {
-  ACME_PROVIDER_ENV_REQUIREMENTS,
-  acmeDirectory,
-  isLetsEncryptDirectoryTlsFailure,
-} from "@/lib/acme-directory";
+  notifyAgentAcmeDnsAck,
+  notifyAgentAcmeIssue,
+  notifyAgentConfigChanged,
+} from "@/lib/agent-notifications";
 import {
-  decryptCertificateSecret,
-  encryptCertificateSecret,
-} from "@/lib/certificate-crypto";
+  assertAuthorizedDnsChallenge,
+  enforceAcmeJobFence,
+  isAcmeCapableAgent,
+  sameDomainSet,
+  sanitizeCertificateIssuanceError,
+} from "@/lib/certificate-acme";
+import { encryptCertificateSecret } from "@/lib/certificate-crypto";
+import { parseCertificateMaterial } from "@/lib/certificate-material";
+import { getCloudflareDnsProvider } from "@/lib/dns-providers/cloudflare";
+import type { DnsProvider } from "@/lib/dns-providers/types";
 import { getServerEnv } from "@/lib/env";
 import { BINDING_GENERATION_RESET_WRITE } from "@/lib/node-certificate-binding";
+import { createSelfSignedCertificate } from "@/lib/self-signed-certificate";
 
-type CertificatePolicy = typeof managedCertificate.$inferSelect;
+type CertificatePolicy = ManagedCertificate;
+type IssuanceJob = CertificateIssuanceJob;
 
-interface DnsRecord {
-  name: string;
-  type: "TXT";
-  value: string;
-}
-
-interface CloudflareRecord {
-  recordId: string;
-}
-
-interface AcmeState {
-  directoryUrl?: string;
-  accountKeyPem: string;
-  accountUrl: string;
-  order: Parameters<acme.Client["getOrder"]>[0];
-  certificateKeyPem: string;
-  csrBase64: string;
-  challenges: Array<{
-    challenge: Parameters<acme.Client["completeChallenge"]>[0];
-    record: DnsRecord;
-  }>;
-  cloudflareRecords: CloudflareRecord[];
-  submittedCount: number;
-  phase: "dns_creating" | "prepared" | "submitted" | "finalized";
-  preparedAt: string;
-}
-
-interface AcmeConfiguration {
-  directoryUrl: string;
-  externalAccountBinding?: { kid: string; hmacKey: string };
-}
-
-const LEASE_MS = 25_000;
-const DNS_SETTLE_MS = 30_000;
-
-const acmeAxios = (
-  acme as typeof acme & {
-    axios: { defaults: { adapter?: string | string[] } };
-  }
-).axios;
-acmeAxios.defaults.adapter = "fetch";
+const LEASE_MS = 30_000;
+const JOB_TTL_MS = 20 * 60_000;
+const ACTIVE_JOB_STATES = ["dispatched", "awaiting_dns", "finalizing"] as const;
 
 export function getCertificateDnsCapability(): {
   automatic: boolean;
@@ -97,21 +86,6 @@ export function getCertificateAcmeProviderCapabilities(): Record<
   };
 }
 
-function cloudflareConfig(): { token: string; zoneId: string } {
-  const env = getServerEnv();
-  if (!env.CLOUDFLARE_DNS_API_TOKEN || !env.CLOUDFLARE_DNS_ZONE_ID) {
-    throw new Error("Cloudflare DNS automation is not configured");
-  }
-  return {
-    token: env.CLOUDFLARE_DNS_API_TOKEN,
-    zoneId: env.CLOUDFLARE_DNS_ZONE_ID,
-  };
-}
-
-function issuanceAad(certificateId: string): string {
-  return `certificate:${certificateId}:issuance`;
-}
-
 async function persistMaterial(
   policy: CertificatePolicy,
   material: {
@@ -121,9 +95,11 @@ async function persistMaterial(
     notAfter: Date;
     fingerprintSha256: string;
   },
+  database: Database = db,
 ) {
   const version = policy.desiredGeneration;
-  const existing = await db
+  let insertedMaterialId: string | null = null;
+  const existing = await database
     .select({ id: certificateMaterial.id })
     .from(certificateMaterial)
     .where(
@@ -134,7 +110,8 @@ async function persistMaterial(
     );
   if (existing.length === 0) {
     const id = randomUUID();
-    await db.insert(certificateMaterial).values({
+    insertedMaterialId = id;
+    await database.insert(certificateMaterial).values({
       id,
       certificateId: policy.id,
       version,
@@ -151,25 +128,8 @@ async function persistMaterial(
       notAfter: material.notAfter,
       fingerprintSha256: material.fingerprintSha256,
     });
-    const retained = await db
-      .select({ id: certificateMaterial.id })
-      .from(certificateMaterial)
-      .where(eq(certificateMaterial.certificateId, policy.id))
-      .orderBy(desc(certificateMaterial.version))
-      .limit(2);
-    if (retained.length === 2) {
-      await db.delete(certificateMaterial).where(
-        and(
-          eq(certificateMaterial.certificateId, policy.id),
-          notInArray(
-            certificateMaterial.id,
-            retained.map((item) => item.id),
-          ),
-        ),
-      );
-    }
   }
-  await db
+  const [updated] = await database
     .update(managedCertificate)
     .set({
       state: "active",
@@ -182,8 +142,39 @@ async function persistMaterial(
       fingerprintSha256: material.fingerprintSha256,
       lastError: null,
     })
-    .where(eq(managedCertificate.id, policy.id));
-  await db
+    .where(
+      and(
+        eq(managedCertificate.id, policy.id),
+        eq(managedCertificate.desiredGeneration, version),
+      ),
+    )
+    .returning({ id: managedCertificate.id });
+  if (!updated) {
+    if (insertedMaterialId) {
+      await database
+        .delete(certificateMaterial)
+        .where(eq(certificateMaterial.id, insertedMaterialId));
+    }
+    throw new Error("Certificate generation changed before material commit");
+  }
+  const retained = await database
+    .select({ id: certificateMaterial.id })
+    .from(certificateMaterial)
+    .where(eq(certificateMaterial.certificateId, policy.id))
+    .orderBy(desc(certificateMaterial.version))
+    .limit(2);
+  if (retained.length === 2) {
+    await database.delete(certificateMaterial).where(
+      and(
+        eq(certificateMaterial.certificateId, policy.id),
+        notInArray(
+          certificateMaterial.id,
+          retained.map((item) => item.id),
+        ),
+      ),
+    );
+  }
+  await database
     .update(certificateServer)
     .set({
       desiredGeneration: version,
@@ -193,314 +184,340 @@ async function persistMaterial(
 }
 
 async function issueSelfSigned(policy: CertificatePolicy) {
-  // Cloudflare's Rolldown build can initialize @peculiar/x509 (and tsyringe)
-  // before a sibling side-effect import. Load the polyfill in a completed
-  // dynamic import first so metadata is always installed before x509 runs.
-  await import("reflect-metadata");
-  const {
-    ExtendedKeyUsageExtension,
-    KeyUsageFlags,
-    KeyUsagesExtension,
-    PemConverter,
-    SubjectAlternativeNameExtension,
-    X509CertificateGenerator,
-  } = await import("@peculiar/x509");
-  const algorithm = { name: "ECDSA", namedCurve: "P-256" } as const;
-  const webcrypto = globalThis.crypto;
-  const keys = await webcrypto.subtle.generateKey(algorithm, true, [
-    "sign",
-    "verify",
-  ]);
-  const notBefore = new Date(Date.now() - 5 * 60_000);
-  const notAfter = new Date(
-    notBefore.getTime() + policy.selfSignedValidityDays * 86_400_000,
+  await persistMaterial(
+    policy,
+    await createSelfSignedCertificate({
+      domains: policy.domains,
+      validityDays: policy.selfSignedValidityDays,
+    }),
   );
-  const certificate = await X509CertificateGenerator.createSelfSigned(
-    {
-      serialNumber: createHash("sha256")
-        .update(randomUUID())
-        .digest("hex")
-        .slice(0, 32),
-      name: `CN=${policy.domains[0]}`,
-      notBefore,
-      notAfter,
-      signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
-      keys,
-      extensions: [
-        new SubjectAlternativeNameExtension(
-          policy.domains.map((value) => ({ type: "dns" as const, value })),
-        ),
-        new KeyUsagesExtension(KeyUsageFlags.digitalSignature, true),
-        new ExtendedKeyUsageExtension(["1.3.6.1.5.5.7.3.1"]),
-      ],
-    },
-    webcrypto as Crypto,
-  );
-  const privateKey = await webcrypto.subtle.exportKey("pkcs8", keys.privateKey);
-  await persistMaterial(policy, {
-    certificatePem: certificate.toString("pem"),
-    privateKeyPem: PemConverter.encode(privateKey, "PRIVATE KEY"),
-    notBefore,
-    notAfter,
-    fingerprintSha256: createHash("sha256")
-      .update(Buffer.from(certificate.rawData))
-      .digest("hex"),
-  });
 }
 
-async function createCloudflareRecord(record: DnsRecord) {
-  const { token, zoneId } = cloudflareConfig();
-  const response = await fetch(
-    `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        type: "TXT",
-        name: record.name,
-        content: record.value,
-        ttl: 60,
-      }),
-    },
-  );
-  if (!response.ok)
-    throw new Error(`Cloudflare TXT creation failed (${response.status})`);
-  const result = (await response.json()) as { result?: { id?: string } };
-  if (!result.result?.id)
-    throw new Error("Cloudflare did not return a record id");
-  return { recordId: result.result.id };
-}
-
-async function cleanupCloudflare(records: CloudflareRecord[]) {
-  const { token, zoneId } = cloudflareConfig();
-  await Promise.allSettled(
-    records.map((record) =>
-      fetch(
-        `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records/${record.recordId}`,
-        { method: "DELETE", headers: { Authorization: `Bearer ${token}` } },
+async function activeJob(
+  certificateId: string,
+  generation: number,
+): Promise<IssuanceJob | null> {
+  const [job] = await db
+    .select()
+    .from(certificateIssuanceJob)
+    .where(
+      and(
+        eq(certificateIssuanceJob.certificateId, certificateId),
+        eq(certificateIssuanceJob.generation, generation),
+        inArray(certificateIssuanceJob.state, [...ACTIVE_JOB_STATES]),
       ),
-    ),
-  );
+    )
+    .orderBy(desc(certificateIssuanceJob.createdAt))
+    .limit(1);
+  return job ?? null;
 }
 
-function acmeClient(policy: CertificatePolicy, state: AcmeState) {
-  return new acme.Client({
-    directoryUrl:
-      state.directoryUrl ??
-      acmeDirectory(policy.acmeProvider, policy.acmeStaging),
-    accountKey: state.accountKeyPem,
-    accountUrl: state.accountUrl,
-    backoffAttempts: 1,
-  });
+async function serverCanIssue(serverId: string) {
+  const [row] = await db.select().from(server).where(eq(server.id, serverId));
+  return row?.enabled && isAcmeCapableAgent(row.agentCapabilities) ? row : null;
 }
 
-function acmeConfiguration(policy: CertificatePolicy): AcmeConfiguration {
-  if (policy.acmeProvider === "letsencrypt") {
-    return {
-      directoryUrl: acmeDirectory("letsencrypt", policy.acmeStaging),
-    };
+async function resolveIssuer(policy: CertificatePolicy): Promise<{
+  policy: CertificatePolicy;
+  issuerServerId: string;
+}> {
+  if (policy.issuerServerId) {
+    const issuer = await serverCanIssue(policy.issuerServerId);
+    if (!issuer) {
+      throw new Error(
+        "The selected ACME issuer server is disabled, missing, or has not advertised acme-v1",
+      );
+    }
+    return { policy, issuerServerId: issuer.id };
   }
 
+  const bindings = await db
+    .select({ server })
+    .from(certificateServer)
+    .innerJoin(server, eq(server.id, certificateServer.serverId))
+    .where(
+      and(
+        eq(certificateServer.certificateId, policy.id),
+        eq(certificateServer.enabled, true),
+      ),
+    );
+  const issuer = bindings
+    .map((binding) => binding.server)
+    .find(
+      (candidate) =>
+        candidate.enabled && isAcmeCapableAgent(candidate.agentCapabilities),
+    );
+  if (!issuer) {
+    throw new Error(
+      "Select an enabled issuer server running a server-agent with acme-v1",
+    );
+  }
+
+  const [updated] = await db
+    .update(managedCertificate)
+    .set({
+      issuerServerId: issuer.id,
+      issuanceMode: "agent_delegated",
+    })
+    .where(eq(managedCertificate.id, policy.id))
+    .returning();
+  return { policy: updated ?? policy, issuerServerId: issuer.id };
+}
+
+function acmeExternalAccountBinding(provider: AcmeProvider) {
+  if (provider !== "zerossl") {
+    return undefined;
+  }
   const env = getServerEnv();
-  const eabKid = env.ACME_EAB_KID;
-  const eabHmacKey = env.ACME_EAB_HMAC_KEY;
-  if (!eabKid || !eabHmacKey) {
+  if (!env.ACME_EAB_KID || !env.ACME_EAB_HMAC_KEY) {
     throw new Error(
       "ZeroSSL requires ACME_EAB_KID and ACME_EAB_HMAC_KEY in the deployment environment",
     );
   }
-
   return {
-    directoryUrl: acmeDirectory("zerossl", false),
-    externalAccountBinding: {
-      kid: eabKid,
-      hmacKey: eabHmacKey,
-    },
+    kid: env.ACME_EAB_KID,
+    hmacKey: env.ACME_EAB_HMAC_KEY,
   };
 }
 
-async function prepareAcmeWithDirectory(
-  policy: CertificatePolicy,
-  configuration: AcmeConfiguration,
-): Promise<AcmeState> {
-  const { directoryUrl, externalAccountBinding } = configuration;
-  const accountKey = (
-    await acme.crypto.createPrivateEcdsaKey("P-256")
-  ).toString();
-  const client = new acme.Client({
-    directoryUrl,
-    accountKey,
-    externalAccountBinding,
-    backoffAttempts: 1,
-  });
-  await client.createAccount({
-    termsOfServiceAgreed: true,
-    contact: policy.acmeEmail ? [`mailto:${policy.acmeEmail}`] : undefined,
-  });
-  const certificateKey = await acme.crypto.createPrivateEcdsaKey("P-256");
-  const [, csr] = await acme.crypto.createCsr(
-    { commonName: policy.domains[0], altNames: policy.domains },
-    certificateKey,
-  );
-  const order = await client.createOrder({
-    identifiers: policy.domains.map((value) => ({ type: "dns", value })),
-  });
-  const authorizations = await client.getAuthorizations(order);
-  const challenges = await Promise.all(
-    authorizations.map(async (authorization) => {
-      const challenge = authorization.challenges.find(
-        (item) => item.type === "dns-01",
-      );
-      if (!challenge) throw new Error("ACME server did not offer dns-01");
-      const value = await client.getChallengeKeyAuthorization(challenge);
-      const domain = authorization.identifier.value.replace(/^\*\./, "");
-      return {
-        challenge,
-        record: {
-          name: `_acme-challenge.${domain}`,
-          type: "TXT" as const,
-          value,
-        },
-      };
-    }),
-  );
-  return {
-    directoryUrl,
-    accountKeyPem: accountKey,
-    accountUrl: client.getAccountUrl(),
-    order,
-    certificateKeyPem: certificateKey.toString(),
-    csrBase64: csr.toString("base64"),
-    challenges,
-    cloudflareRecords: [],
-    submittedCount: 0,
-    phase: policy.dnsMode === "cloudflare" ? "dns_creating" : "prepared",
-    preparedAt: new Date().toISOString(),
-  };
-}
-
-async function prepareAcme(policy: CertificatePolicy): Promise<AcmeState> {
-  const configuration = acmeConfiguration(policy);
-  try {
-    return await prepareAcmeWithDirectory(policy, configuration);
-  } catch (error) {
-    if (!isLetsEncryptDirectoryTlsFailure(error)) throw error;
+async function dispatchJob(job: IssuanceJob, policy: CertificatePolicy) {
+  const provider = getCertificateAcmeProviderCapabilities()[job.acmeProvider];
+  if (!provider.available) {
     throw new Error(
-      "Cloudflare Workers cannot use Let's Encrypt ACME (HTTP 525). Create the certificate with ZeroSSL instead.",
-      { cause: error },
+      `${job.acmeProvider} requires deployment environment variables: ${provider.requiredEnv.join(", ")}`,
     );
   }
-}
-
-async function saveAcmeState(
-  policy: CertificatePolicy,
-  state: AcmeState,
-  status: "issuing" | "waiting_dns" = "issuing",
-) {
+  const externalAccountBinding = acmeExternalAccountBinding(job.acmeProvider);
+  await notifyAgentAcmeIssue(job.issuerServerId, {
+    jobId: job.id,
+    certificateId: job.certificateId,
+    generation: job.generation,
+    domains: job.domains,
+    ...(policy.acmeEmail ? { acmeEmail: policy.acmeEmail } : {}),
+    acmeProvider: job.acmeProvider,
+    acmeStaging: job.acmeStaging,
+    challengeType: job.challengeType,
+    ...(externalAccountBinding ? { externalAccountBinding } : {}),
+  });
+  await db
+    .update(certificateIssuanceJob)
+    .set({
+      dispatchCount: job.dispatchCount + 1,
+      lastDispatchedAt: new Date(),
+    })
+    .where(eq(certificateIssuanceJob.id, job.id));
   await db
     .update(managedCertificate)
     .set({
-      state: status,
-      challenge: state.challenges.map((item) => item.record),
+      state: policy.activeMaterialVersion ? "renewing" : "issuing",
       lastError: null,
-      issuanceStateCiphertext: encryptCertificateSecret(
-        JSON.stringify(state),
-        issuanceAad(policy.id),
-      ),
     })
     .where(eq(managedCertificate.id, policy.id));
 }
 
-async function advanceAcme(policy: CertificatePolicy) {
-  let state: AcmeState | null = policy.issuanceStateCiphertext
-    ? JSON.parse(
-        decryptCertificateSecret(
-          policy.issuanceStateCiphertext,
-          issuanceAad(policy.id),
-        ),
-      )
-    : null;
-  if (!state) {
-    state = await prepareAcme(policy);
-    await saveAcmeState(
-      policy,
-      state,
-      policy.dnsMode === "manual" ? "waiting_dns" : "issuing",
+async function cleanupProviderRecords(
+  records: readonly CertificateDnsBrokerRecord[],
+  provider: DnsProvider | null,
+): Promise<void> {
+  if (!provider) {
+    return;
+  }
+  for (const record of records) {
+    if (!record.providerRecordId) {
+      continue;
+    }
+    try {
+      await provider.deleteTxt(record.providerRecordId);
+    } catch (error) {
+      console.warn(
+        `certificate DNS cleanup failed: ${sanitizeCertificateIssuanceError(error)}`,
+      );
+    }
+  }
+}
+
+async function expireJob(job: IssuanceJob) {
+  await cleanupProviderRecords(job.dnsRecords, getCloudflareDnsProvider());
+  const now = new Date();
+  await db
+    .update(certificateIssuanceJob)
+    .set({
+      state: "expired",
+      dnsRecords: [],
+      lastError: "Issuer agent did not complete the ACME job before expiry",
+      completedAt: now,
+    })
+    .where(eq(certificateIssuanceJob.id, job.id));
+  await db
+    .update(managedCertificate)
+    .set({
+      state: "error",
+      challenge: null,
+      challengeApprovedAt: null,
+      lastError: "Issuer agent did not complete the ACME job before expiry",
+    })
+    .where(
+      and(
+        eq(managedCertificate.id, job.certificateId),
+        eq(managedCertificate.desiredGeneration, job.generation),
+      ),
     );
+}
+
+async function createJob(policy: CertificatePolicy): Promise<void> {
+  const now = new Date();
+  const [claimed] = await db
+    .update(managedCertificate)
+    .set({
+      issuanceLeaseExpiresAt: new Date(now.getTime() + LEASE_MS),
+      issuanceAttemptAt: now,
+      state: policy.activeMaterialVersion ? "renewing" : "issuing",
+      challenge: null,
+      challengeApprovedAt: null,
+      issuanceStateCiphertext: null,
+      lastError: null,
+    })
+    .where(
+      and(
+        eq(managedCertificate.id, policy.id),
+        or(
+          isNull(managedCertificate.issuanceLeaseExpiresAt),
+          lt(managedCertificate.issuanceLeaseExpiresAt, now),
+        ),
+      ),
+    )
+    .returning();
+  if (!claimed) {
     return;
   }
 
-  const client = acmeClient(policy, state);
-  if (state.phase === "dns_creating") {
-    const item = state.challenges[state.cloudflareRecords.length];
-    if (item)
-      state.cloudflareRecords.push(await createCloudflareRecord(item.record));
-    if (state.cloudflareRecords.length === state.challenges.length) {
-      state.phase = "prepared";
-      state.preparedAt = new Date().toISOString();
+  try {
+    const existing = await activeJob(claimed.id, claimed.desiredGeneration);
+    if (existing) {
+      if (existing.challengeExpiresAt <= now) {
+        await expireJob(existing);
+      } else {
+        await dispatchJob(existing, claimed);
+        return;
+      }
     }
-  } else if (state.phase === "prepared") {
-    const canSubmit =
-      (policy.dnsMode === "manual" && policy.challengeApprovedAt !== null) ||
-      (policy.dnsMode === "cloudflare" &&
-        Date.now() - new Date(state.preparedAt).getTime() >= DNS_SETTLE_MS);
-    if (!canSubmit) {
-      await saveAcmeState(policy, state, "waiting_dns");
+
+    const resolved = await resolveIssuer(claimed);
+    const effectivePolicy = resolved.policy;
+    const [job] = await db
+      .insert(certificateIssuanceJob)
+      .values({
+        id: randomUUID(),
+        certificateId: effectivePolicy.id,
+        generation: effectivePolicy.desiredGeneration,
+        issuerServerId: resolved.issuerServerId,
+        challengeType: effectivePolicy.challengeType,
+        acmeProvider: effectivePolicy.acmeProvider,
+        acmeStaging: effectivePolicy.acmeStaging,
+        domains: effectivePolicy.domains,
+        challengeExpiresAt: new Date(now.getTime() + JOB_TTL_MS),
+      })
+      .returning();
+    if (!job) {
+      throw new Error("Failed to create ACME issuance job");
+    }
+    await dispatchJob(job, effectivePolicy);
+  } catch (error) {
+    const message = sanitizeCertificateIssuanceError(error);
+    await db
+      .update(managedCertificate)
+      .set({ state: "error", lastError: message })
+      .where(eq(managedCertificate.id, claimed.id));
+  } finally {
+    await db
+      .update(managedCertificate)
+      .set({ issuanceLeaseExpiresAt: null })
+      .where(eq(managedCertificate.id, claimed.id));
+  }
+}
+
+async function hasDesiredMaterial(policy: CertificatePolicy) {
+  const [material] = await db
+    .select({ id: certificateMaterial.id })
+    .from(certificateMaterial)
+    .where(
+      and(
+        eq(certificateMaterial.certificateId, policy.id),
+        eq(certificateMaterial.version, policy.desiredGeneration),
+      ),
+    );
+  return Boolean(material);
+}
+
+async function advanceAcme(policy: CertificatePolicy): Promise<void> {
+  if (await hasDesiredMaterial(policy)) {
+    return;
+  }
+  const job = await activeJob(policy.id, policy.desiredGeneration);
+  if (job) {
+    if (job.challengeExpiresAt <= new Date()) {
+      await expireJob(job);
       return;
     }
-    const item = state.challenges[state.submittedCount];
-    if (item) {
-      await client.completeChallenge(item.challenge);
-      state.submittedCount += 1;
-    }
-    if (state.submittedCount === state.challenges.length)
-      state.phase = "submitted";
-  } else if (state.phase === "submitted") {
-    const authorizations = await client.getAuthorizations(state.order);
-    const invalidAuthorization = authorizations.find(
-      (item) => item.status === "invalid",
-    );
-    if (invalidAuthorization) {
-      if (policy.dnsMode === "cloudflare")
-        await cleanupCloudflare(state.cloudflareRecords);
+    try {
+      await dispatchJob(job, policy);
+    } catch (error) {
       await db
         .update(managedCertificate)
         .set({
-          issuanceStateCiphertext: null,
-          challenge: null,
-          challengeApprovedAt: null,
+          state: "error",
+          lastError: sanitizeCertificateIssuanceError(error),
         })
         .where(eq(managedCertificate.id, policy.id));
-      throw new Error("ACME DNS authorization failed");
     }
-    if (!authorizations.every((item) => item.status === "valid")) return;
-    state.order = await client.finalizeOrder(
-      state.order,
-      Buffer.from(state.csrBase64, "base64"),
-    );
-    state.phase = "finalized";
-  } else {
-    state.order = await client.getOrder(state.order);
-    if (state.order.status !== "valid") return;
-    const certificatePem = await client.getCertificate(state.order);
-    const info = acme.crypto.readCertificateInfo(certificatePem);
-    await persistMaterial(policy, {
-      certificatePem,
-      privateKeyPem: state.certificateKeyPem,
-      notBefore: info.notBefore,
-      notAfter: info.notAfter,
-      fingerprintSha256: createHash("sha256")
-        .update(Buffer.from(acme.crypto.splitPemChain(certificatePem)[0]!))
-        .digest("hex"),
-    });
-    if (policy.dnsMode === "cloudflare")
-      await cleanupCloudflare(state.cloudflareRecords);
     return;
   }
-  await saveAcmeState(policy, state);
+  await createJob(policy);
+}
+
+async function issueOrAdvanceSelfSigned(
+  policy: CertificatePolicy,
+): Promise<void> {
+  if (await hasDesiredMaterial(policy)) {
+    return;
+  }
+  const now = new Date();
+  const [claimed] = await db
+    .update(managedCertificate)
+    .set({
+      issuanceLeaseExpiresAt: new Date(now.getTime() + LEASE_MS),
+      issuanceAttemptAt: now,
+      state: policy.activeMaterialVersion ? "renewing" : "issuing",
+    })
+    .where(
+      and(
+        eq(managedCertificate.id, policy.id),
+        or(
+          isNull(managedCertificate.issuanceLeaseExpiresAt),
+          lt(managedCertificate.issuanceLeaseExpiresAt, now),
+        ),
+      ),
+    )
+    .returning();
+  if (!claimed) {
+    return;
+  }
+  try {
+    await issueSelfSigned(claimed);
+  } catch (error) {
+    await db
+      .update(managedCertificate)
+      .set({
+        state: "error",
+        lastError: sanitizeCertificateIssuanceError(error),
+      })
+      .where(eq(managedCertificate.id, claimed.id));
+  } finally {
+    await db
+      .update(managedCertificate)
+      .set({ issuanceLeaseExpiresAt: null })
+      .where(eq(managedCertificate.id, claimed.id));
+  }
 }
 
 export async function advanceCertificateIssuance(
@@ -534,19 +551,7 @@ export async function advanceCertificateIssuance(
       }
       continue;
     }
-    if (policy.kind === "acme" && policy.issuanceStateCiphertext === null) {
-      const dnsMode = getCertificateDnsCapability().automatic
-        ? "cloudflare"
-        : "manual";
-      if (policy.dnsMode !== dnsMode) {
-        const [updated] = await db
-          .update(managedCertificate)
-          .set({ dnsMode })
-          .where(eq(managedCertificate.id, policy.id))
-          .returning();
-        if (updated) policy = updated;
-      }
-    }
+
     const renewAt = policy.notAfter
       ? policy.notAfter.getTime() - policy.renewalDaysBeforeExpiry * 86_400_000
       : Number.POSITIVE_INFINITY;
@@ -564,56 +569,408 @@ export async function advanceCertificateIssuance(
         .returning();
       if (renewing) policy = renewing;
     }
-    const [material] = await db
-      .select({ id: certificateMaterial.id })
-      .from(certificateMaterial)
-      .where(
-        and(
-          eq(certificateMaterial.certificateId, policy.id),
-          eq(certificateMaterial.version, policy.desiredGeneration),
-        ),
-      );
-    if (material) continue;
-    const waitingForManualDns =
-      policy.kind === "acme" &&
-      policy.dnsMode === "manual" &&
-      policy.issuanceStateCiphertext !== null &&
-      policy.challengeApprovedAt === null &&
-      policy.state === "waiting_dns";
-    if (waitingForManualDns) continue;
 
-    const now = new Date();
-    const [claimed] = await db
+    if (policy.kind === "self_signed") {
+      await issueOrAdvanceSelfSigned(policy);
+    } else {
+      await advanceAcme(policy);
+    }
+  }
+}
+
+async function sendDnsAck(
+  job: IssuanceJob,
+  fqdn: string,
+  txtValue: string,
+  accepted: boolean,
+  error?: string,
+): Promise<void> {
+  await notifyAgentAcmeDnsAck(job.issuerServerId, {
+    jobId: job.id,
+    fqdn,
+    txtValue,
+    accepted,
+    ...(error ? { error: error.slice(0, 2048) } : {}),
+  });
+}
+
+export async function handleAcmeDnsPresent(
+  serverId: string,
+  payload: { jobId: string; fqdn: string; txtValue: string },
+  database: Database = db,
+): Promise<void> {
+  const [job] = await database
+    .select()
+    .from(certificateIssuanceJob)
+    .where(eq(certificateIssuanceJob.id, payload.jobId));
+  if (!job) {
+    return;
+  }
+  if (job.issuerServerId !== serverId) {
+    await sendDnsAck(
+      job,
+      payload.fqdn,
+      payload.txtValue,
+      false,
+      "issuer identity mismatch",
+    );
+    return;
+  }
+  if (
+    job.state === "completed" ||
+    job.state === "failed" ||
+    job.state === "expired"
+  ) {
+    return;
+  }
+  const [policy] = await database
+    .select()
+    .from(managedCertificate)
+    .where(eq(managedCertificate.id, job.certificateId));
+  if (!policy) {
+    await sendDnsAck(
+      job,
+      payload.fqdn,
+      payload.txtValue,
+      false,
+      "certificate policy not found",
+    );
+    return;
+  }
+  try {
+    enforceAcmeJobFence(
+      {
+        jobId: job.id,
+        jobServerId: job.issuerServerId,
+        jobGeneration: job.generation,
+        desiredGeneration: policy.desiredGeneration,
+        challengeExpiresAt: job.challengeExpiresAt,
+      },
+      serverId,
+    );
+    assertAuthorizedDnsChallenge(job.domains, payload.fqdn);
+  } catch (error) {
+    await sendDnsAck(
+      job,
+      payload.fqdn,
+      payload.txtValue,
+      false,
+      sanitizeCertificateIssuanceError(error),
+    );
+    return;
+  }
+
+  const fqdn = payload.fqdn.toLowerCase();
+  const existing = job.dnsRecords.find(
+    (record) => record.fqdn === fqdn && record.value === payload.txtValue,
+  );
+  if (existing) {
+    if (existing.providerRecordId) {
+      await sendDnsAck(job, fqdn, payload.txtValue, true);
+    }
+    return;
+  }
+  if (job.dnsRecords.length >= 100) {
+    await sendDnsAck(
+      job,
+      fqdn,
+      payload.txtValue,
+      false,
+      "DNS challenge bound exceeded",
+    );
+    return;
+  }
+
+  const provider = getCloudflareDnsProvider();
+  let createdRecordId: string | null = null;
+  try {
+    if (provider) {
+      createdRecordId = await provider.createTxt({
+        fqdn,
+        value: payload.txtValue,
+      });
+    }
+    const record: CertificateDnsBrokerRecord = {
+      fqdn,
+      value: payload.txtValue,
+      providerRecordId: createdRecordId,
+    };
+    const records = [...job.dnsRecords, record];
+    await database
+      .update(certificateIssuanceJob)
+      .set({
+        dnsRecords: records,
+        state: provider ? "dispatched" : "awaiting_dns",
+      })
+      .where(eq(certificateIssuanceJob.id, job.id));
+    await database
       .update(managedCertificate)
       .set({
-        issuanceLeaseExpiresAt: new Date(now.getTime() + LEASE_MS),
-        issuanceAttemptAt: now,
-        state: policy.activeMaterialVersion ? "renewing" : "issuing",
+        state: provider ? "issuing" : "waiting_dns",
+        challenge: records.map(({ fqdn: name, value }) => ({
+          name,
+          type: "TXT",
+          value,
+        })),
+        challengeApprovedAt: provider ? null : policy.challengeApprovedAt,
+        lastError: null,
       })
+      .where(eq(managedCertificate.id, policy.id));
+    if (provider) {
+      await sendDnsAck(job, fqdn, payload.txtValue, true);
+    } else if (policy.challengeApprovedAt) {
+      await sendDnsAck(job, fqdn, payload.txtValue, true);
+    }
+  } catch (error) {
+    if (createdRecordId && provider) {
+      await provider.deleteTxt(createdRecordId).catch(() => undefined);
+    }
+    await sendDnsAck(
+      job,
+      fqdn,
+      payload.txtValue,
+      false,
+      sanitizeCertificateIssuanceError(error),
+    );
+  }
+}
+
+export async function handleAcmeDnsCleanup(
+  serverId: string,
+  payload: { jobId: string; fqdn: string; txtValue: string },
+  database: Database = db,
+): Promise<void> {
+  const [job] = await database
+    .select()
+    .from(certificateIssuanceJob)
+    .where(eq(certificateIssuanceJob.id, payload.jobId));
+  if (!job) {
+    return;
+  }
+  if (job.issuerServerId !== serverId) {
+    return;
+  }
+  try {
+    assertAuthorizedDnsChallenge(job.domains, payload.fqdn);
+  } catch {
+    return;
+  }
+  const fqdn = payload.fqdn.toLowerCase();
+  const record = job.dnsRecords.find(
+    (item) => item.fqdn === fqdn && item.value === payload.txtValue,
+  );
+  if (!record) {
+    return;
+  }
+  if (record.providerRecordId) {
+    const provider = getCloudflareDnsProvider();
+    if (provider) {
+      try {
+        await provider.deleteTxt(record.providerRecordId);
+      } catch (error) {
+        console.warn(
+          `certificate DNS cleanup failed: ${sanitizeCertificateIssuanceError(error)}`,
+        );
+      }
+    }
+  }
+  await database
+    .update(certificateIssuanceJob)
+    .set({
+      dnsRecords: job.dnsRecords.filter(
+        (item) => !(item.fqdn === fqdn && item.value === payload.txtValue),
+      ),
+    })
+    .where(eq(certificateIssuanceJob.id, job.id));
+}
+
+async function failJob(
+  job: IssuanceJob,
+  message: string,
+  phase: string | null,
+  database: Database = db,
+): Promise<void> {
+  const sanitized = sanitizeCertificateIssuanceError(message);
+  await database
+    .update(certificateIssuanceJob)
+    .set({
+      state: "failed",
+      lastError: sanitized,
+      lastErrorPhase: phase,
+      completedAt: new Date(),
+    })
+    .where(eq(certificateIssuanceJob.id, job.id));
+  await database
+    .update(managedCertificate)
+    .set({
+      state: "error",
+      challenge: null,
+      challengeApprovedAt: null,
+      lastError: sanitized,
+    })
+    .where(
+      and(
+        eq(managedCertificate.id, job.certificateId),
+        eq(managedCertificate.desiredGeneration, job.generation),
+      ),
+    );
+  await cleanupProviderRecords(job.dnsRecords, getCloudflareDnsProvider());
+}
+
+export async function handleAcmeResult(
+  serverId: string,
+  payload: AgentWsAcmeResultPayload,
+  database: Database = db,
+): Promise<void> {
+  const [job] = await database
+    .select()
+    .from(certificateIssuanceJob)
+    .where(eq(certificateIssuanceJob.id, payload.jobId));
+  if (!job || job.issuerServerId !== serverId) {
+    return;
+  }
+  const [policy] = await database
+    .select()
+    .from(managedCertificate)
+    .where(eq(managedCertificate.id, job.certificateId));
+  if (!policy) {
+    return;
+  }
+  try {
+    enforceAcmeJobFence(
+      {
+        jobId: job.id,
+        jobServerId: job.issuerServerId,
+        jobGeneration: job.generation,
+        desiredGeneration: policy.desiredGeneration,
+        challengeExpiresAt: job.challengeExpiresAt,
+      },
+      serverId,
+    );
+  } catch {
+    return;
+  }
+
+  if (payload.error) {
+    const claimNow = new Date();
+    const [claimed] = await database
+      .update(certificateIssuanceJob)
+      .set({ state: "finalizing" })
       .where(
         and(
-          eq(managedCertificate.id, policy.id),
-          or(
-            isNull(managedCertificate.issuanceLeaseExpiresAt),
-            lt(managedCertificate.issuanceLeaseExpiresAt, now),
-          ),
+          eq(certificateIssuanceJob.id, job.id),
+          eq(certificateIssuanceJob.issuerServerId, serverId),
+          inArray(certificateIssuanceJob.state, [...ACTIVE_JOB_STATES]),
+          gt(certificateIssuanceJob.challengeExpiresAt, claimNow),
         ),
       )
       .returning();
-    if (!claimed) continue;
-    try {
-      if (policy.kind === "self_signed") await issueSelfSigned(claimed);
-      else await advanceAcme(claimed);
-    } catch (error) {
-      await db
-        .update(managedCertificate)
-        .set({ state: "error", lastError: String(error).slice(0, 4096) })
-        .where(eq(managedCertificate.id, policy.id));
-    } finally {
-      await db
-        .update(managedCertificate)
-        .set({ issuanceLeaseExpiresAt: null })
-        .where(eq(managedCertificate.id, policy.id));
+    if (!claimed) return;
+    await failJob(job, payload.error, payload.errorPhase ?? null, database);
+    return;
+  }
+  if (!payload.certificatePem || !payload.privateKeyPem) {
+    return;
+  }
+
+  const claimNow = new Date();
+  const [claimed] = await database
+    .update(certificateIssuanceJob)
+    .set({ state: "finalizing" })
+    .where(
+      and(
+        eq(certificateIssuanceJob.id, job.id),
+        eq(certificateIssuanceJob.issuerServerId, serverId),
+        inArray(certificateIssuanceJob.state, [...ACTIVE_JOB_STATES]),
+        gt(certificateIssuanceJob.challengeExpiresAt, claimNow),
+      ),
+    )
+    .returning();
+  if (!claimed) {
+    return;
+  }
+
+  try {
+    const material = await parseCertificateMaterial(
+      payload.certificatePem,
+      payload.privateKeyPem,
+    );
+    if (!sameDomainSet(policy.domains, material.domains)) {
+      throw new Error(
+        "Issued certificate names do not match the certificate policy",
+      );
     }
+    const now = new Date();
+    if (
+      material.notAfter <= now ||
+      material.notBefore > new Date(now.getTime() + 300_000)
+    ) {
+      throw new Error(
+        "Issued certificate validity is outside the accepted window",
+      );
+    }
+    await persistMaterial(policy, material, database);
+    await database
+      .update(certificateIssuanceJob)
+      .set({
+        state: "completed",
+        dnsRecords: [],
+        lastError: null,
+        lastErrorPhase: null,
+        completedAt: now,
+      })
+      .where(eq(certificateIssuanceJob.id, job.id));
+    await cleanupProviderRecords(job.dnsRecords, getCloudflareDnsProvider());
+    const bindings = await database
+      .select({ serverId: certificateServer.serverId })
+      .from(certificateServer)
+      .where(
+        and(
+          eq(certificateServer.certificateId, policy.id),
+          eq(certificateServer.enabled, true),
+        ),
+      );
+    await notifyAgentConfigChanged(
+      bindings.map((binding) => binding.serverId),
+      "certificate renewed",
+    );
+  } catch (error) {
+    await failJob(
+      job,
+      sanitizeCertificateIssuanceError(error),
+      payload.errorPhase ?? "certificate",
+      database,
+    );
+  }
+}
+
+export async function continueCertificateDnsChallenge(
+  certificateId: string,
+): Promise<void> {
+  const [policy] = await db
+    .select()
+    .from(managedCertificate)
+    .where(eq(managedCertificate.id, certificateId));
+  if (!policy) {
+    throw new Error("Certificate not found");
+  }
+  const job = await activeJob(certificateId, policy.desiredGeneration);
+  if (!job) {
+    throw new Error("No active DNS challenge to approve");
+  }
+  const approvedAt = new Date();
+  await db
+    .update(certificateIssuanceJob)
+    .set({ challengeApprovedAt: approvedAt })
+    .where(eq(certificateIssuanceJob.id, job.id));
+  await db
+    .update(managedCertificate)
+    .set({
+      challengeApprovedAt: approvedAt,
+      state: "issuing",
+    })
+    .where(eq(managedCertificate.id, certificateId));
+  for (const record of job.dnsRecords) {
+    await sendDnsAck(job, record.fqdn, record.value, true);
   }
 }

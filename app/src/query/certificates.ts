@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 
 import { db, getDatabaseDriver } from "@/db";
 import {
+  certificateIssuanceJob,
   certificateMaterial,
   certificateServer,
   managedCertificate,
@@ -12,6 +13,7 @@ import {
 } from "@/db/proxy-schema";
 import { fromInput, fromResult } from "@/lib/admin-audit";
 import { adminAudit } from "@/lib/admin-audit-middleware";
+import { isAcmeCapableAgent } from "@/lib/certificate-acme";
 import { encryptCertificateSecret } from "@/lib/certificate-crypto";
 import {
   assertImportedCertificateKind,
@@ -25,6 +27,7 @@ import {
   getCertificateAcmeProviderCapabilities,
   advanceCertificateIssuance,
   getCertificateDnsCapability,
+  continueCertificateDnsChallenge as approveManualDnsChallenge,
 } from "@/lib/certificate-issuance";
 import {
   classifyImportedValidity,
@@ -73,6 +76,9 @@ export const listCertificates = createServerFn({ method: "GET" }).handler(
         acmeEmail: managedCertificate.acmeEmail,
         acmeProvider: managedCertificate.acmeProvider,
         acmeStaging: managedCertificate.acmeStaging,
+        issuanceMode: managedCertificate.issuanceMode,
+        issuerServerId: managedCertificate.issuerServerId,
+        challengeType: managedCertificate.challengeType,
         dnsMode: managedCertificate.dnsMode,
         state: managedCertificate.state,
         desiredGeneration: managedCertificate.desiredGeneration,
@@ -96,6 +102,32 @@ export const listCertificates = createServerFn({ method: "GET" }).handler(
       .from(certificateServer)
       .innerJoin(server, eq(server.id, certificateServer.serverId));
     const pendingVersionByCertificate = new Map<string, number>();
+    const activeJobByCertificate = new Map<
+      string,
+      typeof certificateIssuanceJob.$inferSelect
+    >();
+    if (certificates.length > 0) {
+      const activeJobs = await db
+        .select()
+        .from(certificateIssuanceJob)
+        .where(
+          and(
+            inArray(
+              certificateIssuanceJob.certificateId,
+              certificates.map((certificate) => certificate.id),
+            ),
+            inArray(certificateIssuanceJob.state, [
+              "dispatched",
+              "awaiting_dns",
+              "finalizing",
+            ]),
+          ),
+        )
+        .orderBy(asc(certificateIssuanceJob.createdAt));
+      for (const job of activeJobs) {
+        activeJobByCertificate.set(job.certificateId, job);
+      }
+    }
     for (const certificate of certificates) {
       if (certificate.pendingMaterialVersion !== null) {
         pendingVersionByCertificate.set(
@@ -136,6 +168,7 @@ export const listCertificates = createServerFn({ method: "GET" }).handler(
     }
     return certificates.map((certificate) => ({
       ...certificate,
+      activeJob: activeJobByCertificate.get(certificate.id) ?? null,
       pendingMaterial: pendingMaterials.find(
         (material) =>
           material.certificateId === certificate.id &&
@@ -188,6 +221,22 @@ export const createCertificate = createServerFn({ method: "POST" })
           `${data.acmeProvider} requires deployment environment variables: ${capability.requiredEnv.join(", ")}`,
         );
       }
+      if (!data.issuerServerId) {
+        throw new Error("Select an issuer server for ACME issuance");
+      }
+      const [issuer] = await db
+        .select()
+        .from(server)
+        .where(eq(server.id, data.issuerServerId));
+      if (
+        !issuer ||
+        !issuer.enabled ||
+        !isAcmeCapableAgent(issuer.agentCapabilities)
+      ) {
+        throw new Error(
+          "The selected issuer server must be enabled and advertise acme-v1",
+        );
+      }
     }
     const id = randomUUID();
     const dnsCapability = getCertificateDnsCapability();
@@ -202,11 +251,17 @@ export const createCertificate = createServerFn({ method: "POST" })
           data.kind === "acme" && data.acmeEmail ? data.acmeEmail : null,
         acmeProvider: data.kind === "acme" ? data.acmeProvider : "letsencrypt",
         acmeStaging: data.kind === "acme" && data.acmeStaging,
+        issuanceMode:
+          data.kind === "acme" ? "agent_delegated" : "legacy_control_plane",
+        issuerServerId: data.kind === "acme" ? data.issuerServerId : null,
+        challengeType: data.challengeType,
         dnsMode:
           data.kind === "acme"
-            ? dnsCapability.automatic
-              ? "cloudflare"
-              : "manual"
+            ? data.challengeType === "dns-01"
+              ? dnsCapability.automatic
+                ? "cloudflare"
+                : "manual"
+              : null
             : null,
         selfSignedValidityDays: data.selfSignedValidityDays,
         renewalDaysBeforeExpiry: data.renewalDaysBeforeExpiry,
@@ -301,11 +356,7 @@ export const continueCertificateDnsChallenge = createServerFn({
   .validator(certificateIdSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
-    await db
-      .update(managedCertificate)
-      .set({ challengeApprovedAt: new Date(), state: "issuing" })
-      .where(eq(managedCertificate.id, data.id));
-    await advanceCertificateIssuance(data.id);
+    await approveManualDnsChallenge(data.id);
     return { ok: true };
   });
 

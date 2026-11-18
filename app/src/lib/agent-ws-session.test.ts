@@ -44,6 +44,9 @@ function makeStore() {
     recordConfigAck: vi.fn(async () => undefined),
     recordUpdateStatus: vi.fn(async () => undefined),
     applyCertificateDeployments: vi.fn(async () => undefined),
+    handleAcmeDnsPresent: vi.fn(async () => undefined),
+    handleAcmeDnsCleanup: vi.fn(async () => undefined),
+    handleAcmeResult: vi.fn(async () => undefined),
   } satisfies AgentWsStore;
 }
 
@@ -225,5 +228,67 @@ describe("agent WebSocket session", () => {
       SERVER_ID,
       CONNECTED_AT,
     );
+  });
+
+  it("dispatches ACME broker frames and contains persistence failures", async () => {
+    const store = makeStore();
+    store.handleAcmeDnsPresent.mockRejectedValueOnce(
+      new Error("database offline"),
+    );
+    const peer = makePeer();
+    const { session } = await open(store, peer);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await handleAgentWsMessage(
+      session,
+      peer,
+      encodeAgentWsFrame(
+        createAgentWsFrame("acme.dns_present", {
+          jobId: "job-1",
+          fqdn: "_acme-challenge.example.com",
+          txtValue: "txt-digest",
+        }),
+      ),
+    );
+    await handleAgentWsMessage(
+      session,
+      peer,
+      encodeAgentWsFrame(
+        createAgentWsFrame("acme.dns_cleanup", {
+          jobId: "job-1",
+          fqdn: "_acme-challenge.example.com",
+          txtValue: "txt-digest",
+        }),
+      ),
+    );
+    await handleAgentWsMessage(
+      session,
+      peer,
+      encodeAgentWsFrame(
+        createAgentWsFrame("acme.result", {
+          jobId: "job-1",
+          error: "order expired",
+          errorPhase: "timeout",
+        }),
+      ),
+    );
+
+    expect(store.handleAcmeDnsPresent).toHaveBeenCalledWith(SERVER_ID, {
+      jobId: "job-1",
+      fqdn: "_acme-challenge.example.com",
+      txtValue: "txt-digest",
+    });
+    expect(store.handleAcmeDnsCleanup).toHaveBeenCalledWith(SERVER_ID, {
+      jobId: "job-1",
+      fqdn: "_acme-challenge.example.com",
+      txtValue: "txt-digest",
+    });
+    expect(store.handleAcmeResult).toHaveBeenCalledWith(SERVER_ID, {
+      jobId: "job-1",
+      error: "order expired",
+      errorPhase: "timeout",
+    });
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 });

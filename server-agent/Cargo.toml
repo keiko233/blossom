@@ -5,14 +5,18 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.103"
+async-trait = "0.1"
+base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
 clap = { version = "4.6.1", features = ["derive", "env"] }
 getrandom = "0.4"
 hex = "0.4"
 http = "1"
+instant-acme = { version = "0.8.5", default-features = false, features = ["hyper-rustls", "ring"] }
 processkit = "3.3.4"
 progenitor-client = "0.15.1"
 prost = "0.14"
+rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "pem", "ring", "zeroize"] }
 reqwest = { version = "0.13.4", features = ["json"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rustls-pemfile = "2"
@@ -31,6 +35,7 @@ futures-util = { version = "0.3.34", default-features = false, features = ["sink
 tar = "0.4.46"
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 tokio-util = { version = "0.7.20", features = ["rt"] }
+zeroize = "1.8"
 portable-pty = "0.9.0"
 
 [build-dependencies]
@@ -41,7 +46,6 @@ serde_json = "1.0.150"
 syn = "3.0.0"
 
 [dev-dependencies]
-rcgen = "0.14"
 tokio = { version = "1.52.3", features = ["test-util"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

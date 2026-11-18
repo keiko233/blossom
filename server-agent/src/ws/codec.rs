@@ -9,7 +9,7 @@
 //! Decoding is explicit: the envelope is parsed first, then the payload is
 //! deserialized into the strongly-typed message for its `type`. Frames this
 //! agent does not understand (a newer control plane, or the reserved
-//! `telemetry.*` / `pty.*` / `acme.*` channels owned by later work) decode to
+//! `telemetry.*` / `pty.*` / future `acme.*` frames) decode to
 //! [`AgentMessage::Unknown`] / a reserved channel variant instead of failing,
 //! so an old agent never tears down the connection over an added frame type.
 //! Optional envelope and payload fields carry `#[serde(default)]` so frames
@@ -31,6 +31,11 @@ pub mod frame_type {
     pub const CONFIG_ACK: &str = "config.ack";
     pub const UPDATE_TRIGGER: &str = "update.trigger";
     pub const UPDATE_STATUS: &str = "update.status";
+    pub const ACME_ISSUE: &str = "acme.issue";
+    pub const ACME_DNS_PRESENT: &str = "acme.dns_present";
+    pub const ACME_DNS_CLEANUP: &str = "acme.dns_cleanup";
+    pub const ACME_DNS_ACK: &str = "acme.dns_ack";
+    pub const ACME_RESULT: &str = "acme.result";
     pub const PTY_OPEN: &str = "pty.open";
     pub const PTY_DATA: &str = "pty.data";
     pub const PTY_RESIZE: &str = "pty.resize";
@@ -127,11 +132,13 @@ pub enum AgentMessage {
     ConfigAck(ConfigAckPayload),
     UpdateTrigger(UpdateTriggerPayload),
     UpdateStatus(UpdateStatusPayload),
+    AcmeIssue(AcmeIssuePayload),
+    AcmeDnsAck(AcmeDnsAckPayload),
     /// `telemetry.*`, reserved for the host/container telemetry work.
     Telemetry(ReservedFrame),
     /// `pty.*`, reserved for the interactive terminal work.
     Pty(ReservedFrame),
-    /// `acme.*`, reserved for agent-executed certificate issuance.
+    /// An unrecognized `acme.*` frame; typed ACME frames have their own arms.
     Acme(ReservedFrame),
     /// A frame type this agent does not know; callers ignore it.
     Unknown {
@@ -169,6 +176,8 @@ fn decode_message(
         frame_type::CONFIG_ACK => AgentMessage::ConfigAck(payload_of(frame_type, payload)?),
         frame_type::UPDATE_TRIGGER => AgentMessage::UpdateTrigger(payload_of(frame_type, payload)?),
         frame_type::UPDATE_STATUS => AgentMessage::UpdateStatus(payload_of(frame_type, payload)?),
+        frame_type::ACME_ISSUE => AgentMessage::AcmeIssue(payload_of(frame_type, payload)?),
+        frame_type::ACME_DNS_ACK => AgentMessage::AcmeDnsAck(payload_of(frame_type, payload)?),
         other if other.starts_with(TELEMETRY_PREFIX) => AgentMessage::Telemetry(ReservedFrame {
             frame_type: other.to_string(),
             payload,
@@ -313,6 +322,53 @@ pub struct UpdateStatePayload {
     pub checked_at: Option<DateTime<Utc>>,
 }
 
+/// `acme.issue` (control plane -> designated issuer agent).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcmeIssuePayload {
+    pub job_id: String,
+    pub certificate_id: String,
+    pub generation: u64,
+    pub domains: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acme_email: Option<String>,
+    pub acme_provider: String,
+    #[serde(default)]
+    pub acme_staging: bool,
+    pub challenge_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_account_binding: Option<ExternalAccountBindingPayload>,
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAccountBindingPayload {
+    pub kid: String,
+    pub hmac_key: String,
+}
+
+impl std::fmt::Debug for ExternalAccountBindingPayload {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ExternalAccountBindingPayload")
+            .field("kid", &self.kid)
+            .field("hmac_key", &"<redacted>")
+            .finish()
+    }
+}
+
+/// `acme.dns_ack` (control plane -> issuer agent).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcmeDnsAckPayload {
+    pub job_id: String,
+    pub fqdn: String,
+    pub txt_value: String,
+    pub accepted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Debug)]
 pub enum CodecError {
     Json(serde_json::Error),
@@ -450,8 +506,31 @@ mod tests {
         let pty = AgentWsFrame::decode(r#"{"v":1,"type":"pty.data","payload":{}}"#).unwrap();
         assert!(matches!(pty.message, AgentMessage::Pty(_)));
 
-        let acme = AgentWsFrame::decode(r#"{"v":1,"type":"acme.issue","payload":{}}"#).unwrap();
+        let acme = AgentWsFrame::decode(r#"{"v":1,"type":"acme.future","payload":{}}"#).unwrap();
         assert!(matches!(acme.message, AgentMessage::Acme(_)));
+    }
+
+    #[test]
+    fn acme_control_frames_decode_with_bounded_fields_and_redacted_eab() {
+        let decoded = AgentWsFrame::decode(
+            r#"{"v":1,"type":"acme.issue","payload":{"jobId":"job-1","certificateId":"cert-1","generation":2,"domains":["example.com"],"acmeProvider":"zerossl","challengeType":"dns-01","externalAccountBinding":{"kid":"kid-1","hmacKey":"redacted-test-value"}}}"#,
+        )
+        .unwrap();
+        let AgentMessage::AcmeIssue(issue) = decoded.message else {
+            panic!("expected acme.issue");
+        };
+        assert_eq!(issue.job_id, "job-1");
+        assert_eq!(issue.generation, 2);
+        assert!(!format!("{issue:?}").contains("redacted-test-value"));
+
+        let ack = AgentWsFrame::decode(
+            r#"{"v":1,"type":"acme.dns_ack","payload":{"jobId":"job-1","fqdn":"_acme-challenge.example.com","txtValue":"digest","accepted":true}}"#,
+        )
+        .unwrap();
+        let AgentMessage::AcmeDnsAck(ack) = ack.message else {
+            panic!("expected acme.dns_ack");
+        };
+        assert!(ack.accepted);
     }
 
     #[test]

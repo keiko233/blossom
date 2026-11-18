@@ -59,6 +59,7 @@ CI (`.github/workflows/test.yml`) runs `pnpm test` and a build of every deploy t
 | Auth, registration, MCP                                        | The related `lib/*.test.ts` and `orpc/mcp/__tests__/`; extend redaction tests when new fields are sensitive.                                     |
 | Build config (`vite.config.ts`, Dockerfile, workflows)         | Build each affected deploy target; a Docker build if the Dockerfile changed. Local runtime smoke (not a deployment check): run the Node output with `node .output/server/index.mjs`, call the Vercel function handler with a `Request`, or run the Cloudflare output with `wrangler dev --local` from a copy of `dist/` with disposable `vars` (no `.env.local`); request `/api/health`, `/`, `/api/spec.json`. Record the PID of anything you start and stop only that PID. |
 | Rust agent                                                     | `cargo test`, `cargo fmt --check`, `cargo clippy` as above; the Docker lifecycle test for certificate/reload/heartbeat changes.                  |
+| Agent ACME                                                     | `cargo test --locked` (fake CA/DNS ports), app certificate ACME/DNS/self-signed tests, type check, and all three app build targets. Never call a production CA or DNS provider in verification. |
 | Documentation only                                             | Local links and referenced paths/commands resolve; `git diff --check`.                                                                           |
 
 ## Writing tests

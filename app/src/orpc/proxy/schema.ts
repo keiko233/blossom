@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-import { managedCertificateInsertSchema } from "@/db/proxy-schema";
+import {
+  CERTIFICATE_CHALLENGE_TYPES,
+  managedCertificateInsertSchema,
+} from "@/db/proxy-schema";
 
 import {
   isNodeProtocol,
@@ -154,16 +157,21 @@ export const groupIdSchema = z.object({ id: z.string().min(1) });
 
 // --- Managed certificates ---------------------------------------------------
 
-const certificatePolicyBaseSchema = managedCertificateInsertSchema.pick({
-  name: true,
-  kind: true,
-  domains: true,
-  acmeEmail: true,
-  acmeProvider: true,
-  acmeStaging: true,
-  selfSignedValidityDays: true,
-  renewalDaysBeforeExpiry: true,
-});
+const certificatePolicyBaseSchema = managedCertificateInsertSchema
+  .pick({
+    name: true,
+    kind: true,
+    domains: true,
+    acmeEmail: true,
+    acmeProvider: true,
+    acmeStaging: true,
+    selfSignedValidityDays: true,
+    renewalDaysBeforeExpiry: true,
+  })
+  .extend({
+    issuerServerId: z.string().min(1).optional(),
+    challengeType: z.enum(CERTIFICATE_CHALLENGE_TYPES).default("dns-01"),
+  });
 
 export const createCertificateSchema = certificatePolicyBaseSchema;
 export const updateCertificateSchema = certificatePolicyBaseSchema

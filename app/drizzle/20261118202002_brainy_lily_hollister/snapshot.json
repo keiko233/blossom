@@ -1,0 +1,694 @@
+{
+  "type": "diff",
+  "version": "9",
+  "dialect": "postgres",
+  "id": "3af0345d-2533-485e-9389-6c9da503019b",
+  "prevIds": ["ba9389a1-0bcf-4632-8f1e-259a5bce585d"],
+  "footprints": [
+    {
+      "statementType": "create_table",
+      "statementTarget": ["table", "public", "certificate_issuance_job"],
+      "writes": [
+        "s|tbl|public.certificate_issuance_job",
+        "n|tbl|public.certificate_issuance_job",
+        "e|tbl|public.certificate_issuance_job",
+        "n|rel|public.certificate_issuance_job",
+        "n|type|public.certificate_issuance_job",
+        "n|rel|public.certificate_issuance_job_pkey"
+      ],
+      "reads": ["n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "managed_certificate",
+        "issuance_mode"
+      ],
+      "writes": [
+        "s|col|public.managed_certificate.issuance_mode",
+        "n|col|public.managed_certificate.issuance_mode",
+        "e|col|public.managed_certificate.issuance_mode"
+      ],
+      "reads": ["n|tbl|public.managed_certificate", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "managed_certificate",
+        "issuer_server_id"
+      ],
+      "writes": [
+        "s|col|public.managed_certificate.issuer_server_id",
+        "n|col|public.managed_certificate.issuer_server_id",
+        "e|col|public.managed_certificate.issuer_server_id"
+      ],
+      "reads": ["n|tbl|public.managed_certificate", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "managed_certificate",
+        "challenge_type"
+      ],
+      "writes": [
+        "s|col|public.managed_certificate.challenge_type",
+        "n|col|public.managed_certificate.challenge_type",
+        "e|col|public.managed_certificate.challenge_type"
+      ],
+      "reads": ["n|tbl|public.managed_certificate", "n|sch|public"]
+    },
+    {
+      "statementType": "create_index",
+      "statementTarget": [
+        "index",
+        "public",
+        "certificate_issuance_job",
+        "certificate_issuance_job_certificate_idx"
+      ],
+      "writes": [
+        "s|idx|public.certificate_issuance_job_certificate_idx",
+        "n|idx|public.certificate_issuance_job_certificate_idx",
+        "e|idx|public.certificate_issuance_job_certificate_idx",
+        "n|rel|public.certificate_issuance_job_certificate_idx"
+      ],
+      "reads": [
+        "n|tbl|public.certificate_issuance_job",
+        "n|sch|public",
+        "n|col|public.certificate_issuance_job.certificate_id",
+        "n|col|public.certificate_issuance_job.created_at"
+      ]
+    },
+    {
+      "statementType": "create_index",
+      "statementTarget": [
+        "index",
+        "public",
+        "certificate_issuance_job",
+        "certificate_issuance_job_issuer_idx"
+      ],
+      "writes": [
+        "s|idx|public.certificate_issuance_job_issuer_idx",
+        "n|idx|public.certificate_issuance_job_issuer_idx",
+        "e|idx|public.certificate_issuance_job_issuer_idx",
+        "n|rel|public.certificate_issuance_job_issuer_idx"
+      ],
+      "reads": [
+        "n|tbl|public.certificate_issuance_job",
+        "n|sch|public",
+        "n|col|public.certificate_issuance_job.issuer_server_id",
+        "n|col|public.certificate_issuance_job.state"
+      ]
+    },
+    {
+      "statementType": "create_index",
+      "statementTarget": [
+        "index",
+        "public",
+        "certificate_issuance_job",
+        "certificate_issuance_job_state_idx"
+      ],
+      "writes": [
+        "s|idx|public.certificate_issuance_job_state_idx",
+        "n|idx|public.certificate_issuance_job_state_idx",
+        "e|idx|public.certificate_issuance_job_state_idx",
+        "n|rel|public.certificate_issuance_job_state_idx"
+      ],
+      "reads": [
+        "n|tbl|public.certificate_issuance_job",
+        "n|sch|public",
+        "n|col|public.certificate_issuance_job.state"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "certificate_issuance_job"],
+      "writes": [
+        "s|fk|public.certificate_issuance_job.certificate_issuance_job_v1w1hF880Bqh_fkey",
+        "n|fk|public.certificate_issuance_job.certificate_issuance_job_v1w1hF880Bqh_fkey",
+        "e|fk|public.certificate_issuance_job.certificate_issuance_job_v1w1hF880Bqh_fkey",
+        "n|con|public.certificate_issuance_job.certificate_issuance_job_v1w1hF880Bqh_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.certificate_issuance_job",
+        "n|sch|public",
+        "n|tbl|public.managed_certificate",
+        "n|sch|public",
+        "n|col|public.certificate_issuance_job.certificate_id",
+        "n|col|public.managed_certificate.id",
+        "e|uniqueness|public.managed_certificate.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "certificate_issuance_job"],
+      "writes": [
+        "s|fk|public.certificate_issuance_job.certificate_issuance_job_issuer_server_id_server_id_fkey",
+        "n|fk|public.certificate_issuance_job.certificate_issuance_job_issuer_server_id_server_id_fkey",
+        "e|fk|public.certificate_issuance_job.certificate_issuance_job_issuer_server_id_server_id_fkey",
+        "n|con|public.certificate_issuance_job.certificate_issuance_job_issuer_server_id_server_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.certificate_issuance_job",
+        "n|sch|public",
+        "n|tbl|public.server",
+        "n|sch|public",
+        "n|col|public.certificate_issuance_job.issuer_server_id",
+        "n|col|public.server.id",
+        "e|uniqueness|public.server.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "managed_certificate"],
+      "writes": [
+        "s|fk|public.managed_certificate.managed_certificate_issuer_server_id_server_id_fkey",
+        "n|fk|public.managed_certificate.managed_certificate_issuer_server_id_server_id_fkey",
+        "e|fk|public.managed_certificate.managed_certificate_issuer_server_id_server_id_fkey",
+        "n|con|public.managed_certificate.managed_certificate_issuer_server_id_server_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.managed_certificate",
+        "n|sch|public",
+        "n|tbl|public.server",
+        "n|sch|public",
+        "n|col|public.managed_certificate.issuer_server_id",
+        "n|col|public.server.id",
+        "e|uniqueness|public.server.id"
+      ]
+    }
+  ],
+  "deltas": [
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "name": "certificate_issuance_job",
+        "isRlsEnabled": false,
+        "entityType": "tables"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "certificate_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "generation",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "issuer_server_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "challenge_type",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "acme_provider",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "acme_staging",
+        "type": "boolean",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "false",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "domains",
+        "type": "jsonb",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "state",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "'dispatched'",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "dns_records",
+        "type": "jsonb",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "'[]'",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "challenge_approved_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "challenge_expires_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "dispatch_count",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "0",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "last_dispatched_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "last_error_phase",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "last_error",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "completed_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "created_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "updated_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_certificate",
+        "name": "issuance_mode",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "'legacy_control_plane'",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_certificate",
+        "name": "issuer_server_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_certificate",
+        "name": "challenge_type",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "'dns-01'",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "certificate_issuance_job_certificate_idx",
+        "nameExplicit": true,
+        "columns": [
+          {
+            "value": "certificate_id",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          },
+          {
+            "value": "created_at",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          }
+        ],
+        "isUnique": false,
+        "where": null,
+        "with": "",
+        "method": "btree",
+        "concurrently": false,
+        "entityType": "indexes"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "certificate_issuance_job_issuer_idx",
+        "nameExplicit": true,
+        "columns": [
+          {
+            "value": "issuer_server_id",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          },
+          {
+            "value": "state",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          }
+        ],
+        "isUnique": false,
+        "where": null,
+        "with": "",
+        "method": "btree",
+        "concurrently": false,
+        "entityType": "indexes"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "certificate_issuance_job_state_idx",
+        "nameExplicit": true,
+        "columns": [
+          {
+            "value": "state",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          }
+        ],
+        "isUnique": false,
+        "where": null,
+        "with": "",
+        "method": "btree",
+        "concurrently": false,
+        "entityType": "indexes"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "certificate_issuance_job_v1w1hF880Bqh_fkey",
+        "nameExplicit": false,
+        "columns": ["certificate_id"],
+        "schemaTo": "public",
+        "tableTo": "managed_certificate",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "CASCADE",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "certificate_issuance_job_issuer_server_id_server_id_fkey",
+        "nameExplicit": false,
+        "columns": ["issuer_server_id"],
+        "schemaTo": "public",
+        "tableTo": "server",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "CASCADE",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_certificate",
+        "name": "managed_certificate_issuer_server_id_server_id_fkey",
+        "nameExplicit": false,
+        "columns": ["issuer_server_id"],
+        "schemaTo": "public",
+        "tableTo": "server",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "SET NULL",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "certificate_issuance_job",
+        "name": "certificate_issuance_job_pkey",
+        "columns": ["id"],
+        "nameExplicit": false,
+        "entityType": "pks"
+      }
+    }
+  ]
+}

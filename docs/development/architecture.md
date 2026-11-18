@@ -71,6 +71,31 @@ API.
   written to `admin_audit_log` as metadata only; terminal bytes are never
   stored.
 
+### Agent-executed ACME
+
+Established. ACME orders run on the designated `server-agent`, selected by
+`managed_certificate.issuer_server_id` or lazily from an enabled certificate
+binding that advertises `acme-v1`. The app creates a fenced
+`certificate_issuance_job` row before sending `acme.issue` over the agent
+WebSocket; the job id, issuer server, certificate generation, and expiry are
+checked again before a result is committed.
+
+- `http-01` uses a temporary responder on the issuer host (port 80 by default,
+  configurable with `AGENT_ACME_HTTP_BIND`).
+- `dns-01` sends only the exact `_acme-challenge.<domain>` TXT value to the
+  control plane. The Cloudflare adapter creates/deletes the record; without a
+  Cloudflare token the TXT values are shown for administrator approval and
+  manual continuation. DNS credentials never leave the control plane.
+- `acme.result` is accepted only from the job's issuer server and only while
+  that job is the current generation and unexpired. The returned chain and key
+  are validated together, the key is encrypted with `CERTIFICATE_MASTER_KEY`,
+  and bound servers receive a best-effort `config.notify`.
+- Existing active material and bindings are not rewritten by the migration.
+  Rows remain `legacy_control_plane` until a later generation needs issuance;
+  then the issuer is resolved and the row moves to `agent_delegated`. An
+  existing in-flight legacy ACME order is not resumed: active material keeps
+  serving, and the operator can renew to start a new agent job.
+
 The server detail page requests live telemetry through an admin-authenticated,
 uncached endpoint. Each request targets the currently recorded WebSocket
 session and expires after 2.5 seconds. Normal refreshes request one sample at
@@ -86,14 +111,13 @@ Established. `app/vite.config.ts` selects the target from `DEPLOY_TARGET` (`clou
 - **Nitro** builds `vercel` and `node` (presets `vercel` and `node-server`, pinned in `NITRO_PRESETS`). Hosts also auto-detect Nitro, but the `build:<target>` scripts, `app/vercel.json` and the Dockerfile pin the preset so builds are reproducible. Outputs: Node `.output/` (Docker) and Vercel `.vercel/output/`.
 - **Cloudflare** keeps `@cloudflare/vite-plugin` (it must come before `tanstackStart`). Evidence from Nitro `3.0.260903-beta` (`cloudflare_module`), tried with the same app:
   - Build needs three workarounds (`cloudflare:*` externalised for the SSR environment, no trailing commas in `wrangler.jsonc`, `main` in `wrangler.jsonc` overridden), then succeeds.
-  - The built Worker crashes at startup in local workerd (`wrangler dev --local`): `process.stderr` is undefined in `acme-client`'s `debug`. Adding `enable_nodejs_process_v2` moves the failure to `No such module "node:fs"`; adding `enable_nodejs_fs_module` as well makes local requests pass (`/api/health`, `/`, `/api/spec.json`). That changes the production compatibility flags (currently `nodejs_compat` only), which cannot be verified without a deployment.
+  - The earlier local-workerd failure was traced to `acme-client`/`@peculiar/x509`; PR 6 removes both from the app and also removes the `reflect-metadata`/tsyringe bundling workaround. The production compatibility flags remain `nodejs_compat` only because changing them was not verified against a deployment.
   - Nitro's dev runner for Cloudflare (miniflare) requires `miniflare@^4`, but Wrangler 4.154 resolves `5.x` beta, giving `ERR_VALIDATION`. With `miniflare@^4` added, SSR modules fail in workerd (`module is not defined`, `Class extends value [object Module]`), so the local Hyperdrive development path would regress.
   - The plugin-built Worker passes the same local workerd requests unchanged, so the plugin stays until Nitro's Cloudflare dev runner works with this app. Re-evaluate when Nitro or Wrangler updates.
 - **Database driver** is resolved in `packages/database/src/driver.ts`: a Hyperdrive connection string (Cloudflare) forces `node-postgres`; otherwise `DATABASE_DRIVER` or auto-detection (`*.neon.tech` → `neon-http`, else `node-postgres`).
 - **Transactions**: only `node-postgres` supports interactive transactions (`supportsInteractiveTransactions` in `packages/database/src/driver.ts`). Code that needs atomicity branches on it; on `neon-http` it runs ordered statements and compensates on failure (see `app/src/query/nodes.ts`). Do not assume `db.transaction` works everywhere.
 - **`@/lib/database-connection`** is aliased in `vite.config.ts` to the Cloudflare variant only on the Cloudflare target.
 - **Environment** is validated lazily at runtime on the server (`getServerEnv()` in `app/src/lib/env.ts`), and client `VITE_*` variables are validated at build time. `vite dev` also parses the server schema up front unless `SKIP_ENV_VALIDATION` is set. Details in [API, data and auth](api-data-auth.md#environment).
-- **Bundling quirk**: `vite.config.ts` injects `reflect-metadata` ahead of `tsyringe` (pulled in via `@peculiar/x509`/`acme-client`) so chunk ordering cannot break module evaluation. Keep that plugin if you touch certificate/ACME imports.
 - **Hyperdrive**: `app/wrangler.jsonc` declares the `HYPERDRIVE` binding. Database and auth instances are created lazily per Workers request, so connections are not shared across request I/O contexts. Node deployments reuse their database and auth instances. Each Workers request therefore gets its own `pg` pool, created by `drizzle(connectionString)`, i.e. `new Pool({connectionString})` with `pg-pool` defaults: `max` 10, `idleTimeoutMillis` 10000, no connection timeout. Local workerd (12 concurrent `pg_sleep(1)` queries in one request through a local Hyperdrive binding) opened 10 connections, queued the other 2 queries, returned all 12 results in 2.0 s, and left no connections behind once the response finished. Cloudflare's [Workers limits](https://developers.cloudflare.com/workers/platform/limits/) cap the number of connections that are in the initial establishment (waiting-for-headers) phase at six per invocation, with further attempts queued; it is not a limit on all simultaneously open connections, and the documentation does not say how this applies to `pg` sockets. Local workerd was not shown to enforce it. Cloudflare's [Hyperdrive Postgres example](https://developers.cloudflare.com/hyperdrive/examples/connect-to-postgres/) uses `max: 5` in its postgres.js snippet only; it is not a documented requirement for `pg` pools. Whether the default pool size causes queuing or other effects in production is unverified, and the pool size is left unchanged. The pool is deliberately not closed at the end of the handler, because streamed SSR responses may still query after the handler returns. Local Workers requests, including concurrent queries and sign-up, have been tested with a local Hyperdrive binding backed by disposable PostgreSQL; remote Hyperdrive has not been verified.
 - **Docker**: the root `Dockerfile` builds the app with `DEPLOY_TARGET=node` into a self-contained Nitro server; `server-agent/Dockerfile` is a thin Alpine runtime whose entrypoint downloads the agent and sing-box into the mounted `/data` volume. `server-agent/Dockerfile.test` is test-only and seeds both binaries for the Docker lifecycle test. Migrations are not part of the app image. The root Dockerfile copies each workspace package's `package.json` before `pnpm install --frozen-lockfile` (for layer caching), so a new package under `packages/` needs a matching `COPY` line there, and any path it adds to the image's inputs belongs in the `app` filter of `docker.yml`.
 
@@ -131,3 +155,5 @@ Established.
 - Audit logs and MCP tool results run through a redactor (`app/src/orpc/mcp/redact.ts`) that masks sensitive keys, bearer tokens and PEM blocks.
 - Certificate private keys are encrypted at rest with an AES-256-GCM envelope keyed by `CERTIFICATE_MASTER_KEY` (`app/src/lib/certificate-crypto.ts`).
 - The agent never trusts inline certificate material or control-plane paths from the config; it injects only local paths it has validated.
+- ACME issuance is job-fenced by an unguessable job id, the authenticated issuer server, the certificate generation, and an expiry. DNS challenge acknowledgements also echo the exact TXT value, so a delayed ack cannot release a different challenge for the same name.
+- The agent keeps ACME account/challenge values and certificate private keys in redacting/zeroizing wrappers, never logs them, and returns private material only to the control plane, which encrypts it at rest.

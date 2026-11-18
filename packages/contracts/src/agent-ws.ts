@@ -20,6 +20,11 @@ export const AGENT_WS_MESSAGE_TYPES = [
   "config.ack",
   "update.trigger",
   "update.status",
+  "acme.issue",
+  "acme.dns_present",
+  "acme.dns_cleanup",
+  "acme.dns_ack",
+  "acme.result",
 ] as const;
 
 export type AgentWsMessageType = (typeof AGENT_WS_MESSAGE_TYPES)[number];
@@ -34,10 +39,6 @@ export const AGENT_WS_RESERVED_MESSAGE_TYPES = [
   "pty.resize",
   "pty.close",
   "pty.exit",
-  "acme.issue",
-  "acme.dns_present",
-  "acme.dns_cleanup",
-  "acme.result",
 ] as const;
 
 export type AgentWsReservedMessageType =
@@ -313,6 +314,36 @@ export const agentWsPtyExitPayloadSchema = z.object({
   reason: agentWsPtyExitReasonSchema.optional(),
 });
 
+/**
+ * Bounds shared by the control-plane orchestrator and the Rust executor.
+ * Keeping them in the protocol prevents either side from accepting an
+ * unbounded order or DNS broker request.
+ */
+export const AGENT_WS_ACME_MAX_DOMAINS = 100;
+export const AGENT_WS_ACME_MAX_CHALLENGE_VALUE = 512;
+export const AGENT_WS_ACME_MAX_DNS_NAME = 253;
+
+function isTokenText(value: string): boolean {
+  return [...value].every((character) => {
+    const code = character.charCodeAt(0);
+    return code > 32 && code < 127;
+  });
+}
+
+const acmeDomainSchema = z
+  .string()
+  .min(1)
+  .max(AGENT_WS_ACME_MAX_DNS_NAME)
+  .refine(
+    (value) =>
+      !value.includes("://") &&
+      !value.includes("/") &&
+      !/\s/.test(value) &&
+      value.toLowerCase() === value,
+    "Invalid ACME DNS identifier",
+  );
+
+/** `acme.issue` (control plane -> designated issuer agent). */
 export const AGENT_WS_PTY_MESSAGE_TYPES = [
   "pty.open",
   "pty.data",
@@ -375,32 +406,118 @@ export function parseAgentWsPtyMessage(
 
 export const agentWsAcmeIssuePayloadSchema = z.object({
   jobId: z.string().min(1).max(128),
-  certificateId: z.string().min(1),
-  domains: z.array(z.string().min(1)).min(1),
+  certificateId: z.string().min(1).max(128),
+  generation: z.number().int().min(1),
+  domains: z.array(acmeDomainSchema).min(1).max(AGENT_WS_ACME_MAX_DOMAINS),
   acmeEmail: z.email().optional(),
-  acmeProvider: z.enum(["letsencrypt", "zerossl"]).optional(),
-  acmeStaging: z.boolean().optional(),
+  acmeProvider: z.enum(["letsencrypt", "zerossl"]),
+  acmeStaging: z.boolean().default(false),
   challengeType: z.enum(["dns-01", "http-01"]),
+  externalAccountBinding: z
+    .object({
+      kid: z.string().min(1).max(256),
+      hmacKey: z.string().min(1).max(1024),
+    })
+    .optional(),
 });
+
+export type AgentWsAcmeIssuePayload = z.infer<
+  typeof agentWsAcmeIssuePayloadSchema
+>;
 
 export const agentWsAcmeDnsPresentPayloadSchema = z.object({
   jobId: z.string().min(1).max(128),
-  fqdn: z.string().min(1),
-  txtValue: z.string().min(1),
+  fqdn: z.string().min(1).max(AGENT_WS_ACME_MAX_DNS_NAME),
+  txtValue: z
+    .string()
+    .min(1)
+    .max(AGENT_WS_ACME_MAX_CHALLENGE_VALUE)
+    .refine(isTokenText),
 });
+
+export type AgentWsAcmeDnsPresentPayload = z.infer<
+  typeof agentWsAcmeDnsPresentPayloadSchema
+>;
 
 export const agentWsAcmeDnsCleanupPayloadSchema = z.object({
   jobId: z.string().min(1).max(128),
-  fqdn: z.string().min(1),
-  txtValue: z.string().min(1),
+  fqdn: z.string().min(1).max(AGENT_WS_ACME_MAX_DNS_NAME),
+  txtValue: z
+    .string()
+    .min(1)
+    .max(AGENT_WS_ACME_MAX_CHALLENGE_VALUE)
+    .refine(isTokenText),
 });
 
-export const agentWsAcmeResultPayloadSchema = z.object({
+export type AgentWsAcmeDnsCleanupPayload = z.infer<
+  typeof agentWsAcmeDnsCleanupPayloadSchema
+>;
+
+/** `acme.dns_ack` (control plane -> issuer agent). */
+export const agentWsAcmeDnsAckPayloadSchema = z.object({
   jobId: z.string().min(1).max(128),
-  certificatePem: z.string().min(1).optional(),
-  privateKeyPem: z.string().min(1).optional(),
-  error: z.string().min(1).max(16_384).optional(),
+  fqdn: z.string().min(1).max(AGENT_WS_ACME_MAX_DNS_NAME),
+  txtValue: z
+    .string()
+    .min(1)
+    .max(AGENT_WS_ACME_MAX_CHALLENGE_VALUE)
+    .refine(isTokenText),
+  accepted: z.boolean(),
+  error: z.string().min(1).max(2048).optional(),
 });
+
+export type AgentWsAcmeDnsAckPayload = z.infer<
+  typeof agentWsAcmeDnsAckPayloadSchema
+>;
+
+export const AGENT_WS_ACME_ERROR_PHASES = [
+  "configuration",
+  "account",
+  "order",
+  "challenge",
+  "validation",
+  "finalize",
+  "certificate",
+  "dns_broker",
+  "timeout",
+  "internal",
+] as const;
+
+export const agentWsAcmeErrorPhaseSchema = z.enum(AGENT_WS_ACME_ERROR_PHASES);
+
+export type AgentWsAcmeErrorPhase = z.infer<typeof agentWsAcmeErrorPhaseSchema>;
+
+export const agentWsAcmeResultPayloadSchema = z
+  .object({
+    jobId: z.string().min(1).max(128),
+    certificatePem: z
+      .string()
+      .min(1)
+      .max(1024 * 1024)
+      .optional(),
+    privateKeyPem: z
+      .string()
+      .min(1)
+      .max(256 * 1024)
+      .optional(),
+    error: z.string().min(1).max(16_384).optional(),
+    errorPhase: agentWsAcmeErrorPhaseSchema.optional(),
+  })
+  .superRefine((value, context) => {
+    const success =
+      value.certificatePem !== undefined && value.privateKeyPem !== undefined;
+    if (success === (value.error !== undefined)) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "acme.result must carry both PEM values on success or an error",
+      });
+    }
+  });
+
+export type AgentWsAcmeResultPayload = z.infer<
+  typeof agentWsAcmeResultPayloadSchema
+>;
 
 export const agentWsPayloadSchemas = {
   hello: agentWsHelloPayloadSchema,
@@ -411,6 +528,11 @@ export const agentWsPayloadSchemas = {
   "config.ack": agentWsConfigAckPayloadSchema,
   "update.trigger": agentWsUpdateTriggerPayloadSchema,
   "update.status": agentWsUpdateStatusesSchema,
+  "acme.issue": agentWsAcmeIssuePayloadSchema,
+  "acme.dns_present": agentWsAcmeDnsPresentPayloadSchema,
+  "acme.dns_cleanup": agentWsAcmeDnsCleanupPayloadSchema,
+  "acme.dns_ack": agentWsAcmeDnsAckPayloadSchema,
+  "acme.result": agentWsAcmeResultPayloadSchema,
 } as const satisfies Record<AgentWsMessageType, z.ZodType>;
 
 export const agentWsPtyPayloadSchemas = {
@@ -427,10 +549,6 @@ export const agentWsReservedPayloadSchemas = {
   "telemetry.inspect": agentWsTelemetryInspectPayloadSchema,
   "telemetry.snapshot": agentWsTelemetrySnapshotPayloadSchema,
   ...agentWsPtyPayloadSchemas,
-  "acme.issue": agentWsAcmeIssuePayloadSchema,
-  "acme.dns_present": agentWsAcmeDnsPresentPayloadSchema,
-  "acme.dns_cleanup": agentWsAcmeDnsCleanupPayloadSchema,
-  "acme.result": agentWsAcmeResultPayloadSchema,
 } as const satisfies Record<AgentWsReservedMessageType, z.ZodType>;
 
 export type AgentWsDecodedMessage =
@@ -442,6 +560,11 @@ export type AgentWsDecodedMessage =
   | { kind: "config.ack"; payload: AgentWsConfigAckPayload }
   | { kind: "update.trigger"; payload: AgentWsUpdateTriggerPayload }
   | { kind: "update.status"; payload: AgentWsUpdateStatuses }
+  | { kind: "acme.issue"; payload: AgentWsAcmeIssuePayload }
+  | { kind: "acme.dns_present"; payload: AgentWsAcmeDnsPresentPayload }
+  | { kind: "acme.dns_cleanup"; payload: AgentWsAcmeDnsCleanupPayload }
+  | { kind: "acme.dns_ack"; payload: AgentWsAcmeDnsAckPayload }
+  | { kind: "acme.result"; payload: AgentWsAcmeResultPayload }
   | {
       kind: "reserved";
       type: AgentWsReservedMessageType;
