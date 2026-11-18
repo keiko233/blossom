@@ -10,7 +10,10 @@ import type { RealtimeHub } from "./realtime-hub-types";
 export interface AgentNotificationDependencies {
   loadServer(serverId: string): Promise<Server | null>;
   loadDesiredRevision(server: Server): Promise<string>;
-  hub: RealtimeHub;
+  hub: Pick<
+    RealtimeHub,
+    "acceptAgent" | "notifyConfigChanged" | "notifyUpdateTrigger"
+  >;
 }
 
 const defaultDependencies: AgentNotificationDependencies = {
@@ -80,7 +83,7 @@ export async function notifyAgentConfigChanged(
 export async function notifyAgentUpdateTrigger(
   serverId: string,
   payload: AgentWsUpdateTriggerPayload,
-  hub?: RealtimeHub,
+  hub?: Pick<RealtimeHub, "notifyUpdateTrigger">,
 ): Promise<void> {
   try {
     const targetHub =

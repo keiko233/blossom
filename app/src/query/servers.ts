@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { count, desc, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 
 import { db } from "@/db";
 import { node, type Server, server } from "@/db/proxy-schema";
@@ -235,6 +236,8 @@ export const regenerateServerToken = createServerFn({ method: "POST" })
       .set({
         agentTokenHash: credential.hash,
         agentTokenPrefix: credential.prefix,
+        transportMode: "http",
+        wsConnectedAt: null,
       })
       .where(eq(server.id, data.id))
       .returning();
@@ -243,4 +246,38 @@ export const regenerateServerToken = createServerFn({ method: "POST" })
       throw new Error("Not found");
     }
     return { id: row.id, token: credential.token };
+  });
+
+export const checkServerUpdate = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("server.check_update", {
+      targetType: "server",
+      targetId: fromInput("id"),
+    }),
+  ])
+  .validator(serverIdSchema.extend({ target: z.enum(["agent", "sing-box"]) }))
+  .handler(async ({ data }) => {
+    await ensureAdmin();
+    const [row] = await db
+      .select({
+        enabled: server.enabled,
+        transport: server.transportMode,
+        desiredAgentVersion: server.desiredAgentVersion,
+        desiredSingBoxVersion: server.desiredSingBoxVersion,
+      })
+      .from(server)
+      .where(eq(server.id, data.id));
+    const desired =
+      data.target === "agent"
+        ? row?.desiredAgentVersion
+        : row?.desiredSingBoxVersion;
+    if (!row?.enabled || !desired) return "unmanaged";
+    if (row.transport !== "ws") return "polling";
+    await notifyAgentUpdateTrigger(data.id, {
+      target: data.target,
+      desiredAgentVersion: row.desiredAgentVersion,
+      desiredSingBoxVersion: row.desiredSingBoxVersion,
+      force: true,
+    });
+    return "requested";
   });

@@ -41,7 +41,10 @@ function makeHub() {
     ),
     notifyConfigChanged: vi.fn(async () => undefined),
     notifyUpdateTrigger: vi.fn(async () => undefined),
-  } satisfies RealtimeHub;
+  } satisfies Pick<
+    RealtimeHub,
+    "acceptAgent" | "notifyConfigChanged" | "notifyUpdateTrigger"
+  >;
 }
 
 describe("agent WebSocket route", () => {

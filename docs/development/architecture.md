@@ -60,6 +60,14 @@ API.
   Object, or unreachable Redis never changes the mutation result; HTTP polling
   and heartbeats remain the fallback.
 
+The server detail page requests live telemetry through an admin-authenticated,
+uncached endpoint. Each request targets the currently recorded WebSocket
+session and expires after 2.5 seconds. Normal refreshes request one sample at
+a time, and port and interface inspection runs on demand. Telemetry frames
+are handled in memory (and relayed over Redis when a Nitro backplane is
+configured). They do not write to PostgreSQL. Agents without
+`telemetry-v1` continue using their existing transport and update policy.
+
 ## Runtimes and deploy targets
 
 Established. `app/vite.config.ts` selects the target from `DEPLOY_TARGET` (`cloudflare` default, `vercel`, `node`). The same source must build and run on all of them, so avoid APIs that exist on only one runtime.
