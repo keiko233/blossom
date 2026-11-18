@@ -28,6 +28,7 @@ Established. Know which surface you are on, because they authenticate differentl
 | Server functions              | `app/src/query/*.ts`, `app/src/lib/auth.tsx`                           | session; admin ones call `ensureAdmin()`             | The application API for the UI. All admin CRUD lives here.                                                                             |
 | Agent API (oRPC)              | `app/src/orpc/router/index.ts`, `app/src/orpc/proxy/agent.ts`          | per-server `Authorization: Bearer` token             | The only procedures in the oRPC router: `agent.getConfigV3`, `agent.heartbeat`, `agent.reportTraffic`.                                 |
 | Agent WebSocket               | `app/src/routes/api/agent/ws.ts`                                       | per-server `Authorization: Bearer` token             | One outbound `/api/agent/ws` connection per server; the token is checked before the upgrade.                                           |
+| Admin PTY WebSocket           | `app/src/routes/api/admin/servers/$id/pty/ws.ts`                        | better-auth admin session + same-origin check        | Human-only browser terminal relayed to one enrolled agent; no server function or MCP tool exposes it.                                  |
 | oRPC mounts                   | `app/src/routes/api/$.ts` (OpenAPI), `app/src/routes/api/rpc/$.ts` (RPC) | same as above                                      | `/api/*` serves the OpenAPI document (`/api/spec.json`, consumed by the agent codegen); `/api/rpc/*` is the oRPC RPC protocol.         |
 | better-auth                   | `app/src/routes/api/auth/$.ts`                                         | its own                                              | Email/password, magic link, GitHub/Google (when configured), admin and JWT plugins, OAuth provider for MCP.                            |
 | MCP                           | `app/src/routes/api/mcp.ts`, `app/src/orpc/mcp/`                       | OAuth 2.0 bearer; admin actor; `blossom:mcp:*` scopes | Tools call an in-process oRPC router (`mcpRouter`); write tools need `confirm: true` and are audited.                                  |
@@ -59,6 +60,16 @@ API.
   after their SQL mutation commits. A missing socket, unavailable Durable
   Object, or unreachable Redis never changes the mutation result; HTTP polling
   and heartbeats remain the fallback.
+- The admin terminal adds a second WebSocket surface. The browser connects to
+  `/api/admin/servers/<id>/pty/ws`, which accepts only an admin better-auth session
+  with a same-origin `Origin`. The route relays `pty.*` frames to exactly the
+  agent connection identified by `wsConnectedAt`; it does not accept a host,
+  port or command. Nitro keeps the relay in process (or on the Redis
+  backplane), while Cloudflare forwards the browser upgrade into the same
+  `AgentSessionDO` that holds the agent socket. The agent advertises `pty-v1`
+  only when started with `AGENT_PTY_ENABLED=true`. Session open and close are
+  written to `admin_audit_log` as metadata only; terminal bytes are never
+  stored.
 
 ### Agent-executed ACME
 

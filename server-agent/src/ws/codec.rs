@@ -36,6 +36,11 @@ pub mod frame_type {
     pub const ACME_DNS_CLEANUP: &str = "acme.dns_cleanup";
     pub const ACME_DNS_ACK: &str = "acme.dns_ack";
     pub const ACME_RESULT: &str = "acme.result";
+    pub const PTY_OPEN: &str = "pty.open";
+    pub const PTY_DATA: &str = "pty.data";
+    pub const PTY_RESIZE: &str = "pty.resize";
+    pub const PTY_CLOSE: &str = "pty.close";
+    pub const PTY_EXIT: &str = "pty.exit";
 }
 
 const TELEMETRY_PREFIX: &str = "telemetry.";

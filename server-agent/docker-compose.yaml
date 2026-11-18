@@ -27,6 +27,11 @@ services:
       AGENT_TOKEN: ${AGENT_TOKEN:?set AGENT_TOKEN in .env}
       # trace | debug | info | warn | error
       AGENT_LOG_LEVEL: ${AGENT_LOG_LEVEL:-info}
+      # Optional interactive admin terminal; disabled unless explicitly enabled.
+      # AGENT_PTY_ENABLED: ${AGENT_PTY_ENABLED:-false}
+      # AGENT_PTY_MAX_SESSIONS: ${AGENT_PTY_MAX_SESSIONS:-2}
+      # AGENT_PTY_IDLE_TIMEOUT_SECONDS: ${AGENT_PTY_IDLE_TIMEOUT_SECONDS:-900}
+      # AGENT_PTY_MAX_SESSION_SECONDS: ${AGENT_PTY_MAX_SESSION_SECONDS:-3600}
       # First-start downloads. Omit to use the latest published releases;
       # afterwards the control plane's per-server desired versions take over.
       AGENT_BOOTSTRAP_VERSION: ${AGENT_BOOTSTRAP_VERSION:-latest}
