@@ -1,4 +1,4 @@
-name: Server agent release
+name: "[Release] Build and Publish Server Agent Binaries"
 
 on:
   push:

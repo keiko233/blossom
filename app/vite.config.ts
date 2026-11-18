@@ -12,7 +12,7 @@ import { defineConfig, loadEnv, type Plugin } from "vite";
 
 import { clientEnvSchema, serverEnvSchema } from "./src/lib/env-schema";
 
-const DEPLOY_TARGETS = ["cloudflare", "netlify", "vercel", "node"] as const;
+const DEPLOY_TARGETS = ["cloudflare", "vercel", "node"] as const;
 type DeployTarget = (typeof DEPLOY_TARGETS)[number];
 
 /**
@@ -23,26 +23,9 @@ type DeployTarget = (typeof DEPLOY_TARGETS)[number];
  * docs/development/architecture.md#runtimes-and-deploy-targets for why.
  */
 const NITRO_PRESETS = {
-  netlify: "netlify",
   vercel: "vercel",
   node: "node-server",
 } as const satisfies Partial<Record<DeployTarget, string>>;
-
-/**
- * Netlify installs and builds from the repository root (the lockfile and the
- * workspace packages live there) and only discovers `.netlify/functions-internal`
- * and `publish` relative to that base. Nitro's preset would write both under
- * `app/`, so Netlify's output is redirected to the repository root.
- */
-const repoRoot = fileURLToPath(new URL("../", import.meta.url));
-const NITRO_OUTPUT: Partial<
-  Record<DeployTarget, { dir: string; publicDir: string }>
-> = {
-  netlify: {
-    dir: `${repoRoot}.netlify/functions-internal`,
-    publicDir: `${repoRoot}dist`,
-  },
-};
 
 const deployTarget = (process.env.DEPLOY_TARGET ??
   "cloudflare") as DeployTarget;
@@ -137,7 +120,6 @@ const config = defineConfig(({ mode, command }) => {
         : [
             nitro({
               preset: NITRO_PRESETS[deployTarget],
-              output: NITRO_OUTPUT[deployTarget],
             }),
           ]),
       viteReact(),

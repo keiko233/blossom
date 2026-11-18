@@ -1,12 +1,12 @@
 {
   "name": "@blossom/app",
+  "version": "1.2.3",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite dev --port 3000",
     "build": "vite build",
     "build:cloudflare": "DEPLOY_TARGET=cloudflare vite build",
-    "build:netlify": "DEPLOY_TARGET=netlify vite build",
     "build:vercel": "DEPLOY_TARGET=vercel vite build",
     "build:node": "DEPLOY_TARGET=node vite build",
     "start:node": "node .output/server/index.mjs",

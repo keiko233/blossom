@@ -1,9 +1,10 @@
-name: Docker
+name: "[Release] Build and Publish Container Images"
 
 on:
+  release:
+    types: [published]
   push:
-    branches: [main]
-    tags: ["v*"]
+    tags: ["v*", "server-agent-v*"]
   workflow_dispatch:
 
 permissions:
@@ -12,55 +13,46 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
-  # Decide which images need building: only the ones whose sources changed.
-  # Tag pushes and manual dispatches always build everything.
+  # Decide which images need building: app tags (`v*`) build the control plane,
+  # agent tags (`server-agent-v*`) build the server agent, and manual dispatches
+  # build both.
   prepare:
     runs-on: ubuntu-latest
     outputs:
       targets: ${{ steps.targets.outputs.targets }}
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: dorny/paths-filter@v4
-        id: filter
-        with:
-          filters: |
-            app:
-              - 'app/**'
-              - 'packages/**'
-              - 'Dockerfile'
-              - '.dockerignore'
-              - 'package.json'
-              - 'pnpm-lock.yaml'
-              - 'pnpm-workspace.yaml'
-              - '.github/workflows/docker.yml'
-            server-agent:
-              - 'server-agent/**'
-              - '.github/workflows/docker.yml'
-
       - id: targets
         env:
-          APP_CHANGED: ${{ steps.filter.outputs.app }}
-          AGENT_CHANGED: ${{ steps.filter.outputs['server-agent'] }}
-          BUILD_ALL: ${{ github.event_name == 'workflow_dispatch' || github.ref_type == 'tag' }}
+          EVENT_NAME: ${{ github.event_name }}
+          TAG_NAME: ${{ github.event.release.tag_name || github.ref_name }}
         run: |
+          build_app=false
+          build_agent=false
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            build_app=true
+            build_agent=true
+          elif [[ "$TAG_NAME" == server-agent-v* ]]; then
+            build_agent=true
+          elif [[ "$TAG_NAME" == v* ]]; then
+            build_app=true
+          fi
+
           targets=$(jq -cn \
             --arg repo "ghcr.io/$GITHUB_REPOSITORY" \
-            --arg app "$APP_CHANGED" \
-            --arg agent "$AGENT_CHANGED" \
-            --arg all "$BUILD_ALL" '
+            --arg app "$build_app" \
+            --arg agent "$build_agent" '
             []
-            + (if $all == "true" or $app == "true" then [{
+            + (if $app == "true" then [{
                 name: "app",
                 context: ".",
                 image: $repo,
                 "cache-path": "pnpm-store",
                 "cache-map": {"pnpm-store": "/pnpm/store"}
               }] else [] end)
-            + (if $all == "true" or $agent == "true" then [{
+            + (if $agent == "true" then [{
                 name: "server-agent",
                 context: "./server-agent",
                 image: ($repo + "/server-agent"),
@@ -172,6 +164,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            type=match,pattern=^server-agent-v(.*)$
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
 
@@ -183,4 +176,4 @@ jobs:
             $(printf '${{ matrix.target.image }}@sha256:%s ' *)
 
       - name: Inspect
-        run: docker buildx imagetools inspect ${{ matrix.target.image }}:${{ steps.meta.outputs.version }}
+        run: docker buildx imagetools inspect "$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")"

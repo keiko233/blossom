@@ -1,0 +1,208 @@
+name: "[Release] Prepare Version and Release"
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Release target
+        required: true
+        type: choice
+        options:
+          - app
+          - server-agent
+          - both
+      version_type:
+        description: Version bump
+        required: true
+        type: choice
+        options:
+          - major
+          - minor
+          - patch
+          - premajor
+          - preminor
+          - prepatch
+          - prerelease
+      preid:
+        description: Prerelease identifier
+        required: false
+        type: choice
+        options:
+          - beta
+          - rc
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
+      RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      branch: ${{ steps.plan.outputs.branch }}
+      commit-sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+
+      - id: plan
+        env:
+          TARGET: ${{ inputs.target }}
+          VERSION_TYPE: ${{ inputs.version_type }}
+          PREID: ${{ inputs.preid }}
+        run: |
+          set -euo pipefail
+          node scripts/src/release.ts \
+            --target "$TARGET" \
+            --bump "$VERSION_TYPE" \
+            --preid "${PREID:-beta}" \
+            --dry-run > release-plan.json
+          version="$(node -p "JSON.parse(require('node:fs').readFileSync('release-plan.json', 'utf8')).version")"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "branch=release/prepare-${TARGET}-${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Apply version
+        env:
+          TARGET: ${{ inputs.target }}
+          VERSION_TYPE: ${{ inputs.version_type }}
+          PREID: ${{ inputs.preid }}
+        run: |
+          set -euo pipefail
+          node scripts/src/release.ts \
+            --target "$TARGET" \
+            --bump "$VERSION_TYPE" \
+            --preid "${PREID:-beta}"
+
+      - name: Update changelogs
+        env:
+          TARGET: ${{ inputs.target }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$TARGET" == "app" || "$TARGET" == "both" ]]; then
+            git-cliff --config cliff.toml \
+              --include-path 'app/**' \
+              --include-path 'packages/**' \
+              --include-path 'package.json' \
+              --include-path 'pnpm-lock.yaml' \
+              --unreleased --tag "v${VERSION}" \
+              --prepend CHANGELOG.md
+          fi
+          if [[ "$TARGET" == "server-agent" || "$TARGET" == "both" ]]; then
+            git-cliff --config cliff-agent.toml \
+              --include-path 'server-agent/**' \
+              --unreleased --tag "server-agent-v${VERSION}" \
+              --prepend server-agent/CHANGELOG.md
+          fi
+
+      - name: Create GitHub App token
+        id: app-token
+        if: env.RELEASE_APP_ID != '' && env.RELEASE_APP_PRIVATE_KEY != ''
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - id: commit
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          TARGET: ${{ inputs.target }}
+          VERSION: ${{ steps.plan.outputs.version }}
+          BRANCH: ${{ steps.plan.outputs.branch }}
+          USE_APP_TOKEN: ${{ steps.app-token.outputs.token != '' }}
+        run: |
+          set -euo pipefail
+          if [[ "$TARGET" == "app" ]]; then
+            files=(package.json app/package.json CHANGELOG.md)
+          elif [[ "$TARGET" == "server-agent" ]]; then
+            files=(server-agent/Cargo.toml server-agent/Cargo.lock server-agent/CHANGELOG.md)
+          else
+            files=(package.json app/package.json CHANGELOG.md server-agent/Cargo.toml server-agent/Cargo.lock server-agent/CHANGELOG.md)
+          fi
+
+          if [[ "$USE_APP_TOKEN" == "true" ]]; then
+            owner="${GITHUB_REPOSITORY%%/*}"
+            repo="${GITHUB_REPOSITORY#*/}"
+            base_oid="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
+            node scripts/src/create-commit-on-branch.mjs \
+              "$owner" "$repo" "$base_oid" "chore(release): prepare ${TARGET} v${VERSION}" "${files[@]}" \
+              > graphql-request.json
+            commit_oid="$(gh api graphql --input graphql-request.json --jq '.data.createCommitOnBranch.commit.oid')"
+            echo "sha=${commit_oid}" >> "$GITHUB_OUTPUT"
+          else
+            git config user.name "blossom-release-bot"
+            git config user.email "blossom-release-bot@users.noreply.github.com"
+            git checkout -b "$BRANCH"
+            git add "${files[@]}"
+            git commit -m "chore(release): prepare ${TARGET} v${VERSION}"
+            gh auth setup-git
+            git push --force-with-lease origin "$BRANCH"
+            gh pr create \
+              --base main \
+              --head "$BRANCH" \
+              --title "chore(release): prepare ${TARGET} v${VERSION}" \
+              --body "Automated release preparation for ${TARGET} v${VERSION}. Merge this PR and tag main once checks pass."
+            echo "::notice::Release PR opened on branch ${BRANCH}; skipping tag/release creation until merged to main."
+          fi
+
+  release:
+    needs: prepare
+    if: needs.prepare.outputs.commit-sha != ''
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
+      RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Create GitHub App token
+        id: app-token
+        if: env.RELEASE_APP_ID != '' && env.RELEASE_APP_PRIVATE_KEY != ''
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Create tags and releases
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          TARGET: ${{ inputs.target }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          COMMIT_SHA: ${{ needs.prepare.outputs.commit-sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$TARGET" == "app" || "$TARGET" == "both" ]]; then
+            gh release create "v${VERSION}" \
+              --target "$COMMIT_SHA" \
+              --title "Blossom v${VERSION}" \
+              --generate-notes
+          fi
+          if [[ "$TARGET" == "server-agent" || "$TARGET" == "both" ]]; then
+            gh release create "server-agent-v${VERSION}" \
+              --target "$COMMIT_SHA" \
+              --title "server-agent v${VERSION}" \
+              --latest=false \
+              --generate-notes
+          fi

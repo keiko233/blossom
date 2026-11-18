@@ -29,7 +29,7 @@ From the repo root:
 | Preview email templates       | `pnpm --filter @blossom/app email:dev`                         |
 | Agent checks                  | `cd server-agent && cargo test --locked`                       |
 
-Currently, the deploy-target build scripts are `build:cloudflare`, `build:netlify`, `build:vercel`, and `build:node`; plain `pnpm build` uses the default `cloudflare` target (`@cloudflare/vite-plugin`), while the other three are built by Nitro with pinned presets. (See [the architecture redesign spec](../spec/2026-11-18-agent-ws-release-ops-redesign/investigation-report.md) for the planned removal of `netlify` in PR 1.) `db:migrate` acts on the database `DATABASE_URL` points at, and `agent:spec` needs the dev server running; see [API, data and auth](api-data-auth.md#migrations) and [Generated files](generated-files.md#agent-openapi-spec-and-client).
+Currently, the deploy-target build scripts are `build:cloudflare`, `build:vercel`, and `build:node`; plain `pnpm build` uses the default `cloudflare` target (`@cloudflare/vite-plugin`), while the other two are built by Nitro with pinned presets. `db:migrate` acts on the database `DATABASE_URL` points at, and `agent:spec` needs the dev server running; see [API, data and auth](api-data-auth.md#migrations) and [Generated files](generated-files.md#agent-openapi-spec-and-client).
 
 The root `dev`, `build`, and `test` scripts use `pnpm --parallel` over the workspace. The app consumes `packages/{domain,contracts,database}` as TypeScript source and runs their tests in its Vitest suite; they do not need a separate build. The agent is built and tested with `cargo` separately. Which checks to run for a change is in [Testing and verification](testing.md).
 
@@ -79,8 +79,8 @@ Currently three workflows exist in `.github/workflows/`:
 
 | Workflow                    | Trigger                             | What it does                                                                                                                                                                     |
 | --------------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `test.yml` (`CI`)           | pull requests, manual               | Job `app` (`App tests and build`): `pnpm install --frozen-lockfile`, `pnpm test` (with Postgres service), then `pnpm build` (Cloudflare), `build:node`, `build:vercel`, `build:netlify`. Job `server-agent` (`Server agent tests`): `cargo test --locked`, `cargo fmt --check`, `cargo clippy -D warnings`, Docker builds, managed-TLS lifecycle test. |
-| `docker.yml` (`Docker`)     | push to `main`, `v*` tags, manual   | Filters changed paths and builds/publishes multi-arch GHCR manifests (`ghcr.io/<repo>` and `ghcr.io/<repo>/server-agent`). *(Target redesign moves publishing to release tags via `publish.yml`.)* |
+| `test.yml` (`CI`)           | pull requests, manual               | Job `app` (`App tests and build`): `pnpm install --frozen-lockfile`, `pnpm test` (with Postgres service), then `pnpm build` (Cloudflare), `build:node`, `build:vercel`. Job `server-agent` (`Server agent tests`): `cargo test --locked`, `cargo fmt --check`, `cargo clippy -D warnings`, Docker builds, managed-TLS lifecycle test. |
+| `docker.yml` (`Docker`)     | release/tags, manual                | Filters changed paths and builds/publishes multi-arch GHCR manifests (`ghcr.io/<repo>` and `ghcr.io/<repo>/server-agent`). *(Target redesign moves publishing to release tags via `publish.yml`.)* |
 | `server-agent-release.yml`  | `server-agent-v*` tags, manual      | Checks `Cargo.toml`/`Cargo.lock` tag agreement, runs Rust tests/fmt/clippy, builds static amd64/arm64 musl binaries, publishes GitHub Release with `make_latest: false`.         |
 
 ### Workflow conventions
@@ -91,7 +91,7 @@ Currently three workflows exist in `.github/workflows/`:
 
 ## Deployment and external effects
 
-Deployment is outside the normal development loop, and these operations have effects beyond your checkout: `wrangler deploy` publishes a Worker, `wrangler secret put` writes a live secret, pushing to `main` (currently) or release tags triggers GHCR/release publishing, and `db:migrate` mutates `DATABASE_URL`. Authorization to run them comes from explicit task instructions; for verification, prefer local builds, disposable databases, and isolated Docker containers. Keep real secrets out of repository files. Target-specific configuration lives in `app/wrangler.jsonc`, `netlify.toml` (planned for removal in PR 1), `app/vercel.json`, `railway.toml`, `Dockerfile`, and `docker-compose.yaml`. Deployment instructions are in the [README](../../README.md#deployment).
+Deployment is outside the normal development loop, and these operations have effects beyond your checkout: `wrangler deploy` publishes a Worker, `wrangler secret put` writes a live secret, release tags trigger GHCR/release publishing, and `db:migrate` mutates `DATABASE_URL`. Authorization to run them comes from explicit task instructions; for verification, prefer local builds, disposable databases, and isolated Docker containers. Keep real secrets out of repository files. Target-specific configuration lives in `app/wrangler.jsonc`, `app/vercel.json`, `railway.toml`, `Dockerfile`, and `docker-compose.yaml`. Deployment instructions are in the [README](../../README.md#deployment).
 
 ## Documentation
 

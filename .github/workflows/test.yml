@@ -1,4 +1,4 @@
-name: CI
+name: "[CI] Run App and Agent Tests"
 
 on:
   pull_request:
@@ -60,9 +60,6 @@ jobs:
 
       - name: Build app (Vercel)
         run: pnpm --filter @blossom/app build:vercel
-
-      - name: Build app (Netlify)
-        run: pnpm --filter @blossom/app build:netlify
 
   server-agent:
     name: Server agent tests
