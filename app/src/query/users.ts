@@ -29,6 +29,7 @@ import { trafficRecord } from "@/db/traffic-schema";
 import { userNote } from "@/db/user-note-schema";
 import { bulkMetadata, fromInput, fromResult } from "@/lib/admin-audit";
 import { adminAudit } from "@/lib/admin-audit-middleware";
+import { notifyAgentConfigChanged } from "@/lib/agent-notifications";
 import { getAuth } from "@/lib/auth";
 import { isEmailEnabled } from "@/lib/email";
 import { ensureAdmin } from "@/lib/ensure-admin";
@@ -213,7 +214,7 @@ async function applyBan(callerId: string, input: BanUserInput) {
     },
   });
   if (preBan && !preBan.banned) {
-    await recordConfigChange(db, {
+    const change = await recordConfigChange(db, {
       kind: "authorization",
       subjectId: input.userId,
       prevRow: {
@@ -222,6 +223,7 @@ async function applyBan(callerId: string, input: BanUserInput) {
       },
       serverIds: await listServerIdsForUserId(db, input.userId),
     });
+    await notifyAgentConfigChanged(change.serverIds, "user banned");
   }
 }
 
@@ -237,7 +239,7 @@ async function applyUnban(userId: string) {
   // Publish gate: the subscription keeps refusing access until every agent
   // hosting the user's nodes has applied the revision that re-adds them.
   if (preUnban?.banned) {
-    await recordConfigChange(db, {
+    const change = await recordConfigChange(db, {
       kind: "authorization",
       subjectId: userId,
       prevRow: {
@@ -246,6 +248,7 @@ async function applyUnban(userId: string) {
       },
       serverIds: await listServerIdsForUserId(db, userId),
     });
+    await notifyAgentConfigChanged(change.serverIds, "user unbanned");
   }
 }
 

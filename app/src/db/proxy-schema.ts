@@ -40,6 +40,8 @@ export type AgentUpdateState =
   | "failed"
   | "disabled";
 
+export type AgentTransportMode = "http" | "ws";
+
 /**
  * A server is one physical proxy host managed by a single Rust server-agent:
  * it owns the agent token, heartbeat, agent version, and a default public
@@ -67,6 +69,13 @@ export const server = pgTable(
     agentTokenHash: text("agent_token_hash").notNull().unique(),
     agentTokenPrefix: text("agent_token_prefix").notNull(),
     lastSeenAt: timestamp("last_seen_at"),
+    // Current push-channel transport. HTTP polling remains the fallback, so a
+    // closed agent WebSocket returns this to "http" until the next handshake.
+    transportMode: text("transport_mode")
+      .$type<AgentTransportMode>()
+      .default("http")
+      .notNull(),
+    wsConnectedAt: timestamp("ws_connected_at"),
     agentVersion: text("agent_version"),
     // Build identity and capability surface reported by the agent on every
     // heartbeat. `agentBuildId` is a stable build tag; `agentCapabilities`

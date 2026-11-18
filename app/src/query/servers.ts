@@ -6,6 +6,10 @@ import { db } from "@/db";
 import { node, type Server, server } from "@/db/proxy-schema";
 import { fromInput, fromResult } from "@/lib/admin-audit";
 import { adminAudit } from "@/lib/admin-audit-middleware";
+import {
+  notifyAgentConfigChanged,
+  notifyAgentUpdateTrigger,
+} from "@/lib/agent-notifications";
 import { generateAgentToken } from "@/lib/agent-token";
 import { ensureAdmin } from "@/lib/ensure-admin";
 import {
@@ -123,7 +127,11 @@ export const updateServer = createServerFn({ method: "POST" })
     const { id, ...rest } = data;
 
     const [existing] = await db
-      .select({ enabled: server.enabled })
+      .select({
+        enabled: server.enabled,
+        desiredAgentVersion: server.desiredAgentVersion,
+        desiredSingBoxVersion: server.desiredSingBoxVersion,
+      })
       .from(server)
       .where(eq(server.id, id));
     if (!existing) {
@@ -149,6 +157,27 @@ export const updateServer = createServerFn({ method: "POST" })
         subjectId: id,
         prevRow: { enabled: existing.enabled },
         serverIds: [id],
+      });
+      await notifyAgentConfigChanged([id], "server enabled state changed");
+    }
+
+    const agentVersionChanged =
+      rest.desiredAgentVersion !== undefined &&
+      rest.desiredAgentVersion !== existing.desiredAgentVersion;
+    const singBoxVersionChanged =
+      rest.desiredSingBoxVersion !== undefined &&
+      rest.desiredSingBoxVersion !== existing.desiredSingBoxVersion;
+    if (row.enabled && (agentVersionChanged || singBoxVersionChanged)) {
+      await notifyAgentUpdateTrigger(id, {
+        target:
+          agentVersionChanged && singBoxVersionChanged
+            ? "all"
+            : agentVersionChanged
+              ? "agent"
+              : "sing-box",
+        desiredAgentVersion: row.desiredAgentVersion,
+        desiredSingBoxVersion: row.desiredSingBoxVersion,
+        force: true,
       });
     }
     return toDTO(row);

@@ -13,6 +13,7 @@ import { redeemBatch } from "@/db/redeem-schema";
 import type { PlanImpact } from "@/lib/access-impact";
 import { fromInput, fromResult } from "@/lib/admin-audit";
 import { adminAudit } from "@/lib/admin-audit-middleware";
+import { notifyAgentConfigChanged } from "@/lib/agent-notifications";
 import { ensureAdmin } from "@/lib/ensure-admin";
 import {
   listServerIdsForGroupIds,
@@ -181,7 +182,7 @@ export const updatePlan = createServerFn({ method: "POST" })
         previousGroupIds.length === groupIds.length &&
         previousGroupIds.every((groupId) => groupIds.includes(groupId));
       if (!unchanged) {
-        await recordConfigChange(db, {
+        const change = await recordConfigChange(db, {
           kind: "authorization",
           subjectId: id,
           prevRow: { groupIds: previousGroupIds },
@@ -189,6 +190,7 @@ export const updatePlan = createServerFn({ method: "POST" })
             ...new Set([...previousGroupIds, ...groupIds]),
           ]),
         });
+        await notifyAgentConfigChanged(change.serverIds, "plan groups changed");
       }
     }
     return row;

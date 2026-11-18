@@ -27,6 +27,7 @@ Established. Know which surface you are on, because they authenticate differentl
 | SSR pages and routes          | `app/src/routes/`                                                      | better-auth session; role checked in `beforeLoad`   | `(admin)` requires `role === "admin"`, `(user)` and `(auth)` have their own groups.                                                    |
 | Server functions              | `app/src/query/*.ts`, `app/src/lib/auth.tsx`                           | session; admin ones call `ensureAdmin()`             | The application API for the UI. All admin CRUD lives here.                                                                             |
 | Agent API (oRPC)              | `app/src/orpc/router/index.ts`, `app/src/orpc/proxy/agent.ts`          | per-server `Authorization: Bearer` token             | The only procedures in the oRPC router: `agent.getConfigV3`, `agent.heartbeat`, `agent.reportTraffic`.                                 |
+| Agent WebSocket               | `app/src/routes/api/agent/ws.ts`                                       | per-server `Authorization: Bearer` token             | One outbound `/api/agent/ws` connection per server; the token is checked before the upgrade.                                           |
 | oRPC mounts                   | `app/src/routes/api/$.ts` (OpenAPI), `app/src/routes/api/rpc/$.ts` (RPC) | same as above                                      | `/api/*` serves the OpenAPI document (`/api/spec.json`, consumed by the agent codegen); `/api/rpc/*` is the oRPC RPC protocol.         |
 | better-auth                   | `app/src/routes/api/auth/$.ts`                                         | its own                                              | Email/password, magic link, GitHub/Google (when configured), admin and JWT plugins, OAuth provider for MCP.                            |
 | MCP                           | `app/src/routes/api/mcp.ts`, `app/src/orpc/mcp/`                       | OAuth 2.0 bearer; admin actor; `blossom:mcp:*` scopes | Tools call an in-process oRPC router (`mcpRouter`); write tools need `confirm: true` and are audited.                                  |
@@ -34,6 +35,30 @@ Established. Know which surface you are on, because they authenticate differentl
 | Misc                          | `api/health.ts`, `api/admin/certificates/…/export/$part.ts`, `.well-known` routes | health: none; others per route              | `/api/health` is the container health check.                                                                                           |
 
 An isomorphic oRPC client and TanStack Query utilities exist in `app/src/orpc/client.ts`; the pages inspected call server functions directly instead.
+
+### Agent WebSocket transport
+
+Established. The frozen v1 envelope and payload schemas live in
+`packages/contracts/src/agent-ws.ts`; the matching Rust client is added by
+PR #112 under `server-agent/src/ws/`. The control plane authenticates the
+upgrade request with the same hashed per-server bearer token as the oRPC agent
+API.
+
+- **Nitro (`node`, `vercel`)** uses Nitro's `crossws` WebSocket support. The
+  route returns a `426` response carrying crossws hooks; the Node and Vercel
+  presets perform the actual upgrade. Vercel welcomes include a 240-second
+  `reconnectBeforeSeconds` hint because the function's `maxDuration` bounds a
+  connection. When `REDIS_URL` is set, a Redis pub/sub backplane relays
+  `config.notify` / `update.trigger` frames to the instance holding the agent.
+- **Cloudflare** uses one `AgentSessionDO` Durable Object per server. The Worker
+  authenticates first and forwards the upgrade to the object, which uses the
+  WebSocket Hibernation API (`acceptWebSocket` + attachments), not an in-memory
+  socket map. The Worker-to-object notification path is internal, and no
+  Redis service is required.
+- Publish-gate mutations and desired-version changes emit best-effort pushes
+  after their SQL mutation commits. A missing socket, unavailable Durable
+  Object, or unreachable Redis never changes the mutation result; HTTP polling
+  and heartbeats remain the fallback.
 
 ## Runtimes and deploy targets
 

@@ -1,42 +1,25 @@
-import { formatDesiredRevision } from "@blossom/domain/config-revision";
 import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 
 import { hashAgentToken, parseBearerToken } from "@/lib/agent-token";
-import { toSingboxRouteRules } from "@/lib/routing-rules";
 import {
   computeTrafficReportHash,
   findAgentServerByTokenHash,
-  listEnabledServerNodes,
   listServerNodeIds,
   recordAgentTraffic,
   TrafficReportConflictError,
   updateAgentHeartbeat,
 } from "@/query/agent";
-import {
-  applyAgentCertificateDeployments,
-  getCertificateAgentContext,
-} from "@/query/certificate-agent";
-import { listEnabledRules } from "@/query/rule-access";
-import { getNodeActiveSubscriptions } from "@/query/subscription-access";
+import { applyAgentCertificateDeployments } from "@/query/certificate-agent";
 
 import { base } from "../base";
+import { buildAgentDesiredState } from "./agent-desired-state";
 import {
   agentConfigV3OutputSchema,
   heartbeatSchema,
   trafficReportOutputSchema,
   trafficReportSchema,
 } from "./schema";
-import {
-  buildCertificateArtifacts,
-  buildGenerationByCertificateId,
-  buildManagedTlsBindings,
-  compileServerConfig,
-  computeDesiredRevision,
-  filterCertificateArtifactsForBindings,
-  type NodeInbound,
-} from "./singbox";
-import { buildInboundUser } from "./singbox-users";
 import { resolveReportedTrafficUser } from "./traffic-user-codec";
 
 function readHeader(
@@ -72,35 +55,6 @@ const agentProcedure = base.use(async ({ context, next }) => {
   return next({ context: { ...context, server: row } });
 });
 
-async function compileAgentServerConfig(serverId: string, enabled: boolean) {
-  const [nodes, rules] = await Promise.all([
-    enabled ? listEnabledServerNodes(serverId) : [],
-    listEnabledRules(),
-  ]);
-  const perNodeUsers = await Promise.all(
-    nodes.map(async (n) => {
-      const subs = await getNodeActiveSubscriptions(n.id);
-      return subs
-        .map((sub) => buildInboundUser(n, sub))
-        .filter((user): user is NonNullable<typeof user> => user !== null);
-    }),
-  );
-  const built: NodeInbound[] = nodes.map((n, i) => ({
-    node: n,
-    users: perNodeUsers[i]!,
-  }));
-  const materialized = built.filter(({ users }) => users.length > 0);
-  const config = compileServerConfig({
-    inbounds: built,
-    routeRules: toSingboxRouteRules(rules),
-  });
-  return {
-    config,
-    materializedNodes: materialized.map(({ node }) => node),
-    materializedNodeIds: materialized.map(({ node }) => node.id),
-  };
-}
-
 /**
  * Returns the full V3 agent desired state for the calling agent's server: the
  * complete sing-box base config (every enabled inbound populated with the
@@ -127,31 +81,8 @@ export const getAgentConfigV3 = agentProcedure
   })
   .output(agentConfigV3OutputSchema)
   .handler(async ({ context }) => {
-    const [
-      { config, materializedNodes, materializedNodeIds },
-      certificateContext,
-    ] = await Promise.all([
-      compileAgentServerConfig(context.server.id, context.server.enabled),
-      getCertificateAgentContext(context.server.id),
-    ]);
-
-    // Desired generation per certificate as seen by this server, derived only
-    // from enabled bindings so a node never looks managed without a matching
-    // artifact.
-    const generationByCertificateId =
-      buildGenerationByCertificateId(certificateContext);
-
-    const managedTlsBindings = buildManagedTlsBindings(
-      materializedNodes,
-      generationByCertificateId,
-    );
-    const certificateArtifacts = filterCertificateArtifactsForBindings(
-      buildCertificateArtifacts(certificateContext),
-      managedTlsBindings,
-    );
-
     // `context.server` (and so the sequence below) was read in the auth
-    // middleware, BEFORE the config above was compiled. Keep that order: a
+    // middleware, BEFORE the desired state is compiled. Keep that order: a
     // gate-recorded change commits atomically with its rows, so reading the
     // sequence first can only pair it with the same or NEWER content (the
     // subscription then lags, which is safe); reading content first could pair
@@ -162,15 +93,13 @@ export const getAgentConfigV3 = agentProcedure
     // the content hash. The agent treats it as opaque (equality + content
     // byte-compare only); the subscription gate parses the seq prefix back
     // out of heartbeat `appliedRevision` reports.
-    const desiredRevision = formatDesiredRevision(
-      context.server.desiredRevisionSeq,
-      computeDesiredRevision(
-        config,
-        managedTlsBindings,
-        certificateArtifacts,
-        materializedNodeIds,
-      ),
-    );
+    const {
+      config,
+      materializedNodeIds,
+      managedTlsBindings,
+      certificateArtifacts,
+      desiredRevision,
+    } = await buildAgentDesiredState(context.server);
 
     return {
       apiVersion: 3 as const,

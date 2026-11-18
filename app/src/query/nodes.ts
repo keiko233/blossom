@@ -16,6 +16,7 @@ import {
 } from "@/db/proxy-schema";
 import { fromInput, fromResult } from "@/lib/admin-audit";
 import { adminAudit } from "@/lib/admin-audit-middleware";
+import { notifyAgentConfigChanged } from "@/lib/agent-notifications";
 import { ensureAdmin } from "@/lib/ensure-admin";
 import { supportsInteractiveTransactions } from "@/lib/env-schema";
 import {
@@ -394,6 +395,7 @@ export const createNode = createServerFn({ method: "POST" })
     const id = randomUUID();
     let pendingPlan: BindingUpsertPlan | null = null;
 
+    let changedServerIds: string[] = [];
     const run = async (tx: DbHandle) => {
       if (data.certificateId) {
         const plan = await planBindingForNode(
@@ -433,12 +435,13 @@ export const createNode = createServerFn({ method: "POST" })
       // agent confirms the revision that first serves it. Disabled nodes are
       // absent from both payloads, so creating one records nothing.
       if (row.enabled) {
-        await recordConfigChange(tx, {
+        const change = await recordConfigChange(tx, {
           kind: "node",
           subjectId: row.id,
           prevRow: null,
           serverIds: [row.serverId],
         });
+        changedServerIds = change.serverIds;
       }
       return row;
     };
@@ -459,6 +462,7 @@ export const createNode = createServerFn({ method: "POST" })
         throw error;
       }
     }
+    await notifyAgentConfigChanged(changedServerIds, "node created");
     return { node: row };
   });
 
@@ -568,6 +572,7 @@ export const updateNode = createServerFn({ method: "POST" })
     let pendingPlan: BindingUpsertPlan | null = null;
     let nodePersisted = false;
 
+    let changedServerIds: string[] = [];
     const run = async (tx: DbHandle) => {
       if (newBinding) {
         const plan = await planBindingForNode(
@@ -602,12 +607,13 @@ export const updateNode = createServerFn({ method: "POST" })
       if (configChanged) {
         // Both the old and the new server must apply before subscriptions
         // publish the change (moving a node touches both configs).
-        await recordConfigChange(tx, {
+        const change = await recordConfigChange(tx, {
           kind: "node",
           subjectId: id,
           prevRow,
           serverIds: [...new Set([existingNode.serverId, row.serverId])],
         });
+        changedServerIds = change.serverIds;
       }
       if (oldBinding && bindingChanged) {
         await maybeDisableBinding(
@@ -620,22 +626,26 @@ export const updateNode = createServerFn({ method: "POST" })
       return row;
     };
 
+    let row;
     if (supportsInteractiveTransactions(databaseDriver)) {
-      return withNodeTransaction(db, databaseDriver, run);
-    }
-    try {
-      return await run(db);
-    } catch (error) {
-      if (!nodePersisted) {
-        await compensateBindingAfterNodeFailure(
-          db,
-          newBinding?.certificateId,
-          newBinding?.serverId,
-          pendingPlan,
-        );
+      row = await withNodeTransaction(db, databaseDriver, run);
+    } else {
+      try {
+        row = await run(db);
+      } catch (error) {
+        if (!nodePersisted) {
+          await compensateBindingAfterNodeFailure(
+            db,
+            newBinding?.certificateId,
+            newBinding?.serverId,
+            pendingPlan,
+          );
+        }
+        throw error;
       }
-      throw error;
     }
+    await notifyAgentConfigChanged(changedServerIds, "node updated");
+    return row;
   });
 
 /**
@@ -723,6 +733,7 @@ export const deleteNode = createServerFn({ method: "POST" })
     if (!existing) {
       throw new Error("Not found");
     }
+    let changedServerIds: string[] = [];
     const run = async (tx: DbHandle) => {
       const [row] = await tx
         .delete(node)
@@ -732,12 +743,13 @@ export const deleteNode = createServerFn({ method: "POST" })
         throw new Error("Not found");
       }
       if (row.enabled) {
-        await recordConfigChange(tx, {
+        const change = await recordConfigChange(tx, {
           kind: "node",
           subjectId: row.id,
           prevRow: null,
           serverIds: [row.serverId],
         });
+        changedServerIds = change.serverIds;
       }
       if (
         row.certificateId &&
@@ -747,5 +759,7 @@ export const deleteNode = createServerFn({ method: "POST" })
       }
       return { id: row.id };
     };
-    return withNodeTransaction(db, databaseDriver, run);
+    const result = await withNodeTransaction(db, databaseDriver, run);
+    await notifyAgentConfigChanged(changedServerIds, "node deleted");
+    return result;
   });

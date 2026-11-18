@@ -1,6 +1,6 @@
 import { and, eq, inArray } from "drizzle-orm";
 
-import { db } from "@/db";
+import { type Database, db } from "@/db";
 import {
   certificateMaterial,
   certificateServer,
@@ -97,11 +97,12 @@ export interface AgentCertificateDeployment {
 export async function applyAgentCertificateDeployments(
   serverId: string,
   deployments: AgentCertificateDeployment[],
+  database: Database = db,
 ): Promise<void> {
   if (deployments.length === 0) {
     return;
   }
-  const bindingRows = await db
+  const bindingRows = await database
     .select()
     .from(certificateServer)
     .where(eq(certificateServer.serverId, serverId));
@@ -110,7 +111,7 @@ export async function applyAgentCertificateDeployments(
   );
 
   const certificateIds = [...new Set(deployments.map((d) => d.certificateId))];
-  const certificateRows = await db
+  const certificateRows = await database
     .select()
     .from(managedCertificate)
     .where(inArray(managedCertificate.id, certificateIds));
@@ -122,7 +123,7 @@ export async function applyAgentCertificateDeployments(
       activeFingerprintByCertId.set(policy.id, null);
       continue;
     }
-    const [material] = await db
+    const [material] = await database
       .select()
       .from(certificateMaterial)
       .where(
@@ -151,7 +152,7 @@ export async function applyAgentCertificateDeployments(
     const activeVersion =
       activeVersionByCertId.get(deployment.certificateId) ?? null;
     if (activeVersion !== null && binding.desiredGeneration !== activeVersion) {
-      await db
+      await database
         .update(certificateServer)
         .set({
           desiredGeneration: activeVersion,
@@ -205,7 +206,7 @@ export async function applyAgentCertificateDeployments(
       lastErrorPhase: decision.errorPhase,
       lastError: decision.errorMessage?.slice(0, 4096) ?? null,
     };
-    await db
+    await database
       .update(certificateServer)
       .set(set)
       .where(

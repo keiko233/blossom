@@ -5,12 +5,14 @@ import { user } from "@/db/auth-schema";
 import { session } from "@/db/auth-schema";
 import { plan, type Subscription, subscription } from "@/db/plan-schema";
 import { type Node, node, type Server, server } from "@/db/proxy-schema";
+import { notifyAgentConfigChanged } from "@/lib/agent-notifications";
 import {
   isNodeConfigChange,
   snapshotNodeForGate,
 } from "@/lib/node-config-change";
 import { parseNodeSettings } from "@/orpc/proxy/schema";
 import {
+  type RecordConfigChangeInput,
   listServerIdsForSubscriptionId,
   listServerIdsForUserId,
   recordConfigChange,
@@ -68,6 +70,12 @@ function toUserSummary(row: typeof user.$inferSelect): UserSummary {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+async function recordMCPConfigChange(input: RecordConfigChangeInput) {
+  const change = await recordConfigChange(db, input);
+  await notifyAgentConfigChanged(change.serverIds, `MCP ${input.kind} change`);
+  return change;
 }
 
 export async function requireActorAdmin(actorUserId: string): Promise<void> {
@@ -220,7 +228,7 @@ export async function banUserMCP(
   await db.delete(session).where(eq(session.userId, targetUserId));
 
   if (preBan && !preBan.banned) {
-    await recordConfigChange(db, {
+    await recordMCPConfigChange({
       kind: "authorization",
       subjectId: targetUserId,
       prevRow: {
@@ -249,7 +257,7 @@ export async function unbanUserMCP(
     .set({ banned: false, banReason: null, banExpires: null })
     .where(eq(user.id, targetUserId));
   if (preUnban?.banned) {
-    await recordConfigChange(db, {
+    await recordMCPConfigChange({
       kind: "authorization",
       subjectId: targetUserId,
       prevRow: {
@@ -314,7 +322,7 @@ export async function createNodeMCP(
   // Publish gate: hold a newly enabled node out of subscriptions until the
   // agent confirms the revision that first serves it.
   if (row.enabled) {
-    await recordConfigChange(db, {
+    await recordMCPConfigChange({
       kind: "node",
       subjectId: row.id,
       prevRow: null,
@@ -402,7 +410,7 @@ export async function updateNodeMCP(
     .returning();
   if (!row) throw new Error("Not found");
   if (configChanged) {
-    await recordConfigChange(db, {
+    await recordMCPConfigChange({
       kind: "node",
       subjectId: nodeId,
       prevRow,
@@ -420,7 +428,7 @@ export async function deleteNodeMCP(
   const [row] = await db.delete(node).where(eq(node.id, nodeId)).returning();
   if (!row) throw new Error("Not found");
   if (row.enabled) {
-    await recordConfigChange(db, {
+    await recordMCPConfigChange({
       kind: "node",
       subjectId: row.id,
       prevRow: null,
@@ -458,7 +466,7 @@ export async function updateServerMCP(
     .returning();
   if (!row) throw new Error("Not found");
   if (input.enabled !== undefined && input.enabled !== existingServer.enabled) {
-    await recordConfigChange(db, {
+    await recordMCPConfigChange({
       kind: "server",
       subjectId: serverId,
       prevRow: { enabled: existingServer.enabled },
@@ -485,7 +493,7 @@ export async function enableServerMCP(
     .returning();
   if (!row) throw new Error("Not found");
   if (!existing.enabled) {
-    await recordConfigChange(db, {
+    await recordMCPConfigChange({
       kind: "server",
       subjectId: serverId,
       prevRow: { enabled: false },
@@ -512,7 +520,7 @@ export async function disableServerMCP(
     .returning();
   if (!row) throw new Error("Not found");
   if (existing.enabled) {
-    await recordConfigChange(db, {
+    await recordMCPConfigChange({
       kind: "server",
       subjectId: serverId,
       prevRow: { enabled: true },
@@ -595,7 +603,7 @@ export async function updateSubscriptionMCP(
     (input.expiresAt !== undefined &&
       new Date(input.expiresAt).getTime() !== existingSub.expiresAt.getTime())
   ) {
-    await recordConfigChange(db, {
+    await recordMCPConfigChange({
       kind: "authorization",
       subjectId: subscriptionId,
       prevRow: {
@@ -628,7 +636,7 @@ export async function cancelSubscriptionMCP(
   // Cancellation is the safe direction (the subscription endpoint already
   // refuses it); the record only tracks the pending agent-side removal.
   if (existingSub.status !== "cancelled") {
-    await recordConfigChange(db, {
+    await recordMCPConfigChange({
       kind: "authorization",
       subjectId: subscriptionId,
       prevRow: {

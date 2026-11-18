@@ -1,0 +1,63 @@
+{
+  "type": "diff",
+  "version": "9",
+  "dialect": "postgres",
+  "id": "ba9389a1-0bcf-4632-8f1e-259a5bce585d",
+  "prevIds": ["f2c2cd6a-e3bc-4910-bf90-22d6865d80b7"],
+  "footprints": [
+    {
+      "statementType": "add_column",
+      "statementTarget": ["column", "public", "server", "transport_mode"],
+      "writes": [
+        "s|col|public.server.transport_mode",
+        "n|col|public.server.transport_mode",
+        "e|col|public.server.transport_mode"
+      ],
+      "reads": ["n|tbl|public.server", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": ["column", "public", "server", "ws_connected_at"],
+      "writes": [
+        "s|col|public.server.ws_connected_at",
+        "n|col|public.server.ws_connected_at",
+        "e|col|public.server.ws_connected_at"
+      ],
+      "reads": ["n|tbl|public.server", "n|sch|public"]
+    }
+  ],
+  "deltas": [
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server",
+        "name": "transport_mode",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "'http'",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server",
+        "name": "ws_connected_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    }
+  ]
+}
