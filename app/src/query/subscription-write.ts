@@ -15,6 +15,7 @@ import {
   nodeGroup,
   server,
 } from "@/db/proxy-schema";
+import { notifyAgentConfigChanged } from "@/lib/agent-notifications";
 import {
   authorizationPlanIds,
   needsAuthorizationRecord,
@@ -76,12 +77,13 @@ export async function insertSubscription(
   // Publish gate: the fresh credentials are in no running agent config yet,
   // so the subscription holds back its nodes until every server hosting them
   // has applied the revision that introduces this user.
-  await recordConfigChange(db, {
+  const change = await recordConfigChange(db, {
     kind: "credential",
     subjectId: row.id,
     prevRow: null,
     serverIds: await listServerIdsForPlanIds(db, [input.plan.id]),
   });
+  await notifyAgentConfigChanged(change.serverIds, "subscription created");
   return row;
 }
 
@@ -110,7 +112,7 @@ export async function applySubscriptionUpdate(
   }
 
   if (needsAuthorizationRecord(existing, row)) {
-    await recordConfigChange(db, {
+    const change = await recordConfigChange(db, {
       kind: "authorization",
       subjectId: existing.id,
       prevRow: {
@@ -123,6 +125,10 @@ export async function applySubscriptionUpdate(
         authorizationPlanIds(existing, row),
       ),
     });
+    await notifyAgentConfigChanged(
+      change.serverIds,
+      "subscription access changed",
+    );
   }
   return row;
 }
@@ -278,13 +284,18 @@ export async function rotateSubscriptionCredentials(
     throw new Error("Not found");
   }
   const serverIds = raw.__server_ids;
-  return {
+  const resultRow = {
     row: mapRow(subscription, raw),
     serverIds: (typeof serverIds === "string"
       ? JSON.parse(serverIds)
       : serverIds) as string[],
     changeId: (raw.__change_id as string | null) ?? null,
   };
+  await notifyAgentConfigChanged(
+    resultRow.serverIds,
+    "subscription credentials rotated",
+  );
+  return resultRow;
 }
 
 /** Maps a raw `execute` row (snake_case, driver values) onto the table's type. */

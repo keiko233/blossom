@@ -1,15 +1,69 @@
+import type {
+  AgentWsConfigAckPayload,
+  AgentWsHelloPayload,
+  AgentWsUpdateStatuses,
+} from "@blossom/contracts/agent-ws";
 import { parseRevisionSeq } from "@blossom/domain/config-revision";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { createHash, randomUUID } from "node:crypto";
 import type { z } from "zod";
 
-import { db } from "@/db";
+import { type Database, db } from "@/db";
 import { node, type Server, server } from "@/db/proxy-schema";
 import { trafficReport } from "@/db/traffic-schema";
 import type { heartbeatSchema } from "@/orpc/proxy/schema";
 import { pruneAppliedConfigChanges } from "@/query/config-change";
 
 type AgentHeartbeat = z.infer<typeof heartbeatSchema>;
+type DbHandle = Database;
+
+function sanitizeAgentMessage(message: string): string {
+  return [...message]
+    .filter((character) => {
+      const code = character.charCodeAt(0);
+      return (
+        code === 9 || code === 10 || code === 13 || (code >= 32 && code !== 127)
+      );
+    })
+    .join("")
+    .replace(/\/tmp\/[^\s:]+/g, "<config>")
+    .replace(
+      /("[^"]*(?:password|token|secret|private_key)[^"]*"\s*:\s*")[^"]*/gi,
+      "$1<redacted>",
+    )
+    .slice(0, 4096);
+}
+
+function updateStatusColumns(
+  updates: AgentWsUpdateStatuses | AgentHeartbeat["updates"],
+) {
+  return {
+    ...(updates?.agent
+      ? {
+          agentUpdateState: updates.agent.state,
+          agentUpdateTarget: updates.agent.targetVersion ?? null,
+          agentUpdateError: updates.agent.message
+            ? sanitizeAgentMessage(updates.agent.message)
+            : null,
+          agentUpdateCheckedAt: updates.agent.checkedAt
+            ? new Date(updates.agent.checkedAt)
+            : new Date(),
+        }
+      : {}),
+    ...(updates?.singBox
+      ? {
+          singBoxUpdateState: updates.singBox.state,
+          singBoxUpdateTarget: updates.singBox.targetVersion ?? null,
+          singBoxUpdateError: updates.singBox.message
+            ? sanitizeAgentMessage(updates.singBox.message)
+            : null,
+          singBoxUpdateCheckedAt: updates.singBox.checkedAt
+            ? new Date(updates.singBox.checkedAt)
+            : new Date(),
+        }
+      : {}),
+  };
+}
 
 export async function findAgentServerByTokenHash(
   tokenHash: string,
@@ -46,24 +100,6 @@ export async function updateAgentHeartbeat(
   // prefix ("<seq>:<hash>"). It only ever moves forward; legacy hash-only
   // revisions parse to null and leave the seq untouched.
   const appliedSeq = parseRevisionSeq(input.appliedRevision);
-  const sanitizeMessage = (message: string) =>
-    [...message]
-      .filter((character) => {
-        const code = character.charCodeAt(0);
-        return (
-          code === 9 ||
-          code === 10 ||
-          code === 13 ||
-          (code >= 32 && code !== 127)
-        );
-      })
-      .join("")
-      .replace(/\/tmp\/[^\s:]+/g, "<config>")
-      .replace(
-        /("[^"]*(?:password|token|secret|private_key)[^"]*"\s*:\s*")[^"]*/gi,
-        "$1<redacted>",
-      )
-      .slice(0, 4096);
 
   await db
     .update(server)
@@ -81,30 +117,7 @@ export async function updateAgentHeartbeat(
       ...(input.singBoxVersion !== undefined
         ? { singBoxVersion: input.singBoxVersion }
         : {}),
-      ...(input.updates?.agent
-        ? {
-            agentUpdateState: input.updates.agent.state,
-            agentUpdateTarget: input.updates.agent.targetVersion ?? null,
-            agentUpdateError: input.updates.agent.message
-              ? sanitizeMessage(input.updates.agent.message)
-              : null,
-            agentUpdateCheckedAt: input.updates.agent.checkedAt
-              ? new Date(input.updates.agent.checkedAt)
-              : new Date(),
-          }
-        : {}),
-      ...(input.updates?.singBox
-        ? {
-            singBoxUpdateState: input.updates.singBox.state,
-            singBoxUpdateTarget: input.updates.singBox.targetVersion ?? null,
-            singBoxUpdateError: input.updates.singBox.message
-              ? sanitizeMessage(input.updates.singBox.message)
-              : null,
-            singBoxUpdateCheckedAt: input.updates.singBox.checkedAt
-              ? new Date(input.updates.singBox.checkedAt)
-              : new Date(),
-          }
-        : {}),
+      ...updateStatusColumns(input.updates),
       ...(input.runtimeState !== undefined
         ? { runtimeState: input.runtimeState }
         : {}),
@@ -157,7 +170,7 @@ export async function updateAgentHeartbeat(
           : {
               lastErrorPhase: error.phase,
               lastErrorCode: error.code,
-              lastErrorMessage: sanitizeMessage(error.message),
+              lastErrorMessage: sanitizeAgentMessage(error.message),
               lastErrorNodeId: error.nodeId ?? null,
               lastErrorAt: error.occurredAt
                 ? new Date(error.occurredAt)
@@ -170,6 +183,140 @@ export async function updateAgentHeartbeat(
   if (appliedSeq !== null) {
     await pruneAppliedConfigChanges(serverId, appliedSeq);
   }
+}
+
+/**
+ * Records a completed WebSocket handshake without touching agent-reported
+ * status columns. The returned timestamp is the connection identity used to
+ * clear `transportMode` only when this exact socket closes.
+ */
+export async function markAgentWsConnected(
+  serverId: string,
+  database: DbHandle = db,
+): Promise<Date> {
+  const connectedAt = new Date();
+  await database
+    .update(server)
+    .set({
+      lastSeenAt: connectedAt,
+      transportMode: "ws",
+      wsConnectedAt: connectedAt,
+    })
+    .where(eq(server.id, serverId));
+  return connectedAt;
+}
+
+/** Clears only the handshake that is still current; a reconnect wins races. */
+export async function markAgentWsDisconnected(
+  serverId: string,
+  connectedAt: Date,
+  database: DbHandle = db,
+): Promise<void> {
+  await database
+    .update(server)
+    .set({ transportMode: "http", wsConnectedAt: null })
+    .where(and(eq(server.id, serverId), eq(server.wsConnectedAt, connectedAt)));
+}
+
+/**
+ * Applies hello metadata independently of the heartbeat's status reset rules.
+ * Only fields present in the frame are written; `runtimeState`, active nodes
+ * and unrelated error state stay as the last HTTP heartbeat reported them.
+ */
+export async function recordAgentHello(
+  serverId: string,
+  hello: AgentWsHelloPayload,
+  database: DbHandle = db,
+): Promise<void> {
+  const appliedSeq = parseRevisionSeq(hello.appliedRevision);
+  await database
+    .update(server)
+    .set({
+      lastSeenAt: new Date(),
+      ...(hello.agentVersion !== undefined
+        ? { agentVersion: hello.agentVersion }
+        : {}),
+      ...(hello.agentBuildId !== undefined
+        ? { agentBuildId: hello.agentBuildId }
+        : {}),
+      agentCapabilities: hello.capabilities,
+      ...(hello.appliedRevision !== undefined
+        ? { appliedRevision: hello.appliedRevision }
+        : {}),
+      ...(appliedSeq !== null
+        ? {
+            appliedRevisionSeq: sql<number>`GREATEST(${server.appliedRevisionSeq}, ${appliedSeq})`,
+          }
+        : {}),
+      ...(hello.updates ? updateStatusColumns(hello.updates) : {}),
+      ...(hello.updates ? { statusReportedAt: new Date() } : {}),
+    })
+    .where(eq(server.id, serverId));
+
+  if (appliedSeq !== null) {
+    await pruneAppliedConfigChanges(serverId, appliedSeq, database);
+  }
+}
+
+/**
+ * Applies a push-channel config acknowledgement. An empty applied revision on
+ * failure is preserved as-is but does not move the publish-gate sequence.
+ */
+export async function recordAgentConfigAck(
+  serverId: string,
+  ack: AgentWsConfigAckPayload,
+  database: DbHandle = db,
+): Promise<void> {
+  const appliedSeq = parseRevisionSeq(ack.appliedRevision);
+  const now = new Date();
+  const succeeded = ack.error === undefined;
+  await database
+    .update(server)
+    .set({
+      lastSeenAt: now,
+      statusReportedAt: now,
+      configState: succeeded ? "applied" : "apply_failed",
+      ...(ack.appliedRevision.length > 0
+        ? { appliedRevision: ack.appliedRevision }
+        : {}),
+      ...(appliedSeq !== null
+        ? {
+            appliedRevisionSeq: sql<number>`GREATEST(${server.appliedRevisionSeq}, ${appliedSeq})`,
+          }
+        : {}),
+      ...(succeeded && ack.appliedRevision.length > 0
+        ? { lastAppliedAt: now }
+        : {}),
+      ...(ack.error
+        ? {
+            lastErrorPhase: "config",
+            lastErrorCode: "config_ack",
+            lastErrorMessage: sanitizeAgentMessage(ack.error),
+            lastErrorNodeId: null,
+            lastErrorAt: now,
+          }
+        : {}),
+    })
+    .where(eq(server.id, serverId));
+
+  if (appliedSeq !== null) {
+    await pruneAppliedConfigChanges(serverId, appliedSeq, database);
+  }
+}
+
+export async function recordAgentUpdateStatus(
+  serverId: string,
+  updates: AgentWsUpdateStatuses,
+  database: DbHandle = db,
+): Promise<void> {
+  await database
+    .update(server)
+    .set({
+      lastSeenAt: new Date(),
+      statusReportedAt: new Date(),
+      ...updateStatusColumns(updates),
+    })
+    .where(eq(server.id, serverId));
 }
 
 export async function listServerNodeIds(serverId: string): Promise<string[]> {

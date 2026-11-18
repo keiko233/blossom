@@ -8,6 +8,7 @@ import { nodeGroup, proxyGroup } from "@/db/proxy-schema";
 import { summarizeGroupImpact } from "@/lib/access-impact";
 import { fromInput, fromResult } from "@/lib/admin-audit";
 import { adminAudit } from "@/lib/admin-audit-middleware";
+import { notifyAgentConfigChanged } from "@/lib/agent-notifications";
 import { ensureAdmin } from "@/lib/ensure-admin";
 import {
   createGroupSchema,
@@ -176,7 +177,7 @@ export const updateGroup = createServerFn({ method: "POST" })
         previousNodeIds.length === nodeIds.length &&
         previousNodeIds.every((nodeId) => nodeIds.includes(nodeId));
       if (!unchanged) {
-        await recordConfigChange(db, {
+        const change = await recordConfigChange(db, {
           kind: "authorization",
           subjectId: id,
           prevRow: { nodeIds: previousNodeIds },
@@ -184,6 +185,10 @@ export const updateGroup = createServerFn({ method: "POST" })
             ...new Set([...previousNodeIds, ...nodeIds]),
           ]),
         });
+        await notifyAgentConfigChanged(
+          change.serverIds,
+          "group membership changed",
+        );
       }
     }
     return row;
@@ -216,12 +221,13 @@ export const deleteGroup = createServerFn({ method: "POST" })
       throw new Error("Not found");
     }
     if (previousNodeIds.length > 0) {
-      await recordConfigChange(db, {
+      const change = await recordConfigChange(db, {
         kind: "authorization",
         subjectId: data.id,
         prevRow: { nodeIds: previousNodeIds },
         serverIds,
       });
+      await notifyAgentConfigChanged(change.serverIds, "group deleted");
     }
     return { id: row.id };
   });

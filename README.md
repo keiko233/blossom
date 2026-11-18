@@ -68,6 +68,7 @@ Server env vars are validated at runtime on the first request, so production bui
 | `ACME_EAB_HMAC_KEY` | For ZeroSSL | Runtime | ACME external account binding HMAC key. |
 | `CLOUDFLARE_DNS_API_TOKEN` | No | Runtime | Cloudflare token with DNS Edit on the zone, for automatic ACME DNS-01 validation. Set together with `CLOUDFLARE_DNS_ZONE_ID`. |
 | `CLOUDFLARE_DNS_ZONE_ID` | No | Runtime | Cloudflare zone ID used with the token above. |
+| `REDIS_URL` | No | Runtime | Redis pub/sub backplane for agent WebSocket fan-out across multiple Node or Vercel instances. Cloudflare Durable Objects do not use it. |
 
 Copy `app/.env.example` to `app/.env.local` for local development.
 

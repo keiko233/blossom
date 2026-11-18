@@ -40,6 +40,10 @@ export interface RecordConfigChangeInput {
   serverIds: readonly string[];
 }
 
+export interface RecordConfigChangeResult {
+  serverIds: string[];
+}
+
 /**
  * Records one change and links it to every affected server at that server's
  * next revision sequence. No-op when no server is affected (e.g. a change to
@@ -48,10 +52,10 @@ export interface RecordConfigChangeInput {
 export async function recordConfigChange(
   tx: DbHandle,
   input: RecordConfigChangeInput,
-): Promise<void> {
+): Promise<RecordConfigChangeResult> {
   const serverIds = [...new Set(input.serverIds)];
   if (serverIds.length === 0) {
-    return;
+    return { serverIds: [] };
   }
   // Bump the desired seq FIRST. Callers record after the mutation itself, and
   // on neon-http (no interactive transactions) each statement commits
@@ -74,7 +78,7 @@ export async function recordConfigChange(
     }
   }
   if (seqByServer.size === 0) {
-    return;
+    return { serverIds: [] };
   }
   const changeId = randomUUID();
   await tx.insert(configChange).values({
@@ -90,6 +94,7 @@ export async function recordConfigChange(
       revisionSeq,
     })),
   );
+  return { serverIds: [...seqByServer.keys()] };
 }
 
 // --- Affected-server resolution ---------------------------------------------
@@ -268,8 +273,9 @@ export async function countPendingConfigChangesByServer(
 export async function pruneAppliedConfigChanges(
   serverId: string,
   appliedRevisionSeq: number,
+  database: DbHandle = db,
 ): Promise<void> {
-  await db
+  await database
     .delete(configChangeServer)
     .where(
       and(
@@ -279,7 +285,7 @@ export async function pruneAppliedConfigChanges(
     );
   // Orphaned change rows (no server links left) are garbage: prune via an
   // explicit left join rather than a raw NOT EXISTS template.
-  const orphans = await db
+  const orphans = await database
     .select({ id: configChange.id })
     .from(configChange)
     .leftJoin(
@@ -288,7 +294,7 @@ export async function pruneAppliedConfigChanges(
     )
     .where(isNull(configChangeServer.changeId));
   if (orphans.length > 0) {
-    await db.delete(configChange).where(
+    await database.delete(configChange).where(
       inArray(
         configChange.id,
         orphans.map((orphan) => orphan.id),

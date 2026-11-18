@@ -34,6 +34,7 @@ import { Route as authAuthResetRouteImport } from './routes/(auth)/auth/reset'
 import { Route as authAuthSignupRouteImport } from './routes/(auth)/auth/signup'
 import { Route as userDashboardIndexRouteImport } from './routes/(user)/dashboard/index'
 import { Route as userWelcomeIndexRouteImport } from './routes/(user)/welcome/index'
+import { Route as ApiAgentWsRouteImport } from './routes/api/agent/ws'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiRpcSplatRouteImport } from './routes/api/rpc/$'
 import { Route as ApiSubTokenRouteImport } from './routes/api/sub/$token'
@@ -204,6 +205,11 @@ const userWelcomeIndexRoute = userWelcomeIndexRouteImport.update({
   id: '/welcome/',
   path: '/welcome/',
   getParentRoute: () => userRouteRoute,
+} as any)
+const ApiAgentWsRoute = ApiAgentWsRouteImport.update({
+  id: '/api/agent/ws',
+  path: '/api/agent/ws',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
@@ -424,6 +430,7 @@ export interface FileRoutesByFullPath {
   '/auth/mcp-consent': typeof authAuthMcpConsentRoute
   '/auth/reset': typeof authAuthResetRoute
   '/auth/signup': typeof authAuthSignupRoute
+  '/api/agent/ws': typeof ApiAgentWsRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/rpc/$': typeof ApiRpcSplatRoute
   '/api/sub/$token': typeof ApiSubTokenRoute
@@ -476,6 +483,7 @@ export interface FileRoutesByTo {
   '/auth/mcp-consent': typeof authAuthMcpConsentRoute
   '/auth/reset': typeof authAuthResetRoute
   '/auth/signup': typeof authAuthSignupRoute
+  '/api/agent/ws': typeof ApiAgentWsRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/rpc/$': typeof ApiRpcSplatRoute
   '/api/sub/$token': typeof ApiSubTokenRoute
@@ -537,6 +545,7 @@ export interface FileRoutesById {
   '/(auth)/auth/mcp-consent': typeof authAuthMcpConsentRoute
   '/(auth)/auth/reset': typeof authAuthResetRoute
   '/(auth)/auth/signup': typeof authAuthSignupRoute
+  '/api/agent/ws': typeof ApiAgentWsRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/rpc/$': typeof ApiRpcSplatRoute
   '/api/sub/$token': typeof ApiSubTokenRoute
@@ -600,6 +609,7 @@ export interface FileRouteTypes {
     | '/auth/mcp-consent'
     | '/auth/reset'
     | '/auth/signup'
+    | '/api/agent/ws'
     | '/api/auth/$'
     | '/api/rpc/$'
     | '/api/sub/$token'
@@ -652,6 +662,7 @@ export interface FileRouteTypes {
     | '/auth/mcp-consent'
     | '/auth/reset'
     | '/auth/signup'
+    | '/api/agent/ws'
     | '/api/auth/$'
     | '/api/rpc/$'
     | '/api/sub/$token'
@@ -712,6 +723,7 @@ export interface FileRouteTypes {
     | '/(auth)/auth/mcp-consent'
     | '/(auth)/auth/reset'
     | '/(auth)/auth/signup'
+    | '/api/agent/ws'
     | '/api/auth/$'
     | '/api/rpc/$'
     | '/api/sub/$token'
@@ -762,6 +774,7 @@ export interface RootRouteChildren {
   ApiHealthRoute: typeof ApiHealthRoute
   ApiMcpRoute: typeof ApiMcpRoute
   staticIndexRoute: typeof staticIndexRoute
+  ApiAgentWsRoute: typeof ApiAgentWsRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiRpcSplatRoute: typeof ApiRpcSplatRoute
   ApiSubTokenRoute: typeof ApiSubTokenRoute
@@ -958,6 +971,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/welcome/'
       preLoaderRoute: typeof userWelcomeIndexRouteImport
       parentRoute: typeof userRouteRoute
+    }
+    '/api/agent/ws': {
+      id: '/api/agent/ws'
+      path: '/api/agent/ws'
+      fullPath: '/api/agent/ws'
+      preLoaderRoute: typeof ApiAgentWsRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/auth/$': {
       id: '/api/auth/$'
@@ -1530,6 +1550,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiHealthRoute: ApiHealthRoute,
   ApiMcpRoute: ApiMcpRoute,
   staticIndexRoute: staticIndexRoute,
+  ApiAgentWsRoute: ApiAgentWsRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiRpcSplatRoute: ApiRpcSplatRoute,
   ApiSubTokenRoute: ApiSubTokenRoute,

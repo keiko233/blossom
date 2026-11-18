@@ -39,6 +39,9 @@ export const serverEnvSchema = z.object({
   ACME_EAB_HMAC_KEY: z.string().optional(),
   CLOUDFLARE_DNS_API_TOKEN: z.string().optional(),
   CLOUDFLARE_DNS_ZONE_ID: z.string().optional(),
+  // Optional shared backplane for agent WebSocket fan-out across Node/Vercel
+  // instances. Cloudflare uses the AgentSessionDO binding instead.
+  REDIS_URL: z.string().url().optional(),
 });
 
 export const clientEnvSchema = z.object({

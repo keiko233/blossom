@@ -32,6 +32,7 @@ const deployTarget = (process.env.DEPLOY_TARGET ??
 if (!DEPLOY_TARGETS.includes(deployTarget)) {
   throw new Error(`Unknown DEPLOY_TARGET: ${process.env.DEPLOY_TARGET}`);
 }
+const isCloudflare = deployTarget === "cloudflare";
 
 /**
  * tsyringe (pulled in by @peculiar/x509 v1, which acme-client depends on)
@@ -81,9 +82,25 @@ const config = defineConfig(({ mode, command }) => {
       alias: {
         "@/lib/database-connection": fileURLToPath(
           new URL(
-            deployTarget === "cloudflare"
+            isCloudflare
               ? "./src/lib/database-connection.cloudflare.ts"
               : "./src/lib/database-connection.ts",
+            import.meta.url,
+          ),
+        ),
+        "@/lib/realtime-hub": fileURLToPath(
+          new URL(
+            isCloudflare
+              ? "./src/lib/realtime-hub.cloudflare.ts"
+              : "./src/lib/realtime-hub.ts",
+            import.meta.url,
+          ),
+        ),
+        "@/durable-objects/agent-session": fileURLToPath(
+          new URL(
+            isCloudflare
+              ? "./src/durable-objects/agent-session.cloudflare.ts"
+              : "./src/durable-objects/agent-session.ts",
             import.meta.url,
           ),
         ),
@@ -120,6 +137,7 @@ const config = defineConfig(({ mode, command }) => {
         : [
             nitro({
               preset: NITRO_PRESETS[deployTarget],
+              features: { websocket: true },
             }),
           ]),
       viteReact(),
