@@ -34,7 +34,8 @@ start_mock() {
   python3 "$(dirname "$0")/../tests/mock_control_plane.py" \
     --port "$mock_port" \
     --certificate "$test_dir/fullchain.pem" \
-    --private-key "$test_dir/private-key.pem" >"$test_dir/mock.log" 2>&1 &
+    --private-key "$test_dir/private-key.pem" \
+    --ws >"$test_dir/mock.log" 2>&1 &
   mock_pid=$!
 
   attempt=0
@@ -167,6 +168,63 @@ sys.exit(0 if rolled_back else 1)
   done
 }
 
+# Waits until the mock has seen at least `$1` WebSocket upgrades and every
+# agent that connected sent `hello` advertising `ws-v1`.
+wait_ws_connections() {
+  expected=$1
+  attempt=0
+  until curl -fsS "http://127.0.0.1:$mock_port/state" 2>/dev/null |
+    python3 -c '
+import json
+import sys
+
+state = json.load(sys.stdin)
+expected = int(sys.argv[1])
+hellos = state.get("wsHellos") or []
+ok = (
+    state.get("wsEnabled") is True
+    and state.get("wsConnections", 0) >= expected
+    and len(hellos) >= expected
+    and all("ws-v1" in (hello.get("payload", {}).get("capabilities") or []) for hello in hellos)
+)
+sys.exit(0 if ok else 1)
+' "$expected"; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 60 ]; then
+      echo "timed out waiting for $expected websocket connections" >&2
+      curl -fsS "http://127.0.0.1:$mock_port/state" || true
+      docker logs "$container" >&2
+      exit 1
+    fi
+    sleep 1
+  done
+}
+
+# Pushes a `config.notify` and waits for the agent's `config.ack` for that
+# revision, proving the push path (not the poll timer) drove reconciliation.
+wait_ws_ack() {
+  revision=$1
+  attempt=0
+  until curl -fsS "http://127.0.0.1:$mock_port/state" 2>/dev/null |
+    python3 -c '
+import json
+import sys
+
+acks = json.load(sys.stdin).get("wsAcks") or []
+revision = sys.argv[1]
+sys.exit(0 if any(ack.get("payload", {}).get("appliedRevision") == revision for ack in acks) else 1)
+' "$revision"; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 60 ]; then
+      echo "timed out waiting for config.ack for $revision" >&2
+      curl -fsS "http://127.0.0.1:$mock_port/state" || true
+      docker logs "$container" >&2
+      exit 1
+    fi
+    sleep 1
+  done
+}
+
 assert_clean_active() {
   docker exec "$container" sh -c '
     ! grep -q "\"certificate\":" /data/state/active.json
@@ -192,6 +250,7 @@ echo "== phase 1: fresh managed TLS apply =="
 start_agent
 wait_log "sing-box config .* applied"
 wait_healthy_heartbeat
+wait_ws_connections 1
 
 docker exec "$container" sh -c '
   test -s /data/state/certificates/test-cert/generation-1/fullchain.pem
@@ -287,6 +346,31 @@ curl -fsS -X POST -H 'content-type: application/json' \
 wait_healthy_heartbeat
 handshake
 echo "phase 4 ok"
+
+# ── Phase 5: WebSocket push, reconnect and HTTP fallback ─────────────────────
+echo "== phase 5: websocket push and reconnect =="
+
+# A pushed config.notify must reconcile and ack without waiting for the 5s
+# poll timer; the ack carries the committed revision.
+curl -fsS -X POST -H 'content-type: application/json' \
+  -d '{"desiredRevisionSeq":2}' \
+  "http://127.0.0.1:$mock_port/control/notify" >/dev/null
+wait_ws_ack "sha256:managed-tls-integration"
+
+# Dropping the socket makes the agent reconnect with a fresh hello.
+curl -fsS -X POST -H 'content-type: application/json' \
+  -d '{}' "http://127.0.0.1:$mock_port/control/ws-close" >/dev/null
+wait_ws_connections 2
+
+# With the mock gone the agent must keep serving on the HTTP fallback path and
+# keep reporting heartbeats as soon as the control plane returns.
+stop_mock
+sleep 2
+handshake
+start_mock
+wait_healthy_heartbeat
+handshake
+echo "phase 5 ok"
 
 docker logs "$container"
 echo "managed TLS lifecycle test passed"
