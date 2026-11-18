@@ -51,7 +51,7 @@ Statements are **Established** unless marked **Recommended**. **Recommended** co
 
 ## 6. Concurrency, Async, and Process Boundaries
 
-- **Established**: `server-agent` uses `tokio` (`features = ["full"]`), `processkit` for child supervision, and `tonic`/`prost` for `sing-box` gRPC stats streaming.
+- **Established**: `server-agent` uses `tokio` (`features = ["full"]`), `processkit` for child supervision, `tonic`/`prost` for `sing-box` gRPC stats streaming, and `tokio-tungstenite` with the crate's `rustls` (`ring`) stack for the agent WebSocket. `native-tls`/OpenSSL is not used.
 - **Recommended**:
   - Never block Tokio async worker threads with synchronous filesystem/archive extraction, blocking wait loops, or synchronous PTY syscalls; move blocking work to `tokio::task::spawn_blocking` or dedicated OS threads with descriptive names.
   - Propagate structured shutdown via `CancellationToken` (or explicit stop channels) and bound all in-memory telemetry/PTY/WS queues so a stalled network link or runaway process output triggers backpressure/drop policies rather than unbounded memory growth.
@@ -69,6 +69,6 @@ Statements are **Established** unless marked **Recommended**. **Recommended** co
 
 - **Established**: Inline unit tests (`#[cfg(test)] mod tests`) sit next to the implementation and must run cleanly offline (`cargo test --locked`) without a live `sing-box` binary or network.
 - **Recommended**:
-  - Test protocol framing, telemetry parsing (including `/proc` / cgroup fixtures), backoff/reconnect state machines, and ACME state transitions against deterministic fakes and `tokio::time::pause()` rather than real `sleep` delays.
+  - Test protocol framing, telemetry parsing (including `/proc` / cgroup fixtures), backoff/reconnect state machines, and ACME state transitions against deterministic fakes and `tokio::time::pause()` rather than real `sleep` delays. The WebSocket loop (`src/ws/tests.rs`) follows this: fake transport/connection, injected jitter, and `#[tokio::test(start_paused = true)]`.
   - Assert specific error variants or structured phase payloads instead of `assert!(res.is_err())`.
   - Keep existing Docker end-to-end tests (`scripts/test-managed-tls-docker.sh`) green whenever config, TLS, or agent-control-plane transport contracts change.

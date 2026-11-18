@@ -14,15 +14,19 @@ mod process;
 mod stats;
 mod traffic;
 mod update;
+mod ws;
 
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
 use chrono::Utc;
 use clap::Parser;
 use tokio::signal;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::config::{AgentPolicy, CandidateConfig, ConfigManager, FetchStatus};
@@ -31,15 +35,22 @@ use crate::traffic::TrafficReporter;
 use crate::update::{
     AGENT_RESTART_EXIT_CODE, UpdateConfig, UpdateManager, UpdateStatus, supports_singbox_version,
 };
+use crate::ws::adapters::{SensitiveHeader, TokioWsTransport, WsTransportConfig, ws_url};
+use crate::ws::codec::{
+    AgentMessage, AgentWsFrame, CertificateDeployment, ConfigAckPayload, HelloPayload,
+    UpdateStatePayload, UpdateStatusPayload, UpdateTarget, WelcomePayload, frame_type,
+};
+use crate::ws::ports::{AgentCommandSink as _, ChannelCommandSink, WsCommand, WsEvent};
 
 const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const AGENT_BUILD_ID: &str = env!("AGENT_BUILD_ID");
-const AGENT_CAPABILITIES: [&str; 5] = [
+const AGENT_CAPABILITIES: [&str; 6] = [
     "config-v3",
     "managed-tls-v3",
     "certificate-deployments-v1",
     "atomic-config-rollback",
     "connection-stream-traffic",
+    "ws-v1",
 ];
 const RUNTIME_PROBATION: Duration = Duration::from_secs(11);
 
@@ -125,6 +136,16 @@ struct Args {
         value_parser = clap::value_parser!(u64).range(60..)
     )]
     update_retry_seconds: u64,
+
+    /// Connect the push WebSocket; when disabled (or rejected by the control
+    /// plane) the agent keeps the HTTP config poll and heartbeat.
+    #[arg(
+        long,
+        default_value_t = true,
+        env = "AGENT_WS_ENABLED",
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
+    ws_enabled: bool,
 }
 
 fn parse_level(level: &str) -> tracing::Level {
@@ -226,10 +247,43 @@ async fn main() -> Result<()> {
         desired_sing_box_version: None,
     };
 
+    // The push channel is optional: it is never required for correctness, and
+    // every failure path leaves the HTTP poll/heartbeat loop untouched.
+    let (command_sink, command_receiver) = ws::ports::command_channel(64);
+    let command_sink = Arc::new(command_sink);
+    let hello_snapshot = Arc::new(Mutex::new(HelloSnapshot::capture(&config, &updates)));
+    if args.ws_enabled {
+        let sink = command_sink.clone();
+        updates.set_status_observer(Arc::new(move |agent, singbox| {
+            if let Ok(frame) = AgentWsFrame::new(
+                frame_type::UPDATE_STATUS,
+                update_status_payload_from(agent, singbox),
+            ) {
+                ws::enqueue_frame(sink.as_ref(), frame);
+            }
+        }));
+    }
+    let mut ws_link = if args.ws_enabled {
+        start_ws(
+            &args.url,
+            &args.token,
+            hello_snapshot.clone(),
+            command_receiver,
+            command_sink.clone(),
+        )
+    } else {
+        info!("agent websocket disabled; using HTTP config poll and heartbeat");
+        WsLink::disabled()
+    };
+
     match sync_config(&mut config, &mut manager, &bin, &mut status).await {
         Ok(next) => policy = next,
         Err(e) => error!("initial config sync failed: {e}"),
     }
+    hello_snapshot
+        .lock()
+        .expect("hello snapshot lock")
+        .refresh(&config, &updates);
     if reconcile_updates(
         &mut updates,
         &policy,
@@ -272,6 +326,8 @@ async fn main() -> Result<()> {
         "agent running; config poll={}s heartbeat={}s",
         policy.config_poll_interval_seconds, policy.heartbeat_interval_seconds
     );
+    let mut ws_events = ws_link.take_events();
+    let mut ws_transport = "http-fallback";
     let mut config_sleep = Box::pin(tokio::time::sleep(Duration::from_secs(
         policy.config_poll_interval_seconds,
     )));
@@ -280,42 +336,32 @@ async fn main() -> Result<()> {
     )));
 
     loop {
+        let ws_event = async {
+            match ws_events.as_mut() {
+                Some(events) => events.recv().await,
+                None => std::future::pending().await,
+            }
+        };
         tokio::select! {
             _ = &mut config_sleep => {
                 if let Some(reporter) = reporter.as_mut() {
                     reporter.collect_and_report(&client).await;
                 }
-                match sync_config(&mut config, &mut manager, &bin, &mut status).await {
-                    Ok(next) => policy = next,
-                    Err(e) => error!("config sync failed: {e}"),
-                }
-                if reconcile_updates(
-                    &mut updates,
-                    &policy,
+                let exit = config_cycle(
+                    &mut config,
                     &mut manager,
                     &bin,
-                    &mut config,
+                    &mut status,
+                    &mut policy,
+                    &mut updates,
                     &mut sing_box_version,
                 )
-                .await
-                {
-                    heartbeat(
-                        &client,
-                        &mut config,
-                        manager.as_ref(),
-                        &status,
-                        policy.clone(),
-                        sing_box_version.as_deref(),
-                        &updates,
-                    )
-                    .await;
-                    if let Some(manager) = manager.take() {
-                        manager.shutdown().await;
-                    }
-                    info!("agent update installed; exiting for supervisor restart");
-                    std::process::exit(AGENT_RESTART_EXIT_CODE);
+                .await;
+                if exit {
+                    exit_for_restart(manager.take(), &client, &mut config, &status, &policy, sing_box_version.as_deref(), &updates).await;
                 }
                 reconcile_reporter(config.api_endpoint(), &mut reporter, &traffic_dir);
+                refresh_hello(&hello_snapshot, &config, &updates);
                 heartbeat(
                     &client,
                     &mut config,
@@ -340,6 +386,63 @@ async fn main() -> Result<()> {
                 ).await;
                 heartbeat_sleep.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(policy.heartbeat_interval_seconds));
             }
+            event = ws_event => {
+                let Some(event) = event else {
+                    ws_events = None;
+                    continue;
+                };
+                match event {
+                    WsEvent::Connected { welcome } => {
+                        ws_transport = "ws";
+                        info!(
+                            server = %welcome.server_name,
+                            revision_seq = welcome.desired_revision_seq,
+                            "agent websocket connected; HTTP polling remains as fallback"
+                        );
+                        apply_ws_policy(&welcome, &mut policy);
+                        config_sleep.as_mut().reset(
+                            tokio::time::Instant::now()
+                                + Duration::from_secs(policy.config_poll_interval_seconds),
+                        );
+                        heartbeat_sleep.as_mut().reset(
+                            tokio::time::Instant::now()
+                                + Duration::from_secs(policy.heartbeat_interval_seconds),
+                        );
+                        refresh_hello(&hello_snapshot, &config, &updates);
+                    }
+                    WsEvent::Recovered => {
+                        ws_transport = "ws";
+                        info!("agent websocket push channel recovered");
+                    }
+                    WsEvent::Fallback { reason } => {
+                        ws_transport = "http-fallback";
+                        warn!(
+                            "agent websocket unavailable ({reason}); using HTTP config poll and heartbeat"
+                        );
+                    }
+                    WsEvent::Disconnected { reason } => {
+                        ws_transport = "http-fallback";
+                        info!("agent websocket disconnected: {reason}");
+                    }
+                    WsEvent::Frame(message) => {
+                        handle_ws_frame(
+                            message,
+                            &client,
+                            &mut config,
+                            &mut manager,
+                            &bin,
+                            &mut status,
+                            &mut policy,
+                            &mut updates,
+                            &mut sing_box_version,
+                            &command_sink,
+                        )
+                        .await;
+                        reconcile_reporter(config.api_endpoint(), &mut reporter, &traffic_dir);
+                        refresh_hello(&hello_snapshot, &config, &updates);
+                    }
+                }
+            }
             _ = shutdown_signal() => {
                 info!("received shutdown signal");
                 break;
@@ -350,7 +453,8 @@ async fn main() -> Result<()> {
     if let Some(manager) = manager {
         manager.shutdown().await;
     }
-    info!("agent stopped");
+    ws_link.shutdown().await;
+    info!("agent stopped; last transport={ws_transport}");
     Ok(())
 }
 
@@ -564,6 +668,377 @@ async fn sync_config(
         });
     }
     Ok(policy)
+}
+
+/// One reconcile pass shared by the HTTP poll timer and a `config.notify`
+/// push: fetch, apply with the full safety invariants, then reconcile updates.
+/// Returns true when the agent replaced itself and must exit.
+async fn config_cycle(
+    config: &mut ConfigManager,
+    manager: &mut Option<SingBoxManager>,
+    bin: &Path,
+    status: &mut AgentStatus,
+    policy: &mut AgentPolicy,
+    updates: &mut UpdateManager,
+    sing_box_version: &mut Option<String>,
+) -> bool {
+    match sync_config(config, manager, bin, status).await {
+        Ok(next) => *policy = next,
+        Err(error) => error!("config sync failed: {error}"),
+    }
+    reconcile_updates(updates, policy, manager, bin, config, sing_box_version).await
+}
+
+async fn exit_for_restart(
+    manager: Option<SingBoxManager>,
+    client: &client::Client,
+    config: &mut ConfigManager,
+    status: &AgentStatus,
+    policy: &AgentPolicy,
+    sing_box_version: Option<&str>,
+    updates: &UpdateManager,
+) -> ! {
+    heartbeat(
+        client,
+        config,
+        manager.as_ref(),
+        status,
+        policy.clone(),
+        sing_box_version,
+        updates,
+    )
+    .await;
+    if let Some(manager) = manager {
+        manager.shutdown().await;
+    }
+    info!("agent update installed; exiting for supervisor restart");
+    std::process::exit(AGENT_RESTART_EXIT_CODE);
+}
+
+fn refresh_hello(
+    snapshot: &Arc<Mutex<HelloSnapshot>>,
+    config: &ConfigManager,
+    updates: &UpdateManager,
+) {
+    snapshot
+        .lock()
+        .expect("hello snapshot lock")
+        .refresh(config, updates);
+}
+
+/// The `hello` payload is rebuilt before every connect so a reconnect carries
+/// the current applied revision, certificate deployments and update state.
+#[derive(Debug, Clone)]
+struct HelloSnapshot {
+    payload: HelloPayload,
+}
+
+impl HelloSnapshot {
+    fn capture(config: &ConfigManager, updates: &UpdateManager) -> Self {
+        let mut snapshot = Self {
+            payload: HelloPayload {
+                agent_version: AGENT_VERSION.to_string(),
+                agent_build_id: AGENT_BUILD_ID.to_string(),
+                capabilities: AGENT_CAPABILITIES
+                    .iter()
+                    .map(|capability| capability.to_string())
+                    .collect(),
+                applied_revision: None,
+                certificate_deployments: Vec::new(),
+                updates: None,
+            },
+        };
+        snapshot.refresh(config, updates);
+        snapshot
+    }
+
+    fn refresh(&mut self, config: &ConfigManager, updates: &UpdateManager) {
+        self.payload.applied_revision = config.applied_revision().map(str::to_owned);
+        self.payload.certificate_deployments = config
+            .deployments()
+            .iter()
+            .map(certificate_deployment)
+            .collect();
+        self.payload.updates = Some(update_status_payload_from(
+            updates.agent_status(),
+            updates.singbox_status(),
+        ));
+    }
+
+    fn payload(&self) -> HelloPayload {
+        self.payload.clone()
+    }
+}
+
+impl ws::HelloSource for Arc<Mutex<HelloSnapshot>> {
+    fn hello(&self) -> HelloPayload {
+        self.lock().expect("hello snapshot lock").payload()
+    }
+}
+
+fn certificate_deployment(deployment: &config::DeploymentRecord) -> CertificateDeployment {
+    CertificateDeployment {
+        certificate_id: deployment.certificate_id.clone(),
+        generation: deployment.generation,
+        fingerprint_sha256: deployment.fingerprint_sha256.clone(),
+        installed: deployment.installed,
+        in_use: deployment.in_use,
+        error_phase: deployment.error_phase.clone(),
+        error_message: deployment.error_message.clone(),
+    }
+}
+
+fn update_state_payload(status: &UpdateStatus) -> UpdateStatePayload {
+    UpdateStatePayload {
+        target_version: status.target_version.clone(),
+        state: status.state.as_str().to_string(),
+        message: status.message.clone(),
+        checked_at: status.checked_at,
+    }
+}
+
+fn update_status_payload_from(agent: &UpdateStatus, singbox: &UpdateStatus) -> UpdateStatusPayload {
+    UpdateStatusPayload {
+        agent: Some(update_state_payload(agent)),
+        sing_box: Some(update_state_payload(singbox)),
+    }
+}
+
+/// Applies the control plane's negotiated intervals. The welcome values are
+/// authoritative for cadence but are clamped exactly like the HTTP document.
+fn apply_ws_policy(welcome: &WelcomePayload, policy: &mut AgentPolicy) {
+    policy.config_poll_interval_seconds = welcome.poll_interval_seconds.clamp(5, 86_400);
+    policy.heartbeat_interval_seconds = welcome.heartbeat_interval_seconds.clamp(5, 3_600);
+}
+
+/// Dispatches a pushed frame through the same reconcilers the poll timer uses.
+///
+/// `config.notify` re-fetches the full v3 document (never trusting the push
+/// payload as config) and then acks the committed or failed revision.
+/// `update.trigger` runs the ordinary update reconciler and acks nothing; the
+/// status observer streams transitions back over the socket.
+#[allow(clippy::too_many_arguments)]
+async fn handle_ws_frame(
+    message: AgentMessage,
+    client: &client::Client,
+    config: &mut ConfigManager,
+    manager: &mut Option<SingBoxManager>,
+    bin: &Path,
+    status: &mut AgentStatus,
+    policy: &mut AgentPolicy,
+    updates: &mut UpdateManager,
+    sing_box_version: &mut Option<String>,
+    sink: &Arc<ChannelCommandSink>,
+) {
+    match message {
+        AgentMessage::ConfigNotify(notify) => {
+            info!(
+                revision_seq = notify.desired_revision_seq,
+                revision = %notify.desired_revision,
+                reason = notify.reason.as_deref().unwrap_or("unspecified"),
+                "config push received; reconciling immediately"
+            );
+            let exit = config_cycle(
+                config,
+                manager,
+                bin,
+                status,
+                policy,
+                updates,
+                sing_box_version,
+            )
+            .await;
+            send_config_ack(sink, config, status);
+            if exit {
+                exit_for_restart(
+                    manager.take(),
+                    client,
+                    config,
+                    status,
+                    policy,
+                    sing_box_version.as_deref(),
+                    updates,
+                )
+                .await;
+            }
+        }
+        AgentMessage::UpdateTrigger(trigger) => {
+            info!(
+                target = ?trigger.target,
+                force = trigger.force,
+                "update push received; reconciling immediately"
+            );
+            if trigger.force {
+                match trigger.target {
+                    UpdateTarget::Agent | UpdateTarget::All => updates.clear_agent_cooldown(),
+                    UpdateTarget::SingBox => {}
+                }
+                if matches!(trigger.target, UpdateTarget::SingBox | UpdateTarget::All) {
+                    updates.clear_singbox_cooldown();
+                }
+            }
+            let mut targeted = policy.clone();
+            // A missing version means "resolve latest"; a single-target
+            // trigger must not also touch the other binary.
+            targeted.desired_agent_version = match trigger.target {
+                UpdateTarget::Agent | UpdateTarget::All => Some(
+                    trigger
+                        .desired_agent_version
+                        .clone()
+                        .unwrap_or_else(|| "latest".to_string()),
+                ),
+                UpdateTarget::SingBox => None,
+            };
+            targeted.desired_sing_box_version = match trigger.target {
+                UpdateTarget::SingBox | UpdateTarget::All => Some(
+                    trigger
+                        .desired_sing_box_version
+                        .clone()
+                        .unwrap_or_else(|| "latest".to_string()),
+                ),
+                UpdateTarget::Agent => None,
+            };
+            let exit =
+                reconcile_updates(updates, &targeted, manager, bin, config, sing_box_version).await;
+            if exit {
+                exit_for_restart(
+                    manager.take(),
+                    client,
+                    config,
+                    status,
+                    policy,
+                    sing_box_version.as_deref(),
+                    updates,
+                )
+                .await;
+            }
+        }
+        AgentMessage::Welcome(welcome) => {
+            apply_ws_policy(&welcome, policy);
+        }
+        AgentMessage::Hello(_)
+        | AgentMessage::Ping(_)
+        | AgentMessage::Pong(_)
+        | AgentMessage::ConfigAck(_)
+        | AgentMessage::UpdateStatus(_) => {}
+        AgentMessage::Telemetry(frame) | AgentMessage::Pty(frame) | AgentMessage::Acme(frame) => {
+            tracing::debug!(frame_type = %frame.frame_type, "ignoring reserved websocket channel");
+        }
+        AgentMessage::Unknown { frame_type } => {
+            tracing::debug!(frame_type = %frame_type, "ignoring unknown websocket frame");
+        }
+    }
+}
+
+/// Sends `config.ack` with the revision the agent actually committed and the
+/// current deployments. When nothing was ever committed this is the empty
+/// string rather than the desired revision: the control plane must not read a
+/// failed apply as an applied one.
+fn send_config_ack(sink: &ChannelCommandSink, config: &ConfigManager, status: &AgentStatus) {
+    let applied_revision = config.applied_revision().unwrap_or_default().to_string();
+    let error = status.error.as_ref().map(|error| error.message.clone());
+    let payload = ConfigAckPayload {
+        applied_revision,
+        certificate_deployments: config
+            .deployments()
+            .iter()
+            .map(certificate_deployment)
+            .collect(),
+        error,
+    };
+    match AgentWsFrame::new(frame_type::CONFIG_ACK, payload) {
+        Ok(frame) => ws::enqueue_frame(sink, frame),
+        Err(error) => warn!("failed to encode config.ack: {error}"),
+    }
+}
+
+/// Handle to the background WebSocket task. Dropping the task's cancellation
+/// token stops the loop; [`WsLink::shutdown`] also waits for it to finish.
+struct WsLink {
+    events: Option<mpsc::Receiver<WsEvent>>,
+    cancel: CancellationToken,
+    sink: Option<Arc<ChannelCommandSink>>,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl WsLink {
+    fn disabled() -> Self {
+        Self {
+            events: None,
+            cancel: CancellationToken::new(),
+            sink: None,
+            task: None,
+        }
+    }
+
+    fn take_events(&mut self) -> Option<mpsc::Receiver<WsEvent>> {
+        self.events.take()
+    }
+
+    async fn shutdown(mut self) {
+        if let Some(sink) = self.sink.take() {
+            let _ = sink.enqueue(WsCommand::Close);
+        }
+        self.cancel.cancel();
+        if let Some(task) = self.task.take() {
+            let _ = task.await;
+        }
+    }
+}
+
+fn start_ws(
+    base_url: &str,
+    token: &str,
+    hello: Arc<Mutex<HelloSnapshot>>,
+    commands: mpsc::Receiver<WsCommand>,
+    sink: Arc<ChannelCommandSink>,
+) -> WsLink {
+    let url = match ws_url(base_url) {
+        Ok(url) => url,
+        Err(error) => {
+            warn!("agent websocket disabled: {error}");
+            return WsLink::disabled();
+        }
+    };
+    let token = match SensitiveHeader::bearer(token) {
+        Ok(token) => token,
+        Err(error) => {
+            warn!("agent websocket disabled: {error}");
+            return WsLink::disabled();
+        }
+    };
+    let transport = match TokioWsTransport::new(WsTransportConfig {
+        url: url.clone(),
+        token,
+        connect_timeout: Duration::from_secs(15),
+    }) {
+        Ok(transport) => transport,
+        Err(error) => {
+            warn!("agent websocket disabled: {error}");
+            return WsLink::disabled();
+        }
+    };
+    info!("connecting agent websocket at {url}");
+    let (event_sender, event_receiver) = mpsc::channel(32);
+    let cancel = CancellationToken::new();
+    let task_cancel = cancel.clone();
+    let task = tokio::spawn(async move {
+        ws::run(
+            transport,
+            hello,
+            ws::RandomJitter,
+            event_sender,
+            commands,
+            task_cancel,
+        )
+        .await;
+    });
+    WsLink {
+        events: Some(event_receiver),
+        cancel,
+        sink: Some(sink),
+        task: Some(task),
+    }
 }
 
 async fn restore_runtime(
@@ -902,7 +1377,11 @@ async fn heartbeat(
 
 #[cfg(test)]
 mod tests {
-    use super::{CandidateConfig, node_id_from_error};
+    use super::{
+        AGENT_CAPABILITIES, CandidateConfig, HelloSnapshot, apply_ws_policy, node_id_from_error,
+    };
+    use crate::config::AgentPolicy;
+    use crate::ws::codec::WelcomePayload;
 
     #[test]
     fn maps_singbox_inbound_index_back_to_node() {
@@ -921,6 +1400,75 @@ mod tests {
                 &candidate,
             ),
             Some("node-b".to_string()),
+        );
+    }
+
+    #[test]
+    fn advertises_the_websocket_capability() {
+        assert!(AGENT_CAPABILITIES.contains(&"ws-v1"));
+    }
+
+    #[test]
+    fn welcome_intervals_are_clamped_like_the_http_document() {
+        let welcome = WelcomePayload {
+            server_id: "srv-1".into(),
+            server_name: "edge".into(),
+            protocol_version: 1,
+            desired_revision_seq: 1,
+            desired_revision: "sha256:rev".into(),
+            poll_interval_seconds: 1,
+            heartbeat_interval_seconds: 100_000,
+            reconnect_before_seconds: None,
+        };
+        let mut policy = AgentPolicy {
+            config_poll_interval_seconds: 60,
+            heartbeat_interval_seconds: 30,
+            desired_agent_version: None,
+            desired_sing_box_version: None,
+        };
+        apply_ws_policy(&welcome, &mut policy);
+        assert_eq!(policy.config_poll_interval_seconds, 5);
+        assert_eq!(policy.heartbeat_interval_seconds, 3_600);
+    }
+
+    #[test]
+    fn hello_snapshot_carries_the_capabilities_and_build_id() {
+        let config = crate::config::ConfigManager::new(
+            crate::client::new_client("http://127.0.0.1:1/api", "test-token")
+                .expect("client builds"),
+            std::env::temp_dir().join(format!("blossom-hello-{}", std::process::id())),
+        )
+        .expect("config manager builds");
+        let updates = crate::update::UpdateManager::new(
+            crate::update::UpdateConfig {
+                state_dir: std::env::temp_dir()
+                    .join(format!("blossom-hello-state-{}", std::process::id())),
+                download_dir: std::env::temp_dir()
+                    .join(format!("blossom-hello-downloads-{}", std::process::id())),
+                github_api: "https://api.github.com".into(),
+                agent_repo: "acme/blossom".into(),
+                singbox_repo: "acme/sing-box".into(),
+                github_token: None,
+                self_update: false,
+                retry_after: std::time::Duration::from_secs(3600),
+            },
+            "0.2.0".to_string(),
+            None,
+        )
+        .expect("update manager builds");
+        let snapshot = HelloSnapshot::capture(&config, &updates);
+        let payload = snapshot.payload();
+        assert!(payload.capabilities.iter().any(|value| value == "ws-v1"));
+        assert!(!payload.agent_build_id.is_empty());
+        assert!(payload.updates.is_some());
+        let _ = std::fs::remove_dir_all(
+            std::env::temp_dir().join(format!("blossom-hello-{}", std::process::id())),
+        );
+        let _ = std::fs::remove_dir_all(
+            std::env::temp_dir().join(format!("blossom-hello-state-{}", std::process::id())),
+        );
+        let _ = std::fs::remove_dir_all(
+            std::env::temp_dir().join(format!("blossom-hello-downloads-{}", std::process::id())),
         );
     }
 }

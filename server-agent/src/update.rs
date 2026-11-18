@@ -9,6 +9,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -22,6 +23,11 @@ use tar::Archive;
 use tracing::{info, warn};
 
 pub const AGENT_RESTART_EXIT_CODE: i32 = 75;
+
+/// Observes every agent/sing-box status transition. The WebSocket bridge uses
+/// it to stream `update.status` frames while a triggered update runs; the
+/// observer must be cheap and must not block.
+pub type StatusObserver = Arc<dyn Fn(&UpdateStatus, &UpdateStatus) + Send + Sync>;
 
 const USER_AGENT: &str = concat!("blossom-server-agent/", env!("CARGO_PKG_VERSION"));
 const AGENT_TAG_PREFIX: &str = "server-agent-v";
@@ -150,6 +156,7 @@ pub struct UpdateManager {
     failed_singbox: Option<FailedUpdate>,
     agent_latest: Option<(ResolvedRelease, Instant)>,
     singbox_latest: Option<(ResolvedRelease, Instant)>,
+    status_observer: Option<StatusObserver>,
 }
 
 impl UpdateManager {
@@ -200,6 +207,7 @@ impl UpdateManager {
             failed_singbox: None,
             agent_latest: None,
             singbox_latest: None,
+            status_observer: None,
         };
         manager.recover_pending_update()?;
         manager.failed_agent = manager.read_failed("agent-update-failed.json");
@@ -229,19 +237,62 @@ impl UpdateManager {
         &self.singbox_status
     }
 
+    /// Installs a transition observer (see [`StatusObserver`]).
+    pub fn set_status_observer(&mut self, observer: StatusObserver) {
+        self.status_observer = Some(observer);
+    }
+
+    /// Clears a recorded agent failure so a forced trigger retries at once
+    /// instead of waiting out the retry window.
+    pub fn clear_agent_cooldown(&mut self) {
+        self.failed_agent = None;
+        let _ = fs::remove_file(self.config.state_dir.join("agent-update-failed.json"));
+    }
+
+    /// Clears a recorded sing-box failure so a forced trigger retries at once.
+    pub fn clear_singbox_cooldown(&mut self) {
+        self.failed_singbox = None;
+        let _ = fs::remove_file(self.config.state_dir.join("sing-box-update-failed.json"));
+    }
+
+    fn notify_status(&self) {
+        if let Some(observer) = &self.status_observer {
+            observer(&self.agent_status, &self.singbox_status);
+        }
+    }
+
+    fn set_agent_status(
+        &mut self,
+        state: UpdateState,
+        target: Option<String>,
+        message: Option<String>,
+    ) {
+        self.agent_status.set(state, target, message);
+        self.notify_status();
+    }
+
+    fn set_singbox_status(
+        &mut self,
+        state: UpdateState,
+        target: Option<String>,
+        message: Option<String>,
+    ) {
+        self.singbox_status.set(state, target, message);
+        self.notify_status();
+    }
+
     /// Downloads and installs a newer agent binary when `desired` differs from
     /// the running version. Returns true when the caller must exit so the
     /// supervisor can start the replacement.
     pub async fn maybe_update_agent(&mut self, desired: &str, current_exe: &Path) -> Result<bool> {
         let desired_key = normalize_version(desired);
         if desired_key == self.current_agent_version {
-            self.agent_status
-                .set(UpdateState::UpToDate, Some(desired_key), None);
+            self.set_agent_status(UpdateState::UpToDate, Some(desired_key), None);
             self.clear_failed_agent();
             return Ok(false);
         }
         if !self.config.self_update {
-            self.agent_status.set(
+            self.set_agent_status(
                 UpdateState::Disabled,
                 Some(desired_key),
                 Some("self-update is disabled; restart with AGENT_SELF_UPDATE=1".to_string()),
@@ -252,8 +303,7 @@ impl UpdateManager {
         if self.in_agent_cooldown(&desired_key) {
             return Ok(false);
         }
-        self.agent_status
-            .set(UpdateState::Checking, Some(desired_key), None);
+        self.set_agent_status(UpdateState::Checking, Some(desired_key), None);
         let release = match self.resolve_agent_release(desired).await {
             Ok(release) => release,
             Err(error) => {
@@ -262,8 +312,7 @@ impl UpdateManager {
             }
         };
         if release.version == self.current_agent_version {
-            self.agent_status
-                .set(UpdateState::UpToDate, Some(release.version.clone()), None);
+            self.set_agent_status(UpdateState::UpToDate, Some(release.version.clone()), None);
             self.clear_failed_agent();
             return Ok(false);
         }
@@ -289,7 +338,7 @@ impl UpdateManager {
             .config
             .download_dir
             .join(format!("server-agent-{}.new", release.version));
-        self.agent_status.set(
+        self.set_agent_status(
             UpdateState::Downloading,
             Some(release.version.clone()),
             None,
@@ -326,7 +375,7 @@ impl UpdateManager {
         if let Err(error) = install_result {
             let _ = fs::remove_file(&temp);
             let _ = fs::remove_file(self.config.state_dir.join("agent-update.json"));
-            self.agent_status.set(
+            self.set_agent_status(
                 UpdateState::Applying,
                 Some(release.version.clone()),
                 Some(error.to_string()),
@@ -335,8 +384,7 @@ impl UpdateManager {
             return Err(error);
         }
 
-        self.agent_status
-            .set(UpdateState::Restarting, Some(release.version.clone()), None);
+        self.set_agent_status(UpdateState::Restarting, Some(release.version.clone()), None);
         info!(
             from = %self.current_agent_version,
             to = %release.version,
@@ -354,16 +402,14 @@ impl UpdateManager {
     ) -> Result<Option<StagedSingBox>> {
         let desired_key = normalize_version(desired);
         if desired_key != "latest" && current_version == Some(desired_key.as_str()) {
-            self.singbox_status
-                .set(UpdateState::UpToDate, Some(desired_key), None);
+            self.set_singbox_status(UpdateState::UpToDate, Some(desired_key), None);
             self.clear_failed_singbox();
             return Ok(None);
         }
         if self.in_singbox_cooldown(&desired_key) {
             return Ok(None);
         }
-        self.singbox_status
-            .set(UpdateState::Checking, Some(desired_key), None);
+        self.set_singbox_status(UpdateState::Checking, Some(desired_key), None);
         let release = match self.resolve_singbox_release(desired).await {
             Ok(release) => release,
             Err(error) => {
@@ -380,8 +426,7 @@ impl UpdateManager {
             bail!("{message}");
         }
         if current_version == Some(release.version.as_str()) {
-            self.singbox_status
-                .set(UpdateState::UpToDate, Some(release.version.clone()), None);
+            self.set_singbox_status(UpdateState::UpToDate, Some(release.version.clone()), None);
             self.clear_failed_singbox();
             return Ok(None);
         }
@@ -411,7 +456,7 @@ impl UpdateManager {
             .config
             .download_dir
             .join(format!("sing-box-{}.tar.gz", release.version));
-        self.singbox_status.set(
+        self.set_singbox_status(
             UpdateState::Downloading,
             Some(release.version.clone()),
             None,
@@ -421,8 +466,7 @@ impl UpdateManager {
             return Err(error);
         }
 
-        self.singbox_status
-            .set(UpdateState::Verifying, Some(release.version.clone()), None);
+        self.set_singbox_status(UpdateState::Verifying, Some(release.version.clone()), None);
         let staged_path = self
             .config
             .download_dir
@@ -448,8 +492,7 @@ impl UpdateManager {
         bin: &Path,
         desired: &str,
     ) -> Result<()> {
-        self.singbox_status
-            .set(UpdateState::Applying, Some(staged.version.clone()), None);
+        self.set_singbox_status(UpdateState::Applying, Some(staged.version.clone()), None);
         if let Err(error) = set_executable(&staged.path) {
             self.fail_singbox(desired, &error.to_string());
             return Err(error);
@@ -477,8 +520,7 @@ impl UpdateManager {
     }
 
     pub fn singbox_update_succeeded(&mut self, version: &str) {
-        self.singbox_status
-            .set(UpdateState::UpToDate, Some(version.to_string()), None);
+        self.set_singbox_status(UpdateState::UpToDate, Some(version.to_string()), None);
         self.clear_failed_singbox();
     }
 
@@ -500,8 +542,7 @@ impl UpdateManager {
         if pending.target_version == self.current_agent_version {
             let _ = fs::remove_file(&path);
             let _ = fs::remove_file(self.config.state_dir.join("agent-update-failed.json"));
-            self.agent_status
-                .set(UpdateState::UpToDate, Some(pending.target_version), None);
+            self.set_agent_status(UpdateState::UpToDate, Some(pending.target_version), None);
             return Ok(());
         }
         let failed = FailedUpdate {
@@ -525,7 +566,7 @@ impl UpdateManager {
             at: Utc::now(),
         };
         let _ = self.write_json("agent-update-failed.json", &failed);
-        self.agent_status.set(
+        self.set_agent_status(
             UpdateState::Failed,
             Some(failed.target_version.clone()),
             Some(failed.message.clone()),
@@ -540,7 +581,7 @@ impl UpdateManager {
             at: Utc::now(),
         };
         let _ = self.write_json("sing-box-update-failed.json", &failed);
-        self.singbox_status.set(
+        self.set_singbox_status(
             UpdateState::Failed,
             Some(failed.target_version.clone()),
             Some(failed.message.clone()),
@@ -569,7 +610,7 @@ impl UpdateManager {
                     .is_ok_and(|elapsed| elapsed < self.config.retry_after)
         });
         if cooling && let Some(failed) = &self.failed_agent {
-            self.agent_status.set(
+            self.set_agent_status(
                 UpdateState::Failed,
                 Some(failed.target_version.clone()),
                 Some(failed.message.clone()),
@@ -587,7 +628,7 @@ impl UpdateManager {
                     .is_ok_and(|elapsed| elapsed < self.config.retry_after)
         });
         if cooling && let Some(failed) = &self.failed_singbox {
-            self.singbox_status.set(
+            self.set_singbox_status(
                 UpdateState::Failed,
                 Some(failed.target_version.clone()),
                 Some(failed.message.clone()),
@@ -1059,6 +1100,59 @@ mod tests {
             UpdateManager::new(update_config(api, &dir), "0.3.0".to_string(), None).unwrap();
         assert_eq!(recovered.agent_status().state, UpdateState::UpToDate);
         assert!(!dir.join("state/agent-update.json").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn status_observer_sees_every_transition() {
+        use std::sync::{Arc, Mutex};
+
+        let dir = temp_dir("observer");
+        let executable = dir.join("server-agent");
+        std::fs::write(&executable, b"old-agent").unwrap();
+        let replacement = b"#!/bin/sh\necho new-agent\n";
+        let asset_name = format!("server-agent-linux-{}", release_arch().unwrap());
+        let digest = hex::encode(sha2::Sha256::digest(replacement));
+        let api = serve_with(|api| {
+            HashMap::from([
+                (
+                    "/repos/acme/blossom/releases/tags/server-agent-v0.3.0".to_string(),
+                    serde_json::to_vec(&serde_json::json!({
+                        "tag_name": "server-agent-v0.3.0",
+                        "draft": false,
+                        "prerelease": false,
+                        "assets": [{
+                            "name": asset_name,
+                            "browser_download_url": format!("{api}/agent"),
+                            "digest": format!("sha256:{digest}")
+                        }]
+                    }))
+                    .unwrap(),
+                ),
+                ("/agent".to_string(), replacement.to_vec()),
+            ])
+        })
+        .await;
+
+        let states = Arc::new(Mutex::new(Vec::new()));
+        let recorded = states.clone();
+        let mut manager =
+            UpdateManager::new(update_config(api, &dir), "0.2.0".to_string(), None).unwrap();
+        manager.set_status_observer(Arc::new(move |agent, _singbox| {
+            recorded
+                .lock()
+                .expect("state log lock")
+                .push(agent.state.as_str());
+        }));
+        manager
+            .maybe_update_agent("0.3.0", &executable)
+            .await
+            .unwrap();
+
+        let states = states.lock().unwrap().clone();
+        assert!(states.contains(&"checking"), "{states:?}");
+        assert!(states.contains(&"downloading"), "{states:?}");
+        assert!(states.contains(&"restarting"), "{states:?}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

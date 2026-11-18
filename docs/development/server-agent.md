@@ -8,9 +8,13 @@ Statements are **Established** unless marked **Recommended**.
 
 | File               | Responsibility                                                                                                                                                  |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/main.rs`      | CLI (`clap`, flags mirrored by `AGENT_*` env vars), startup from the last-known-good config, the config-poll and heartbeat loops, shutdown.                      |
+| `src/main.rs`      | CLI (`clap`, flags mirrored by `AGENT_*` env vars), startup from the last-known-good config, the config-poll/heartbeat loops, WebSocket event wiring, shutdown.  |
 | `src/client.rs`    | Wraps the progenitor-generated client; injects the `Authorization: Bearer` token as a sensitive default header.                                                  |
 | `src/config.rs`    | Fetches the v3 desired state, applies certificate bindings to the base sing-box config, writes candidates, tracks active / last-known-good, reports errors.      |
+| `src/ws/codec.rs`  | Frozen v1 JSON frame envelope (`hello`/`welcome`, `ping`/`pong`, `config.*`, `update.*`) and typed message decoding that ignores unknown frames.                  |
+| `src/ws/ports.rs`  | Narrow `WsTransport`/`WsConnection`/`AgentCommandSink` traits, the bounded outbound queue, and the jittered backoff/fallback policy.                            |
+| `src/ws/adapters.rs` | `tokio-tungstenite` transport: `/api/agent/ws` URL derivation, sensitive bearer header, `rustls` (`ring`) TLS.                                                |
+| `src/ws/mod.rs`    | Reconnect loop: `hello` on every connect, keepalive ping/pong, proactive reconnect, and HTTP-fallback signalling.                                               |
 | `src/certificate.rs` | Validated, generation-addressed certificate store under `<state_dir>/certificates/<id>/generation-<n>/`.                                                      |
 | `src/process.rs`   | Supervises the sing-box child (`processkit`): log forwarding, restart with backoff, graceful replacement, `sing-box check` preflight.                            |
 | `src/stats.rs`     | Hand-written tonic/prost client for sing-box's built-in `api` service (`StartedService.SubscribeConnections`; no `.proto` files, no `tonic-build`).              |
@@ -20,17 +24,27 @@ Statements are **Established** unless marked **Recommended**.
 | `build.rs`         | Generates the API client from `openapi/spec.json` and stamps the build id (see below).                                                                           |
 | `examples/query_stats.rs` | Manual smoke test that prints the connection stream of a running sing-box >= 1.14.                                                                     |
 | `scripts/entrypoint.sh` | Thin-image PID-1 helper: first-start downloads, `/data` layout, signal forwarding and crash rollback.                                                       |
-| `tests/mock_control_plane.py`, `scripts/test-managed-tls-docker.sh` | Docker-based end-to-end test of the managed-TLS lifecycle against a mock control plane.                                |
+| `tests/mock_control_plane.py`, `scripts/test-managed-tls-docker.sh` | Docker-based end-to-end test of the managed-TLS lifecycle, plus WebSocket push/reconnect, against a mock control plane. |
 
 ## Contract with the control plane
 
 - The agent's build-time contract with the app is the OpenAPI document `openapi/spec.json`; at runtime it talks to the app over that API. `build.rs` reads it, rewrites OAS 3.1 nullable `anyOf: [T, {type: "null"}]` into OAS 3.0 `nullable: true` in memory, and runs progenitor to produce `OUT_DIR/codegen.rs`, included by `src/client.rs`. The generated code is never committed. A missing spec fails the build with a message pointing at `pnpm agent:spec`.
 - Method names come from the spec's `operationId`s (`get_agent_config_v3`, `agent_heartbeat`, `report_agent_traffic`). Renaming an `operationId` in the app breaks the agent build — that is the intended signal.
 - `--url`/`AGENT_URL` must include the `/api` prefix; spec paths are relative to it.
-- The agent advertises capabilities in its heartbeat (`AGENT_CAPABILITIES` in `main.rs`: `config-v3`, `managed-tls-v3`, `certificate-deployments-v1`, `atomic-config-rollback`, `connection-stream-traffic`). Add a capability when the agent gains behaviour the control plane may want to depend on.
+- The agent advertises capabilities in its heartbeat (`AGENT_CAPABILITIES` in `main.rs`: `config-v3`, `managed-tls-v3`, `certificate-deployments-v1`, `atomic-config-rollback`, `connection-stream-traffic`, `ws-v1`). Add a capability when the agent gains behaviour the control plane may want to depend on.
 - `desiredRevision` is opaque to the agent: equality and content comparison only. The control plane parses its own sequence prefix back out of the reported `appliedRevision` for the [publish gate](architecture.md#publish-gate).
 - The poll and heartbeat intervals come from the control plane per server; `AGENT_INTERVAL` is only the bootstrap value.
-- The same polled `agent` object may carry `desiredAgentVersion` and `desiredSingBoxVersion` (`latest` or an exact version). The heartbeat reports the per-binary `updates` state back. A future WebSocket/SSE transport can feed the same `AgentPolicy` directives without changing the reconciler.
+- The same polled `agent` object may carry `desiredAgentVersion` and `desiredSingBoxVersion` (`latest` or an exact version). The heartbeat reports the per-binary `updates` state back. The WebSocket channel feeds the same `AgentPolicy` directives without changing the reconciler.
+
+### WebSocket push channel
+
+The agent opens one outbound WebSocket to `<AGENT_URL>/agent/ws` (`https` -> `wss`, `http` -> `ws`) with the same per-server bearer token on the upgrade request. `--ws-enabled` / `AGENT_WS_ENABLED` (default `true`) turns it off; the token is never logged. The wire protocol is the frozen v1 JSON envelope `{ v, id, type, ts, payload }` decoded in `src/ws/codec.rs`. Unknown frame types and the reserved `telemetry.*` / `pty.*` / `acme.*` channels decode without error so a newer control plane never tears down an older agent.
+
+- `hello` is sent on every connect and reconnect with the current version, build id, capabilities, applied revision, certificate deployments and update state; the control plane answers with `welcome`, whose intervals replace the polled `AgentPolicy` cadence (clamped identically).
+- `config.notify` re-fetches the full v3 document and runs the ordinary apply path, so `sing-box check`, `RUNTIME_PROBATION`, last-known-good rollback and certificate handling are unchanged. The agent then sends `config.ack` with the committed revision (or the failure) and its deployments.
+- `update.trigger` runs the ordinary update reconciler and streams `update.status` transitions through the status observer. SHA-256 verification and `server-agent.prev` / `sing-box.prev` rollback are untouched.
+- Keepalive pings are answered with `pong`; `welcome.reconnectBeforeSeconds` arms a proactive reconnect for serverless targets that cap connection lifetime.
+- Reconnect uses 1s -> 2s -> 5s -> 15s -> 30s backoff with jitter. A rejected upgrade (400/403/404/426/501) or a failure streak announces HTTP fallback, and the poll/heartbeat loops plus `TrafficReporter` keep running throughout.
 
 ## Safety invariants
 
@@ -82,7 +96,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   scripts/test-managed-tls-docker.sh blossom/server-agent:managed-tls-test
   ```
 
-  `Dockerfile.test` is test-only: it builds the agent and downloads the pinned official sing-box, seeding both under `/data/bin`, so the test does not need GitHub at container start. The production `Dockerfile` remains thin. The script needs Docker, `python3` and `curl`, starts a mock control plane on port 18765 (override with `MOCK_PORT`) and a container, and cleans both up on exit. Run it when you change certificate handling, config application or the heartbeat/reporting contract; skip it for unrelated edits and say so.
+  `Dockerfile.test` is test-only: it builds the agent and downloads the pinned official sing-box, seeding both under `/data/bin`, so the test does not need GitHub at container start. The production `Dockerfile` remains thin. The script needs Docker, `python3` and `curl`, starts a mock control plane on port 18765 (override with `MOCK_PORT`) and a container, and cleans both up on exit. The mock serves the agent WebSocket too, so the script also pushes a `config.notify` and asserts `config.ack`, drops the socket to assert a reconnect, and then takes the control plane offline to assert the HTTP fallback still reports. Run it when you change certificate handling, config application, the transport, or the heartbeat/reporting contract; skip it for unrelated edits and say so.
 - The pre-commit hook runs `cargo fmt` and `cargo clippy --fix` on staged `.rs` files (see [Workflow](workflow.md#git-hooks)).
 - `cargo run` starts a long-running process. It needs a reachable control plane, an agent token and a sing-box binary >= 1.14 (official release binaries include the `api` service used for traffic stats), and it launches and supervises sing-box, which binds the inbound ports the control plane assigns. Its state directory defaults to `/var/lib/blossom-agent`, so pass `--state-dir` (or `AGENT_STATE_DIR`) pointing at a temporary directory when experimenting, point `--url` at a disposable local control plane rather than a production one, and never run it on a host whose real proxy you depend on. The mock control plane used by the Docker lifecycle test is the contained way to exercise the agent end to end. Whether to run any of this is for the task instructions to decide.
 
