@@ -83,7 +83,7 @@
     "@apiture/openapi-down-convert": "^0.14.2",
     "@cloudflare/vite-plugin": "^1.66.0",
     "@iconify/json": "^2.2.549",
-    "@inlang/paraglide-js": "^2.29.3",
+    "@inlang/paraglide-js": "^3.0.0",
     "@react-email/ui": "^6.11.5",
     "@rolldown/plugin-babel": "^0.3.0",
     "@svgr/core": "^8.1.0",
