@@ -2,14 +2,21 @@ import type {
   AgentWsConfigNotifyPayload,
   AgentWsWelcomePayload,
 } from "@blossom/contracts/agent-ws";
-import { parseAgentWsFrame } from "@blossom/contracts/agent-ws";
+import {
+  createAgentWsFrame,
+  encodeAgentWsFrame,
+  parseAgentWsFrame,
+} from "@blossom/contracts/agent-ws";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Server } from "@/db/proxy-schema";
 
 import type { AgentWsStore } from "./agent-ws-session";
 import { NitroRealtimeHub, withRuntimeReconnectHint } from "./realtime-hub";
-import type { RealtimeBackplane } from "./realtime-hub-types";
+import type {
+  RealtimeBackplane,
+  RealtimeBackplaneMessage,
+} from "./realtime-hub-types";
 
 const server = {
   id: "srv-1",
@@ -62,6 +69,68 @@ describe("NitroRealtimeHub", () => {
     expect(withRuntimeReconnectHint(welcome, { vercel: false })).toEqual(
       welcome,
     );
+  });
+
+  it("relays inspection through a second instance without writing telemetry to the store", async () => {
+    const deliverers = new Set<(payload: RealtimeBackplaneMessage) => void>();
+    const backplane: RealtimeBackplane = {
+      subscribe: async (deliver) => {
+        deliverers.add(deliver);
+      },
+      publish: async (payload) => {
+        for (const deliver of deliverers) deliver(payload);
+      },
+    };
+    const store = fakeStore();
+    const connectedHub = new NitroRealtimeHub({ store, backplane });
+    const adminHub = new NitroRealtimeHub({ store, backplane });
+    const response = (await connectedHub.acceptAgent(
+      new Request("http://localhost/api/agent/ws"),
+      server,
+      welcome,
+    )) as Response & {
+      crossws: {
+        open(peer: unknown): Promise<void>;
+        message(peer: unknown, message: { text(): string }): Promise<void>;
+      };
+    };
+    const sendFromAgent = (type: string, payload: unknown) =>
+      response.crossws.message(peer, {
+        text: () => encodeAgentWsFrame(createAgentWsFrame(type, payload)),
+      });
+    const peer = {
+      id: "peer",
+      close: vi.fn(),
+      send: (raw: string) => {
+        const request = parseAgentWsFrame(raw);
+        if (request.ok && request.frame.type === "telemetry.inspect") {
+          const { requestId } = request.frame.payload as { requestId: string };
+          void sendFromAgent("telemetry.snapshot", {
+            requestId,
+            partial: false,
+            interfaces: [],
+            listeners: [],
+          });
+        }
+      },
+    };
+    await response.crossws.open(peer);
+    await sendFromAgent("hello", {
+      agentVersion: "test",
+      capabilities: ["telemetry-v1"],
+    });
+    const result = await adminHub.requestTelemetry(
+      server.id,
+      "snapshot",
+      "2026-11-19T00:00:00.000Z",
+    );
+    expect(result).toMatchObject({
+      kind: "snapshot",
+      data: { partial: false },
+    });
+    expect(store.recordConfigAck).not.toHaveBeenCalled();
+    expect(store.recordUpdateStatus).not.toHaveBeenCalled();
+    expect(store.recordHello).toHaveBeenCalledTimes(1);
   });
 
   it("attaches crossws hooks and routes config notifications to the peer", async () => {

@@ -1987,6 +1987,7 @@ dependencies = [
  "hex",
  "http",
  "instant-acme",
+ "libc",
  "openapiv3",
  "prettyplease",
  "processkit",

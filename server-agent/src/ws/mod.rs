@@ -218,6 +218,8 @@ where
     let mut proactive_armed = false;
     let mut nonce: u64 = 0;
     let mut established = false;
+    #[cfg(target_os = "linux")]
+    let mut telemetry = crate::telemetry::Collector::default();
 
     loop {
         tokio::select! {
@@ -314,6 +316,14 @@ where
                         }
                     }
                     AgentMessage::Pong(_) => {}
+                    #[cfg(target_os = "linux")]
+                    AgentMessage::Telemetry(request) if established => {
+                        if let Some(reply) = telemetry.reply(request).await
+                            && let Err(error) = connection.send(reply).await
+                        {
+                            return SessionEnd::Closed { reason: error.describe(), established };
+                        }
+                    }
                     other => {
                         if events.send(WsEvent::Frame(other)).await.is_err() {
                             return SessionEnd::Shutdown;

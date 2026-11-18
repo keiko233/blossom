@@ -192,29 +192,74 @@ export type AgentWsUpdateTriggerPayload = z.infer<
   typeof agentWsUpdateTriggerPayloadSchema
 >;
 
-// --- Reserved channels for PR 4-5 -----------------------------------------
+// --- Extension channels ------------------------------------------
 
 export const agentWsTelemetrySubscribePayloadSchema = z.object({
-  enabled: z.boolean().default(true),
-  intervalSeconds: z.number().int().min(1).max(300).optional(),
+  requestId: correlationIdSchema,
+  enabled: z.literal(true),
 });
 
-export const agentWsTelemetrySamplePayloadSchema = z.looseObject({
-  sampledAt: timestampSchema.optional(),
-  cpuPercent: z.number().min(0).max(100).optional(),
-  memoryUsedBytes: z.number().int().min(0).optional(),
-  memoryTotalBytes: z.number().int().min(0).optional(),
-  loadAverage: z.array(z.number()).length(3).optional(),
-  uptimeSeconds: z.number().int().min(0).optional(),
+const byteCount = z.number().int().nonnegative();
+const usage = z
+  .object({ used: byteCount, total: byteCount })
+  .refine(({ used, total }) => used <= total);
+const ipAddress = z.union([z.ipv4(), z.ipv6()]);
+
+export const agentWsTelemetrySamplePayloadSchema = z.object({
+  requestId: correlationIdSchema,
+  cpuPercent: z.number().min(0).max(100).nullable(),
+  memory: usage.nullable(),
+  disk: usage.nullable(),
+  environment: z.enum([
+    "systemd",
+    "docker",
+    "containerd",
+    "kubernetes",
+    "container",
+    "unknown",
+  ]),
+  networkScope: z.literal("agent"),
+  cgroupVersion: z.union([z.literal(1), z.literal(2)]).nullable(),
+  cpuLimit: z.number().positive().nullable(),
+  memoryLimit: byteCount.nullable(),
 });
 
 export const agentWsTelemetryInspectPayloadSchema = z.object({
   requestId: correlationIdSchema,
 });
 
-export const agentWsTelemetrySnapshotPayloadSchema = z.looseObject({
-  requestId: correlationIdSchema.optional(),
-  sampledAt: timestampSchema.optional(),
+export const agentWsTelemetrySnapshotPayloadSchema = z.object({
+  requestId: correlationIdSchema,
+  partial: z.boolean(),
+  listeners: z
+    .array(
+      z.object({
+        protocol: z.enum(["tcp", "udp"]),
+        address: ipAddress,
+        port: z.number().int().min(1).max(65535),
+      }),
+    )
+    .max(128),
+  interfaces: z
+    .array(
+      z.object({
+        name: z
+          .string()
+          .min(1)
+          .max(32)
+          .refine((name) =>
+            [...name].every(
+              (character) =>
+                character >= " " &&
+                character !== "\u007f" &&
+                character !== "/" &&
+                character.trim() !== "",
+            ),
+          ),
+        address: ipAddress,
+      }),
+    )
+    .max(128),
 });
 
 export const agentWsPtyOpenPayloadSchema = z.object({

@@ -13,6 +13,8 @@ mod client;
 mod config;
 mod process;
 mod stats;
+#[cfg(target_os = "linux")]
+mod telemetry;
 mod traffic;
 mod update;
 mod ws;
@@ -50,7 +52,9 @@ use crate::ws::ports::{AgentCommandSink as _, ChannelCommandSink, WsCommand, WsE
 
 const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const AGENT_BUILD_ID: &str = env!("AGENT_BUILD_ID");
-const AGENT_CAPABILITIES: [&str; 7] = [
+const AGENT_CAPABILITIES: &[&str] = &[
+    #[cfg(target_os = "linux")]
+    "telemetry-v1",
     "config-v3",
     "managed-tls-v3",
     "certificate-deployments-v1",

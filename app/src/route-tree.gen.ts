@@ -69,6 +69,7 @@ import { Route as adminAdminProxiesRulesIndexRouteImport } from './routes/(admin
 import { Route as adminAdminProxiesServersIndexRouteImport } from './routes/(admin)/admin/proxies/servers/index'
 import { Route as adminAdminProxiesServersServerIdRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId'
 import { Route as adminAdminProxiesServersNewRouteImport } from './routes/(admin)/admin/proxies/servers/new'
+import { Route as ApiAdminServersIdStreamRouteImport } from './routes/api/admin/servers/$id/stream'
 import { Route as ApiAdminCertificatesCertificateIdExportPartRouteImport } from './routes/api/admin/certificates/$certificateId/export/$part'
 
 const adminRouteRoute = adminRouteRouteImport.update({
@@ -401,6 +402,11 @@ const adminAdminProxiesServersNewRoute =
     path: '/new',
     getParentRoute: () => adminAdminProxiesServersRouteRoute,
   } as any)
+const ApiAdminServersIdStreamRoute = ApiAdminServersIdStreamRouteImport.update({
+  id: '/api/admin/servers/$id/stream',
+  path: '/api/admin/servers/$id/stream',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAdminCertificatesCertificateIdExportPartRoute =
   ApiAdminCertificatesCertificateIdExportPartRouteImport.update({
     id: '/api/admin/certificates/$certificateId/export/$part',
@@ -409,6 +415,7 @@ const ApiAdminCertificatesCertificateIdExportPartRoute =
   } as any)
 
 export interface FileRoutesByFullPath {
+  '/': typeof staticIndexRoute
   '/admin': typeof adminAdminRouteRouteWithChildren
   '/dashboard': typeof userDashboardRouteRouteWithChildren
   '/.well-known/oauth-authorization-server': typeof DotwellKnownOauthAuthorizationServerRouteWithChildren
@@ -416,7 +423,6 @@ export interface FileRoutesByFullPath {
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
-  '/': typeof staticIndexRoute
   '/admin/audit': typeof adminAdminAuditRouteRouteWithChildren
   '/admin/mcp': typeof adminAdminMcpRouteRouteWithChildren
   '/admin/plans': typeof adminAdminPlansRouteRouteWithChildren
@@ -463,6 +469,7 @@ export interface FileRoutesByFullPath {
   '/admin/proxies/nodes/new': typeof adminAdminProxiesNodesNewRoute
   '/admin/proxies/servers/$serverId': typeof adminAdminProxiesServersServerIdRoute
   '/admin/proxies/servers/new': typeof adminAdminProxiesServersNewRoute
+  '/api/admin/servers/$id/stream': typeof ApiAdminServersIdStreamRoute
   '/admin/proxies/certificates/': typeof adminAdminProxiesCertificatesIndexRoute
   '/admin/proxies/groups/': typeof adminAdminProxiesGroupsIndexRoute
   '/admin/proxies/nodes/': typeof adminAdminProxiesNodesIndexRoute
@@ -471,12 +478,12 @@ export interface FileRoutesByFullPath {
   '/api/admin/certificates/$certificateId/export/$part': typeof ApiAdminCertificatesCertificateIdExportPartRoute
 }
 export interface FileRoutesByTo {
+  '/': typeof staticIndexRoute
   '/.well-known/oauth-authorization-server': typeof DotwellKnownOauthAuthorizationServerRouteWithChildren
   '/.well-known/oauth-protected-resource': typeof DotwellKnownOauthProtectedResourceRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
-  '/': typeof staticIndexRoute
   '/admin/proxies': typeof adminAdminProxiesRouteRouteWithChildren
   '/auth/forgot': typeof authAuthForgotRoute
   '/auth/login': typeof authAuthLoginRoute
@@ -512,6 +519,7 @@ export interface FileRoutesByTo {
   '/admin/proxies/nodes/new': typeof adminAdminProxiesNodesNewRoute
   '/admin/proxies/servers/$serverId': typeof adminAdminProxiesServersServerIdRoute
   '/admin/proxies/servers/new': typeof adminAdminProxiesServersNewRoute
+  '/api/admin/servers/$id/stream': typeof ApiAdminServersIdStreamRoute
   '/admin/proxies/certificates': typeof adminAdminProxiesCertificatesIndexRoute
   '/admin/proxies/groups': typeof adminAdminProxiesGroupsIndexRoute
   '/admin/proxies/nodes': typeof adminAdminProxiesNodesIndexRoute
@@ -578,6 +586,7 @@ export interface FileRoutesById {
   '/(admin)/admin/proxies/nodes/new': typeof adminAdminProxiesNodesNewRoute
   '/(admin)/admin/proxies/servers/$serverId': typeof adminAdminProxiesServersServerIdRoute
   '/(admin)/admin/proxies/servers/new': typeof adminAdminProxiesServersNewRoute
+  '/api/admin/servers/$id/stream': typeof ApiAdminServersIdStreamRoute
   '/(admin)/admin/proxies/certificates/': typeof adminAdminProxiesCertificatesIndexRoute
   '/(admin)/admin/proxies/groups/': typeof adminAdminProxiesGroupsIndexRoute
   '/(admin)/admin/proxies/nodes/': typeof adminAdminProxiesNodesIndexRoute
@@ -588,6 +597,7 @@ export interface FileRoutesById {
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
+    | '/'
     | '/admin'
     | '/dashboard'
     | '/.well-known/oauth-authorization-server'
@@ -595,7 +605,6 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/api/health'
     | '/api/mcp'
-    | '/'
     | '/admin/audit'
     | '/admin/mcp'
     | '/admin/plans'
@@ -642,6 +651,7 @@ export interface FileRouteTypes {
     | '/admin/proxies/nodes/new'
     | '/admin/proxies/servers/$serverId'
     | '/admin/proxies/servers/new'
+    | '/api/admin/servers/$id/stream'
     | '/admin/proxies/certificates/'
     | '/admin/proxies/groups/'
     | '/admin/proxies/nodes/'
@@ -650,12 +660,12 @@ export interface FileRouteTypes {
     | '/api/admin/certificates/$certificateId/export/$part'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/'
     | '/.well-known/oauth-authorization-server'
     | '/.well-known/oauth-protected-resource'
     | '/api/$'
     | '/api/health'
     | '/api/mcp'
-    | '/'
     | '/admin/proxies'
     | '/auth/forgot'
     | '/auth/login'
@@ -691,6 +701,7 @@ export interface FileRouteTypes {
     | '/admin/proxies/nodes/new'
     | '/admin/proxies/servers/$serverId'
     | '/admin/proxies/servers/new'
+    | '/api/admin/servers/$id/stream'
     | '/admin/proxies/certificates'
     | '/admin/proxies/groups'
     | '/admin/proxies/nodes'
@@ -756,6 +767,7 @@ export interface FileRouteTypes {
     | '/(admin)/admin/proxies/nodes/new'
     | '/(admin)/admin/proxies/servers/$serverId'
     | '/(admin)/admin/proxies/servers/new'
+    | '/api/admin/servers/$id/stream'
     | '/(admin)/admin/proxies/certificates/'
     | '/(admin)/admin/proxies/groups/'
     | '/(admin)/admin/proxies/nodes/'
@@ -778,6 +790,7 @@ export interface RootRouteChildren {
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiRpcSplatRoute: typeof ApiRpcSplatRoute
   ApiSubTokenRoute: typeof ApiSubTokenRoute
+  ApiAdminServersIdStreamRoute: typeof ApiAdminServersIdStreamRoute
   ApiAdminCertificatesCertificateIdExportPartRoute: typeof ApiAdminCertificatesCertificateIdExportPartRoute
 }
 
@@ -786,21 +799,21 @@ declare module '@tanstack/react-router' {
     '/(admin)': {
       id: '/(admin)'
       path: ''
-      fullPath: ''
+      fullPath: '/'
       preLoaderRoute: typeof adminRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/(auth)': {
       id: '/(auth)'
       path: ''
-      fullPath: ''
+      fullPath: '/'
       preLoaderRoute: typeof authRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/(user)': {
       id: '/(user)'
       path: ''
-      fullPath: ''
+      fullPath: '/'
       preLoaderRoute: typeof userRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
@@ -1217,6 +1230,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof adminAdminProxiesServersNewRouteImport
       parentRoute: typeof adminAdminProxiesServersRouteRoute
     }
+    '/api/admin/servers/$id/stream': {
+      id: '/api/admin/servers/$id/stream'
+      path: '/api/admin/servers/$id/stream'
+      fullPath: '/api/admin/servers/$id/stream'
+      preLoaderRoute: typeof ApiAdminServersIdStreamRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/admin/certificates/$certificateId/export/$part': {
       id: '/api/admin/certificates/$certificateId/export/$part'
       path: '/api/admin/certificates/$certificateId/export/$part'
@@ -1554,6 +1574,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiRpcSplatRoute: ApiRpcSplatRoute,
   ApiSubTokenRoute: ApiSubTokenRoute,
+  ApiAdminServersIdStreamRoute: ApiAdminServersIdStreamRoute,
   ApiAdminCertificatesCertificateIdExportPartRoute:
     ApiAdminCertificatesCertificateIdExportPartRoute,
 }

@@ -24,8 +24,6 @@ function dependencies(notifyConfigChanged: RealtimeHub["notifyConfigChanged"]) {
       acceptAgent: vi.fn(),
       notifyConfigChanged,
       notifyUpdateTrigger: vi.fn(),
-      notifyAcmeIssue: vi.fn(),
-      notifyAcmeDnsAck: vi.fn(),
     },
   } satisfies AgentNotificationDependencies;
 }

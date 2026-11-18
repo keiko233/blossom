@@ -4,6 +4,18 @@
 
 Statements are **Established** unless marked **Recommended**.
 
+## Linux telemetry
+
+The `telemetry-v1` capability is advertised on Linux. Requests over the
+established agent WebSocket read bounded procfs and cgroup data, root filesystem
+usage, and, on demand, addresses and bound sockets in the agent's network
+namespace. Resource totals reflect the agent's procfs view. The collector
+reports visible cgroup quotas separately and cannot determine container host
+versus bridge mode from inside all supported deployments. An occupied
+configured port is an overlap indicator, since a socket can belong to the
+managed sing-box process. Telemetry uses no Docker socket, host mounts or
+shell commands.
+
 ## Module map
 
 | File               | Responsibility                                                                                                                                                  |
