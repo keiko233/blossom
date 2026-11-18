@@ -4,5 +4,11 @@
     "config:recommended"
   ],
   "automerge": true,
-  "platformAutomerge": true
+  "platformAutomerge": true,
+  "packageRules": [
+    {
+      "matchPackageNames": ["drizzle-kit"],
+      "automerge": false
+    }
+  ]
 }
