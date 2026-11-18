@@ -33,6 +33,8 @@ services:
       AGENT_SING_BOX_BOOTSTRAP_VERSION: ${AGENT_SING_BOX_BOOTSTRAP_VERSION:-latest}
       # Optional GitHub token to avoid unauthenticated API rate limits.
       # AGENT_GITHUB_TOKEN: ${AGENT_GITHUB_TOKEN:-}
+      # Address family for the entrypoint's GitHub requests: prefer | only | off.
+      # AGENT_GITHUB_IPV6: ${AGENT_GITHUB_IPV6:-prefer}
 
     volumes:
       # Binaries, last-known-good config, certificates, download cache.

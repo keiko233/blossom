@@ -33,6 +33,11 @@ agent_repo=${AGENT_RELEASE_REPO:-keiko233/blossom}
 sing_box_repo=${AGENT_SING_BOX_RELEASE_REPO:-SagerNet/sing-box}
 agent_version=${AGENT_BOOTSTRAP_VERSION:-${AGENT_VERSION:-latest}}
 sing_box_version=${AGENT_SING_BOX_BOOTSTRAP_VERSION:-${AGENT_SING_BOX_VERSION:-latest}}
+# Address family for GitHub requests (release resolution and asset downloads
+# only, never the agent's own traffic). `prefer` tries IPv6 first and falls
+# back to the default resolution order, which avoids an IPv4 egress that is
+# shared, proxied or already rate limited.
+github_ipv6=${AGENT_GITHUB_IPV6:-prefer}
 
 log() {
   printf '[entrypoint] %s\n' "$*" >&2
@@ -56,14 +61,40 @@ case "$(uname -m)" in
   *) fail "unsupported architecture: $(uname -m)" ;;
 esac
 
-gh_get() {
+case "$github_ipv6" in
+  prefer|only|off) ;;
+  *) fail "AGENT_GITHUB_IPV6 must be prefer, only or off (got: $github_ipv6)" ;;
+esac
+
+# $1 is the retry count, the rest are curl arguments.
+gh_curl() {
+  retries=$1
+  shift
   if [ -n "${AGENT_GITHUB_TOKEN:-}" ]; then
-    curl -fsSL --retry 3 --retry-delay 2 \
+    curl -fsSL --retry "$retries" --retry-delay 2 \
       -H "Authorization: Bearer ${AGENT_GITHUB_TOKEN}" \
       "$@"
   else
-    curl -fsSL --retry 3 --retry-delay 2 "$@"
+    curl -fsSL --retry "$retries" --retry-delay 2 "$@"
   fi
+}
+
+gh_get() {
+  case "$github_ipv6" in
+    only)
+      gh_curl 3 --ipv6 "$@"
+      ;;
+    off)
+      gh_curl 3 "$@"
+      ;;
+    *)
+      # One short IPv6 attempt, then the default order. A host without a
+      # usable IPv6 route fails this quickly instead of stalling the bootstrap.
+      gh_curl 0 --ipv6 --connect-timeout 10 "$@" && return 0
+      log "IPv6 request failed; retrying with the default address family"
+      gh_curl 3 "$@"
+      ;;
+  esac
 }
 
 download() {
