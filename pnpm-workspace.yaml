@@ -7,3 +7,21 @@ allowBuilds:
   meta-json-schema: false
   sharp: true
   workerd: true
+skills:
+  dirs:
+    - .agents/skills
+# The schema package only ships .d.ts files; the app builds with TypeScript 7.
+peerDependencyRules:
+  allowedVersions:
+    "@black-duty/sing-box-schema>typescript": "7"
+permissions:
+  "@tanstack/devtools-vite":
+    skills: true
+  "@tanstack/react-router":
+    skills: true
+  "@tanstack/react-start":
+    skills: true
+  "@tanstack/router-plugin":
+    skills: true
+  drizzle-kit:
+    skills: true
