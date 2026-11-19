@@ -11,6 +11,7 @@ mod acme;
 mod certificate;
 mod client;
 mod config;
+mod logs;
 mod process;
 mod pty;
 mod stats;
