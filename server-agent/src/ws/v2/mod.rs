@@ -6,5 +6,6 @@
 //! parent module are untouched; v2 is selected explicitly and never mixed
 //! into a v1 session.
 
+pub mod adapter;
 pub mod codec;
 pub mod snapshot;

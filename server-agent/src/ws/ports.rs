@@ -28,6 +28,10 @@ pub enum WsError {
     Closed,
     /// The bounded outbound queue is full; the caller may retry later.
     QueueFull,
+    /// The upgrade succeeded but the control plane did not echo the required
+    /// subprotocol, so it does not speak it (an older control plane, or a
+    /// proxy that strips the header).
+    SubprotocolMismatch,
 }
 
 impl WsError {
@@ -48,6 +52,9 @@ impl WsError {
             Self::Protocol(message) => format!("websocket protocol error: {message}"),
             Self::Closed => "websocket closed".to_string(),
             Self::QueueFull => "outbound websocket queue is full".to_string(),
+            Self::SubprotocolMismatch => {
+                "control plane did not accept the required websocket subprotocol".to_string()
+            }
         }
     }
 }
