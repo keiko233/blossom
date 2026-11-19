@@ -18,6 +18,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import * as schema from "@/db/schema";
 import { handleEnrollmentRedeem } from "@/lib/agent-enrollment-route";
+import { AgentAuthError, verifyAgentAccessToken } from "@/lib/agent-oauth";
 import {
   AGENT_MACHINE_SCOPE,
   AGENT_TOKEN_LIFETIME_SECONDS,
@@ -38,6 +39,8 @@ const PG_URL = process.env.BLOSSOM_TEST_PG_URL;
 const ORIGIN = "http://localhost:3000";
 const RESOURCES = getOAuthResourceIdentifiers(ORIGIN);
 const OPERATOR = "enroll-operator";
+const hashClientSecret = (value: string) =>
+  createHash("sha256").update(value).digest("base64url");
 
 function assertDisposable(raw: string) {
   const url = new URL(raw);
@@ -529,6 +532,123 @@ describe.skipIf(!PG_URL)(
           /token_hash|tokenHash|attemptId|clientSecret/,
         );
         expect(identities).toHaveLength(1);
+      });
+    });
+    describe("verifyAgentAccessToken against the provider", () => {
+      const verify = (
+        token: string,
+        purpose: "handshake" | "session",
+        audience = RESOURCES.agent,
+      ) =>
+        verifyAgentAccessToken(db, token, {
+          issuer: `${ORIGIN}/api/auth`,
+          audience,
+          getJwks: () => auth.api.getJwks(),
+          purpose,
+        });
+      const codeOf = async (promise: Promise<unknown>) => {
+        try {
+          await promise;
+          return undefined;
+        } catch (error) {
+          return error instanceof AgentAuthError ? error.code : "other";
+        }
+      };
+
+      it("maps a machine token to its server; a pending identity acts only for its handshake", async () => {
+        const { secret } = await grantFor("srv-a");
+        const result = await redeem(secret);
+        if (!result.ok) throw new Error("unreachable");
+        const issued = await tokenFor(result.clientId, result.clientSecret);
+        const token = issued.body.access_token as string;
+
+        const handshake = await verify(token, "handshake");
+        expect(handshake).toMatchObject({
+          serverId: "srv-a",
+          identityId: result.identityId,
+          identityStatus: "pending",
+          clientId: result.clientId,
+        });
+        expect(
+          handshake.expiresAt - Math.floor(Date.now() / 1000),
+        ).toBeLessThanOrEqual(AGENT_TOKEN_LIFETIME_SECONDS);
+        expect(await codeOf(verify(token, "session"))).toBe(
+          "identity_not_usable",
+        );
+
+        await setIdentityActive(result.identityId);
+        expect((await verify(token, "session")).identityStatus).toBe("active");
+      });
+
+      it("refuses a machine token presented for another audience, and a tampered token", async () => {
+        const { secret } = await grantFor("srv-a");
+        const result = await redeem(secret);
+        if (!result.ok) throw new Error("unreachable");
+        const token = (await tokenFor(result.clientId, result.clientSecret))
+          .body.access_token as string;
+        expect(await codeOf(verify(token, "session", RESOURCES.mcp))).toBe(
+          "invalid_token",
+        );
+        expect(await codeOf(verify(`${token}x`, "session"))).toBe(
+          "invalid_token",
+        );
+      });
+
+      it("refuses a still-unexpired token as soon as its identity is revoked", async () => {
+        const { secret } = await grantFor("srv-a");
+        const result = await redeem(secret);
+        if (!result.ok) throw new Error("unreachable");
+        await setIdentityActive(result.identityId);
+        const token = (await tokenFor(result.clientId, result.clientSecret))
+          .body.access_token as string;
+        expect((await verify(token, "session")).serverId).toBe("srv-a");
+
+        await revokeAgentIdentity(db, {
+          identityId: result.identityId,
+          now: now(),
+        });
+        expect(await codeOf(verify(token, "session"))).toBe("client_disabled");
+      });
+
+      it("refuses a token whose server is disabled", async () => {
+        const { secret } = await grantFor("srv-b");
+        const result = await redeem(secret);
+        if (!result.ok) throw new Error("unreachable");
+        await setIdentityActive(result.identityId);
+        const token = (await tokenFor(result.clientId, result.clientSecret))
+          .body.access_token as string;
+        await pool.query(
+          `UPDATE server SET enabled = false WHERE id = 'srv-b'`,
+        );
+        expect(await codeOf(verify(token, "session"))).toBe("server_disabled");
+      });
+
+      it("refuses a valid machine client that has no identity mapping", async () => {
+        await pool.query(
+          `INSERT INTO oauth_client (id, client_id, client_secret, redirect_uris, grant_types, client_credentials_scopes, token_endpoint_auth_method, public, disabled)
+         VALUES ('orphan', 'orphan-client', $1, '[]', '["client_credentials"]', $2, 'client_secret_basic', false, false)`,
+          [
+            hashClientSecret("fake-orphan-secret-0001"),
+            JSON.stringify([AGENT_MACHINE_SCOPE]),
+          ],
+        );
+        await pool.query(
+          `INSERT INTO oauth_resource (id, identifier, name) VALUES ('agent-resource', $1, 'Blossom agent')
+         ON CONFLICT DO NOTHING`,
+          [RESOURCES.agent],
+        );
+        await pool.query(
+          `INSERT INTO oauth_client_resource (id, client_id, resource_id) VALUES ('orphan-link', 'orphan-client', $1)`,
+          [RESOURCES.agent],
+        );
+        const issued = await tokenFor(
+          "orphan-client",
+          "fake-orphan-secret-0001",
+        );
+        expect(issued.status).toBe(200);
+        expect(
+          await codeOf(verify(issued.body.access_token as string, "session")),
+        ).toBe("unknown_client");
       });
     });
   },
