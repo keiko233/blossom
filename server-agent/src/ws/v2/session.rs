@@ -125,6 +125,28 @@ pub struct TrafficRequest {
     pub reply: oneshot::Sender<TrafficOutcome>,
 }
 
+/// The identifier the last apply failed on, and when. It lives with the bridge
+/// rather than the connection, so a reconnect does not re-fetch it at once.
+#[derive(Debug, Default)]
+struct FailedApply {
+    last: Option<(ConfigIdentifier, Instant)>,
+}
+
+impl FailedApply {
+    fn note(&mut self, desired: &ConfigIdentifier, outcome: &ApplyOutcome) {
+        self.last = match outcome {
+            ApplyOutcome::Applied => None,
+            ApplyOutcome::Failed { .. } => Some((desired.clone(), Instant::now())),
+        };
+    }
+
+    fn holds(&self, desired: &ConfigIdentifier, hold: Duration) -> bool {
+        self.last
+            .as_ref()
+            .is_some_and(|(failed, at)| failed == desired && at.elapsed() < hold)
+    }
+}
+
 /// The session's ends of the bridge.
 pub struct SessionPorts {
     status: watch::Receiver<CoreStatus>,
@@ -134,6 +156,7 @@ pub struct SessionPorts {
     refusals: mpsc::Sender<SnapshotRefusal>,
     traffic: mpsc::Receiver<TrafficRequest>,
     online: watch::Sender<bool>,
+    failed: FailedApply,
 }
 
 /// The core's ends of the bridge.
@@ -173,6 +196,7 @@ pub fn channels(
             refusals: refusals_tx,
             traffic: traffic_rx,
             online: online_tx,
+            failed: FailedApply::default(),
         },
         CorePorts {
             status: status_tx,
@@ -210,6 +234,9 @@ pub struct SessionTiming {
     pub liveness: Duration,
     /// Status cadence until `welcome` supplies `statusIntervalSeconds`.
     pub default_status_interval: Duration,
+    /// How long a failed identifier is not requested again. Without the hold,
+    /// every status exchange would re-fetch and re-apply it.
+    pub failed_apply_hold: Duration,
 }
 
 impl Default for SessionTiming {
@@ -220,6 +247,7 @@ impl Default for SessionTiming {
             ping: Duration::from_secs(20),
             liveness: Duration::from_secs(90),
             default_status_interval: Duration::from_secs(30),
+            failed_apply_hold: Duration::from_secs(60),
         }
     }
 }
@@ -268,6 +296,8 @@ struct State {
     last_seen: Instant,
     handshake_deadline: Instant,
     proactive_deadline: Option<Instant>,
+    snapshot_timeout: Duration,
+    failed_hold: Duration,
 }
 
 /// Runs one connection to completion. It returns when the connection ends, the
@@ -315,6 +345,8 @@ async fn run_connection<W: Wire>(
         last_seen: now,
         handshake_deadline: now + timing.handshake,
         proactive_deadline: None,
+        snapshot_timeout: timing.snapshot,
+        failed_hold: timing.failed_apply_hold,
     };
     let mut frame_limit = MAX_FRAME_BYTES;
     let mut ping_tick = tokio::time::interval(timing.ping);
@@ -329,6 +361,7 @@ async fn run_connection<W: Wire>(
         refusals,
         traffic,
         online,
+        failed,
     } = ports;
 
     loop {
@@ -362,7 +395,7 @@ async fn run_connection<W: Wire>(
             _ = wait_for(snapshot_deadline), if snapshot_deadline.is_some() => {
                 // The snapshot did not arrive in time. Report a receive failure;
                 // the next status exchange asks again.
-                if let Err(reason) = fail_snapshot(&mut state, wire, "snapshot did not arrive before the deadline".to_string()).await {
+                if let Err(reason) = fail_snapshot(&mut state, wire, failed, "snapshot did not arrive before the deadline".to_string()).await {
                     return SessionEnd::Lost { reason, welcomed: state.welcomed };
                 }
             }
@@ -394,6 +427,7 @@ async fn run_connection<W: Wire>(
                 if state.request.as_ref().is_some_and(|requested| requested.request_id == result.request_id) {
                     state.request = None;
                 }
+                failed.note(&result.desired, &result.outcome);
                 if let Err(reason) = send_ack(wire, &result).await {
                     return SessionEnd::Lost { reason, welcomed: true };
                 }
@@ -453,7 +487,7 @@ async fn run_connection<W: Wire>(
                         refusals,
                         online,
                         frame_limit: &mut frame_limit,
-                        snapshot_timeout: timing.snapshot,
+                        failed: &mut *failed,
                     },
                 )
                 .await;
@@ -479,7 +513,7 @@ struct Context<'a, W: Wire> {
     refusals: &'a mut mpsc::Sender<SnapshotRefusal>,
     online: &'a mut watch::Sender<bool>,
     frame_limit: &'a mut usize,
-    snapshot_timeout: Duration,
+    failed: &'a mut FailedApply,
 }
 
 async fn handle<W: Wire>(
@@ -494,7 +528,7 @@ async fn handle<W: Wire>(
         refusals,
         online,
         frame_limit,
-        snapshot_timeout,
+        failed,
     } = context;
     match message {
         Message::Welcome(welcome) => {
@@ -534,8 +568,8 @@ async fn handle<W: Wire>(
                 applied.as_ref(),
                 reason,
                 state,
+                failed,
                 wire,
-                snapshot_timeout,
             )
             .await?;
         }
@@ -548,8 +582,8 @@ async fn handle<W: Wire>(
                 applied.as_ref(),
                 GetReason::Mismatch,
                 state,
+                failed,
                 wire,
-                snapshot_timeout,
             )
             .await?;
         }
@@ -561,8 +595,8 @@ async fn handle<W: Wire>(
                 applied.as_ref(),
                 GetReason::Notify,
                 state,
+                failed,
                 wire,
-                snapshot_timeout,
             )
             .await?;
         }
@@ -575,7 +609,7 @@ async fn handle<W: Wire>(
                 requested.announced = Some(begin.desired.clone());
             }
             if let Err(error) = state.assembler.begin(&begin) {
-                fail_snapshot(state, wire, error.describe()).await?;
+                fail_snapshot(state, wire, failed, error.describe()).await?;
             }
         }
         Message::SnapshotChunk(chunk) => {
@@ -583,7 +617,7 @@ async fn handle<W: Wire>(
                 match state.assembler.chunk(&chunk) {
                     Ok(()) => {}
                     Err(SnapshotError::UnknownRequest) => {}
-                    Err(error) => fail_snapshot(state, wire, error.describe()).await?,
+                    Err(error) => fail_snapshot(state, wire, failed, error.describe()).await?,
                 }
             }
         }
@@ -592,15 +626,25 @@ async fn handle<W: Wire>(
                 match state.assembler.end(&end) {
                     Ok(verified) => queue_apply(state, verified),
                     Err(SnapshotError::UnknownRequest) => {}
-                    Err(error) => fail_snapshot(state, wire, error.describe()).await?,
+                    Err(error) => fail_snapshot(state, wire, failed, error.describe()).await?,
                 }
             }
         }
         Message::SnapshotError(refused) => {
             if is_current(state, &refused.request_id) {
                 state.assembler.discard();
-                state.request = None;
+                let requested = state.request.take();
                 warn!("control plane refused the configuration snapshot");
+                if let Some(requested) = requested {
+                    let desired = requested.announced.unwrap_or(requested.asked_for);
+                    failed.note(
+                        &desired,
+                        &ApplyOutcome::Failed {
+                            stage: AckStage::Receive,
+                            error: refused.message.clone(),
+                        },
+                    );
+                }
                 let _ = refusals.try_send(SnapshotRefusal {
                     code: snapshot_error_code(refused.code),
                     message: refused.message,
@@ -661,25 +705,23 @@ fn queue_apply(state: &mut State, verified: VerifiedSnapshot) {
 async fn fail_snapshot<W: Wire>(
     state: &mut State,
     wire: &mut W,
+    failed: &mut FailedApply,
     error: String,
 ) -> Result<(), String> {
     state.assembler.discard();
     let Some(requested) = state.request.take() else {
         return Ok(());
     };
-    let desired = requested.announced.unwrap_or(requested.asked_for);
-    send_ack(
-        wire,
-        &ApplyResult {
-            request_id: requested.request_id,
-            desired,
-            outcome: ApplyOutcome::Failed {
-                stage: AckStage::Receive,
-                error,
-            },
+    let result = ApplyResult {
+        request_id: requested.request_id,
+        desired: requested.announced.unwrap_or(requested.asked_for),
+        outcome: ApplyOutcome::Failed {
+            stage: AckStage::Receive,
+            error,
         },
-    )
-    .await
+    };
+    failed.note(&result.desired, &result.outcome);
+    send_ack(wire, &result).await
 }
 
 fn is_current(state: &State, request_id: &str) -> bool {
@@ -715,15 +757,15 @@ async fn request_if_needed<W: Wire>(
     applied: Option<&ConfigIdentifier>,
     reason: GetReason,
     state: &mut State,
+    failed: &FailedApply,
     wire: &mut W,
-    snapshot_timeout: Duration,
 ) -> Result<(), String> {
-    if applied == Some(desired) {
+    if applied == Some(desired) || failed.holds(desired, state.failed_hold) {
         return Ok(());
     }
     if let Some(requested) = state.request.as_ref()
         && requested.asked_for == *desired
-        && requested.at.elapsed() < snapshot_timeout
+        && requested.at.elapsed() < state.snapshot_timeout
     {
         return Ok(());
     }

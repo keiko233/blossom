@@ -18,7 +18,8 @@ use super::{
 use crate::ws::codec::{UpdateStatePayload, UpdateStatusPayload};
 use crate::ws::ports::WsError;
 use crate::ws::v2::codec::{
-    ConfigIdentifier, ConfigState, RuntimeState, TrafficEntry, TrafficReport, UpdatePolicy,
+    AckStage, ConfigIdentifier, ConfigState, RuntimeState, TrafficEntry, TrafficReport,
+    UpdatePolicy,
 };
 
 const D7: &str = "7:sha256:48a9e1aa59f365863b57348ccd1701026c39652cfb74b8e2b039811611802ec6";
@@ -675,6 +676,99 @@ async fn the_hello_reports_the_applied_identifier_and_build() {
     assert_eq!(hello["applied"]["desiredRevisionSeq"], 7);
     assert_eq!(hello["agentBuildId"], "test-build");
     assert_eq!(hello["capabilities"], json!(["config-v3", "ws-v2"]));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_apply_is_held_across_status_exchanges_and_then_retried() {
+    let mut harness = start(Some(D7));
+    expect_type(&mut harness, "hello").await;
+    harness.peer.send(Ok(welcome(D7, 30, None))).unwrap();
+    let status_ack = |revision: &str| {
+        peer_frame(
+            "agent.status.ack",
+            json!({
+                "desired": identifier(revision),
+                "updatePolicy": {"desiredAgentVersion": null, "desiredSingBoxVersion": null}
+            }),
+        )
+    };
+
+    harness.peer.send(Ok(status_ack(D8))).unwrap();
+    let get = expect_type(&mut harness, "config.get").await;
+    send_snapshot(
+        &harness,
+        get["requestId"].as_str().unwrap(),
+        D8,
+        &body_for(D8),
+    );
+    let job = harness.core.apply.recv().await.unwrap();
+    harness
+        .core
+        .results
+        .send(ApplyResult {
+            request_id: job.request_id,
+            desired: job.desired,
+            outcome: ApplyOutcome::Failed {
+                stage: AckStage::Apply,
+                error: "candidate did not become healthy".into(),
+            },
+        })
+        .await
+        .unwrap();
+    let ack = expect_type(&mut harness, "config.ack").await;
+    assert_eq!(ack["outcome"], "failed");
+
+    // The next status exchange still names the failed identifier. It must not
+    // restart the fetch and apply cycle inside the hold.
+    harness.peer.send(Ok(status_ack(D8))).unwrap();
+    expect_silence(&mut harness).await;
+
+    tokio::time::advance(Duration::from_secs(61)).await;
+    harness.peer.send(Ok(status_ack(D8))).unwrap();
+    let retry = expect_type(&mut harness, "config.get").await;
+    assert_eq!(retry["reason"], "mismatch");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_refused_snapshot_is_held_across_status_exchanges_and_then_retried() {
+    let mut harness = start(Some(D7));
+    expect_type(&mut harness, "hello").await;
+    harness.peer.send(Ok(welcome(D7, 30, None))).unwrap();
+    let status_ack = |revision: &str| {
+        peer_frame(
+            "agent.status.ack",
+            json!({
+                "desired": identifier(revision),
+                "updatePolicy": {"desiredAgentVersion": null, "desiredSingBoxVersion": null}
+            }),
+        )
+    };
+
+    harness.peer.send(Ok(status_ack(D8))).unwrap();
+    let get = expect_type(&mut harness, "config.get").await;
+    harness
+        .peer
+        .send(Ok(peer_frame(
+            "config.snapshot.error",
+            json!({
+                "requestId": get["requestId"],
+                "code": "snapshot_too_large",
+                "message": "the compiled configuration exceeds the snapshot limit",
+            }),
+        )))
+        .unwrap();
+    let refusal = harness.core.refusals.recv().await.unwrap();
+    assert_eq!(refusal.code, "snapshot_too_large");
+
+    // The same refused identifier must not restart the compile and transfer
+    // on the next status exchange.
+    harness.peer.send(Ok(status_ack(D8))).unwrap();
+    expect_silence(&mut harness).await;
+
+    tokio::time::advance(Duration::from_secs(61)).await;
+    harness.peer.send(Ok(status_ack(D8))).unwrap();
+    let retry = expect_type(&mut harness, "config.get").await;
+    assert_eq!(retry["reason"], "mismatch");
 }
 
 fn report(report_id: &str) -> TrafficReport {
