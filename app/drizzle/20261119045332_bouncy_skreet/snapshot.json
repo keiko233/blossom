@@ -1,0 +1,325 @@
+{
+  "type": "diff",
+  "version": "9",
+  "dialect": "postgres",
+  "id": "0213b0e5-9584-4e63-8bc4-fa770403c298",
+  "prevIds": ["3af0345d-2533-485e-9389-6c9da503019b"],
+  "footprints": [
+    {
+      "statementType": "create_table",
+      "statementTarget": ["table", "public", "server_metric_minute"],
+      "writes": [
+        "s|tbl|public.server_metric_minute",
+        "n|tbl|public.server_metric_minute",
+        "e|tbl|public.server_metric_minute",
+        "n|rel|public.server_metric_minute",
+        "n|type|public.server_metric_minute",
+        "n|rel|public.server_metric_minute_pkey"
+      ],
+      "reads": ["n|sch|public"]
+    },
+    {
+      "statementType": "create_index",
+      "statementTarget": [
+        "index",
+        "public",
+        "server_metric_minute",
+        "server_metric_minute_minute_idx"
+      ],
+      "writes": [
+        "s|idx|public.server_metric_minute_minute_idx",
+        "n|idx|public.server_metric_minute_minute_idx",
+        "e|idx|public.server_metric_minute_minute_idx",
+        "n|rel|public.server_metric_minute_minute_idx"
+      ],
+      "reads": [
+        "n|tbl|public.server_metric_minute",
+        "n|sch|public",
+        "n|col|public.server_metric_minute.minute"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "server_metric_minute"],
+      "writes": [
+        "s|fk|public.server_metric_minute.server_metric_minute_server_id_server_id_fkey",
+        "n|fk|public.server_metric_minute.server_metric_minute_server_id_server_id_fkey",
+        "e|fk|public.server_metric_minute.server_metric_minute_server_id_server_id_fkey",
+        "n|con|public.server_metric_minute.server_metric_minute_server_id_server_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.server_metric_minute",
+        "n|sch|public",
+        "n|tbl|public.server",
+        "n|sch|public",
+        "n|col|public.server_metric_minute.server_id",
+        "n|col|public.server.id",
+        "e|uniqueness|public.server.id"
+      ]
+    }
+  ],
+  "deltas": [
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "name": "server_metric_minute",
+        "isRlsEnabled": false,
+        "entityType": "tables"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server_metric_minute",
+        "name": "server_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server_metric_minute",
+        "name": "minute",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server_metric_minute",
+        "name": "scope",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server_metric_minute",
+        "name": "scope_key",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server_metric_minute",
+        "name": "cpu_percent",
+        "type": "double precision",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server_metric_minute",
+        "name": "memory_used_bytes",
+        "type": "bigint",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server_metric_minute",
+        "name": "memory_total_bytes",
+        "type": "bigint",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server_metric_minute",
+        "name": "disk_used_bytes",
+        "type": "bigint",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server_metric_minute",
+        "name": "disk_total_bytes",
+        "type": "bigint",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server_metric_minute",
+        "name": "network_tx_bytes_per_second",
+        "type": "double precision",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server_metric_minute",
+        "name": "network_rx_bytes_per_second",
+        "type": "double precision",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server_metric_minute",
+        "name": "received_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server_metric_minute",
+        "name": "server_metric_minute_minute_idx",
+        "nameExplicit": true,
+        "columns": [
+          {
+            "value": "minute",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          }
+        ],
+        "isUnique": false,
+        "where": null,
+        "with": "",
+        "method": "btree",
+        "concurrently": false,
+        "entityType": "indexes"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server_metric_minute",
+        "name": "server_metric_minute_server_id_server_id_fkey",
+        "nameExplicit": false,
+        "columns": ["server_id"],
+        "schemaTo": "public",
+        "tableTo": "server",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "CASCADE",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server_metric_minute",
+        "name": "server_metric_minute_pkey",
+        "columns": ["server_id", "minute"],
+        "nameExplicit": false,
+        "entityType": "pks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server_metric_minute",
+        "name": "server_metric_minute_scope_check",
+        "value": "\"scope\" in ('host', 'container')",
+        "entityType": "checks"
+      }
+    }
+  ]
+}

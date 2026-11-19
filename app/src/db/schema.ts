@@ -7,6 +7,7 @@ export * from "./auth-schema.ts";
 export * from "./oauth-schema.ts";
 export * from "./plan-schema.ts";
 export * from "./proxy-schema.ts";
+export * from "./server-metric-schema.ts";
 export * from "./rule-schema.ts";
 export * from "./settings-schema.ts";
 export * from "./traffic-schema.ts";
