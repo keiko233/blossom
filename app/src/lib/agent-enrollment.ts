@@ -1,6 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 
+import { AGENT_ENROLLMENT_MODES } from "@/db/agent-identity-schema";
+
 /**
  * Pure enrollment helpers: secret formats, hashing and the redeem request body.
  * The store that claims grants and creates identities is `query/agent-identity-store.ts`.
@@ -64,3 +66,33 @@ export const redeemEnrollmentBodySchema = z
   .strict();
 
 export type RedeemEnrollmentBody = z.infer<typeof redeemEnrollmentBodySchema>;
+
+/** Admin input for a new grant. Replacing an identity needs an explicit confirmation. */
+export const createEnrollmentGrantInputSchema = z
+  .object({
+    serverId: z.string().min(1).max(64),
+    mode: z.enum(AGENT_ENROLLMENT_MODES),
+    capabilities: z
+      .array(z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/))
+      .max(16)
+      .default([]),
+    release: z.string().trim().min(1).max(64).nullable().default(null),
+    confirmReplace: z.boolean().optional(),
+  })
+  .superRefine((input, ctx) => {
+    if (input.mode === "replace" && input.confirmReplace !== true) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["confirmReplace"],
+        message: "Replacing the active identity requires confirmReplace",
+      });
+    }
+  });
+
+export const revokeEnrollmentGrantInputSchema = z.object({
+  grantId: z.string().min(1).max(64),
+});
+
+export const revokeAgentIdentityInputSchema = z.object({
+  identityId: z.string().min(1).max(64),
+});

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import {
+  createEnrollmentGrantInputSchema,
   generateEnrollmentGrant,
   generateMachineCredential,
   hashEnrollmentGrantSecret,
@@ -48,5 +49,48 @@ describe("machine client credentials", () => {
       createHash("sha256").update(credential.clientSecret).digest("base64url"),
     );
     expect(hashMachineClientSecret("fake-value")).not.toContain("fake-value");
+  });
+});
+
+describe("admin grant input", () => {
+  it("requires explicit confirmation to replace the active identity", () => {
+    const base = { serverId: "srv-a", mode: "replace" };
+    expect(createEnrollmentGrantInputSchema.safeParse(base).success).toBe(
+      false,
+    );
+    expect(
+      createEnrollmentGrantInputSchema.safeParse({
+        ...base,
+        confirmReplace: false,
+      }).success,
+    ).toBe(false);
+    expect(
+      createEnrollmentGrantInputSchema.safeParse({
+        ...base,
+        confirmReplace: true,
+      }).data,
+    ).toMatchObject({ mode: "replace", capabilities: [], release: null });
+  });
+
+  it("does not need confirmation for a first enrollment", () => {
+    expect(
+      createEnrollmentGrantInputSchema.safeParse({
+        serverId: "srv-a",
+        mode: "enroll",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("keeps capability names and release labels to a safe shape", () => {
+    const parse = (input: object) =>
+      createEnrollmentGrantInputSchema.safeParse({
+        serverId: "srv-a",
+        mode: "enroll",
+        ...input,
+      }).success;
+    expect(parse({ capabilities: ["ws", "log.tail"] })).toBe(true);
+    expect(parse({ capabilities: ["Bad Name"] })).toBe(false);
+    expect(parse({ release: "server-agent-v1.2.3" })).toBe(true);
+    expect(parse({ release: "x".repeat(65) })).toBe(false);
   });
 });
