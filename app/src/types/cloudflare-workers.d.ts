@@ -20,6 +20,11 @@ interface DurableObjectNamespace {
 interface DurableObjectState {
   acceptWebSocket(webSocket: WebSocket, tags?: string[]): void;
   getWebSockets(tag?: string): WebSocket[];
+  storage: {
+    getAlarm(): Promise<number | null>;
+    setAlarm(scheduledTime: number): Promise<void>;
+    deleteAlarm(): Promise<void>;
+  };
 }
 
 declare class WebSocketPair {

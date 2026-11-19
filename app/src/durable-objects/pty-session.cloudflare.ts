@@ -64,9 +64,12 @@ export function readAgentAttachment(
   }
   const candidate = attachment as Partial<AgentSocketAttachment> & {
     kind?: string;
+    protocol?: string;
   };
+  // v2 sockets carry no PTY relay; only v1 agent sockets are addressable.
   if (
     candidate.kind === "pty" ||
+    candidate.protocol === "v2" ||
     typeof candidate.serverId !== "string" ||
     typeof candidate.connectedAt !== "string"
   ) {
