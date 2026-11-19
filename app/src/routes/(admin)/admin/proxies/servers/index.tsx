@@ -175,7 +175,9 @@ function RouteComponent(): React.ReactElement {
       {
         serverId: server.id,
         address: server.address,
-        tokenPrefix: server.agentTokenPrefix,
+        ...(server.agentTokenPrefix
+          ? { tokenPrefix: server.agentTokenPrefix }
+          : {}),
       },
       null,
       2,
@@ -205,8 +207,12 @@ function RouteComponent(): React.ReactElement {
               </span>
             ) : null}
             <span className="font-mono text-xs text-muted-foreground">
-              {server.agentTokenPrefix}
-              {server.agentVersion ? ` · v${server.agentVersion}` : ""}
+              {[
+                server.agentTokenPrefix,
+                server.agentVersion && `v${server.agentVersion}`,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
             </span>
           </div>
         );

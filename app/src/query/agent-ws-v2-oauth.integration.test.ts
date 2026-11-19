@@ -19,6 +19,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import * as schema from "@/db/schema";
 import { verifyAgentAccessToken } from "@/lib/agent-oauth";
+import { authenticateStaticAgentToken } from "@/lib/agent-static-auth";
+import { hashAgentToken } from "@/lib/agent-token";
 import {
   AGENT_MACHINE_SCOPE,
   createOAuthProviderOptions,
@@ -26,9 +28,12 @@ import {
 } from "@/lib/oauth-provider-config";
 
 import {
+  disableAgentBackupCredential,
+  findAgentServerByTokenHash,
   loadCurrentAgentServer,
   promoteAgentV2WsSession,
   revalidatePendingAgentV2Session,
+  rotateAgentCredential,
   startAgentV2WsSession,
   type AgentSessionCredential,
 } from "./agent";
@@ -257,6 +262,7 @@ describe.skipIf(!pgUrl).each(drivers)(
       expect(
         await revalidatePendingAgentV2Session(
           "srv-oauth",
+          session!.sessionId,
           credential,
           database,
         ),
@@ -410,6 +416,288 @@ describe.skipIf(!pgUrl).each(drivers)(
       expect(rows).toEqual([
         { id: first.identityId, status: "superseded" },
         { id: second.identityId, status: "active" },
+      ]);
+    });
+
+    it("keeps the old generation and fence when the pending proof is wrong or expired", async () => {
+      const first = await enroll(database, "srv-oauth", "enroll");
+      const firstToken = await tokenFor(first.clientId, first.clientSecret);
+      const firstCredential = oauthCredential(
+        await verify(database, firstToken, "handshake"),
+      );
+      const firstSession = await startAgentV2WsSession(
+        "srv-oauth",
+        firstCredential,
+        database,
+      );
+      await promoteAgentV2WsSession(
+        "srv-oauth",
+        firstSession!.sessionId,
+        firstCredential,
+        database,
+      );
+
+      const second = await enroll(database, "srv-oauth", "replace");
+      const secondToken = await tokenFor(second.clientId, second.clientSecret);
+      const secondCredential = oauthCredential(
+        await verify(database, secondToken, "handshake"),
+      );
+      const secondSession = await startAgentV2WsSession(
+        "srv-oauth",
+        secondCredential,
+        database,
+      );
+
+      expect(
+        await promoteAgentV2WsSession(
+          "srv-oauth",
+          "not-the-proved-session",
+          secondCredential,
+          database,
+        ),
+      ).toBeNull();
+      expect(
+        await loadCurrentAgentServer(
+          "srv-oauth",
+          firstSession!.sessionId,
+          database,
+        ),
+      ).not.toBeNull();
+
+      await admin.query(
+        `UPDATE server
+         SET ws_pending_expires_at = timezone('utc', now()) - interval '1 second'
+         WHERE id = 'srv-oauth'`,
+      );
+      expect(
+        await promoteAgentV2WsSession(
+          "srv-oauth",
+          secondSession!.sessionId,
+          secondCredential,
+          database,
+        ),
+      ).toBeNull();
+      expect(
+        await revalidatePendingAgentV2Session(
+          "srv-oauth",
+          secondSession!.sessionId,
+          secondCredential,
+          database,
+        ),
+      ).toBe(false);
+
+      const { rows } = await admin.query(
+        `SELECT id, status FROM agent_identity ORDER BY generation`,
+      );
+      expect(rows).toEqual([
+        { id: first.identityId, status: "active" },
+        { id: second.identityId, status: "pending" },
+      ]);
+      expect(
+        await loadCurrentAgentServer(
+          "srv-oauth",
+          firstSession!.sessionId,
+          database,
+        ),
+      ).not.toBeNull();
+    });
+
+    it("serializes concurrent promotions of one pending proof", async () => {
+      const enrolled = await enroll(database, "srv-oauth", "enroll");
+      const token = await tokenFor(enrolled.clientId, enrolled.clientSecret);
+      const credential = oauthCredential(
+        await verify(database, token, "handshake"),
+      );
+      const session = await startAgentV2WsSession(
+        "srv-oauth",
+        credential,
+        database,
+      );
+
+      const results = await Promise.all([
+        promoteAgentV2WsSession(
+          "srv-oauth",
+          session!.sessionId,
+          credential,
+          database,
+        ),
+        promoteAgentV2WsSession(
+          "srv-oauth",
+          session!.sessionId,
+          credential,
+          database,
+        ),
+      ]);
+      expect(results.filter((row) => row !== null)).toHaveLength(1);
+      expect(
+        await loadCurrentAgentServer("srv-oauth", session!.sessionId, database),
+      ).not.toBeNull();
+    });
+
+    it("promotes a replacement while the previous generation is revoked", async () => {
+      const first = await enroll(database, "srv-oauth", "enroll");
+      const firstToken = await tokenFor(first.clientId, first.clientSecret);
+      const firstCredential = oauthCredential(
+        await verify(database, firstToken, "handshake"),
+      );
+      const firstSession = await startAgentV2WsSession(
+        "srv-oauth",
+        firstCredential,
+        database,
+      );
+      await promoteAgentV2WsSession(
+        "srv-oauth",
+        firstSession!.sessionId,
+        firstCredential,
+        database,
+      );
+
+      const second = await enroll(database, "srv-oauth", "replace");
+      const secondToken = await tokenFor(second.clientId, second.clientSecret);
+      const secondCredential = oauthCredential(
+        await verify(database, secondToken, "handshake"),
+      );
+      const secondSession = await startAgentV2WsSession(
+        "srv-oauth",
+        secondCredential,
+        database,
+      );
+
+      const [promoted] = await Promise.all([
+        promoteAgentV2WsSession(
+          "srv-oauth",
+          secondSession!.sessionId,
+          secondCredential,
+          database,
+        ),
+        revokeAgentIdentity(database, {
+          identityId: first.identityId,
+          now: new Date(),
+        }),
+      ]);
+      expect(promoted).not.toBeNull();
+      expect(
+        await loadCurrentAgentServer(
+          "srv-oauth",
+          secondSession!.sessionId,
+          database,
+        ),
+      ).not.toBeNull();
+      expect(
+        await loadCurrentAgentServer(
+          "srv-oauth",
+          firstSession!.sessionId,
+          database,
+        ),
+      ).toBeNull();
+      const { rows } = await admin.query(
+        `SELECT id, status FROM agent_identity ORDER BY generation`,
+      );
+      expect(rows[0]?.id).toBe(first.identityId);
+      expect(["revoked", "superseded"]).toContain(rows[0]?.status);
+      expect(rows[1]).toEqual({
+        id: second.identityId,
+        status: "active",
+      });
+    });
+
+    it("disables and resets a static backup credential without disturbing OAuth", async () => {
+      await admin.query(
+        `INSERT INTO server (id, name, address, enabled, agent_token_hash, agent_token_prefix)
+         VALUES ('srv-static', 'Static', 'static.example.test', true, $1, 'agt_static')
+         ON CONFLICT (id) DO NOTHING`,
+        [hashAgentToken("agt_old_backup")],
+      );
+      const lookup = (tokenHash: string) =>
+        findAgentServerByTokenHash(tokenHash, database);
+      const staticCredential = {
+        kind: "static" as const,
+        tokenHash: hashAgentToken("agt_old_backup"),
+      };
+      const staticSession = await startAgentV2WsSession(
+        "srv-static",
+        staticCredential,
+        database,
+      );
+      expect(staticSession).not.toBeNull();
+      await expect(
+        authenticateStaticAgentToken(
+          "agt_old_backup",
+          { allowDisabled: true },
+          lookup,
+        ),
+      ).resolves.toMatchObject({ server: { id: "srv-static" } });
+
+      await disableAgentBackupCredential("srv-static", database);
+      expect(
+        await loadCurrentAgentServer(
+          "srv-static",
+          staticSession!.sessionId,
+          database,
+        ),
+      ).toBeNull();
+      await expect(
+        authenticateStaticAgentToken(
+          "agt_old_backup",
+          { allowDisabled: true },
+          lookup,
+        ),
+      ).resolves.toBeNull();
+
+      const newCredential = {
+        hash: hashAgentToken("agt_new_backup"),
+        prefix: "agt_new",
+      };
+      await rotateAgentCredential("srv-static", newCredential, database);
+      await expect(
+        authenticateStaticAgentToken(
+          "agt_new_backup",
+          { allowDisabled: true },
+          lookup,
+        ),
+      ).resolves.toMatchObject({ server: { id: "srv-static" } });
+      await expect(
+        authenticateStaticAgentToken(
+          "agt_old_backup",
+          { allowDisabled: true },
+          lookup,
+        ),
+      ).resolves.toBeNull();
+
+      const enrolled = await enroll(database, "srv-oauth", "enroll");
+      const oauthToken = await tokenFor(
+        enrolled.clientId,
+        enrolled.clientSecret,
+      );
+      const oauthUse = oauthCredential(
+        await verify(database, oauthToken, "handshake"),
+      );
+      const oauthSession = await startAgentV2WsSession(
+        "srv-oauth",
+        oauthUse,
+        database,
+      );
+      await promoteAgentV2WsSession(
+        "srv-oauth",
+        oauthSession!.sessionId,
+        oauthUse,
+        database,
+      );
+
+      await disableAgentBackupCredential("srv-oauth", database);
+      expect(
+        await loadCurrentAgentServer(
+          "srv-oauth",
+          oauthSession!.sessionId,
+          database,
+        ),
+      ).not.toBeNull();
+      const { rows: oauthRows } = await admin.query(
+        `SELECT agent_token_hash IS NULL AS disabled, ws_credential_kind
+         FROM server WHERE id = 'srv-oauth'`,
+      );
+      expect(oauthRows).toEqual([
+        { disabled: true, ws_credential_kind: "oauth" },
       ]);
     });
 

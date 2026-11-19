@@ -62,7 +62,13 @@ const serverMetaSchema = z.object({
   heartbeatIntervalSeconds: z.number().int().min(5).max(300).default(30),
 });
 
-export const createServerSchema = serverMetaSchema;
+export const createServerSchema = serverMetaSchema.extend({
+  /**
+   * Static bearer credentials are a backup path. OAuth machine identity is the
+   * default, so a new server gets a static token only when this is explicit.
+   */
+  enableBackupToken: z.boolean().default(false),
+});
 
 export const updateServerSchema = serverMetaSchema.partial().extend({
   id: z.string().min(1),

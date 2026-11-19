@@ -16,7 +16,7 @@ Blossom has two deployables that meet at one HTTP contract.
 - **`packages/domain/`**, **`packages/contracts/`**, and **`packages/database/`** contain portable domain rules, browser-safe validation contracts, and database connection management respectively. They expose explicit TypeScript source entry points; their tests run in the app's Vitest suite. The database server entry is denied in client builds.
 - **`server-agent/`** is a standalone Rust crate (not part of the pnpm workspace). One agent runs per physical proxy server, owns one sing-box process, and reconciles it to the desired state the app serves. See [Server agent](server-agent.md).
 
-The data model is server → nodes: a `server` has one agent token and one sing-box process; every enabled `node` on it becomes an inbound in the same generated config. Plans, groups, subscriptions, rules, certificates, redeem codes, announcements, settings and audit logs hang off that in `app/src/db/*-schema.ts`.
+The data model is server → nodes: a `server` has one agent's OAuth machine identity (and optionally one static backup token) and one sing-box process; every enabled `node` on it becomes an inbound in the same generated config. Plans, groups, subscriptions, rules, certificates, redeem codes, announcements, settings and audit logs hang off that in `app/src/db/*-schema.ts`.
 
 ## Request surfaces
 
@@ -27,7 +27,7 @@ Established. Know which surface you are on, because they authenticate differentl
 | SSR pages and routes          | `app/src/routes/`                                                      | better-auth session; role checked in `beforeLoad`   | `(admin)` requires `role === "admin"`, `(user)` and `(auth)` have their own groups.                                                    |
 | Server functions              | `app/src/query/*.ts`, `app/src/lib/auth.tsx`                           | session; admin ones call `ensureAdmin()`             | The application API for the UI. All admin CRUD lives here.                                                                             |
 | Agent API (oRPC)              | `app/src/orpc/router/index.ts`, `app/src/orpc/proxy/agent.ts`          | per-server `Authorization: Bearer` token             | The only procedures in the oRPC router: `agent.getConfigV3`, `agent.heartbeat`, `agent.reportTraffic`.                                 |
-| Agent WebSocket               | `app/src/routes/api/agent/ws.ts`                                       | per-server static token or OAuth machine token       | One outbound `/api/agent/ws` connection per server; the bearer is checked before the upgrade. Static tokens serve v1/v2; OAuth machine tokens serve v2 only. |
+| Agent WebSocket               | `app/src/routes/api/agent/ws.ts`                                       | per-server optional static backup token or OAuth machine token | One outbound `/api/agent/ws` connection per server; the bearer is checked before the upgrade. Static tokens serve v1/v2 when a backup is enabled; OAuth machine tokens serve v2 only. |
 | Admin PTY WebSocket           | `app/src/routes/api/admin/servers/$id/pty/ws.ts`                        | better-auth admin session + same-origin check        | Human-only browser terminal relayed to one enrolled agent; no server function or MCP tool exposes it.                                  |
 | oRPC mounts                   | `app/src/routes/api/$.ts` (OpenAPI), `app/src/routes/api/rpc/$.ts` (RPC) | same as above                                      | `/api/*` serves the OpenAPI document (`/api/spec.json`, consumed by the agent codegen); `/api/rpc/*` is the oRPC RPC protocol.         |
 | better-auth                   | `app/src/routes/api/auth/$.ts`                                         | its own                                              | Email/password, magic link, GitHub/Google (when configured), admin and JWT plugins, OAuth provider for MCP.                            |
@@ -155,7 +155,7 @@ When you add a mutation, work out which of those cases it is. If it falls under 
 Established.
 
 - Admin operations are never reachable through the agent API. The oRPC router is deliberately limited to `agent.*` (see the comment in `app/src/orpc/base.ts`).
-- Agent tokens are stored hashed (`server.agentTokenHash`); only a non-secret prefix is shown, and the plaintext is returned once on create/reset. DTOs strip the hash (`ServerDTO`).
+- A static backup token is optional and stored hashed (`server.agentTokenHash`); only a non-secret prefix and whether the backup is enabled are shown, and the plaintext is returned once on enable/reset. DTOs strip the hash (`ServerDTO`).
 - Audit logs and MCP tool results run through a redactor (`app/src/orpc/mcp/redact.ts`) that masks sensitive keys, bearer tokens and PEM blocks.
 - Certificate private keys are encrypted at rest with an AES-256-GCM envelope keyed by `CERTIFICATE_MASTER_KEY` (`app/src/lib/certificate-crypto.ts`).
 - The agent never trusts inline certificate material or control-plane paths from the config; it injects only local paths it has validated.

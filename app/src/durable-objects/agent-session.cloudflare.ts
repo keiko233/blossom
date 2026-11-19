@@ -423,6 +423,7 @@ export class AgentSessionDO extends DurableObject {
           const usable = await this.withDatabase((database) =>
             revalidatePendingAgentV2Session(
               attachment.serverId,
+              attachment.sessionId,
               credential,
               database,
             ),

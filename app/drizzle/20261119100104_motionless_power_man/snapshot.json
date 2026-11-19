@@ -1,0 +1,171 @@
+{
+  "type": "diff",
+  "version": "9",
+  "dialect": "postgres",
+  "id": "a48aa4dc-0c97-4a4d-b374-de35ba55a198",
+  "prevIds": ["f134940d-6e9e-481d-923a-6d9e4c84ff02"],
+  "footprints": [
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "server",
+        "ws_pending_session_id"
+      ],
+      "writes": [
+        "s|col|public.server.ws_pending_session_id",
+        "n|col|public.server.ws_pending_session_id",
+        "e|col|public.server.ws_pending_session_id"
+      ],
+      "reads": ["n|tbl|public.server", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "server",
+        "ws_pending_identity_id"
+      ],
+      "writes": [
+        "s|col|public.server.ws_pending_identity_id",
+        "n|col|public.server.ws_pending_identity_id",
+        "e|col|public.server.ws_pending_identity_id"
+      ],
+      "reads": ["n|tbl|public.server", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "server",
+        "ws_pending_generation"
+      ],
+      "writes": [
+        "s|col|public.server.ws_pending_generation",
+        "n|col|public.server.ws_pending_generation",
+        "e|col|public.server.ws_pending_generation"
+      ],
+      "reads": ["n|tbl|public.server", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "server",
+        "ws_pending_expires_at"
+      ],
+      "writes": [
+        "s|col|public.server.ws_pending_expires_at",
+        "n|col|public.server.ws_pending_expires_at",
+        "e|col|public.server.ws_pending_expires_at"
+      ],
+      "reads": ["n|tbl|public.server", "n|sch|public"]
+    },
+    {
+      "statementType": "alter_column",
+      "statementTarget": ["column", "public", "server", "agent_token_hash"],
+      "writes": ["s|colprop|public.server.agent_token_hash.notNull"],
+      "reads": [
+        "n|tbl|public.server",
+        "n|sch|public",
+        "n|col|public.server.agent_token_hash"
+      ],
+      "sqlHash": "c13833d19055adc9"
+    },
+    {
+      "statementType": "alter_column",
+      "statementTarget": ["column", "public", "server", "agent_token_prefix"],
+      "writes": ["s|colprop|public.server.agent_token_prefix.notNull"],
+      "reads": [
+        "n|tbl|public.server",
+        "n|sch|public",
+        "n|col|public.server.agent_token_prefix"
+      ],
+      "sqlHash": "8ebda28a822c5e87"
+    }
+  ],
+  "deltas": [
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server",
+        "name": "ws_pending_session_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server",
+        "name": "ws_pending_identity_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server",
+        "name": "ws_pending_generation",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server",
+        "name": "ws_pending_expires_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "alter",
+      "key": "columns\u0000[\"public\",\"server\",\"agent_token_hash\"]",
+      "set": {
+        "notNull": false
+      }
+    },
+    {
+      "op": "alter",
+      "key": "columns\u0000[\"public\",\"server\",\"agent_token_prefix\"]",
+      "set": {
+        "notNull": false
+      }
+    }
+  ]
+}
