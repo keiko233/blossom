@@ -26,6 +26,7 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::future::Future;
 use std::hash::{BuildHasher, Hasher};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -81,24 +82,24 @@ impl Default for Limits {
 
 /// One sealed, immutable report. This is also the on-disk format.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct Batch {
-    version: u32,
-    report_id: String,
-    window_started_at: DateTime<Utc>,
-    window_ended_at: DateTime<Utc>,
-    entries: Vec<BatchEntry>,
+pub(crate) struct Batch {
+    pub(crate) version: u32,
+    pub(crate) report_id: String,
+    pub(crate) window_started_at: DateTime<Utc>,
+    pub(crate) window_ended_at: DateTime<Utc>,
+    pub(crate) entries: Vec<BatchEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct BatchEntry {
-    subscription_id: String,
-    uplink_bytes: i64,
-    downlink_bytes: i64,
+pub(crate) struct BatchEntry {
+    pub(crate) subscription_id: String,
+    pub(crate) uplink_bytes: i64,
+    pub(crate) downlink_bytes: i64,
 }
 
 /// What the control plane said about one delivery attempt.
 #[derive(Debug)]
-enum SendOutcome {
+pub(crate) enum SendOutcome {
     /// Acknowledged; the batch can be forgotten. `acknowledged_id` is false
     /// when the control plane ignored the report id (it predates idempotent
     /// ingestion), in which case a replay would be counted again.
@@ -110,8 +111,10 @@ enum SendOutcome {
     Retry(String),
 }
 
-trait ReportSink {
-    async fn send(&self, batch: &Batch) -> SendOutcome;
+/// Where a sealed batch is delivered. The HTTP client and the v2 session each
+/// implement it. The future must be `Send` so the reporter can run on its own task.
+pub(crate) trait ReportSink: Sync {
+    fn send(&self, batch: &Batch) -> impl Future<Output = SendOutcome> + Send;
 }
 
 struct ClientSink<'a>(&'a crate::client::Client);
@@ -708,9 +711,14 @@ impl TrafficReporter {
     /// consumer task's problem; this only reports what has arrived. Every
     /// failure path logs (warn!/error!) and returns; never panics/crashes.
     pub async fn collect_and_report(&mut self, client: &crate::client::Client) {
+        self.collect_and_flush(&ClientSink(client)).await;
+    }
+
+    /// The same cycle with any delivery sink: the HTTP client or the v2 session.
+    pub(crate) async fn collect_and_flush<S: ReportSink>(&mut self, sink: &S) {
         let deltas = self.shared.drain();
         self.outbox.ingest(&deltas, Utc::now());
-        self.outbox.flush(&ClientSink(client), Utc::now()).await;
+        self.outbox.flush(sink, Utc::now()).await;
     }
 }
 
@@ -744,10 +752,10 @@ fn clamp_i64(value: u64) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
     use std::collections::{HashMap, HashSet, VecDeque};
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use chrono::{DateTime, Duration, Utc};
@@ -789,10 +797,10 @@ mod tests {
     /// once and a reused id with different content is refused.
     #[derive(Default)]
     struct FakeControlPlane {
-        script: RefCell<VecDeque<Fault>>,
-        applied: RefCell<HashMap<String, Vec<BatchEntry>>>,
-        totals: RefCell<HashMap<String, (i64, i64)>>,
-        attempts: RefCell<Vec<Batch>>,
+        script: Mutex<VecDeque<Fault>>,
+        applied: Mutex<HashMap<String, Vec<BatchEntry>>>,
+        totals: Mutex<HashMap<String, (i64, i64)>>,
+        attempts: Mutex<Vec<Batch>>,
         echo_report_id: bool,
     }
 
@@ -805,11 +813,11 @@ mod tests {
         }
 
         fn script(&self, faults: impl IntoIterator<Item = Fault>) {
-            self.script.borrow_mut().extend(faults);
+            self.script.lock().unwrap().extend(faults);
         }
 
         fn apply(&self, batch: &Batch) -> Result<(), String> {
-            let mut applied = self.applied.borrow_mut();
+            let mut applied = self.applied.lock().unwrap();
             if let Some(previous) = applied.get(&batch.report_id) {
                 return if *previous == batch.entries {
                     Ok(())
@@ -818,7 +826,7 @@ mod tests {
                 };
             }
             applied.insert(batch.report_id.clone(), batch.entries.clone());
-            let mut totals = self.totals.borrow_mut();
+            let mut totals = self.totals.lock().unwrap();
             for entry in &batch.entries {
                 let total = totals.entry(entry.subscription_id.clone()).or_default();
                 total.0 += entry.uplink_bytes;
@@ -828,12 +836,18 @@ mod tests {
         }
 
         fn total(&self, sub: &str) -> (i64, i64) {
-            self.totals.borrow().get(sub).copied().unwrap_or_default()
+            self.totals
+                .lock()
+                .unwrap()
+                .get(sub)
+                .copied()
+                .unwrap_or_default()
         }
 
         fn attempted_ids(&self) -> Vec<String> {
             self.attempts
-                .borrow()
+                .lock()
+                .unwrap()
                 .iter()
                 .map(|b| b.report_id.clone())
                 .collect()
@@ -842,8 +856,8 @@ mod tests {
 
     impl ReportSink for FakeControlPlane {
         async fn send(&self, batch: &Batch) -> SendOutcome {
-            self.attempts.borrow_mut().push(batch.clone());
-            let fault = self.script.borrow_mut().pop_front();
+            self.attempts.lock().unwrap().push(batch.clone());
+            let fault = self.script.lock().unwrap().pop_front();
             match fault {
                 Some(Fault::Unavailable) => SendOutcome::Retry("connection refused".to_string()),
                 Some(Fault::Reject) => SendOutcome::Rejected("400".to_string()),
@@ -969,7 +983,7 @@ mod tests {
 
         assert_eq!(plane.total("a"), (10, 20));
         assert!(pending_files(&root).is_empty());
-        let sent = &plane.attempts.borrow()[0];
+        let sent = plane.attempts.lock().unwrap()[0].clone();
         assert_eq!(
             (sent.window_started_at, sent.window_ended_at),
             (at(0), at(60))
@@ -996,10 +1010,9 @@ mod tests {
         let attempts = plane.attempted_ids();
         assert_eq!(attempts[0], attempts[1], "retry must reuse the report id");
         assert_ne!(attempts[1], attempts[2], "new traffic gets a new id");
-        assert_eq!(
-            plane.attempts.borrow()[0].entries,
-            plane.attempts.borrow()[1].entries
-        );
+        let first = plane.attempts.lock().unwrap()[0].entries.clone();
+        let second = plane.attempts.lock().unwrap()[1].entries.clone();
+        assert_eq!(first, second);
         assert_eq!(plane.total("a"), (15, 0));
         assert_eq!(plane.total("b"), (0, 7));
         assert!(pending_files(&root).is_empty());
@@ -1082,7 +1095,7 @@ mod tests {
 
         outbox.flush(&plane, at(61)).await;
 
-        assert_eq!(plane.attempts.borrow().len(), 2);
+        assert_eq!(plane.attempts.lock().unwrap().len(), 2);
         assert!(outbox.queue.items.is_empty());
         assert!(pending_files(&root).is_empty());
         assert_eq!(fs::read_dir(root.join("rejected")).unwrap().count(), 1);
@@ -1110,7 +1123,7 @@ mod tests {
         );
 
         outbox.flush(&plane, at(61)).await;
-        assert_eq!(plane.attempts.borrow().len(), 2);
+        assert_eq!(plane.attempts.lock().unwrap().len(), 2);
         assert_eq!(outbox.queue.items.len(), 1);
         fs::remove_dir_all(&root).unwrap();
     }
@@ -1201,7 +1214,7 @@ mod tests {
 
         outbox.flush(&plane, at(60 + 2 * 3600)).await;
 
-        assert!(plane.attempts.borrow().is_empty());
+        assert!(plane.attempts.lock().unwrap().is_empty());
         assert!(outbox.queue.items.is_empty());
         assert!(pending_files(&root).is_empty());
         fs::remove_dir_all(&root).unwrap();
@@ -1261,7 +1274,7 @@ mod tests {
         outbox.ingest(&deltas(&[("a", 0, 0)]), at(60));
         outbox.flush(&plane, at(61)).await;
 
-        assert!(plane.attempts.borrow().is_empty());
+        assert!(plane.attempts.lock().unwrap().is_empty());
         assert!(pending_files(&root).is_empty());
         let _ = fs::remove_dir_all(&root);
     }

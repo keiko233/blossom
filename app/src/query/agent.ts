@@ -224,6 +224,37 @@ export async function startAgentWsSession(
 }
 
 /**
+ * Starts a v2 session only if the credential that authenticated the upgrade is
+ * still the server's. The upgrade is checked before the socket is accepted, so
+ * a rotation in between must refuse the session here, in the same statement
+ * that makes it current. Returns `null` when the credential no longer matches.
+ */
+export async function startAgentV2WsSession(
+  serverId: string,
+  expectedTokenHash: string,
+  database: DbHandle = db,
+): Promise<AgentWsSessionStart | null> {
+  const connectedAt = new Date();
+  const sessionId = randomUUID();
+  const rows = await database
+    .update(server)
+    .set({
+      lastSeenAt: connectedAt,
+      transportMode: "ws",
+      wsConnectedAt: connectedAt,
+      wsSessionId: sessionId,
+    })
+    .where(
+      and(
+        eq(server.id, serverId),
+        eq(server.agentTokenHash, expectedTokenHash),
+      ),
+    )
+    .returning({ id: server.id });
+  return rows.length > 0 ? { connectedAt, sessionId } : null;
+}
+
+/**
  * Records a completed WebSocket handshake without touching agent-reported
  * status columns. The returned timestamp is the connection identity used to
  * clear `transportMode` only when this exact socket closes.
@@ -374,15 +405,20 @@ export async function listServerNodeIds(
   return rows.map((row) => row.id);
 }
 
-/** Loads the server row a v2 session reads before it compiles. */
-export async function loadAgentServer(
+/**
+ * Loads the server row for a v2 session, but only while that session is still
+ * current. A replaced session, or one whose credential was rotated (which
+ * clears the marker), gets `null` and must not read or send configuration.
+ */
+export async function loadCurrentAgentServer(
   serverId: string,
+  sessionId: string,
   database: DbHandle = db,
 ): Promise<Server | null> {
   const [row] = await database
     .select()
     .from(server)
-    .where(eq(server.id, serverId));
+    .where(currentSession(serverId, sessionId));
   return row ?? null;
 }
 
@@ -563,34 +599,51 @@ export async function recordAgentV2ConfigAck(
 }
 
 /**
- * Stores the configuration identifier compiled for the current session. The
- * write is conditional on the sequence still being the one that was compiled,
- * so a compile that raced a change cannot cache a stale identifier.
+ * A configuration identifier compiled from the state read before the compile.
+ * `desiredInputsVersion` is the version the server row carried at that read.
+ */
+export interface CachedDesiredRevision {
+  desiredRevisionSeq: number;
+  desiredInputsVersion: number;
+  desiredRevision: string;
+  /** The identifier may be trusted without recompiling only until this. */
+  validUntil: Date;
+}
+
+/**
+ * Stores the identifier compiled for the current session. The write names the
+ * sequence and inputs version it was compiled from and matches only while both
+ * are unchanged. A compile that raced a publish-gate change or an invalidation,
+ * including one on another instance, therefore cannot cache a stale identifier.
  */
 export async function cacheAgentDesiredRevision(
   serverId: string,
   sessionId: string,
-  desiredRevisionSeq: number,
-  desiredRevision: string,
+  cache: CachedDesiredRevision,
   database: DbHandle = db,
 ): Promise<void> {
   await database
     .update(server)
-    .set({ desiredConfigRevision: desiredRevision })
+    .set({
+      desiredConfigRevision: cache.desiredRevision,
+      desiredConfigValidUntil: cache.validUntil,
+    })
     .where(
       and(
         currentSession(serverId, sessionId),
-        eq(server.desiredRevisionSeq, desiredRevisionSeq),
+        eq(server.desiredRevisionSeq, cache.desiredRevisionSeq),
+        eq(server.desiredInputsVersion, cache.desiredInputsVersion),
       ),
     );
 }
 
 /**
- * Clears cached configuration identifiers so the next v2 status or session
- * recompiles them. Call after a change that alters the compiled configuration
- * without a publish-gate record (for example routing rules), or after a
- * change notification, which may not be delivered. Omit `serverIds` to clear
- * every server.
+ * Discards cached configuration identifiers and bumps their inputs version, so
+ * the next v2 status, hello or snapshot recompiles, and a compile that began
+ * before this call cannot store its identifier. Call it after any mutation of
+ * compiled inputs that no publish-gate record covers (routing rules,
+ * certificates, traffic quota), and after a change notification, which may not
+ * be delivered. Omit `serverIds` to invalidate every server.
  */
 export async function invalidateDesiredConfigRevisions(
   serverIds?: readonly string[],
@@ -601,8 +654,54 @@ export async function invalidateDesiredConfigRevisions(
   }
   await database
     .update(server)
-    .set({ desiredConfigRevision: null })
+    .set({
+      desiredConfigRevision: null,
+      desiredConfigValidUntil: null,
+      desiredInputsVersion: sql`${server.desiredInputsVersion} + 1`,
+    })
     .where(serverIds ? inArray(server.id, [...serverIds]) : undefined);
+}
+
+/**
+ * Invalidates after a mutation has already committed, so a failure here cannot
+ * fail the caller's operation. A missed invalidation is still bounded by the
+ * cached identifier's deadline.
+ */
+export async function invalidateDesiredConfigRevisionsAfterCommit(
+  serverIds?: readonly string[],
+  database: DbHandle = db,
+): Promise<void> {
+  try {
+    await invalidateDesiredConfigRevisions(serverIds, database);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`agent desired configuration invalidation failed: ${message}`);
+  }
+}
+
+/**
+ * Replaces a server's static agent credential and ends its current v2 session
+ * in the same statement. The old session's fenced writes then match no row and
+ * its configuration reads fail, so it stops at its next frame, and a reconnect
+ * with the old credential is refused at the upgrade.
+ */
+export async function rotateAgentCredential(
+  serverId: string,
+  credential: { hash: string; prefix: string },
+  database: DbHandle = db,
+): Promise<{ id: string } | null> {
+  const [row] = await database
+    .update(server)
+    .set({
+      agentTokenHash: credential.hash,
+      agentTokenPrefix: credential.prefix,
+      transportMode: "http",
+      wsConnectedAt: null,
+      wsSessionId: null,
+    })
+    .where(eq(server.id, serverId))
+    .returning({ id: server.id });
+  return row ?? null;
 }
 
 /**

@@ -69,7 +69,7 @@ function fakeV2Store(): AgentWsV2HubStore {
       sessionId: session++ === 0 ? FIRST_SESSION : SECOND_SESSION,
       connectedAt: new Date("2026-11-19T00:00:00.000Z"),
     })),
-    loadServer: vi.fn(async () => null),
+    loadCurrentServer: vi.fn(async () => null),
     recordHello: vi.fn(
       async () =>
         ({
@@ -90,9 +90,12 @@ function fakeV2Store(): AgentWsV2HubStore {
       accepted: 0,
       dropped: 0,
     })),
+    loadLogPolicy: vi.fn(async () => null),
+    recordLogPolicyAck: vi.fn(async () => "recorded" as const),
     compile: vi.fn(async () => ({
       desiredRevision: "1:sha256:rev",
       document: {},
+      validUntil: new Date("2099-01-01T00:00:00.000Z"),
     })),
     endSession: vi.fn(async () => undefined),
   } satisfies AgentWsV2Store & AgentWsV2HubStore;

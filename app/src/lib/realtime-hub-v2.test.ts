@@ -23,7 +23,14 @@ const SESSION_ID = "22222222-2222-4222-8222-222222222222";
 const REVISION = `7:sha256:${"a".repeat(64)}`;
 const NEXT = `8:sha256:${"b".repeat(64)}`;
 
-const server = { id: "srv-1", name: "edge", enabled: true } as Server;
+const server = {
+  id: "srv-1",
+  name: "edge",
+  enabled: true,
+  agentTokenHash: "hash-1",
+  agentCapabilities: [],
+  logPolicyRevision: 0,
+} as unknown as Server;
 
 type Hooks = {
   upgrade(request: Request): { protocol: string };
@@ -71,11 +78,16 @@ function sentTypes(peer: FakePeer): string[] {
 
 function fakeV2Store() {
   const store = {
-    startSession: vi.fn(async () => ({
-      sessionId: SESSION_ID,
-      connectedAt: new Date("2026-11-19T00:00:00.000Z"),
-    })),
-    loadServer: vi.fn(async () => null),
+    startSession: vi.fn(
+      async (
+        _serverId: string,
+        _expectedTokenHash: string,
+      ): Promise<{ sessionId: string; connectedAt: Date } | null> => ({
+        sessionId: SESSION_ID,
+        connectedAt: new Date("2026-11-19T00:00:00.000Z"),
+      }),
+    ),
+    loadCurrentServer: vi.fn(async () => null),
     recordHello: vi.fn(
       async () =>
         ({
@@ -85,6 +97,8 @@ function fakeV2Store() {
           heartbeatIntervalSeconds: 30,
           desiredAgentVersion: null,
           desiredSingBoxVersion: null,
+          agentCapabilities: [],
+          logPolicyRevision: 0,
         }) as unknown as Server,
     ),
     recordStatus: vi.fn(async () => null),
@@ -96,7 +110,31 @@ function fakeV2Store() {
       accepted: 0,
       dropped: 0,
     })),
-    compile: vi.fn(async () => ({ desiredRevision: REVISION, document: {} })),
+    loadLogPolicy: vi.fn(async () => ({
+      revision: 0,
+      sources: [
+        {
+          source: "agent" as const,
+          revision: 0,
+          baseline: "default" as const,
+          level: "default" as const,
+          deadline: null,
+        },
+        {
+          source: "sing-box" as const,
+          revision: 0,
+          baseline: "default" as const,
+          level: "default" as const,
+          deadline: null,
+        },
+      ],
+    })),
+    recordLogPolicyAck: vi.fn(async () => "recorded" as const),
+    compile: vi.fn(async () => ({
+      desiredRevision: REVISION,
+      document: {},
+      validUntil: new Date("2099-01-01T00:00:00.000Z"),
+    })),
     endSession: vi.fn(async () => undefined),
   };
   return store satisfies AgentWsV2HubStore & AgentWsV2Store;
@@ -157,13 +195,36 @@ describe("NitroRealtimeHub v2 sessions", () => {
     );
   });
 
+  it("closes an upgrade whose credential changed before its session started", async () => {
+    const { hub, v2Store } = makeHub();
+    v2Store.startSession.mockResolvedValueOnce(null);
+    const hooks = await acceptV2(hub);
+    const peer = makePeer("p-rotated");
+
+    await hooks.open(peer);
+    await hooks.message(
+      peer,
+      agentFrame("hello", {
+        agentVersion: "0.4.0",
+        agentBuildId: "build-1",
+        capabilities: [],
+        applied: null,
+        certificateDeployments: [],
+      }),
+    );
+
+    expect(peer.close).toHaveBeenCalledWith(1008, "credential changed");
+    expect(peer.sent).toEqual([]);
+    expect(v2Store.recordHello).not.toHaveBeenCalled();
+  });
+
   it("starts a fenced session on open and welcomes it on hello", async () => {
     const { hub, v2Store } = makeHub();
     const hooks = await acceptV2(hub);
     const peer = makePeer("p1");
 
     await hooks.open(peer);
-    expect(v2Store.startSession).toHaveBeenCalledWith("srv-1");
+    expect(v2Store.startSession).toHaveBeenCalledWith("srv-1", "hash-1");
     expect(peer.sent).toEqual([]);
 
     await hooks.message(
@@ -226,6 +287,38 @@ describe("NitroRealtimeHub v2 sessions", () => {
     await hub.notifyUpdateTrigger("srv-1", { target: "agent", force: false });
 
     expect(peer.sent).toEqual([]);
+  });
+
+  it("pushes log policy only to welcomed v2 sessions", async () => {
+    const { hub, backplane } = makeHub();
+    const hooks = await acceptV2(hub);
+    const welcomed = makePeer("welcomed");
+    const pending = makePeer("pending");
+    await hooks.open(welcomed);
+    await hooks.open(pending);
+    await hooks.message(
+      welcomed,
+      agentFrame("hello", {
+        agentVersion: "0.4.0",
+        agentBuildId: "build-1",
+        capabilities: ["log-policy-v1"],
+        applied: null,
+        certificateDeployments: [],
+      }),
+    );
+
+    await hub.notifyLogPolicy("srv-1", {
+      revision: 3,
+      source: "agent",
+      reason: "log policy changed",
+    });
+
+    expect(sentTypes(welcomed)).toEqual(["welcome", "log.policy.notify"]);
+    expect(sentTypes(pending)).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(backplane.publish).toHaveBeenCalledWith(
+      expect.objectContaining({ serverId: "srv-1", protocol: "v2" }),
+    );
   });
 
   it("delivers a remote v2 push only to welcomed local sessions", async () => {

@@ -7,6 +7,7 @@ import {
   type AgentWsUpdateTriggerPayload,
   type AgentWsWelcomePayload,
 } from "@blossom/contracts/agent-ws";
+import type { LogPolicyNotifyPayload } from "@blossom/contracts/log-policy";
 import { env } from "cloudflare:workers";
 
 import type { Server } from "@/db/proxy-schema";
@@ -18,7 +19,10 @@ import {
 
 import type { TelemetryKind, TelemetryResult } from "./agent-telemetry";
 import { createAgentWsV2Store } from "./agent-ws-store";
-import { encodeAgentWsV2ConfigNotify } from "./agent-ws-v2-session";
+import {
+  encodeAgentWsV2ConfigNotify,
+  encodeAgentWsV2LogPolicyNotify,
+} from "./agent-ws-v2-session";
 import type { AdminLogsAcceptContext } from "./logs-relay-types";
 import {
   AGENT_LOGS_INTERNAL_ACTOR,
@@ -89,7 +93,17 @@ export class CloudflareRealtimeHub implements RealtimeHub {
   }
 
   async acceptAgentV2(request: Request, server: Server): Promise<Response> {
-    const started = await createAgentWsV2Store().startSession(server.id);
+    const started = await createAgentWsV2Store().startSession(
+      server.id,
+      server.agentTokenHash,
+    );
+    if (!started) {
+      // The credential changed after the upgrade was authenticated.
+      return new Response("Unauthorized", {
+        status: 401,
+        headers: { "cache-control": "no-store" },
+      });
+    }
 
     const headers = new Headers(request.headers);
     headers.delete("authorization");
@@ -214,6 +228,17 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     await this.sendFrame(
       serverId,
       encodeAgentWsFrame(createAgentWsFrame("acme.dns_ack", payload)),
+    );
+  }
+
+  async notifyLogPolicy(
+    serverId: string,
+    payload: LogPolicyNotifyPayload,
+  ): Promise<void> {
+    await this.sendFrame(
+      serverId,
+      encodeAgentWsV2LogPolicyNotify(payload),
+      "v2",
     );
   }
 

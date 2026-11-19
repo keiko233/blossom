@@ -1,0 +1,42 @@
+{
+  "type": "diff",
+  "version": "9",
+  "dialect": "postgres",
+  "id": "99ab6ea1-3792-440c-b62f-2ef33ca78329",
+  "prevIds": ["5dc8b66f-0048-4e91-bcf2-eceac94982b2"],
+  "footprints": [
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "server_log_policy",
+        "desired_baseline"
+      ],
+      "writes": [
+        "s|col|public.server_log_policy.desired_baseline",
+        "n|col|public.server_log_policy.desired_baseline",
+        "e|col|public.server_log_policy.desired_baseline"
+      ],
+      "reads": ["n|tbl|public.server_log_policy", "n|sch|public"]
+    }
+  ],
+  "deltas": [
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server_log_policy",
+        "name": "desired_baseline",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "'default'",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    }
+  ]
+}

@@ -10,6 +10,7 @@ import {
   type AgentWsWelcomePayload,
 } from "@blossom/contracts/agent-ws";
 import { AGENT_WS_V2_SUBPROTOCOL } from "@blossom/contracts/agent-ws-v2";
+import type { LogPolicyNotifyPayload } from "@blossom/contracts/log-policy";
 import Redis from "ioredis";
 
 import type { Server } from "@/db/proxy-schema";
@@ -36,6 +37,7 @@ import {
 } from "./agent-ws-store";
 import {
   encodeAgentWsV2ConfigNotify,
+  encodeAgentWsV2LogPolicyNotify,
   openAgentWsV2Session,
   type AgentWsV2Session,
 } from "./agent-ws-v2-session";
@@ -156,8 +158,10 @@ type LocalConnection = {
 
 type LocalV2Connection = {
   peer: CrosswsPeer;
-  sessionId: string;
-  session: AgentWsV2Session;
+  /** `null` when the credential changed before the session could start. */
+  session: Promise<AgentWsV2Session | null>;
+  /** Set once the session row starts, for log relay binding. */
+  sessionId?: string;
 };
 
 export type PtyRelayEvent =
@@ -241,7 +245,7 @@ export class NitroRealtimeHub implements RealtimeHub {
         headers: { Connection: "Upgrade", Upgrade: "websocket" },
       }),
       request,
-      this.createV2Hooks(server.id),
+      this.createV2Hooks(server.id, server.agentTokenHash),
     );
   }
 
@@ -316,64 +320,77 @@ export class NitroRealtimeHub implements RealtimeHub {
     );
   }
 
-  private createV2Hooks(serverId: string): CrosswsHooks {
+  private createV2Hooks(serverId: string, tokenHash: string): CrosswsHooks {
     return {
       upgrade: () => ({ protocol: AGENT_WS_V2_SUBPROTOCOL }),
       open: async (peer) => {
-        let started: Awaited<ReturnType<AgentWsV2HubStore["startSession"]>>;
-        try {
-          started = await this.v2Store.startSession(serverId);
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : String(error);
-          console.warn(`agent websocket v2 open failed: ${message}`);
-          peer.close(1011, "session unavailable");
-          return;
-        }
-        this.supersedeLogRelays(serverId, started.sessionId);
-        const session = openAgentWsV2Session({
-          serverId,
-          sessionId: started.sessionId,
-          peer,
-          store: this.v2Store,
-          reconnectBeforeSeconds: reconnectBeforeSecondsForRuntime(),
-          onLogFrame: (text) =>
-            this.deliverLogAgentFrame(serverId, started.sessionId, text),
-        });
+        const session = (async () => {
+          const started = await this.v2Store.startSession(serverId, tokenHash);
+          if (!started) {
+            return null;
+          }
+          const connection = this.findV2Connection(serverId, peer);
+          if (connection) {
+            connection.sessionId = started.sessionId;
+          }
+          this.supersedeLogRelays(serverId, started.sessionId);
+          return openAgentWsV2Session({
+            serverId,
+            sessionId: started.sessionId,
+            peer,
+            store: this.v2Store,
+            reconnectBeforeSeconds: reconnectBeforeSecondsForRuntime(),
+            onLogFrame: (text) =>
+              this.deliverLogAgentFrame(serverId, started.sessionId, text),
+          });
+        })();
         let peers = this.v2Connections.get(serverId);
         if (!peers) {
           peers = new Set();
           this.v2Connections.set(serverId, peers);
         }
-        peers.add({ peer, sessionId: started.sessionId, session });
+        peers.add({ peer, session });
         this.startBackplane();
+        try {
+          if (!(await session)) {
+            this.removeV2Connection(serverId, peer);
+            peer.close(1008, "credential changed");
+          }
+        } catch (error) {
+          this.removeV2Connection(serverId, peer);
+          const message =
+            error instanceof Error ? error.message : String(error);
+          console.warn(`agent websocket v2 open failed: ${message}`);
+          peer.close(1011, "session unavailable");
+        }
       },
       message: async (peer, message) => {
         const connection = this.findV2Connection(serverId, peer);
         if (!connection) {
           return;
         }
-        await connection.session.handleText(message.text());
+        const session = await connection.session;
+        await session?.handleText(message.text());
       },
       close: async (peer) => {
         const connection = this.removeV2Connection(serverId, peer);
         if (!connection) {
           return;
         }
-        this.closeLogRelays(
-          serverId,
-          connection.sessionId,
-          "agent_disconnected",
-        );
+        const session = await connection.session.catch(() => undefined);
+        if (!session) {
+          return;
+        }
+        this.closeLogRelays(serverId, session.sessionId, "agent_disconnected");
         this.publishBackplane(() => ({
           origin: this.id,
           serverId,
           frame: "",
           logTarget: "browser",
-          logSessionId: connection.sessionId,
+          logSessionId: session.sessionId,
           logAgentGone: true,
         }));
-        await connection.session.close();
+        await session.close();
       },
       error: (peer, error) => {
         const message = error instanceof Error ? error.message : String(error);
@@ -415,14 +432,13 @@ export class NitroRealtimeHub implements RealtimeHub {
    */
   private deliverV2(serverId: string, frame: string): void {
     for (const connection of this.v2Connections.get(serverId) ?? []) {
-      if (!connection.session.welcomed) {
-        continue;
-      }
-      try {
-        connection.peer.send(frame);
-      } catch {
-        // A stale peer is removed by its close hook.
-      }
+      void connection.session
+        .then((session) => {
+          if (session?.welcomed) {
+            connection.peer.send(frame);
+          }
+        })
+        .catch(() => undefined);
     }
   }
 
@@ -764,15 +780,14 @@ export class NitroRealtimeHub implements RealtimeHub {
       (candidate) => candidate.sessionId === sessionId,
     );
     if (connection) {
-      if (!connection.session.welcomed) {
-        return false;
-      }
-      try {
-        connection.peer.send(frame);
-        return true;
-      } catch {
-        return false;
-      }
+      void connection.session
+        .then((session) => {
+          if (session?.welcomed) {
+            connection.peer.send(frame);
+          }
+        })
+        .catch(() => undefined);
+      return true;
     }
     if (!this.backplane) {
       return false;
@@ -912,14 +927,16 @@ export class NitroRealtimeHub implements RealtimeHub {
     const connection = [...(this.v2Connections.get(serverId) ?? [])].find(
       (candidate) => candidate.sessionId === sessionId,
     );
-    if (!connection?.session.welcomed) {
+    if (!connection) {
       return;
     }
-    try {
-      connection.peer.send(frame);
-    } catch {
-      // The agent close hook ends the relays bound to this session.
-    }
+    void connection.session
+      .then((session) => {
+        if (session?.welcomed) {
+          connection.peer.send(frame);
+        }
+      })
+      .catch(() => undefined);
   }
 
   private publishBackplane(message: () => RealtimeBackplaneMessage): void {
@@ -1155,6 +1172,13 @@ export class NitroRealtimeHub implements RealtimeHub {
       serverId,
       encodeAgentWsFrame(createAgentWsFrame("acme.dns_ack", payload)),
     );
+  }
+
+  async notifyLogPolicy(
+    serverId: string,
+    payload: LogPolicyNotifyPayload,
+  ): Promise<void> {
+    this.publishV2(serverId, encodeAgentWsV2LogPolicyNotify(payload));
   }
 }
 
