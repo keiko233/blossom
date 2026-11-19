@@ -17,6 +17,7 @@ import { env } from "cloudflare:workers";
 import type { Server } from "@/db/proxy-schema";
 import type { AgentSessionCredential } from "@/query/agent";
 import {
+  type AgentWsSessionStart,
   markAgentWsConnected,
   markAgentWsDisconnected,
   endAgentWsSession,
@@ -67,12 +68,12 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     server: Server,
     welcome: AgentWsWelcomePayload,
   ): Promise<Response> {
-    let connectedAt = new Date();
-    let sessionId: string | null = null;
+    let started: AgentWsSessionStart = {
+      connectedAt: new Date(),
+      sessionId: crypto.randomUUID(),
+    };
     try {
-      const started = await markAgentWsConnected(server.id);
-      connectedAt = started.connectedAt;
-      sessionId = started.sessionId;
+      started = await markAgentWsConnected(server.id);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`agent websocket connect metadata failed: ${message}`);
@@ -82,10 +83,11 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     headers.delete("authorization");
     headers.delete("cookie");
     headers.set(AGENT_WS_INTERNAL_SERVER_ID, server.id);
-    headers.set(AGENT_WS_INTERNAL_CONNECTED_AT, connectedAt.toISOString());
-    if (sessionId) {
-      headers.set(AGENT_WS_INTERNAL_SESSION_ID, sessionId);
-    }
+    headers.set(
+      AGENT_WS_INTERNAL_CONNECTED_AT,
+      started.connectedAt.toISOString(),
+    );
+    headers.set(AGENT_WS_INTERNAL_SESSION_ID, started.sessionId);
     headers.set(
       AGENT_WS_INTERNAL_WELCOME,
       encodeURIComponent(JSON.stringify(welcome)),
@@ -99,19 +101,15 @@ export class CloudflareRealtimeHub implements RealtimeHub {
         }),
       );
       if (response.status !== 101) {
-        await markAgentWsDisconnected(
-          server.id,
-          connectedAt,
-          sessionId ?? undefined,
-        ).catch(() => {});
+        await markAgentWsDisconnected(server.id, started.sessionId).catch(
+          () => {},
+        );
       }
       return response;
     } catch (error) {
-      await markAgentWsDisconnected(
-        server.id,
-        connectedAt,
-        sessionId ?? undefined,
-      ).catch(() => {});
+      await markAgentWsDisconnected(server.id, started.sessionId).catch(
+        () => {},
+      );
       throw error;
     }
   }

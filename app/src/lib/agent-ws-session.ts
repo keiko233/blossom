@@ -11,9 +11,16 @@ import {
   type AgentWsUpdateStatuses,
   type AgentWsWelcomePayload,
 } from "@blossom/contracts/agent-ws";
+import { randomUUID } from "node:crypto";
 
 export interface AgentWsPeer {
   send(data: string): unknown;
+}
+
+/** The identity of one WebSocket handshake. */
+export interface AgentWsConnection {
+  connectedAt: Date;
+  sessionId: string;
 }
 
 /**
@@ -21,15 +28,8 @@ export interface AgentWsPeer {
  * database or a WebSocket adapter.
  */
 export interface AgentWsStore {
-  markConnected(serverId: string): Promise<{
-    connectedAt: Date;
-    sessionId: string;
-  }>;
-  markDisconnected(
-    serverId: string,
-    connectedAt: Date,
-    sessionId?: string,
-  ): Promise<void>;
+  markConnected(serverId: string): Promise<AgentWsConnection>;
+  markDisconnected(serverId: string, sessionId: string): Promise<void>;
   recordHello(serverId: string, hello: AgentWsHelloPayload): Promise<void>;
   recordConfigAck(
     serverId: string,
@@ -61,7 +61,7 @@ export interface AgentWsSession {
   serverId: string;
   welcome: AgentWsWelcomePayload;
   connectedAt: Date;
-  sessionId: string | undefined;
+  sessionId: string;
   store: AgentWsStore;
   welcomeSent: boolean;
 }
@@ -71,9 +71,7 @@ export interface OpenAgentWsSessionOptions {
   welcome: AgentWsWelcomePayload;
   store: AgentWsStore;
   /** Pre-recorded by a transport adapter that must persist before upgrading. */
-  connectedAt?: Date;
-  /** The fence recorded with `connectedAt`, when the transport has it. */
-  sessionId?: string;
+  session?: AgentWsConnection;
 }
 
 function logFailure(operation: string, error: unknown): void {
@@ -84,23 +82,20 @@ function logFailure(operation: string, error: unknown): void {
 export async function openAgentWsSession(
   options: OpenAgentWsSessionOptions,
 ): Promise<AgentWsSession> {
-  let connectedAt = options.connectedAt;
-  let sessionId = options.sessionId;
-  if (!connectedAt) {
+  let session = options.session;
+  if (!session) {
     try {
-      const started = await options.store.markConnected(options.serverId);
-      connectedAt = started.connectedAt;
-      sessionId = started.sessionId;
+      session = await options.store.markConnected(options.serverId);
     } catch (error) {
       logFailure("connect", error);
-      connectedAt = new Date();
+      session = { connectedAt: new Date(), sessionId: randomUUID() };
     }
   }
   return {
     serverId: options.serverId,
     welcome: options.welcome,
-    connectedAt,
-    sessionId,
+    connectedAt: session.connectedAt,
+    sessionId: session.sessionId,
     store: options.store,
     welcomeSent: false,
   };
@@ -244,11 +239,7 @@ export async function closeAgentWsSession(
   session: AgentWsSession,
 ): Promise<void> {
   try {
-    await session.store.markDisconnected(
-      session.serverId,
-      session.connectedAt,
-      session.sessionId,
-    );
+    await session.store.markDisconnected(session.serverId, session.sessionId);
   } catch (error) {
     logFailure("disconnect", error);
   }

@@ -182,10 +182,6 @@ describe("NitroRealtimeHub", () => {
     );
 
     await response.crossws.close(peer, {});
-    expect(store.markDisconnected).toHaveBeenCalledWith(
-      "srv-1",
-      new Date("2026-11-19T00:00:00.000Z"),
-      "session-1",
-    );
+    expect(store.markDisconnected).toHaveBeenCalledWith("srv-1", "session-1");
   });
 });

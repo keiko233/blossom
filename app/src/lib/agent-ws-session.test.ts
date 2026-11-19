@@ -228,11 +228,7 @@ describe("agent WebSocket session", () => {
     const peer = makePeer();
     const { session } = await open(store, peer);
     await closeAgentWsSession(session);
-    expect(store.markDisconnected).toHaveBeenCalledWith(
-      SERVER_ID,
-      CONNECTED_AT,
-      SESSION_ID,
-    );
+    expect(store.markDisconnected).toHaveBeenCalledWith(SERVER_ID, SESSION_ID);
   });
 
   it("dispatches ACME broker frames and contains persistence failures", async () => {
