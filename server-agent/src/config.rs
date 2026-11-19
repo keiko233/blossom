@@ -412,7 +412,15 @@ impl ConfigManager {
                 None,
             )
         })?;
-        let document = response.into_inner();
+        self.compile_document(response.into_inner())
+    }
+
+    /// Compiles one v3 document into the candidate or skips it when the active
+    /// config already matches. Shared by the HTTP poll and the WebSocket path.
+    fn compile_document(
+        &mut self,
+        document: types::GetAgentConfigV3Response,
+    ) -> Result<FetchStatus, ConfigError> {
         let policy = AgentPolicy {
             config_poll_interval_seconds: document
                 .agent

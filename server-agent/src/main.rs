@@ -38,7 +38,7 @@ use crate::acme::AcmeManager;
 use crate::acme::instant_backend::InstantAcmeBackend;
 use crate::acme::ports::DEFAULT_CHALLENGE_TIMEOUT;
 use crate::acme::solver_dns01::DnsAck;
-use crate::config::{AgentPolicy, CandidateConfig, ConfigManager, FetchStatus};
+use crate::config::{AgentPolicy, CandidateConfig, ConfigError, ConfigManager, FetchStatus};
 use crate::process::{ProcessState, SingBoxManager, check_config, resolve_binary, singbox_version};
 use crate::traffic::TrafficReporter;
 use crate::update::{
@@ -270,27 +270,7 @@ async fn main() -> Result<()> {
         AGENT_VERSION.to_string(),
         sing_box_version.clone(),
     )?;
-    let (mut manager, startup_error) = if config.has_active_config() {
-        match check_config(&bin, config.config_path()).await {
-            Ok(()) => {
-                match SingBoxManager::start(bin.clone(), config.config_path().clone()).await {
-                    Ok(manager) => (Some(manager), config.startup_error().map(str::to_owned)),
-                    Err(error) => {
-                        error!("failed to start last-known-good config: {error}");
-                        config.mark_needs_reapply();
-                        (None, Some(error.to_string()))
-                    }
-                }
-            }
-            Err(error) => {
-                error!("last-known-good config failed startup preflight: {error}");
-                config.mark_needs_reapply();
-                (None, Some(error.to_string()))
-            }
-        }
-    } else {
-        (None, config.startup_error().map(str::to_owned))
-    };
+    let (mut manager, startup_error) = start_last_known_good(&mut config, &bin).await;
     let api_endpoint = config.api_endpoint().clone();
     let mut reporter = match TrafficReporter::new(
         api_endpoint.addr.clone(),
@@ -637,17 +617,66 @@ async fn sync_config(
     status: &mut AgentStatus,
 ) -> Result<AgentPolicy> {
     let fetched = config.fetch().await.map_err(|error| {
-        status.config_state = "apply_failed";
-        status.observed_revision = config.observed_revision().map(str::to_owned);
-        status.error = Some(ReportedError {
-            phase: error.phase,
-            code: error.code,
-            message: error.message.clone(),
-            node_id: error.node_id.clone(),
-            occurred_at: Utc::now(),
-        });
+        record_config_error(config, status, &error);
         anyhow::Error::new(error)
     })?;
+    apply_fetched(config, manager, bin, status, fetched, RUNTIME_PROBATION).await
+}
+
+/// Records a failed reconcile so the next heartbeat or config acknowledgement
+/// reports it. Shared by the HTTP poll path and the WebSocket v2 path.
+fn record_config_error(config: &ConfigManager, status: &mut AgentStatus, error: &ConfigError) {
+    status.config_state = "apply_failed";
+    status.observed_revision = config.observed_revision().map(str::to_owned);
+    status.error = Some(ReportedError {
+        phase: error.phase,
+        code: error.code,
+        message: error.message.clone(),
+        node_id: error.node_id.clone(),
+        occurred_at: Utc::now(),
+    });
+}
+
+/// Starts sing-box from the committed config on disk, if there is one. A config
+/// that fails preflight or launch is marked for re-apply, so the next reconcile
+/// cannot skip it.
+async fn start_last_known_good(
+    config: &mut ConfigManager,
+    bin: &Path,
+) -> (Option<SingBoxManager>, Option<String>) {
+    if !config.has_active_config() {
+        return (None, config.startup_error().map(str::to_owned));
+    }
+    match check_config(bin, config.config_path()).await {
+        Ok(()) => {
+            match SingBoxManager::start(bin.to_path_buf(), config.config_path().clone()).await {
+                Ok(manager) => (Some(manager), config.startup_error().map(str::to_owned)),
+                Err(error) => {
+                    error!("failed to start last-known-good config: {error}");
+                    config.mark_needs_reapply();
+                    (None, Some(error.to_string()))
+                }
+            }
+        }
+        Err(error) => {
+            error!("last-known-good config failed startup preflight: {error}");
+            config.mark_needs_reapply();
+            (None, Some(error.to_string()))
+        }
+    }
+}
+
+/// Applies a compiled desired state with every safety invariant: candidate
+/// preflight, promotion, process replacement, probation, then commit or
+/// rollback. The HTTP poll path and the WebSocket v2 snapshot path both use it.
+async fn apply_fetched(
+    config: &mut ConfigManager,
+    manager: &mut Option<SingBoxManager>,
+    bin: &Path,
+    status: &mut AgentStatus,
+    fetched: FetchStatus,
+    probation: Duration,
+) -> Result<AgentPolicy> {
     let (policy, candidate) = match fetched {
         FetchStatus::Unchanged(policy) => {
             status.observed_revision = config.observed_revision().map(str::to_owned);
@@ -762,7 +791,7 @@ async fn sync_config(
         );
         config.mark_candidate_error(&candidate, "apply", &e.to_string());
         let rolled_back = config.rollback().unwrap_or(false);
-        restore_runtime(manager, bin, config, rolled_back).await;
+        restore_runtime(manager, bin, config, rolled_back, probation).await;
         status.config_state = "apply_failed";
         status.error = Some(ReportedError {
             phase: "apply",
@@ -776,7 +805,7 @@ async fn sync_config(
 
     // Only commit the candidate after the replacement process survives the
     // health window.
-    tokio::time::sleep(RUNTIME_PROBATION).await;
+    tokio::time::sleep(probation).await;
     if manager.as_ref().map(SingBoxManager::state) == Some(ProcessState::Running) {
         config.commit_applied(&candidate)?;
         config.set_runtime_confirmed(true);
@@ -790,7 +819,7 @@ async fn sync_config(
             "health",
             "candidate did not become healthy during probation",
         );
-        restore_runtime(manager, bin, config, rolled_back).await;
+        restore_runtime(manager, bin, config, rolled_back, probation).await;
         error!(
             revision = %candidate.revision,
             rolled_back,
@@ -1449,6 +1478,7 @@ async fn restore_runtime(
     bin: &Path,
     config: &mut ConfigManager,
     rolled_back: bool,
+    probation: Duration,
 ) {
     if !rolled_back || !config.has_active_config() {
         if let Some(current) = manager.take() {
@@ -1469,7 +1499,7 @@ async fn restore_runtime(
             return;
         }
     }
-    tokio::time::sleep(RUNTIME_PROBATION).await;
+    tokio::time::sleep(probation).await;
     config.set_runtime_confirmed(
         manager.as_ref().map(SingBoxManager::state) == Some(ProcessState::Running),
     );
