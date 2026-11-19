@@ -147,7 +147,8 @@ type LocalConnection = {
 
 type LocalV2Connection = {
   peer: CrosswsPeer;
-  session: Promise<AgentWsV2Session>;
+  /** `null` when the credential changed before the session could start. */
+  session: Promise<AgentWsV2Session | null>;
 };
 
 export type PtyRelayEvent =
@@ -208,16 +209,19 @@ export class NitroRealtimeHub implements RealtimeHub {
         headers: { Connection: "Upgrade", Upgrade: "websocket" },
       }),
       request,
-      this.createV2Hooks(server.id),
+      this.createV2Hooks(server.id, server.agentTokenHash),
     );
   }
 
-  private createV2Hooks(serverId: string): CrosswsHooks {
+  private createV2Hooks(serverId: string, tokenHash: string): CrosswsHooks {
     return {
       upgrade: () => ({ protocol: AGENT_WS_V2_SUBPROTOCOL }),
       open: async (peer) => {
         const session = (async () => {
-          const started = await this.v2Store.startSession(serverId);
+          const started = await this.v2Store.startSession(serverId, tokenHash);
+          if (!started) {
+            return null;
+          }
           return openAgentWsV2Session({
             serverId,
             sessionId: started.sessionId,
@@ -235,7 +239,10 @@ export class NitroRealtimeHub implements RealtimeHub {
         peers.add(connection);
         this.startBackplane();
         try {
-          await session;
+          if (!(await session)) {
+            this.removeV2Connection(serverId, peer);
+            peer.close(1008, "credential changed");
+          }
         } catch (error) {
           this.removeV2Connection(serverId, peer);
           const message =
@@ -250,7 +257,7 @@ export class NitroRealtimeHub implements RealtimeHub {
           return;
         }
         const session = await connection.session;
-        await session.handleText(message.text());
+        await session?.handleText(message.text());
       },
       close: async (peer) => {
         const connection = this.removeV2Connection(serverId, peer);
@@ -302,7 +309,7 @@ export class NitroRealtimeHub implements RealtimeHub {
     for (const connection of this.v2Connections.get(serverId) ?? []) {
       void connection.session
         .then((session) => {
-          if (session.welcomed) {
+          if (session?.welcomed) {
             connection.peer.send(frame);
           }
         })
