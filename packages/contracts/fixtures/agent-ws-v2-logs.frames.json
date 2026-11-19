@@ -1,0 +1,679 @@
+{
+  "$comment": "Agent WebSocket v2 log protocol fixtures (tail, search, context). `sender` is the side that produced the frame: `agent`, `control-plane` (agent wire), `browser` (admin log WebSocket requests) or `control-plane-browser` (admin log WebSocket results). `expect` is \"ok\" or the parse error code the receiver must report. Checked by packages/contracts/src/agent-ws-v2-logs.test.ts; the Rust implementation must produce the same results for the agent wire and the UI must for the browser wire.",
+  "subprotocol": "blossom-agent.v2",
+  "frames": [
+    {
+      "name": "control plane subscribes from the newest tail",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "logs.subscribe",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "subscriptionId": "a1b2-sub",
+          "filter": {},
+          "resume": null,
+          "limit": 200
+        }
+      }
+    },
+    {
+      "name": "control plane resumes a subscription with a filter",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "logs.subscribe",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "subscriptionId": "a1b2-sub",
+          "filter": {
+            "source": "sing-box",
+            "minLevel": "warn"
+          },
+          "resume": {
+            "generation": "18446744073709551615",
+            "seq": 17
+          },
+          "limit": 200
+        }
+      }
+    },
+    {
+      "name": "control plane unsubscribes a tail",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "logs.unsubscribe",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "subscriptionId": "a1b2-sub"
+        }
+      }
+    },
+    {
+      "name": "control plane cancels a search",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "logs.search.cancel",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "requestId": "req-search-1"
+        }
+      }
+    },
+    {
+      "name": "control plane requests a context window",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "logs.context",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "requestId": "req-ctx-1",
+          "generation": "18446744073709551615",
+          "seq": 9,
+          "before": 5,
+          "after": 5
+        }
+      }
+    },
+    {
+      "name": "control plane searches with a continuation",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "logs.search",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "requestId": "req-search-2",
+          "query": {
+            "text": "dial tcp",
+            "source": "sing-box",
+            "minLevel": "error",
+            "since": "2026-11-19T00:00:00.000Z",
+            "until": "2026-11-19T00:00:02.000Z"
+          },
+          "cursor": {
+            "generation": "18446744073709551615",
+            "pinnedSeq": 42,
+            "before": 30,
+            "floor": 0
+          },
+          "limit": 100
+        }
+      }
+    },
+    {
+      "name": "agent tail batch with a truncated sing-box record",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "logs.batch",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "subscriptionId": "tail-1",
+          "next": {
+            "generation": "18446744073709551615",
+            "seq": 2
+          },
+          "hasMore": false,
+          "records": [
+            {
+              "seq": 1,
+              "time": "2026-11-19T00:00:01.000Z",
+              "source": "agent",
+              "level": "info",
+              "processGeneration": 0,
+              "text": "server started",
+              "truncated": false
+            },
+            {
+              "seq": 2,
+              "time": "2026-11-19T00:00:01.000Z",
+              "source": "sing-box",
+              "level": "error",
+              "processGeneration": 2,
+              "text": "dial tcp 10.0.0.1:443 refused…",
+              "truncated": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "agent restart gap carries no range",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "logs.gap",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "subscriptionId": "tail-1",
+          "generation": "18446744073709551615",
+          "gap": {
+            "reason": "restarted",
+            "fromSeq": 0,
+            "toSeq": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "agent overwritten gap names its range",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "logs.gap",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "subscriptionId": "tail-1",
+          "generation": "18446744073709551615",
+          "gap": {
+            "reason": "overwritten",
+            "fromSeq": 3,
+            "toSeq": 8
+          }
+        }
+      }
+    },
+    {
+      "name": "agent search result with a continuation",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "logs.search.result",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "requestId": "req-search-2",
+          "generation": "18446744073709551615",
+          "pinnedSeq": 42,
+          "matches": [
+            {
+              "seq": 29,
+              "time": "2026-11-19T00:00:01.000Z",
+              "source": "sing-box",
+              "level": "error",
+              "processGeneration": 2,
+              "text": "dial tcp refused",
+              "truncated": false
+            }
+          ],
+          "next": {
+            "generation": "18446744073709551615",
+            "pinnedSeq": 42,
+            "before": 30,
+            "floor": 0
+          },
+          "coverage": {
+            "gap": null,
+            "searchableFrom": "2026-11-19T00:00:00.000Z",
+            "searchableTo": "2026-11-19T00:00:02.000Z"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent search result reports overwritten coverage",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "logs.search.result",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "requestId": "req-search-2",
+          "generation": "18446744073709551615",
+          "pinnedSeq": 42,
+          "matches": [],
+          "next": null,
+          "coverage": {
+            "gap": "overwritten",
+            "searchableFrom": null,
+            "searchableTo": null
+          }
+        }
+      }
+    },
+    {
+      "name": "agent context result",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "logs.context.result",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "requestId": "req-ctx-1",
+          "generation": "18446744073709551615",
+          "target": {
+            "seq": 9,
+            "time": "2026-11-19T00:00:01.000Z",
+            "source": "agent",
+            "level": "info",
+            "processGeneration": 0,
+            "text": "target",
+            "truncated": false
+          },
+          "before": [
+            {
+              "seq": 8,
+              "time": "2026-11-19T00:00:01.000Z",
+              "source": "agent",
+              "level": "info",
+              "processGeneration": 0,
+              "text": "before",
+              "truncated": false
+            }
+          ],
+          "after": [
+            {
+              "seq": 10,
+              "time": "2026-11-19T00:00:01.000Z",
+              "source": "agent",
+              "level": "info",
+              "processGeneration": 0,
+              "text": "after",
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "agent busy error names its request",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "logs.error",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "code": "busy",
+          "requestId": "req-search-2",
+          "message": "too many concurrent log searches"
+        }
+      }
+    },
+    {
+      "name": "agent error names both a subscription and a request",
+      "sender": "agent",
+      "expect": "invalid-payload",
+      "frame": {
+        "v": 2,
+        "type": "logs.error",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "code": "busy",
+          "subscriptionId": "tail-1",
+          "requestId": "req-search-2",
+          "message": "ambiguous"
+        }
+      }
+    },
+    {
+      "name": "agent sends a control-plane request",
+      "sender": "agent",
+      "expect": "invalid-direction",
+      "frame": {
+        "v": 2,
+        "type": "logs.subscribe",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "subscriptionId": "tail-1",
+          "filter": {},
+          "resume": null,
+          "limit": 200
+        }
+      }
+    },
+    {
+      "name": "control plane sends an agent result",
+      "sender": "control-plane",
+      "expect": "invalid-direction",
+      "frame": {
+        "v": 2,
+        "type": "logs.batch",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "subscriptionId": "tail-1",
+          "next": {
+            "generation": "18446744073709551615",
+            "seq": 0
+          },
+          "hasMore": false,
+          "records": []
+        }
+      }
+    },
+    {
+      "name": "restart gap with a sequence range",
+      "sender": "agent",
+      "expect": "invalid-payload",
+      "frame": {
+        "v": 2,
+        "type": "logs.gap",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "subscriptionId": "tail-1",
+          "generation": "18446744073709551615",
+          "gap": {
+            "reason": "restarted",
+            "fromSeq": 1,
+            "toSeq": 4
+          }
+        }
+      }
+    },
+    {
+      "name": "generation sent as a JSON number",
+      "sender": "agent",
+      "expect": "invalid-payload",
+      "frame": {
+        "v": 2,
+        "type": "logs.batch",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "subscriptionId": "tail-1",
+          "next": {
+            "generation": 7,
+            "seq": 0
+          },
+          "hasMore": false,
+          "records": []
+        }
+      }
+    },
+    {
+      "name": "generation above 64 bits",
+      "sender": "control-plane",
+      "expect": "invalid-payload",
+      "frame": {
+        "v": 2,
+        "type": "logs.context",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "requestId": "req-ctx-2",
+          "generation": "18446744073709551616",
+          "seq": 1,
+          "before": 0,
+          "after": 0
+        }
+      }
+    },
+    {
+      "name": "search range with since not before until",
+      "sender": "control-plane",
+      "expect": "invalid-payload",
+      "frame": {
+        "v": 2,
+        "type": "logs.search",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "requestId": "req-search-3",
+          "query": {
+            "since": "2026-11-19T00:00:02.000Z",
+            "until": "2026-11-19T00:00:01.000Z"
+          },
+          "cursor": null,
+          "limit": 10
+        }
+      }
+    },
+    {
+      "name": "search page above the 100 result bound",
+      "sender": "control-plane",
+      "expect": "invalid-payload",
+      "frame": {
+        "v": 2,
+        "type": "logs.search",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "requestId": "req-search-4",
+          "query": {
+            "text": "x"
+          },
+          "cursor": null,
+          "limit": 101
+        }
+      }
+    },
+    {
+      "name": "search text above 256 characters",
+      "sender": "control-plane",
+      "expect": "invalid-payload",
+      "frame": {
+        "v": 2,
+        "type": "logs.search",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "requestId": "req-search-5",
+          "query": {
+            "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "cursor": null,
+          "limit": 10
+        }
+      }
+    },
+    {
+      "name": "record sequence zero is invalid",
+      "sender": "agent",
+      "expect": "invalid-payload",
+      "frame": {
+        "v": 2,
+        "type": "logs.batch",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "subscriptionId": "tail-1",
+          "next": {
+            "generation": "18446744073709551615",
+            "seq": 0
+          },
+          "hasMore": false,
+          "records": [
+            {
+              "seq": 0,
+              "time": "2026-11-19T00:00:01.000Z",
+              "source": "agent",
+              "level": "info",
+              "processGeneration": 0,
+              "text": "x",
+              "truncated": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "browser subscribes with a client id",
+      "sender": "browser",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "logs.subscribe",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "subscriptionId": "tab-1",
+          "filter": {
+            "minLevel": "info"
+          },
+          "resume": null,
+          "limit": 200
+        }
+      }
+    },
+    {
+      "name": "browser unsubscribes its tail",
+      "sender": "browser",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "logs.unsubscribe",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "subscriptionId": "tab-1"
+        }
+      }
+    },
+    {
+      "name": "browser searches its own request id",
+      "sender": "browser",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "logs.search",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "requestId": "search-tab-1",
+          "query": {
+            "text": "Refused",
+            "since": "2026-11-19T00:00:00.000Z"
+          },
+          "cursor": null,
+          "limit": 100
+        }
+      }
+    },
+    {
+      "name": "browser sends a result type",
+      "sender": "browser",
+      "expect": "unknown-type",
+      "frame": {
+        "v": 2,
+        "type": "logs.batch",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "subscriptionId": "tab-1",
+          "next": {
+            "generation": "18446744073709551615",
+            "seq": 0
+          },
+          "hasMore": false,
+          "records": []
+        }
+      }
+    },
+    {
+      "name": "browser sends an unknown type",
+      "sender": "browser",
+      "expect": "unknown-type",
+      "frame": {
+        "v": 2,
+        "type": "logs.level.set",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "source": "agent"
+        }
+      }
+    },
+    {
+      "name": "browser sends an empty search text",
+      "sender": "browser",
+      "expect": "invalid-payload",
+      "frame": {
+        "v": 2,
+        "type": "logs.search",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "requestId": "search-tab-2",
+          "query": {
+            "text": ""
+          },
+          "cursor": null,
+          "limit": 10
+        }
+      }
+    },
+    {
+      "name": "browser uses envelope version 1",
+      "sender": "browser",
+      "expect": "unsupported-version",
+      "frame": {
+        "v": 1,
+        "type": "logs.subscribe",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {}
+      }
+    },
+    {
+      "name": "control plane sends a dropped-range gap to the browser",
+      "sender": "control-plane-browser",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "logs.gap",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "subscriptionId": "tab-1",
+          "generation": "18446744073709551615",
+          "gap": {
+            "reason": "dropped",
+            "fromSeq": 120,
+            "toSeq": 180
+          }
+        }
+      }
+    },
+    {
+      "name": "control plane sends a timeout error to the browser",
+      "sender": "control-plane-browser",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "logs.error",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "code": "timeout",
+          "requestId": "search-tab-1",
+          "message": "the agent did not answer in time"
+        }
+      }
+    },
+    {
+      "name": "dropped gap with sequence zero is invalid",
+      "sender": "control-plane-browser",
+      "expect": "invalid-payload",
+      "frame": {
+        "v": 2,
+        "type": "logs.gap",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "subscriptionId": "tab-1",
+          "generation": "18446744073709551615",
+          "gap": {
+            "reason": "dropped",
+            "fromSeq": 0,
+            "toSeq": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "control plane sends a browser request to the browser",
+      "sender": "control-plane-browser",
+      "expect": "unknown-type",
+      "frame": {
+        "v": 2,
+        "type": "logs.search",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "requestId": "search-tab-1",
+          "query": {},
+          "cursor": null,
+          "limit": 1
+        }
+      }
+    }
+  ]
+}

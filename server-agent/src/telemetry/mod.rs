@@ -1,6 +1,9 @@
 mod linux;
 mod ports;
-mod types;
+pub(crate) mod types;
+
+pub(crate) use linux::Linux;
+pub(crate) use ports::LinuxRead;
 
 use std::{
     net::{Ipv4Addr, Ipv6Addr},
@@ -13,11 +16,7 @@ use tokio::time::Instant;
 
 use crate::ws::codec::{AgentWsFrame, ReservedFrame};
 
-use self::{
-    linux::Linux,
-    ports::LinuxRead,
-    types::{Listener, Sample, Snapshot, Usage},
-};
+use self::types::{Listener, Sample, Snapshot, Usage};
 
 #[derive(Default)]
 pub(crate) struct Collector {
@@ -192,7 +191,7 @@ fn cpu_quota(quota: &str, period: &str) -> Option<f64> {
     (quota > 0 && period > 0).then_some(quota as f64 / period as f64)
 }
 
-fn sample(linux: &impl LinuxRead) -> Sample {
+pub(crate) fn sample(linux: &impl LinuxRead) -> Sample {
     let before = linux.text("/proc/stat").and_then(|input| cpu(&input));
     std::thread::sleep(Duration::from_millis(150));
     let after = linux.text("/proc/stat").and_then(|input| cpu(&input));
@@ -286,7 +285,7 @@ fn listener(line: &str, protocol: &'static str, ipv6: bool) -> Option<Listener> 
     })
 }
 
-fn inspect(linux: &impl LinuxRead) -> Snapshot {
+pub(crate) fn inspect(linux: &impl LinuxRead) -> Snapshot {
     let mut listeners = Vec::new();
     let mut partial = false;
     for (path, protocol, ipv6) in [

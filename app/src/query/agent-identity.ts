@@ -7,10 +7,13 @@ import { fromInput, fromResult } from "@/lib/admin-audit";
 import { adminAudit } from "@/lib/admin-audit-middleware";
 import {
   createEnrollmentGrantInputSchema,
+  ENROLLMENT_GRANT_TTL_MINUTES,
   revokeAgentIdentityInputSchema,
   revokeEnrollmentGrantInputSchema,
 } from "@/lib/agent-enrollment";
 import {
+  AGENT_INSTALLER_REQUIRED_CAPABILITIES,
+  isAgentReleaseCompatible,
   parseApprovedAgentReleases,
   selectApprovedAgentRelease,
 } from "@/lib/agent-installer-release";
@@ -33,6 +36,11 @@ import {
 
 /** TanStack Query key for one server's agent identity state. */
 export const AGENT_IDENTITY_QUERY_KEY = ["admin", "agent-identity"] as const;
+/** TanStack Query key for the control plane's approved installer catalog. */
+export const AGENT_INSTALLER_OPTIONS_QUERY_KEY = [
+  "admin",
+  "agent-installer-options",
+] as const;
 
 export const getAgentIdentityState = createServerFn({ method: "GET" })
   .validator(z.object({ serverId: z.string().min(1).max(64) }))
@@ -44,6 +52,29 @@ export const getAgentIdentityState = createServerFn({ method: "GET" })
     ]);
     return { identities, grants };
   });
+
+/**
+ * Approved installer releases and the grant lifetime the UI may display. An
+ * empty catalog is a normal state: it disables installer actions instead of
+ * offering an unapproved build.
+ */
+export const getAgentInstallerOptions = createServerFn({
+  method: "GET",
+}).handler(async () => {
+  await ensureAdmin();
+  const releases = parseApprovedAgentReleases(APPROVED_AGENT_RELEASES);
+  return {
+    releases: releases.map((release) => ({
+      version: release.version,
+      tag: release.tag,
+      singBoxVersion: release.singBox.version,
+      capabilities: release.agent.capabilities,
+      compatible: isAgentReleaseCompatible(release),
+    })),
+    requiredCapabilities: [...AGENT_INSTALLER_REQUIRED_CAPABILITIES],
+    grantLifetimeMinutes: ENROLLMENT_GRANT_TTL_MINUTES,
+  };
+});
 
 /**
  * Issues a one-time enrollment grant. The plaintext grant is returned once:

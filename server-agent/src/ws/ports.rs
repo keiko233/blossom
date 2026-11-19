@@ -20,6 +20,9 @@ pub enum WsError {
     /// The upgrade was refused with an HTTP status (404/426/501 from an older
     /// control plane or a proxy that does not forward upgrades).
     Rejected { status: u16 },
+    /// The credential is valid, but the authoritative control plane confirmed
+    /// the server is disabled. This is the only positive disablement signal.
+    ServerDisabled { status: u16 },
     /// TCP/TLS/WebSocket I/O failed before or during the session.
     Io(String),
     /// The peer violated the protocol (bad frame, bad UTF-8, oversized message).
@@ -32,6 +35,9 @@ pub enum WsError {
     /// subprotocol, so it does not speak it (an older control plane, or a
     /// proxy that strips the header).
     SubprotocolMismatch,
+    /// A machine access token could not be obtained. The agent keeps its
+    /// last-known-good configuration and retries with bounded backoff.
+    Auth(String),
 }
 
 impl WsError {
@@ -48,6 +54,9 @@ impl WsError {
     pub fn describe(&self) -> String {
         match self {
             Self::Rejected { status } => format!("upgrade rejected with HTTP {status}"),
+            Self::ServerDisabled { status } => {
+                format!("control plane confirmed the server is disabled with HTTP {status}")
+            }
             Self::Io(message) => format!("websocket I/O error: {message}"),
             Self::Protocol(message) => format!("websocket protocol error: {message}"),
             Self::Closed => "websocket closed".to_string(),
@@ -55,6 +64,7 @@ impl WsError {
             Self::SubprotocolMismatch => {
                 "control plane did not accept the required websocket subprotocol".to_string()
             }
+            Self::Auth(message) => format!("agent authentication unavailable: {message}"),
         }
     }
 }

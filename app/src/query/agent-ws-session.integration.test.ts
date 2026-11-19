@@ -194,26 +194,22 @@ describe.skipIf(!pgUrl).each(drivers)(
         Array.from({ length: 12 }, () => startAgentWsSession("srv1", database)),
       );
       const ids = new Set(sessions.map((session) => session.sessionId));
+      const connectedAt = new Set(
+        sessions.map((session) => session.connectedAt.getTime()),
+      );
       expect(ids.size).toBe(12);
+      expect(connectedAt.size).toBe(12);
       expect(ids.has((await markerOf("srv1")).ws_session_id!)).toBe(true);
     });
 
     it("v1 disconnect clears only the handshake that is still current", async () => {
-      const v1Connected = await markAgentWsConnected("srv1", database);
+      const v1 = await markAgentWsConnected("srv1", database);
       const v2 = await startAgentWsSession("srv1", database);
 
-      await markAgentWsDisconnected(
-        "srv1",
-        v1Connected.sessionId,
-        database,
-      );
+      await markAgentWsDisconnected("srv1", v1.sessionId, database);
       expect((await markerOf("srv1")).ws_session_id).toBe(v2.sessionId);
 
-      await markAgentWsDisconnected(
-        "srv1",
-        v2.sessionId,
-        database,
-      );
+      await markAgentWsDisconnected("srv1", v2.sessionId, database);
       expect(await markerOf("srv1")).toMatchObject({
         ws_session_id: null,
         transport_mode: "http",

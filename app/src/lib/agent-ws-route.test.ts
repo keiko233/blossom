@@ -2,10 +2,13 @@ import type { AgentWsWelcomePayload } from "@blossom/contracts/agent-ws";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Server } from "@/db/proxy-schema";
+import { AgentAuthError } from "@/lib/agent-oauth";
 import { hashAgentToken } from "@/lib/agent-token";
 
 import {
+  AGENT_WS_DISABLED_STATE_HEADER,
   authenticateAgentWsRequest,
+  authenticateDisabledAgentWsRequest,
   handleAgentWsRequest,
 } from "./agent-ws-route";
 import type { RealtimeHub } from "./realtime-hub-types";
@@ -92,6 +95,7 @@ describe("agent WebSocket route", () => {
       request({ authorization: "Bearer fake-token", upgrade: "websocket" }),
       {
         authenticate: async () => null,
+        authenticateDisabled: async () => null,
         buildWelcome: async () => welcome,
         wakeCertificateIssuance: async () => undefined,
         hub,
@@ -102,6 +106,159 @@ describe("agent WebSocket route", () => {
       (response as Response & { crossws?: unknown }).crossws,
     ).toBeDefined();
     expect(hub.acceptAgent).not.toHaveBeenCalled();
+  });
+
+  it("returns a non-session disable signal only for a current v2 credential", async () => {
+    const disabled = { ...server, enabled: false } as Server;
+    expect(
+      await authenticateDisabledAgentWsRequest(
+        request({ authorization: "Bearer fake-token" }),
+        async () => null,
+        async () => null,
+      ),
+    ).toBeNull();
+    expect(
+      await authenticateDisabledAgentWsRequest(
+        request({ authorization: "Bearer fake-token" }),
+        async () => disabled,
+        async () => null,
+      ),
+    ).toEqual({
+      server: disabled,
+      credential: {
+        kind: "static",
+        tokenHash: hashAgentToken("fake-token"),
+      },
+    });
+    expect(
+      await authenticateDisabledAgentWsRequest(
+        request({ authorization: "Bearer fake-token" }),
+        async () => server,
+        async () => null,
+      ),
+    ).toBeNull();
+
+    expect(
+      await authenticateDisabledAgentWsRequest(
+        request({ authorization: "Bearer machine-token" }),
+        async () => null,
+        async () => ({
+          serverId: "srv-1",
+          identityId: "identity-2",
+          generation: 3,
+          identityStatus: "active",
+          clientId: "agent_test",
+          expiresAt: 1_900_000_000,
+        }),
+        async () => disabled,
+      ),
+    ).toEqual({
+      server: disabled,
+      credential: {
+        kind: "oauth",
+        identityId: "identity-2",
+        generation: 3,
+        clientId: "agent_test",
+        expiresAt: 1_900_000_000,
+        identityStatus: "active",
+      },
+    });
+  });
+
+  it("rejects bad static, pending, and disabled-client credentials with no disable body", async () => {
+    const disabled = { ...server, enabled: false } as Server;
+    const pending = {
+      serverId: "srv-1",
+      identityId: "identity-2",
+      generation: 3,
+      identityStatus: "pending",
+      clientId: "agent_test",
+      expiresAt: 1_900_000_000,
+    } as const;
+    const cases: Array<{
+      authorization: string;
+      verify?: () => Promise<typeof pending>;
+    }> = [
+      { authorization: "Bearer stale-token" },
+      { authorization: "Bearer no-token", verify: async () => pending },
+      { authorization: "Bearer machine-token", verify: async () => pending },
+    ];
+    for (const item of cases) {
+      expect(
+        await authenticateDisabledAgentWsRequest(
+          request({ authorization: item.authorization }),
+          async () => null,
+          item.verify ?? (async () => null),
+          async () => disabled,
+        ),
+      ).toBeNull();
+    }
+    expect(
+      await authenticateDisabledAgentWsRequest(
+        request({ authorization: "Bearer machine-token" }),
+        async () => null,
+        async () => {
+          throw new AgentAuthError("client_disabled");
+        },
+        async () => disabled,
+      ),
+    ).toBeNull();
+  });
+
+  it("distinguishes a confirmed disabled v2 credential from an ordinary 401", async () => {
+    const hub = makeHub();
+    const buildWelcome = vi.fn(async () => welcome);
+    const wakeCertificateIssuance = vi.fn(async () => undefined);
+    const upgradeRequest = request({
+      authorization: "Bearer fake-token",
+      upgrade: "websocket",
+      "sec-websocket-protocol": "blossom-agent.v2",
+    });
+    const base = {
+      authenticate: async () => null,
+      buildWelcome,
+      wakeCertificateIssuance,
+      hub,
+    };
+    const disabled = { ...server, enabled: false } as Server;
+
+    const confirmed = await handleAgentWsRequest(upgradeRequest, {
+      ...base,
+      authenticateDisabled: async () => authenticated(disabled),
+    });
+    expect(confirmed.status).toBe(409);
+    expect(confirmed.headers.get(AGENT_WS_DISABLED_STATE_HEADER)).toBe(
+      "disabled",
+    );
+    expect(await confirmed.text()).toBe("Server disabled");
+    expect(buildWelcome).not.toHaveBeenCalled();
+    expect(wakeCertificateIssuance).not.toHaveBeenCalled();
+    expect(hub.acceptAgent).not.toHaveBeenCalled();
+    expect(hub.acceptAgentV2).not.toHaveBeenCalled();
+
+    const disabledForV1 = authenticated(disabled);
+    const authenticateDisabled = vi.fn(async () => disabledForV1);
+    const legacy = await handleAgentWsRequest(
+      request({
+        authorization: "Bearer fake-token",
+        upgrade: "websocket",
+        "sec-websocket-protocol": "blossom-agent.v1",
+      }),
+      {
+        ...base,
+        authenticateDisabled,
+      },
+    );
+    expect(legacy.status).toBe(401);
+    expect(legacy.headers.get(AGENT_WS_DISABLED_STATE_HEADER)).toBeNull();
+    expect(authenticateDisabled).not.toHaveBeenCalled();
+
+    const rejected = await handleAgentWsRequest(upgradeRequest, {
+      ...base,
+      authenticateDisabled: async () => null,
+    });
+    expect(rejected.status).toBe(401);
+    expect(rejected.headers.get(AGENT_WS_DISABLED_STATE_HEADER)).toBeNull();
   });
 
   it("maps an OAuth machine token to its identity server and generation", async () => {
@@ -142,6 +299,7 @@ describe("agent WebSocket route", () => {
 
     const response = await handleAgentWsRequest(upgradeRequest, {
       authenticate: async () => authenticated(),
+      authenticateDisabled: async () => null,
       buildWelcome,
       wakeCertificateIssuance: async () => undefined,
       hub,
@@ -160,6 +318,7 @@ describe("agent WebSocket route", () => {
     const hub = makeHub();
     const plain = await handleAgentWsRequest(request(), {
       authenticate: async () => authenticated(),
+      authenticateDisabled: async () => null,
       buildWelcome: async () => welcome,
       wakeCertificateIssuance: async () => undefined,
       hub,
@@ -172,6 +331,7 @@ describe("agent WebSocket route", () => {
       request({ upgrade: "websocket" }),
       {
         authenticate: async () => authenticated(),
+        authenticateDisabled: async () => null,
         buildWelcome: async () => welcome,
         wakeCertificateIssuance: async () => undefined,
         hub,
@@ -187,6 +347,7 @@ describe("agent WebSocket route", () => {
 
     await handleAgentWsRequest(upgradeRequest, {
       authenticate: async () => authenticated(),
+      authenticateDisabled: async () => null,
       buildWelcome,
       wakeCertificateIssuance: async () => undefined,
       hub,
@@ -212,6 +373,7 @@ describe("agent WebSocket route", () => {
             identityStatus: "active",
           },
         }),
+        authenticateDisabled: async () => null,
         buildWelcome: async () => welcome,
         wakeCertificateIssuance: async () => undefined,
         hub,
@@ -235,6 +397,7 @@ describe("agent WebSocket route", () => {
 
     await handleAgentWsRequest(upgradeRequest, {
       authenticate: async () => authenticated(),
+      authenticateDisabled: async () => null,
       buildWelcome,
       wakeCertificateIssuance: async () => undefined,
       hub,
@@ -258,6 +421,7 @@ describe("agent WebSocket route", () => {
       }),
       {
         authenticate: async () => authenticated(),
+        authenticateDisabled: async () => null,
         buildWelcome: async () => welcome,
         wakeCertificateIssuance: async () => undefined,
         hub,

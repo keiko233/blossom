@@ -1,8 +1,11 @@
-//! The protocol v2 agent runtime, selected with `--ws-protocol v2`.
+//! The protocol v2 agent runtime, the default for both credential modes.
 //!
 //! The WebSocket is the only control path. Configuration arrives as snapshots
 //! that are verified before they reach the core, status and traffic travel
 //! over the same session, and nothing polls the HTTP agent API.
+//! `--ws-protocol legacy` is the explicit compatibility opt-in for the v1
+//! transport; this runtime never substitutes an HTTP poll when the socket is
+//! unavailable.
 //!
 //! The core loop owns sing-box, the candidate and last-known-good configs,
 //! and the updater. It runs one apply at a time, and the session never waits
@@ -10,11 +13,14 @@
 //! sing-box restart. Status is published on change, so the session can send
 //! `agent.status` as soon as the core's state moves.
 //!
-//! Not yet served by v2, so none is advertised: PTY, ACME, and telemetry. The
-//! update targets arrive as `updatePolicy` in `welcome` and in
-//! `agent.status.ack`, so v2 applies them without `update.trigger`.
+//! Not yet served by v2, so neither is advertised: PTY and ACME. Telemetry is
+//! served on Linux through the additive v2 subscription frames. The update
+//! targets arrive as `updatePolicy` in `welcome` and in `agent.status.ack`, so
+//! v2 applies them without `update.trigger`.
 
+use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Result, bail};
@@ -25,6 +31,9 @@ use tracing::{error, info, warn};
 
 use crate::acme::solver_dns01::DnsAck;
 use crate::config::{AgentPolicy, ConfigError, ConfigManager};
+use crate::log_policy::{LogPolicy, PolicyAction, PolicyRequest, SOURCES, Source as PolicySource};
+use crate::logs::{LogStore, SecretScope};
+use crate::oauth::OAuthTokenProvider;
 use crate::process::{ProcessState, SingBoxManager, resolve_binary, singbox_version};
 use crate::traffic::TrafficReporter;
 use crate::update::{AGENT_RESTART_EXIT_CODE, UpdateManager, supports_singbox_version};
@@ -34,22 +43,24 @@ use crate::ws::codec::{AgentWsFrame, frame_type};
 use crate::ws::ports::WsCommand;
 use crate::ws::v2::adapter::V2Connector;
 use crate::ws::v2::codec::{
-    AckStage, ConfigIdentifier, ConfigState, RuntimeState, StatusError, UpdatePolicy,
+    AckStage, ConfigIdentifier, ConfigState, LOGS_SEARCH_CAPABILITY, LOGS_TAIL_CAPABILITY,
+    LogPolicyAck, RuntimeState, StatusError, UpdatePolicy,
 };
 use crate::ws::v2::link::{self, LinkOptions};
 use crate::ws::v2::session::{
-    self, ApplyJob, ApplyOutcome, ApplyResult, Command, CoreStatus, HelloIdentity, SnapshotRefusal,
+    self, ApplyJob, ApplyOutcome, ApplyResult, Command, CoreStatus, HelloIdentity, LogPolicyJob,
+    SnapshotRefusal,
 };
+use crate::ws::v2::telemetry;
 use crate::ws::v2::traffic::run_reporter;
 use crate::{
-    AGENT_BUILD_ID, AGENT_VERSION, AgentStatus, Args, ReportedError, apply_fetched,
-    apply_update_trigger, certificate_deployment, handle_pty_event, handle_pty_frame,
-    new_acme_manager, new_pty_manager, new_update_manager, reconcile_updates, record_config_error,
-    shutdown_signal, start_last_known_good, update_status_payload_from,
+    AGENT_BUILD_ID, AGENT_VERSION, AgentStatus, Args, AuthMode, ReportedError, ServiceStartup,
+    apply_fetched, apply_update_trigger, certificate_deployment, handle_pty_event,
+    handle_pty_frame, new_acme_manager, new_pty_manager, new_update_manager, reconcile_updates,
+    record_config_error, shutdown_signal, start_last_known_good, update_status_payload_from,
 };
 
-/// What v2 advertises in `hello`. Telemetry and log policy remain v1-only, and
-/// `ws-v1` is not spoken on this transport.
+/// What v2 advertises in `hello`; `ws-v1` is not spoken on this transport.
 const V2_CAPABILITIES: &[&str] = &[
     "config-v3",
     "managed-tls-v3",
@@ -57,8 +68,11 @@ const V2_CAPABILITIES: &[&str] = &[
     "atomic-config-rollback",
     "connection-stream-traffic",
     "acme-v1",
+    "log-policy-v1",
     "ws-v2",
     "traffic-v2",
+    LOGS_TAIL_CAPABILITY,
+    LOGS_SEARCH_CAPABILITY,
 ];
 const V2_PTY_CAPABILITY: &str = "pty-v2";
 
@@ -70,6 +84,10 @@ fn v2_capabilities(pty_enabled: bool) -> Vec<String> {
     if pty_enabled {
         capabilities.push(V2_PTY_CAPABILITY.to_string());
     }
+    if telemetry::supported() {
+        capabilities.push("telemetry-v2".to_string());
+        capabilities.push("telemetry-history-v2".to_string());
+    }
     capabilities
 }
 const WS_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -80,21 +98,33 @@ const RUNTIME_SAMPLE: Duration = Duration::from_secs(5);
 const MAX_STATUS_MESSAGE_CHARS: usize = 4096;
 
 /// Runs the v2 agent until shutdown or until a self-update asks for a restart.
-pub async fn run(args: &Args) -> Result<()> {
+pub async fn run(
+    args: &Args,
+    startup: &ServiceStartup,
+    logs: LogStore,
+    log_policy: Arc<LogPolicy>,
+) -> Result<()> {
     if !args.ws_enabled {
-        bail!("--ws-protocol v2 is the WebSocket path and cannot run with --ws-enabled=false");
+        bail!("protocol v2 is the WebSocket path and cannot run with --ws-enabled=false");
     }
-    let url = ws_url(&args.url)?;
-    let transport = V2Connector::new(WsTransportConfig {
-        url: url.clone(),
-        token: SensitiveHeader::bearer(&args.token)?,
-        connect_timeout: WS_CONNECT_TIMEOUT,
-    });
+    let url = ws_url(&startup.url)?;
+    let transport = match &startup.auth {
+        AuthMode::Static(token) => V2Connector::new(WsTransportConfig {
+            url: url.clone(),
+            token: SensitiveHeader::bearer(token)?,
+            connect_timeout: WS_CONNECT_TIMEOUT,
+        }),
+        AuthMode::OAuth(path) => {
+            let provider =
+                Arc::new(OAuthTokenProvider::load(path, &startup.url, logs.clone()).await?);
+            V2Connector::with_bearer(url.clone(), provider, WS_CONNECT_TIMEOUT)
+        }
+    };
     info!("agent websocket protocol v2 selected; connecting to {url}");
 
     // Nothing here calls the HTTP agent API. The client only supplies the
     // configuration manager's type, and it is never used.
-    let client = crate::client::new_client(&args.url, &args.token)?;
+    let client = crate::client::new_client(&startup.url, "v2-does-not-use-http")?;
     let bin = resolve_binary(args.sing_box_path.clone());
     let mut sing_box_version = singbox_version(&bin).await;
     if let Some(version) = sing_box_version.as_deref()
@@ -103,7 +133,9 @@ pub async fn run(args: &Args) -> Result<()> {
         warn!("sing-box {version} is too old for connection-stream traffic");
     }
     let state_dir = args.state_dir.clone();
-    let mut config = ConfigManager::new(client, state_dir.clone())?;
+    let mut config =
+        ConfigManager::new(client, state_dir.clone(), logs.clone(), log_policy.clone())?;
+    logs.replace_secrets(SecretScope::StatsApi, config.api_endpoint().secret.iter())?;
     let mut updates = new_update_manager(args, sing_box_version.clone())?;
 
     // The committed config starts sing-box before the network is touched, so
@@ -130,12 +162,15 @@ pub async fn run(args: &Args) -> Result<()> {
         sing_box_version.as_deref(),
         &updates,
     );
+    let mut log_policy_errors = BTreeMap::new();
+    let initial_log_acks = log_policy_acks(&log_policy, &log_policy_errors);
     let (mut session_ports, mut core, traffic_ports) = session::channels(
         initial.clone(),
         UpdatePolicy {
             desired_agent_version: None,
             desired_sing_box_version: None,
         },
+        initial_log_acks.clone(),
     );
     let mut published = Some(initial);
     let (pty_event_sender, mut pty_events) = tokio::sync::mpsc::channel(64);
@@ -153,6 +188,7 @@ pub async fn run(args: &Args) -> Result<()> {
         }));
     }
     let acme = new_acme_manager(args, core.outbound.clone());
+    let mut published_log = Some(initial_log_acks);
 
     let cancel = CancellationToken::new();
     let options = LinkOptions::new(HelloIdentity {
@@ -161,6 +197,7 @@ pub async fn run(args: &Args) -> Result<()> {
         capabilities,
     });
     let link_cancel = cancel.clone();
+    let link_logs = logs.clone();
     let link_task = tokio::spawn(async move {
         link::run(
             &transport,
@@ -168,6 +205,7 @@ pub async fn run(args: &Args) -> Result<()> {
             &options,
             &RandomJitter,
             &link_cancel,
+            &link_logs,
         )
         .await;
     });
@@ -191,6 +229,9 @@ pub async fn run(args: &Args) -> Result<()> {
     let mut pty_tick = tokio::time::interval(Duration::from_secs(15));
     pty_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     pty_tick.tick().await;
+    let mut log_policy_tick = tokio::time::interval(Duration::from_secs(5));
+    log_policy_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    log_policy_tick.tick().await;
 
     loop {
         tokio::select! {
@@ -206,6 +247,24 @@ pub async fn run(args: &Args) -> Result<()> {
                 if core.results.send(result).await.is_err() {
                     break;
                 }
+            }
+            Some(()) = core.disabled.recv() => {
+                apply_administrative_disable(&mut config, &mut manager, &bin).await;
+            }
+            job = core.log_jobs.recv() => {
+                let Some(job) = job else {
+                    break;
+                };
+                apply_log_policy_job(
+                    &log_policy,
+                    &mut config,
+                    &mut manager,
+                    &bin,
+                    probation,
+                    job,
+                    &mut log_policy_errors,
+                )
+                .await;
             }
             changed = core.policy.changed() => {
                 if changed.is_err() {
@@ -313,6 +372,16 @@ pub async fn run(args: &Args) -> Result<()> {
                     }
                 }
             }
+            _ = log_policy_tick.tick() => {
+                crate::log_policy_maintenance(
+                    &log_policy,
+                    &mut config,
+                    &mut manager,
+                    &bin,
+                    probation,
+                )
+                .await;
+            }
             _ = runtime_tick.tick() => {}
         }
         publish(
@@ -325,6 +394,12 @@ pub async fn run(args: &Args) -> Result<()> {
                 sing_box_version.as_deref(),
                 &updates,
             ),
+        );
+        publish_log_acks(
+            &core.log_acks,
+            &mut published_log,
+            &log_policy,
+            &log_policy_errors,
         );
     }
 
@@ -340,6 +415,136 @@ pub async fn run(args: &Args) -> Result<()> {
     }
     info!("agent stopped (websocket protocol v2)");
     Ok(())
+}
+
+/// A positive disablement: stop the serving process, atomically replace the
+/// active and last-known-good configs with a local no-inbound teardown, and
+/// launch that teardown. The persisted disabled flag prevents startup from
+/// serving the old inbound after a crash or restart. Only a later enabled
+/// authoritative configuration can clear it.
+async fn apply_administrative_disable(
+    config: &mut ConfigManager,
+    manager: &mut Option<SingBoxManager>,
+    bin: &Path,
+) {
+    if config.administratively_disabled() {
+        return;
+    }
+    let candidate = match config.apply_administrative_teardown() {
+        Ok(candidate) => candidate,
+        Err(error) => {
+            error!("failed to persist the administrative teardown: {error:#}");
+            return;
+        }
+    };
+    // Persist the teardown before stopping the process that still serves the
+    // previous memory configuration. A failed write therefore leaves the proxy
+    // untouched and the signal can safely be retried by the next link.
+    if let Some(current) = manager.take() {
+        current.shutdown().await;
+    }
+    match SingBoxManager::start(bin.to_path_buf(), config.config_path().clone()).await {
+        Ok(started) => {
+            manager.replace(started);
+            info!(
+                revision = %candidate.revision,
+                "control plane disabled this server; proxy inbound teardown applied"
+            );
+        }
+        Err(error) => {
+            warn!("administrative teardown persisted but sing-box did not start: {error}");
+        }
+    }
+}
+
+/// Applies the desired levels from one control-plane snapshot through the
+/// existing local policy API. The core loop owns this work, so it is serialized
+/// with configuration reconciliation and sing-box probation.
+async fn apply_log_policy_job(
+    policy: &LogPolicy,
+    config: &mut ConfigManager,
+    manager: &mut Option<SingBoxManager>,
+    bin: &Path,
+    probation: Duration,
+    job: LogPolicyJob,
+    errors: &mut BTreeMap<PolicySource, String>,
+) {
+    for desired in job.sources {
+        let source: PolicySource = desired.source.into();
+        let mut request = PolicyRequest::new(source, desired.revision, desired.level.into());
+        request.baseline = desired.baseline.into();
+        request.deadline = desired.deadline;
+        match policy.request_snapshot(request, Utc::now()) {
+            Ok(decision) => {
+                errors.remove(&source);
+                let Some(action) = decision.action else {
+                    continue;
+                };
+                match action {
+                    PolicyAction::Agent(level) => {
+                        policy.apply_agent(level, Utc::now());
+                    }
+                    PolicyAction::SingBox(overlay) => {
+                        if !config.has_active_config() {
+                            // The request stays pending and the maintenance
+                            // tick retries once a validated config exists.
+                            continue;
+                        }
+                        let result = crate::apply_singbox_log_overlay(
+                            config, manager, bin, overlay, probation,
+                        )
+                        .await;
+                        policy.record(PolicySource::SingBox, overlay.effective, result, Utc::now());
+                    }
+                }
+            }
+            Err(error) => {
+                errors.insert(
+                    source,
+                    error.to_string().chars().take(512).collect::<String>(),
+                );
+            }
+        }
+    }
+}
+
+/// The status the core publishes to the session for both sources. Errors are
+/// bounded and never include log lines or configuration bodies.
+fn log_policy_acks(
+    policy: &LogPolicy,
+    errors: &BTreeMap<PolicySource, String>,
+) -> Vec<LogPolicyAck> {
+    let now = Utc::now();
+    SOURCES
+        .iter()
+        .map(|source| {
+            let status = policy.status(*source, now);
+            LogPolicyAck {
+                source: (*source).into(),
+                source_revision: status.revision,
+                requested: status.requested.into(),
+                baseline: status.baseline.into(),
+                effective: status.effective.into(),
+                deadline: status.deadline,
+                error: errors.get(source).cloned().or(status.error),
+                pending: status.pending || errors.contains_key(source),
+            }
+        })
+        .collect()
+}
+
+fn publish_log_acks(
+    sender: &watch::Sender<Vec<LogPolicyAck>>,
+    last: &mut Option<Vec<LogPolicyAck>>,
+    policy: &LogPolicy,
+    errors: &BTreeMap<PolicySource, String>,
+) {
+    let next = log_policy_acks(policy, errors);
+    if last.as_ref() == Some(&next) {
+        return;
+    }
+    sender.send_replace(next.clone());
+    *last = Some(next);
 }
 
 /// Applies one verified snapshot with the same safety invariants as the HTTP
@@ -478,7 +683,7 @@ fn snapshot(
             None
         } else {
             config
-                .applied_revision()
+                .served_revision()
                 .and_then(ConfigIdentifier::from_revision)
         },
         runtime_state: runtime.map_or(RuntimeState::Stopped, runtime_state_of),
@@ -540,7 +745,9 @@ async fn restart_for_update(manager: Option<SingBoxManager>) -> ! {
 #[cfg(test)]
 mod tests {
     use super::{V2_CAPABILITIES, bounded, config_state_of, stage_of, v2_capabilities};
-    use crate::ws::v2::codec::{AckStage, ConfigState};
+    use crate::ws::v2::codec::{
+        AckStage, ConfigState, LOGS_SEARCH_CAPABILITY, LOGS_TAIL_CAPABILITY,
+    };
 
     #[test]
     fn v2_advertises_only_what_the_v2_peer_serves() {
@@ -554,6 +761,13 @@ mod tests {
         assert!(V2_CAPABILITIES.contains(&"acme-v1"));
         assert!(!v2_capabilities(false).contains(&"pty-v2".to_string()));
         assert!(v2_capabilities(true).contains(&"pty-v2".to_string()));
+        assert!(V2_CAPABILITIES.contains(&"log-policy-v1"));
+        for served in [LOGS_TAIL_CAPABILITY, LOGS_SEARCH_CAPABILITY] {
+            assert!(
+                V2_CAPABILITIES.contains(&served),
+                "{served} must be advertised"
+            );
+        }
     }
 
     #[test]

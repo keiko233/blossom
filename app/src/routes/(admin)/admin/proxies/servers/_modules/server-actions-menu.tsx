@@ -1,3 +1,4 @@
+import { useNavigate } from "@tanstack/react-router";
 import { EllipsisIcon } from "lucide-react";
 import type React from "react";
 
@@ -21,8 +22,14 @@ export interface ServerActionsMenuProps {
 export function ServerActionsMenu({
   server,
 }: ServerActionsMenuProps): React.ReactElement {
-  const { isBusy, copyAgentInfo, resetToken, requestDelete } =
-    useServerActions(server);
+  const navigate = useNavigate();
+  const { isBusy, copyAgentInfo, requestDelete } = useServerActions(server);
+
+  const openConnection = () =>
+    void navigate({
+      to: "/admin/proxies/servers/$serverId/connection",
+      params: { serverId: server.id },
+    });
 
   return (
     <Menu>
@@ -42,8 +49,8 @@ export function ServerActionsMenu({
         <MenuItem onClick={() => void copyAgentInfo()}>
           {m.admin_proxies_servers_action_copy_agent()}
         </MenuItem>
-        <MenuItem onClick={() => resetToken()}>
-          {m.admin_proxies_servers_action_reset_token()}
+        <MenuItem onClick={openConnection}>
+          {m.admin_proxies_servers_action_connection()}
         </MenuItem>
         <MenuSeparator />
         <MenuItem variant="destructive" onClick={() => void requestDelete()}>

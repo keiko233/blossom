@@ -64,6 +64,7 @@ export EXPECTED_FINGERPRINT=$(shasum -a 256 "$test_dir/fullchain.pem" | awk '{pr
 start_mock
 
 start_agent() {
+  # This lifecycle test exercises the v1 WebSocket and HTTP fallback.
   docker run -d --name "$container" \
     --user "$(id -u):$(id -g)" \
     --add-host host.docker.internal:host-gateway \
@@ -71,6 +72,7 @@ start_agent() {
     -v "$data_dir:/data" \
     -e AGENT_URL="http://host.docker.internal:$mock_port/api" \
     -e AGENT_TOKEN=integration-test-token \
+    -e AGENT_WS_PROTOCOL=legacy \
     -e AGENT_INTERVAL=5 \
     "$image" >/dev/null
 }

@@ -79,6 +79,14 @@ const config = defineConfig(({ mode, command }) => {
             import.meta.url,
           ),
         ),
+        "@/lib/admin-metrics-relay": fileURLToPath(
+          new URL(
+            isCloudflare
+              ? "./src/lib/admin-metrics-relay.cloudflare.ts"
+              : "./src/lib/admin-metrics-relay.ts",
+            import.meta.url,
+          ),
+        ),
         "@/durable-objects/agent-session": fileURLToPath(
           new URL(
             isCloudflare

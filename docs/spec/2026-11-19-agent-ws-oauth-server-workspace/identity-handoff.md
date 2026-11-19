@@ -118,9 +118,12 @@ call reads the database, so a revoked identity fails even for a still-unexpired 
 ## Remaining follow-up work
 
 1. **Installer and UI** consume the admin functions above. The installer must treat the
-   `egr_` secret as a one-time value (no argv, no URL, no log). The server DTO
-   fields, backup-token functions, and OAuth-only creation default the
-   Connection tab consumes are in [Workspace Connection UI
+   `egr_` secret as a one-time value (no argv, no URL, no log). The fixed
+   download route, the approved-release gate, and the Rust
+   enrollment/credential-file contract are in
+   [Operations: systemd installation](../../operations/server-agent.md#systemd-installation-oauth-enrollment).
+   The Connection tab consumes the server DTO, backup-token functions, and
+   proof-only pending lane described in [Workspace Connection UI
    handoff](connection-ui-handoff.md).
 2. **Rust credential provider** consumes the redeem response. The exact
    credential storage, token, WebSocket, pending-proof, rotation, expiry and

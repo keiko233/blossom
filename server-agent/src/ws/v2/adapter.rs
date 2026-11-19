@@ -7,7 +7,9 @@
 //! text, and the codec validates them, so this layer only moves bytes.
 
 use futures_util::{SinkExt as _, StreamExt as _};
+use std::sync::Arc;
 use tokio::net::TcpStream;
+use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::tungstenite::error::{Error as TungsteniteError, ProtocolError};
@@ -19,34 +21,91 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async_tls_with_
 use tracing::debug;
 
 use super::codec::{MAX_FRAME_BYTES, SUBPROTOCOL};
-use crate::ws::adapters::{WsTransportConfig, classify, web_socket_config};
+use crate::ws::adapters::{SensitiveHeader, WsTransportConfig, classify, web_socket_config};
 use crate::ws::ports::WsError;
 
+/// One bearer token and the instants at which it must be refreshed and when
+/// it stops being valid. The session reconnects at `refresh_at`, before the
+/// connection's token lease ends.
+pub struct SessionToken {
+    pub header: SensitiveHeader,
+    pub refresh_at: Option<Instant>,
+    pub expires_at: Option<Instant>,
+}
+
+/// Supplies a fresh bearer header immediately before a v2 upgrade.
+#[async_trait::async_trait]
+pub trait BearerSource: Send + Sync {
+    async fn bearer(&self) -> Result<SessionToken, WsError>;
+}
+
+#[derive(Clone)]
+enum AuthSource {
+    Static(SensitiveHeader),
+    OAuth(Arc<dyn BearerSource>),
+}
+
 /// Opens protocol v2 connections to one agent WebSocket URL.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct V2Connector {
-    config: WsTransportConfig,
+    url: String,
+    auth: AuthSource,
+    connect_timeout: std::time::Duration,
 }
 
 impl V2Connector {
+    /// A connector that presents a fixed static token (legacy or backup mode).
     pub fn new(config: WsTransportConfig) -> Self {
+        Self::install_crypto();
+        Self {
+            url: config.url,
+            auth: AuthSource::Static(config.token),
+            connect_timeout: config.connect_timeout,
+        }
+    }
+
+    /// A connector that obtains a fresh machine token before every upgrade.
+    pub fn with_bearer(
+        url: String,
+        source: Arc<dyn BearerSource>,
+        connect_timeout: std::time::Duration,
+    ) -> Self {
+        Self::install_crypto();
+        Self {
+            url,
+            auth: AuthSource::OAuth(source),
+            connect_timeout,
+        }
+    }
+
+    fn install_crypto() {
         // The TLS connector uses the process crypto provider. Installing `ring`
         // here keeps the connector usable when the binary did not install it.
         let _ = rustls::crypto::ring::default_provider().install_default();
-        Self { config }
+    }
+
+    async fn token(&self) -> Result<SessionToken, WsError> {
+        match &self.auth {
+            AuthSource::Static(header) => Ok(SessionToken {
+                header: header.clone(),
+                refresh_at: None,
+                expires_at: None,
+            }),
+            AuthSource::OAuth(source) => source.bearer().await,
+        }
     }
 
     /// Performs the upgrade with the v2 subprotocol and the connect deadline.
     pub async fn connect(&self) -> Result<V2Connection, WsError> {
+        let token = self.token().await?;
         let mut request = self
-            .config
             .url
             .as_str()
             .into_client_request()
             .map_err(|error| WsError::Protocol(format!("invalid websocket URL: {error}")))?;
         request
             .headers_mut()
-            .insert(AUTHORIZATION, self.config.token.header_value());
+            .insert(AUTHORIZATION, token.header.header_value());
         request.headers_mut().insert(
             USER_AGENT,
             HeaderValue::from_static(concat!("blossom-server-agent/", env!("CARGO_PKG_VERSION"))),
@@ -57,7 +116,7 @@ impl V2Connector {
         );
 
         let handshake = tokio::time::timeout(
-            self.config.connect_timeout,
+            self.connect_timeout,
             connect_async_tls_with_config(
                 request,
                 Some(web_socket_config(MAX_FRAME_BYTES)),
@@ -71,6 +130,15 @@ impl V2Connector {
         let (stream, response) = match handshake {
             Ok(pair) => pair,
             Err(TungsteniteError::Http(response)) => {
+                if response.status().as_u16() == 409
+                    && response
+                        .headers()
+                        .get("x-blossom-agent-state")
+                        .and_then(|value| value.to_str().ok())
+                        == Some("disabled")
+                {
+                    return Err(WsError::ServerDisabled { status: 409 });
+                }
                 return Err(WsError::Rejected {
                     status: response.status().as_u16(),
                 });
@@ -88,14 +156,41 @@ impl V2Connector {
             drop(stream);
             return Err(WsError::SubprotocolMismatch);
         }
-        debug!(url = %self.config.url, "agent websocket v2 connected");
-        Ok(V2Connection { stream })
+        debug!(url = %self.url, "agent websocket v2 connected");
+        let refresh_deadline = match (token.refresh_at, token.expires_at) {
+            (Some(refresh), Some(expires)) => Some(refresh.min(expires)),
+            (Some(refresh), None) => Some(refresh),
+            (None, Some(expires)) => Some(expires),
+            (None, None) => None,
+        };
+        Ok(V2Connection {
+            stream,
+            refresh_deadline,
+        })
+    }
+}
+
+impl std::fmt::Debug for V2Connector {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("V2Connector")
+            .field("url", &self.url)
+            .field(
+                "auth",
+                &match &self.auth {
+                    AuthSource::Static(_) => "static",
+                    AuthSource::OAuth(_) => "oauth",
+                },
+            )
+            .field("connect_timeout", &self.connect_timeout)
+            .finish()
     }
 }
 
 /// One live v2 session.
 pub struct V2Connection {
     stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
+    refresh_deadline: Option<Instant>,
 }
 
 impl std::fmt::Debug for V2Connection {
@@ -105,6 +200,11 @@ impl std::fmt::Debug for V2Connection {
 }
 
 impl V2Connection {
+    /// When the session should reconnect to present a fresh machine token.
+    pub fn refresh_deadline(&self) -> Option<Instant> {
+        self.refresh_deadline
+    }
+
     /// Waits for the next text frame. Protocol pings are answered by the
     /// library, and binary frames are not part of v2, so they are skipped.
     pub async fn recv_text(&mut self) -> Result<String, WsError> {
@@ -171,6 +271,8 @@ mod tests {
         WrongEcho,
         /// Refuses the upgrade with an HTTP status.
         Refuses(u16),
+        /// Refuses with a 409 and the explicit disabled-state marker.
+        Disabled,
     }
 
     async fn spawn_peer(peer: Peer) -> String {
@@ -216,6 +318,15 @@ mod tests {
                     Peer::Refuses(status) => {
                         let mut error = ErrorResponse::new(None);
                         *error.status_mut() = StatusCode::from_u16(status).unwrap();
+                        Err(error)
+                    }
+                    Peer::Disabled => {
+                        let mut error = ErrorResponse::new(None);
+                        *error.status_mut() = StatusCode::CONFLICT;
+                        error.headers_mut().insert(
+                            "x-blossom-agent-state",
+                            HeaderValue::from_static("disabled"),
+                        );
                         Err(error)
                     }
                 }
@@ -274,6 +385,15 @@ mod tests {
         assert_eq!(
             connector(url).connect().await.unwrap_err(),
             WsError::Rejected { status: 400 }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_409_with_the_disabled_marker_is_a_positive_disable() {
+        let url = spawn_peer(Peer::Disabled).await;
+        assert_eq!(
+            connector(url).connect().await.unwrap_err(),
+            WsError::ServerDisabled { status: 409 }
         );
     }
 

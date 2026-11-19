@@ -1,5 +1,6 @@
 import {
   AGENT_WS_V2_LIMITS,
+  AGENT_WS_V2_TELEMETRY_HISTORY_CAPABILITY,
   createAgentWsV2Frame,
   encodeAgentWsV2Frame,
   parseAgentWsV2Frame,
@@ -8,8 +9,10 @@ import {
   type AgentWsV2MessageType,
   type AgentWsV2PayloadOf,
   type AgentWsV2StatusPayload,
+  type AgentWsV2TelemetrySamplePayload,
   type AgentWsV2TrafficReportPayload,
 } from "@blossom/contracts/agent-ws-v2";
+import type { LogPolicyAckPayload } from "@blossom/contracts/log-policy";
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
@@ -19,6 +22,7 @@ import {
   encodeAgentWsV2ConfigNotify,
   openAgentWsV2Session,
   type AgentWsV2Peer,
+  type AgentWsV2PtyFrame,
   type AgentWsV2Store,
 } from "./agent-ws-v2-session";
 
@@ -51,6 +55,8 @@ function server(overrides: Partial<Server> = {}): Server {
     configPollIntervalSeconds: 60,
     desiredAgentVersion: null,
     desiredSingBoxVersion: "1.13.0",
+    agentCapabilities: [],
+    logPolicyRevision: 0,
     ...overrides,
   } as Server;
 }
@@ -65,15 +71,36 @@ function makeStore(overrides: Partial<AgentWsV2Store> = {}) {
     recordUpdateStatus: vi.fn(async () => true),
     cacheDesiredRevision: vi.fn(async () => undefined),
     applyCertificateDeployments: vi.fn(async () => undefined),
-    handleAcmeDnsPresent: vi.fn(async () => true),
-    handleAcmeDnsCleanup: vi.fn(async () => true),
-    handleAcmeResult: vi.fn(async () => true),
     revalidateSession: vi.fn(async () => "ok" as const),
     applyTraffic: vi.fn(async () => ({
       status: "applied" as const,
       accepted: 1,
       dropped: 0,
     })),
+    handleAcmeDnsPresent: vi.fn(async () => true),
+    handleAcmeDnsCleanup: vi.fn(async () => true),
+    handleAcmeResult: vi.fn(async () => true),
+    loadLogPolicy: vi.fn(async () => ({
+      revision: 0,
+      sources: [
+        {
+          source: "agent" as const,
+          revision: 0,
+          baseline: "default" as const,
+          level: "default" as const,
+          deadline: null,
+        },
+        {
+          source: "sing-box" as const,
+          revision: 0,
+          baseline: "default" as const,
+          level: "default" as const,
+          deadline: null,
+        },
+      ],
+    })),
+    recordLogPolicyAck: vi.fn(async () => "recorded" as const),
+    recordMetricHistory: vi.fn(async () => "written" as const),
     compile: vi.fn(async () => ({
       desiredRevision: REVISION,
       document: { apiVersion: 3, desiredRevision: REVISION },
@@ -241,6 +268,39 @@ describe("agent WebSocket v2 session handshake", () => {
     });
   });
 
+  it("advertises the log-policy revision only to a capable agent", async () => {
+    const store = makeStore({
+      recordHello: vi.fn(async () =>
+        server({
+          agentCapabilities: ["log-policy-v1"],
+          logPolicyRevision: 3,
+        }),
+      ),
+    });
+    const peer = makePeer();
+    await open(store, peer).handleText(
+      agentFrame("hello", {
+        ...CURRENT_HELLO,
+        capabilities: ["log-policy-v1"],
+      }),
+    );
+    expect(received(peer)[0]).toMatchObject({
+      kind: "welcome",
+      payload: { logPolicyRevision: 3 },
+    });
+
+    const legacy = makeStore();
+    const legacyPeer = makePeer();
+    await open(legacy, legacyPeer).handleText(
+      agentFrame("hello", CURRENT_HELLO),
+    );
+    const legacyWelcome = received(legacyPeer)[0];
+    expect(legacyWelcome?.kind).toBe("welcome");
+    if (legacyWelcome?.kind === "welcome") {
+      expect(legacyWelcome.payload).not.toHaveProperty("logPolicyRevision");
+    }
+  });
+
   it("ignores a stale cache whose sequence no longer matches", async () => {
     const store = makeStore({
       recordHello: vi.fn(async () =>
@@ -305,6 +365,109 @@ describe("agent WebSocket v2 session handshake", () => {
     await session.handleText(agentFrame("hello", CURRENT_HELLO));
     await session.handleText(agentFrame("hello", CURRENT_HELLO));
     expect(store.recordHello).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("agent WebSocket v2 log policy", () => {
+  it("answers a snapshot request from the fenced store", async () => {
+    const store = makeStore({
+      recordHello: vi.fn(async () =>
+        server({ agentCapabilities: ["log-policy-v1"], logPolicyRevision: 3 }),
+      ),
+      loadLogPolicy: vi.fn(async () => ({
+        revision: 3,
+        sources: [
+          {
+            source: "agent" as const,
+            revision: 2,
+            baseline: "warn" as const,
+            level: "warn" as const,
+            deadline: null,
+          },
+          {
+            source: "sing-box" as const,
+            revision: 3,
+            baseline: "info" as const,
+            level: "debug" as const,
+            deadline: "2026-11-19T00:15:00.000Z",
+          },
+        ],
+      })),
+    });
+    const peer = makePeer();
+    const session = open(store, peer);
+    await session.handleText(
+      agentFrame("hello", {
+        ...CURRENT_HELLO,
+        capabilities: ["log-policy-v1"],
+      }),
+    );
+    await session.handleText(
+      agentFrame("log.policy.get", { requestId: "log-get-1" }, "log-get-1"),
+    );
+
+    expect(store.loadLogPolicy).toHaveBeenCalledWith(SERVER_ID, SESSION_ID);
+    expect(received(peer).at(-1)).toEqual({
+      kind: "log.policy.snapshot",
+      payload: {
+        requestId: "log-get-1",
+        revision: 3,
+        sources: [
+          {
+            source: "agent",
+            revision: 2,
+            baseline: "warn",
+            level: "warn",
+            deadline: null,
+          },
+          {
+            source: "sing-box",
+            revision: 3,
+            baseline: "info",
+            level: "debug",
+            deadline: "2026-11-19T00:15:00.000Z",
+          },
+        ],
+      },
+    });
+  });
+
+  it("records an acknowledgement and stops a replaced session", async () => {
+    const ack: LogPolicyAckPayload = {
+      source: "agent",
+      sourceRevision: 2,
+      requested: "warn",
+      baseline: "info",
+      effective: "warn",
+      deadline: null,
+      error: null,
+      pending: false,
+    };
+    const store = makeStore({
+      recordLogPolicyAck: vi.fn(async () => "recorded" as const),
+    });
+    const peer = makePeer();
+    const session = open(store, peer);
+    await session.handleText(agentFrame("hello", CURRENT_HELLO));
+    await session.handleText(agentFrame("log.policy.ack", ack));
+    expect(store.recordLogPolicyAck).toHaveBeenCalledWith(
+      SERVER_ID,
+      SESSION_ID,
+      ack,
+    );
+
+    const replaced = makeStore({
+      recordLogPolicyAck: vi.fn(async () => "replaced" as const),
+    });
+    const replacedPeer = makePeer();
+    const replacedSession = open(replaced, replacedPeer);
+    await replacedSession.handleText(agentFrame("hello", CURRENT_HELLO));
+    await replacedSession.handleText(agentFrame("log.policy.ack", ack));
+    expect(received(replacedPeer).at(-1)).toMatchObject({
+      kind: "error",
+      payload: { code: "session_replaced" },
+    });
+    expect(replacedPeer.close).toHaveBeenCalledWith(4000, "session_replaced");
   });
 });
 
@@ -518,14 +681,106 @@ describe("agent WebSocket v2 frame validation", () => {
   });
 });
 
+const METRIC_SAMPLE: AgentWsV2TelemetrySamplePayload = {
+  subscriptionId: "history-session",
+  purpose: "history",
+  sampledAt: "2026-11-19T00:01:00.000Z",
+  cpuPercent: 24.5,
+  memory: { used: 512, total: 1024 },
+  disk: { used: 100, total: 1000 },
+  environment: "systemd",
+  networkScope: "agent",
+  cgroupVersion: null,
+  cpuLimit: null,
+  memoryLimit: null,
+  scopeKey: "systemd|-|-|-|eth0",
+  network: {
+    txBytesPerSecond: 1024,
+    rxBytesPerSecond: 2048,
+    windowMs: 2000,
+  },
+};
+
+describe("agent WebSocket v2 telemetry", () => {
+  it("requests the independent history subscription after welcome", async () => {
+    const store = makeStore();
+    const peer = makePeer();
+    const session = open(store, peer);
+    await session.handleText(
+      agentFrame("hello", {
+        ...CURRENT_HELLO,
+        capabilities: ["config-v3", AGENT_WS_V2_TELEMETRY_HISTORY_CAPABILITY],
+      }),
+    );
+
+    expect(received(peer).map((message) => message.kind)).toEqual([
+      "welcome",
+      "telemetry.subscribe",
+    ]);
+    expect(received(peer).at(-1)).toMatchObject({
+      kind: "telemetry.subscribe",
+      payload: {
+        purpose: "history",
+        intervalMs: 60_000,
+        subscriptionId: `history-${SESSION_ID}`,
+      },
+    });
+  });
+
+  it("records only history samples through the exact session fence", async () => {
+    const onSample = vi.fn();
+    const store = makeStore();
+    const peer = makePeer();
+    const session = openAgentWsV2Session({
+      serverId: SERVER_ID,
+      sessionId: SESSION_ID,
+      credential: { kind: "static", tokenHash: "hash-1" },
+      peer,
+      store,
+      onSample,
+    });
+    await session.handleText(agentFrame("hello", CURRENT_HELLO));
+
+    await session.handleText(agentFrame("telemetry.sample", METRIC_SAMPLE));
+    await session.handleText(
+      agentFrame("telemetry.sample", {
+        ...METRIC_SAMPLE,
+        purpose: "live",
+        subscriptionId: "live-session",
+      }),
+    );
+
+    expect(onSample).toHaveBeenCalledTimes(2);
+    expect(store.recordMetricHistory).toHaveBeenCalledTimes(1);
+    expect(store.recordMetricHistory).toHaveBeenCalledWith(
+      SERVER_ID,
+      SESSION_ID,
+      METRIC_SAMPLE,
+    );
+  });
+});
+
 const STATUS: AgentWsV2StatusPayload = {
   reason: "interval",
   runtimeState: "running",
   certificateDeployments: [],
 };
 
-async function welcomed(store: AgentWsV2Store, peer: AgentWsV2Peer) {
-  const session = open(store, peer);
+async function welcomed(
+  store: AgentWsV2Store,
+  peer: AgentWsV2Peer,
+  options: {
+    onPtyFrame?: (frame: AgentWsV2PtyFrame) => boolean | Promise<boolean>;
+  } = {},
+) {
+  const session = openAgentWsV2Session({
+    serverId: SERVER_ID,
+    sessionId: SESSION_ID,
+    credential: { kind: "static", tokenHash: "hash-1" },
+    peer,
+    store,
+    ...options,
+  });
   await session.handleText(agentFrame("hello", CURRENT_HELLO));
   return session;
 }
@@ -889,5 +1144,108 @@ describe("agent WebSocket v2 pushes and teardown", () => {
 
     expect(peer.sent).toHaveLength(count);
     expect(store.loadCurrentServer).not.toHaveBeenCalled();
+  });
+});
+
+describe("agent WebSocket v2 operations parity", () => {
+  it("records update.status and stops a replaced session", async () => {
+    const store = makeStore({
+      recordUpdateStatus: vi.fn(async () => false),
+    });
+    const peer = makePeer();
+    const session = await welcomed(store, peer);
+
+    await session.handleText(
+      agentFrame("update.status", {
+        agent: { state: "applying", targetVersion: "0.4.1" },
+      }),
+    );
+
+    expect(store.recordUpdateStatus).toHaveBeenCalledWith(
+      SERVER_ID,
+      SESSION_ID,
+      expect.objectContaining({ agent: expect.any(Object) }),
+    );
+    expect(received(peer).at(-1)).toMatchObject({
+      kind: "error",
+      payload: { code: "session_replaced" },
+    });
+    expect(peer.close).toHaveBeenCalledWith(4000, "session_replaced");
+  });
+
+  it("passes ACME and terminal results through the fenced store", async () => {
+    const store = makeStore();
+    const onPtyFrame = vi.fn(() => true);
+    const peer = makePeer();
+    const session = await welcomed(store, peer, { onPtyFrame });
+
+    await session.handleText(
+      agentFrame("acme.dns_present", {
+        jobId: "job-1",
+        fqdn: "_acme-challenge.example.com",
+        txtValue: "digest",
+      }),
+    );
+    expect(store.handleAcmeDnsPresent).toHaveBeenCalledWith(
+      SERVER_ID,
+      SESSION_ID,
+      expect.objectContaining({ jobId: "job-1" }),
+    );
+
+    await session.handleText(
+      agentFrame("acme.result", {
+        jobId: "job-1",
+        certificatePem: "certificate",
+        privateKeyPem: "key",
+      }),
+    );
+    expect(store.handleAcmeResult).toHaveBeenCalledWith(
+      SERVER_ID,
+      SESSION_ID,
+      expect.objectContaining({ jobId: "job-1" }),
+    );
+
+    await session.handleText(
+      agentFrame("pty.data", { sessionId: "pty-1", data: "ls\r\n" }),
+    );
+    expect(onPtyFrame).toHaveBeenCalledWith({
+      type: "pty.data",
+      payload: { sessionId: "pty-1", data: "ls\r\n" },
+    });
+  });
+
+  it("closes an orphaned shell when no relay holds its session", async () => {
+    const store = makeStore();
+    const peer = makePeer();
+    const session = await welcomed(store, peer, {
+      onPtyFrame: () => false,
+    });
+
+    await session.handleText(
+      agentFrame("pty.data", { sessionId: "pty-1", data: "ls" }),
+    );
+
+    expect(received(peer).at(-1)).toMatchObject({
+      kind: "pty.close",
+      payload: { sessionId: "pty-1" },
+    });
+  });
+
+  it("rejects a control-plane operation sent by an agent", async () => {
+    const store = makeStore();
+    const peer = makePeer();
+    const session = await welcomed(store, peer);
+
+    await session.handleText(
+      agentFrame("update.trigger", {
+        target: "agent",
+        force: false,
+      }),
+    );
+
+    expect(received(peer).at(-1)).toMatchObject({
+      kind: "error",
+      payload: { code: "invalid_direction", type: "update.trigger" },
+    });
   });
 });

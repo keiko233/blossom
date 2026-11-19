@@ -17,7 +17,7 @@ processkit = "3.3.4"
 progenitor-client = "0.17.0"
 prost = "0.14"
 rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "pem", "ring", "zeroize"] }
-reqwest = { version = "0.13.4", features = ["json"] }
+reqwest = { version = "0.13.4", features = ["form", "json"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rustls-pemfile = "2"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -48,5 +48,5 @@ syn = "3.0.0"
 [dev-dependencies]
 tokio = { version = "1.52.3", features = ["test-util"] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"

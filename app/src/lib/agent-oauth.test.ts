@@ -190,4 +190,24 @@ describe("decideAgentIdentityUse", () => {
       ),
     ).toBe("server_disabled");
   });
+
+  it("uses the status purpose only to read an active identity on a disabled server", () => {
+    expect(
+      decideAgentIdentityUse(row({ serverEnabled: false }), {
+        linked: true,
+        purpose: "status",
+      }),
+    ).toEqual({
+      serverId: "srv-a",
+      identityId: "identity-1",
+      generation: 1,
+      identityStatus: "active",
+    });
+    expect(() =>
+      decideAgentIdentityUse(row({ status: "pending", serverEnabled: false }), {
+        linked: true,
+        purpose: "status",
+      }),
+    ).toThrow(expect.objectContaining({ code: "identity_not_usable" }));
+  });
 });

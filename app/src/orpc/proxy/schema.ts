@@ -64,10 +64,11 @@ const serverMetaSchema = z.object({
 
 export const createServerSchema = serverMetaSchema.extend({
   /**
-   * Static bearer credentials are a backup path. OAuth machine identity is the
-   * default, so a new server gets a static token only when this is explicit.
+   * Standalone callers that omit this field keep the existing static-token
+   * default. The create form sends `false` explicitly so the UI is OAuth-first
+   * without changing the API's rollout behavior.
    */
-  enableBackupToken: z.boolean().default(false),
+  enableBackupToken: z.boolean().default(true),
 });
 
 export const updateServerSchema = serverMetaSchema.partial().extend({

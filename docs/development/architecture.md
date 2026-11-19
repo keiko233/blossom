@@ -22,19 +22,20 @@ The data model is server → nodes: a `server` has one agent's OAuth machine ide
 
 Established. Know which surface you are on, because they authenticate differently.
 
-| Surface                       | Where                                                                  | Authentication                                       | Notes                                                                                                                                  |
-| ----------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| SSR pages and routes          | `app/src/routes/`                                                      | better-auth session; role checked in `beforeLoad`   | `(admin)` requires `role === "admin"`, `(user)` and `(auth)` have their own groups.                                                    |
-| Server functions              | `app/src/query/*.ts`, `app/src/lib/auth.tsx`                           | session; admin ones call `ensureAdmin()`             | The application API for the UI. All admin CRUD lives here.                                                                             |
-| Agent API (oRPC)              | `app/src/orpc/router/index.ts`, `app/src/orpc/proxy/agent.ts`          | per-server `Authorization: Bearer` token             | The only procedures in the oRPC router: `agent.getConfigV3`, `agent.heartbeat`, `agent.reportTraffic`.                                 |
-| Agent WebSocket               | `app/src/routes/api/agent/ws.ts`                                       | per-server optional static backup token or OAuth machine token | One outbound `/api/agent/ws` connection per server; the bearer is checked before the upgrade. Static tokens serve v1/v2 when a backup is enabled; OAuth machine tokens serve v2 only. |
-| Admin PTY WebSocket           | `app/src/routes/api/admin/servers/$id/pty/ws.ts`                        | better-auth admin session + same-origin check        | Human-only browser terminal relayed to one enrolled agent; no server function or MCP tool exposes it.                                  |
-| Admin installer download      | `app/src/routes/api/admin/servers/$id/installation/script/$grantId.ts` | better-auth admin session + same-origin check        | Fixed per-server, grant-bound script attachment; never contains the grant and always returns `private, no-store`.                      |
-| oRPC mounts                   | `app/src/routes/api/$.ts` (OpenAPI), `app/src/routes/api/rpc/$.ts` (RPC) | same as above                                      | `/api/*` serves the OpenAPI document (`/api/spec.json`, consumed by the agent codegen); `/api/rpc/*` is the oRPC RPC protocol.         |
-| better-auth                   | `app/src/routes/api/auth/$.ts`                                         | its own                                              | Email/password, magic link, GitHub/Google (when configured), admin and JWT plugins, OAuth provider for MCP.                            |
-| MCP                           | `app/src/routes/api/mcp.ts`, `app/src/orpc/mcp/`                       | OAuth 2.0 bearer; admin actor; `blossom:mcp:*` scopes | Tools call an in-process oRPC router (`mcpRouter`); write tools need `confirm: true` and are audited.                                  |
-| Subscription output           | `app/src/routes/api/sub/$token.ts`                                     | the subscription token in the URL                    | Renders a Clash config from the nodes the subscription may use, gated by the publish gate below. Writes an access log.                 |
-| Misc                          | `api/health.ts`, `api/admin/certificates/…/export/$part.ts`, `.well-known` routes | health: none; others per route              | `/api/health` is the container health check.                                                                                           |
+| Surface                  | Where                                                                             | Authentication                                        | Notes                                                                                                                                                        |
+| ------------------------ | --------------------------------------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| SSR pages and routes     | `app/src/routes/`                                                                 | better-auth session; role checked in `beforeLoad`     | `(admin)` requires `role === "admin"`, `(user)` and `(auth)` have their own groups.                                                                          |
+| Server functions         | `app/src/query/*.ts`, `app/src/lib/auth.tsx`                                      | session; admin ones call `ensureAdmin()`              | The application API for the UI. All admin CRUD lives here.                                                                                                   |
+| Agent API (oRPC)         | `app/src/orpc/router/index.ts`, `app/src/orpc/proxy/agent.ts`                     | per-server `Authorization: Bearer` token              | The only procedures in the oRPC router: `agent.getConfigV3`, `agent.heartbeat`, `agent.reportTraffic`.                                                       |
+| Agent WebSocket          | `app/src/routes/api/agent/ws.ts`                                                  | per-server optional static backup token or OAuth machine token | One outbound `/api/agent/ws` connection per server; the bearer is checked before the upgrade. Static backup tokens serve v1/v2 when enabled; OAuth machine tokens serve v2 only. |
+| Admin PTY WebSocket      | `app/src/routes/api/admin/servers/$id/pty/ws.ts`                                  | better-auth admin session + same-origin check         | Human-only browser terminal relayed to one enrolled agent; no server function or MCP tool exposes it.                                                        |
+| Admin installer download | `app/src/routes/api/admin/servers/$id/installation/script/$grantId.ts`            | better-auth admin session + same-origin check         | Fixed per-server, grant-bound script attachment; never contains the grant and always returns `private, no-store`.                                            |
+| Admin metric WebSocket   | `app/src/routes/api/admin/servers/$id/metrics/ws.ts`                              | better-auth admin session + same-origin check         | Coalesced live CPU, memory, disk and network samples for one server; idle authority checks run on a timer.                                                   |
+| oRPC mounts              | `app/src/routes/api/$.ts` (OpenAPI), `app/src/routes/api/rpc/$.ts` (RPC)          | same as above                                         | `/api/*` serves the OpenAPI document (`/api/spec.json`, consumed by the agent codegen); `/api/rpc/*` is the oRPC RPC protocol.                               |
+| better-auth              | `app/src/routes/api/auth/$.ts`                                                    | its own                                               | Email/password, magic link, GitHub/Google (when configured), admin and JWT plugins, OAuth provider for MCP.                                                  |
+| MCP                      | `app/src/routes/api/mcp.ts`, `app/src/orpc/mcp/`                                  | OAuth 2.0 bearer; admin actor; `blossom:mcp:*` scopes | Tools call an in-process oRPC router (`mcpRouter`); write tools need `confirm: true` and are audited.                                                        |
+| Subscription output      | `app/src/routes/api/sub/$token.ts`                                                | the subscription token in the URL                     | Renders a Clash config from the nodes the subscription may use, gated by the publish gate below. Writes an access log.                                       |
+| Misc                     | `api/health.ts`, `api/admin/certificates/…/export/$part.ts`, `.well-known` routes | health: none; others per route                        | `/api/health` is the container health check.                                                                                                                 |
 
 An isomorphic oRPC client and TanStack Query utilities exist in `app/src/orpc/client.ts`; the pages inspected call server functions directly instead.
 
@@ -45,10 +46,15 @@ Established. The frozen v1 envelope and payload schemas live in
 PR #112 under `server-agent/src/ws/`. Clients that offer the
 `blossom-agent.v2` subprotocol use the v2 session protocol on the same route,
 documented in [Agent WebSocket v2](agent-ws-v2.md). The control plane
-implements v2 sessions; the Rust v2 client is a later change. The control plane authenticates the
-  upgrade request with either the same hashed per-server bearer token as the
-  oRPC agent API or, on v2, a Better Auth machine token whose active identity
-  maps to exactly one server.
+implements v2 sessions, and the shipped Rust agent selects v2 by default for
+both an OAuth credential file and an explicit static backup token. The explicit
+`legacy` protocol is the compatibility opt-in for the v1 envelope plus HTTP
+poll, heartbeat, and traffic; v2 never downgrades to HTTP. The control plane
+authenticates the upgrade request with either the hashed per-server static
+backup token or, on v2, a Better Auth machine token whose identity maps to
+exactly one server. A pending identity may prove itself in a proof-only lane;
+only its exact successful `hello` moves the session fence and supersedes the
+active generation.
 
 - **Nitro (`node`, `vercel`)** uses Nitro's `crossws` WebSocket support. The
   route returns a `426` response carrying crossws hooks; the Node and Vercel
@@ -71,9 +77,10 @@ implements v2 sessions; the Rust v2 client is a later change. The control plane 
   agent connection identified by `wsConnectedAt`; it does not accept a host,
   port or command. Nitro keeps the relay in process (or on the Redis
   backplane), while Cloudflare forwards the browser upgrade into the same
-  `AgentSessionDO` that holds the agent socket. The agent advertises `pty-v1`
-  only when started with `AGENT_PTY_ENABLED=true` and not running as root. The
-  browser shows the terminal as connected only after `pty.started`. Session open
+  `AgentSessionDO` that holds the agent socket. The agent advertises `pty-v2`
+  on the default transport (or `pty-v1` in explicit legacy mode) only when
+  started with `AGENT_PTY_ENABLED=true` and not running as root. The browser
+  shows the terminal as connected only after `pty.started`. Session open
   and close are written to `admin_audit_log` as metadata only; terminal bytes are
   never stored. Both relays re-check the admin session, the user's admin role,
   the server and the agent connection every 30 seconds, and close the shell
@@ -81,6 +88,18 @@ implements v2 sessions; the Rust v2 client is a later change. The control plane 
   storage alarm, so it also runs while the object hibernates, and it stores the
   better-auth session row id, never the cookie or bearer token. A database
   error or a 10-second timeout counts as a failed check.
+- The admin metric stream is a third WebSocket surface. The browser connects to
+  `/api/admin/servers/<id>/metrics/ws`, which accepts only an admin session with
+  a same-origin `Origin`. Nitro keeps one sampler per server/session and shares
+  it across viewers; the sampler polls a v1 agent or subscribes once to a v2
+  agent, so two-second sampling is coalesced. Idle viewers are re-authorized on
+  a 30-second timer against the admin session, server enablement, capability and
+  exact agent session. Cloudflare forwards the upgrade into the same
+  `AgentSessionDO`, which owns the sampler and authority timer. Live samples are
+  never persisted; the browser keeps a bounded window. Coalescing is per
+  process: several Nitro instances each sample unless `REDIS_URL` relays agent
+  replies, and the Cloudflare sampler's timer keeps the Durable Object active
+  while viewers are connected instead of hibernating.
 
 ### Agent-executed ACME
 
@@ -114,6 +133,21 @@ a time, and port and interface inspection runs on demand. Telemetry frames
 are handled in memory (and relayed over Redis when a Nitro backplane is
 configured). They do not write to PostgreSQL. Agents without
 `telemetry-v1` continue using their existing transport and update policy.
+
+Host history is the only telemetry that reaches PostgreSQL. v2 agents send a
+separate 60-second history sample that the v2 session records through
+`recordServerMetricMinuteV2`
+(`app/src/query/server-metric-store.ts`), with the same statement fencing the
+exact `server.wsSessionId` as the upsert, so a replaced or disabled socket
+cannot write. The cadence starts in the handshake, independent of any browser
+viewer. v1 agents keep transient live telemetry and do not write host history.
+Each write also removes one bounded batch of minutes older than the 30-day
+retention. A scheduler can call `GET` or `POST
+/api/maintenance/server-metrics` with `Authorization: Bearer
+$MAINTENANCE_TOKEN`; batch size and batch count are clamped. No platform
+scheduler is configured in this repository: Node deployments need an external
+systemd timer, CronJob or equivalent; Vercel Cron can call the route with its
+secret; Cloudflare needs an operator-added Cron Trigger or external scheduler.
 
 ## Runtimes and deploy targets
 

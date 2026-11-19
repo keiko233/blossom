@@ -27,6 +27,42 @@ const C_UNDEFINED = 1;
 const C_TRUE = 2;
 const C_FALSE = 3;
 
+// seroval's `serializeString` leaves simple strings untouched and escapes the
+// rest (for example every newline in the installer script). The response's
+// `s`/`k` values are that encoded form, so decode them the way seroval's own
+// `deserializeString` does.
+const ESCAPE_SEQUENCE = /(\\\\|\\"|\\n|\\r|\\b|\\t|\\f|\\u2028|\\u2029|\\x3C)/g;
+
+export function deserializeSerovalString(value) {
+  if (typeof value !== "string" || !value.includes("\\")) return value;
+  return value.replace(ESCAPE_SEQUENCE, (match) => {
+    switch (match) {
+      case "\\\\":
+        return "\\";
+      case '\\"':
+        return '"';
+      case "\\n":
+        return "\n";
+      case "\\r":
+        return "\r";
+      case "\\b":
+        return "\b";
+      case "\\t":
+        return "\t";
+      case "\\f":
+        return "\f";
+      case "\\u2028":
+        return "\u2028";
+      case "\\u2029":
+        return "\u2029";
+      case "\\x3C":
+        return "<";
+      default:
+        return match;
+    }
+  });
+}
+
 export function serverFnId(file, exportName) {
   return createHash("sha256")
     .update(`${file}--${exportName}_createServerFn_handler`)
@@ -76,7 +112,7 @@ export function decodeSeroval(node) {
       case T_NUMBER:
         return n.s;
       case T_STRING:
-        return n.s;
+        return deserializeSerovalString(n.s);
       case T_CONSTANT:
         return [null, undefined, true, false][n.s];
       case T_BIGINT:
@@ -99,7 +135,7 @@ export function decodeSeroval(node) {
         const out = {};
         refs.set(n.i, out);
         n.p.k.forEach((key, index) => {
-          out[key] = walk(n.p.v[index]);
+          out[deserializeSerovalString(key)] = walk(n.p.v[index]);
         });
         return out;
       }
@@ -154,6 +190,29 @@ export class AppClient {
 
   get baseUrl() {
     return this.#base;
+  }
+
+  /** The cookie/origin headers a browser would send for this session. */
+  headers(extra = {}) {
+    return this.#headers(extra);
+  }
+
+  /** Raw `name=value; ...` cookie header for sharing one session. */
+  cookieHeader() {
+    return [...this.#cookies]
+      .map(([name, value]) => `${name}=${value}`)
+      .join("; ");
+  }
+
+  /** Adopts a session cookie from another client on the same host. */
+  adoptCookies(cookieHeader) {
+    this.#cookies.clear();
+    for (const pair of cookieHeader.split(";")) {
+      const trimmed = pair.trim();
+      const eq = trimmed.indexOf("=");
+      if (eq <= 0) continue;
+      this.#cookies.set(trimmed.slice(0, eq), trimmed.slice(eq + 1));
+    }
   }
 
   #storeCookies(response) {

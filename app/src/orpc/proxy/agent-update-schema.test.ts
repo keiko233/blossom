@@ -51,10 +51,14 @@ describe("agent update contract", () => {
     ).toThrow();
   });
 
-  it("creates OAuth-only servers unless a backup token is explicit", () => {
+  it("keeps the API static-token default unless the caller opts out", () => {
     const base = { name: "edge", address: "edge.example.com" };
 
-    expect(createServerSchema.parse(base).enableBackupToken).toBe(false);
+    expect(createServerSchema.parse(base).enableBackupToken).toBe(true);
+    expect(
+      createServerSchema.parse({ ...base, enableBackupToken: false })
+        .enableBackupToken,
+    ).toBe(false);
     expect(
       createServerSchema.parse({ ...base, enableBackupToken: true })
         .enableBackupToken,
