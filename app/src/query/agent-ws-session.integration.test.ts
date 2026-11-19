@@ -194,7 +194,11 @@ describe.skipIf(!pgUrl).each(drivers)(
         Array.from({ length: 12 }, () => startAgentWsSession("srv1", database)),
       );
       const ids = new Set(sessions.map((session) => session.sessionId));
+      const connectedAt = new Set(
+        sessions.map((session) => session.connectedAt.getTime()),
+      );
       expect(ids.size).toBe(12);
+      expect(connectedAt.size).toBe(12);
       expect(ids.has((await markerOf("srv1")).ws_session_id!)).toBe(true);
     });
 
