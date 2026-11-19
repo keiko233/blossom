@@ -1,0 +1,38 @@
+# Implementation and Acceptance
+
+## Implementation sequence
+
+| Phase | Deliverable | Exit criteria |
+| --- | --- | --- |
+| 1. Protocol and runtimes | Define the shared v2 contract and Rust messages. Share configuration compilation, status, and traffic logic across transports. Implement WSS startup, reconciliation, application, and traffic acknowledgments. Use existing tokens for the initial verification. | Legacy agents continue using the legacy paths. New agents complete a full lifecycle with the HTTP agent API blocked. Node, Cloudflare, and Vercel pass their WebSocket runtime checks. |
+| 2. Machine identity and installation | Add Better Auth per-server clients, credential management, enrollment grants, and the systemd installer. Publish an OAuth-capable agent release and support both credentials in the control plane. | Install and authenticate two distinct servers. Verify rotation, revocation, lost responses, and repeated installation. Pass MCP and legacy agent regression checks. |
+| 3. Routing and overview | Add the server workspace, Connection and Settings tabs, live metric subscriptions, and host history. Phase 2 can use the existing detail page for the installation entry point. | History accumulates without viewers and remains queryable offline. Associated nodes and existing detail URLs still work. |
+| 4. Operations sessions | Add the interactive shell, remote log tail, retained-log search, context lookup, per-source log level controls, and diagnostic events. Regress existing PTY and ACME in phase 1. | Verify interactive use on a real host, cross-instance relay, search and policy reconciliation, access revocation, and resource cleanup. |
+
+Finalize JSON payloads and error codes in phase 1 with shared TypeScript and Rust fixtures. In phase 2, verify client creation, authorization, issuance, rotation, and MCP behavior against the pinned Better Auth version first. Before phase 3, measure write volume to validate the proposed sampling interval and retention. Before phase 4, verify that target platform connection limits support the intended operations sessions. Include runtime evidence with the corresponding implementation change.
+
+## Compatibility and rollback
+
+1. Deploy additive database migrations and a control plane that supports both v1 and v2. Existing servers keep their current credentials and transport. Track v1 and v2 connection counts and each server's latest successful reconciliation.
+2. Upgrade one server at a time. Use the existing credential to verify v2 and recovery from the last successfully applied configuration. Then enroll it in OAuth and confirm that the new identity can synchronize. For a system service migration, back up state, stop the old instance, preserve the state and report queue, and start the new service. Running both at once can cause port contention or duplicate reads of counters. Present OAuth enrollment by default for newly created servers.
+3. For a single-server rollback, first diagnose connection or authentication failures. If legacy HTTP is needed, explicitly enable a backup token and configure legacy mode or restore the previous binary with its existing state directory. Check that the previous binary can read the current state format. Keep the additive database schema. Before rolling back the control plane, return dependent agents to a compatible mode or retain the compatible control plane until those agents move.
+4. Plan retirement of legacy HTTP as a separate change after the upgrade and rollback window closes. Manage backup static token support independently of legacy HTTP retirement.
+
+Monitor connection age and disconnect reason, last successful reconciliation, desired and applied revision drift, traffic queue backlog and expiry, OAuth rejection categories, log gaps, and missing telemetry. Record diagnostic metadata and keep payloads and credentials out of alert data and metric labels.
+
+## Acceptance matrix
+
+| Scenario | Pass condition |
+| --- | --- |
+| Cold start, missed notifications, and reconnect | V2 makes zero HTTP configuration polling, heartbeat, or traffic reporting requests. An empty cache receives its initial configuration over WSS. An existing cache starts offline. The next status exchange recovers a missed notification. Reconnect restores the desired configuration and update policy. |
+| Configuration, certificates, and publish gate | A large chunked snapshot containing certificates can retry after interruption. Invalid configuration and stale acknowledgments fail to open the publish gate. Successful application opens it. Certificate-only changes apply successfully. ACME, certificate path handling, and sing-box safety checks pass regression tests. |
+| Traffic acknowledgment | Test disconnects before and after commit, lost acknowledgments, duplicate reports, and conflicting replays. Replaced sessions cannot double bill, and report delivery can resume after an offline restart. Verify transaction or single-statement session fencing with both database drivers. |
+| OAuth and backup credentials | Reject incorrect issuer, audience, and scope, unknown clients, user and MCP tokens, expired or revoked credentials, and disabled servers. A JWT authorizes only its mapped server. Revocation and disablement close existing connections within the lease window. Backup tokens require explicit enablement. |
+| Installation | Run the script on clean amd64 and arm64 Linux systemd hosts and verify reconnection after reboot. Check recovery from wrong architecture, digest mismatch, expiry, concurrent redemption, lost credential responses, repeat installation, and upgrade rollback. Logs and audit entries contain metadata only. |
+| Workspace | Verify navigation, deep links, both languages, keyboard interaction, empty and offline states, and narrow layouts. Check live network rates, missing history intervals, and the meaning of business traffic totals. |
+| PTY and logs | Operate an interactive shell from the browser and validate that the browser cannot choose the shell path. Switching sessions, timeout, revocation, and disconnect clean up the process group. Slow log consumers see gaps, server switching resets the stream, and untrusted log text is rendered safely. |
+| Remote log search | Find entries outside the loaded live view. Verify text, source, severity, time bounds, pagination, context, and cancellation. Eviction and agent restart surface incomplete coverage. Switching servers or losing authorization discards late results. Search terms and raw entries stay out of audit data and persistent control-plane storage. |
+| Remote log levels | Change the two sources independently and verify effective levels with actual emitted logs. Recover after a missed notification, an offline edit, a concurrent edit, and an agent restart. Temporary verbosity returns to baseline after expiry even during a disconnect. A failed reload reports the error and preserves the working proxy. Logging-only edits leave the publish gate unchanged. |
+| Runtimes and legacy | Exercise Node in single-instance and multi-instance Redis configurations, Cloudflare Durable Object hibernation, and Vercel reconnect on connection expiry. Regress the legacy agent, v2 OAuth, v2 static token, and explicit legacy mode. |
+
+Run the relevant Vitest suites, type checks, builds for all three app targets, Rust tests, fmt and Clippy checks, and the managed-TLS Docker lifecycle. Regenerate OpenAPI when the HTTP contract changes. Generate Drizzle migrations and the route tree using the existing workflows. Use disposable instances for database, real terminal, and installation verification. [Testing guide](../../development/testing.md) · [Generated files](../../development/generated-files.md)
