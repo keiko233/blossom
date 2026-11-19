@@ -1,5 +1,68 @@
 # Changelog
 
+All notable changes to Blossom.
+## v1.4.0 - 2026-11-19
+
+### Added
+
+- Add server routing and PTY shell foundation (#173)
+
+- Add the WebSocket v2 control plane (#174)
+
+- Add agent identity enrollment and rotation (#175)
+
+- Run admin operations over the v2 lifecycle (#176)
+
+- Complete the agent operations workspace and v2 rollout (#177)
+
+
+### Changed
+
+- Unify app and server-agent release versioning (#185)
+
+
+### Documentation
+
+- Specify the agent operations workspace (#172)
+
+
+### Fixed
+
+- Update rust crate progenitor-client to 0.16.0 (#105)
+
+- Let agent tag trigger binary release
+
+- Guard db:migrate against Hyperdrive drift (#184)
+
+
+### Maintenance
+
+- Update pnpm/action-setup action to v6 (#63)
+
+- Update github artifact actions (#62)
+
+- Update rust crate zeroize to v1.9.2 (#126)
+
+- Update dependency filesize to v11.0.34 (#81)
+
+- Update better-auth monorepo to v1.7.26 (#118)
+
+- Update dependency resend to v6.38.1 (#100)
+
+- Update orpc monorepo to v1.16.2 (#84)
+
+- Update dependency @cloudflare/vite-plugin to v1.70.1 (#180)
+
+- Update dependency vitest to v5.1.1 (#120)
+
+- Allow direct push with GITHUB_TOKEN and call downstream workflows
+
+- Set minimumReleaseAge to 0
+
+- Update dependency wrangler to v4.165.0 (#136)
+
+# Changelog
+
 All notable changes to the Blossom app.
 ## v1.3.0 - 2026-11-19
 
