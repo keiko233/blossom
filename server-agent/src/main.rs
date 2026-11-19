@@ -34,12 +34,17 @@ use tokio::signal;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
+use tracing_subscriber::Layer as _;
+use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::util::SubscriberInitExt as _;
 
 use crate::acme::AcmeManager;
 use crate::acme::instant_backend::InstantAcmeBackend;
 use crate::acme::ports::DEFAULT_CHALLENGE_TIMEOUT;
 use crate::acme::solver_dns01::DnsAck;
 use crate::config::{AgentPolicy, CandidateConfig, ConfigManager, FetchStatus};
+use crate::logs::{CaptureLayer, LogStore};
 use crate::process::{ProcessState, SingBoxManager, check_config, resolve_binary, singbox_version};
 use crate::traffic::TrafficReporter;
 use crate::update::{
@@ -236,9 +241,16 @@ fn parse_level(level: &str) -> tracing::Level {
 async fn main() -> Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let args = Args::parse();
-    tracing_subscriber::fmt()
-        .with_max_level(parse_level(&args.log_level))
+    let logs = LogStore::shared();
+    let level = LevelFilter::from_level(parse_level(&args.log_level));
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_filter(level))
+        .with(CaptureLayer::new(logs.clone()).with_filter(level))
         .init();
+    logs.register_secret(&args.token);
+    if let Some(github_token) = args.github_token.as_deref() {
+        logs.register_secret(github_token);
+    }
 
     let client = client::new_client(&args.url, &args.token)?;
 
@@ -254,6 +266,9 @@ async fn main() -> Result<()> {
     let state_dir = args.state_dir.clone();
     let traffic_dir = state_dir.join("traffic");
     let mut config = ConfigManager::new(client.clone(), state_dir.clone())?;
+    if let Some(secret) = config.api_endpoint().secret.as_deref() {
+        logs.register_secret(secret);
+    }
     let mut updates = UpdateManager::new(
         UpdateConfig {
             state_dir: state_dir.clone(),

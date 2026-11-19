@@ -6,7 +6,7 @@
 
 use std::fmt;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
@@ -40,6 +40,10 @@ struct Inner {
     searches_in_flight: AtomicUsize,
 }
 
+/// The process-wide buffer. The tracing layer and the sing-box supervisor
+/// write to it, and the WebSocket log binding reads from it.
+static SHARED: OnceLock<LogStore> = OnceLock::new();
+
 #[derive(Clone)]
 pub(crate) struct LogStore {
     inner: Arc<Inner>,
@@ -52,6 +56,10 @@ impl Default for LogStore {
 }
 
 impl LogStore {
+    pub(crate) fn shared() -> Self {
+        SHARED.get_or_init(Self::default).clone()
+    }
+
     pub(crate) fn new(limits: RingLimits) -> Self {
         Self {
             inner: Arc::new(Inner {

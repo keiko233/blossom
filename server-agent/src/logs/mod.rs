@@ -22,5 +22,12 @@ mod search;
 mod store;
 mod text;
 
+pub(crate) use layer::{CaptureLayer, SING_BOX_OUTPUT_TARGET};
+#[cfg(test)]
+pub(crate) use model::LogCursor;
+pub(crate) use model::{LogLevel, LogSource};
+pub(crate) use store::LogStore;
+pub(crate) use text::strip_ansi;
+
 #[cfg(test)]
 mod tests;

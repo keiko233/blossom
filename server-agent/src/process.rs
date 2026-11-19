@@ -1,8 +1,9 @@
 //! Supervises the sing-box child process via processkit.
 //!
-//! A background task owns the running process: it forwards sing-box's logs to
-//! `tracing`, restarts it with backoff if it crashes, and shuts the whole
-//! process tree down gracefully on replacement or agent exit.
+//! A background task owns the running process: it captures sing-box's stdout
+//! and stderr into the retained log buffer and forwards them to `tracing`,
+//! restarts it with backoff if it crashes, and shuts the whole process tree
+//! down gracefully on replacement or agent exit.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -14,6 +15,8 @@ use processkit::{CancellationToken, Command, ProcessEvent, RunningProcess};
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, warn};
+
+use crate::logs::{LogLevel, LogSource, LogStore, SING_BOX_OUTPUT_TARGET, strip_ansi};
 
 /// Grace period for a SIGTERM before processkit escalates to SIGKILL on shutdown.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
@@ -59,9 +62,18 @@ impl ProcessState {
 impl SingBoxManager {
     /// Resolves the sing-box binary, starts it against `config_path`, and spawns
     /// the supervisor. Returns once the first launch succeeds so startup errors
-    /// (missing binary, bad initial config) surface immediately.
+    /// (missing binary, bad initial config) surface immediately. Every line the
+    /// child writes is also captured into the shared log buffer.
     pub async fn start(bin: PathBuf, config_path: PathBuf) -> Result<Self> {
-        let proc = spawn_singbox(&bin, &config_path)
+        Self::start_with_logs(bin, config_path, LogStore::shared()).await
+    }
+
+    pub(crate) async fn start_with_logs(
+        bin: PathBuf,
+        config_path: PathBuf,
+        logs: LogStore,
+    ) -> Result<Self> {
+        let proc = spawn_singbox(&bin, &config_path, &logs)
             .await
             .context("failed to start sing-box")?;
         info!("sing-box started (pid {:?})", proc.process.pid());
@@ -76,6 +88,7 @@ impl SingBoxManager {
             ctrl_rx,
             state.clone(),
             last_error.clone(),
+            logs,
         ));
         Ok(Self {
             ctrl_tx,
@@ -126,9 +139,11 @@ pub fn resolve_binary(explicit: Option<PathBuf>) -> PathBuf {
 struct ManagedProcess {
     process: RunningProcess,
     cancel: CancellationToken,
+    /// Sing-box run number, recorded on each captured line.
+    generation: u64,
 }
 
-async fn spawn_singbox(bin: &Path, config_path: &Path) -> Result<ManagedProcess> {
+async fn spawn_singbox(bin: &Path, config_path: &Path, logs: &LogStore) -> Result<ManagedProcess> {
     let config = config_path
         .to_str()
         .context("config path is not valid UTF-8")?;
@@ -140,7 +155,11 @@ async fn spawn_singbox(bin: &Path, config_path: &Path) -> Result<ManagedProcess>
         .start()
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-    Ok(ManagedProcess { process, cancel })
+    Ok(ManagedProcess {
+        process,
+        cancel,
+        generation: logs.begin_process_generation(),
+    })
 }
 
 /// Validates a candidate with the exact sing-box binary that will run it.
@@ -196,6 +215,7 @@ async fn supervise(
     mut ctrl_rx: mpsc::Receiver<Ctrl>,
     state: Arc<AtomicU8>,
     last_error: Arc<Mutex<Option<String>>>,
+    logs: LogStore,
 ) {
     let mut current = proc;
     // Grows across quick crashes, resets after a healthy run. Persisted here (not
@@ -205,7 +225,7 @@ async fn supervise(
 
     loop {
         let started = Instant::now();
-        match run_one(current, &mut ctrl_rx, &state, &last_error).await {
+        match run_one(current, &mut ctrl_rx, &state, &last_error, &logs).await {
             RunOutcome::Stopped => {
                 state.store(ProcessState::Stopped as u8, Ordering::Relaxed);
                 info!("sing-box stopped");
@@ -227,7 +247,7 @@ async fn supervise(
             );
         }
 
-        match restart(&bin, &config_path, backoff, &mut ctrl_rx).await {
+        match restart(&bin, &config_path, backoff, &mut ctrl_rx, &logs).await {
             Some(next) => current = next,
             // Told to shut down while backing off, or the channel closed.
             None => return,
@@ -245,6 +265,7 @@ async fn restart(
     config_path: &Path,
     backoff: Duration,
     ctrl_rx: &mut mpsc::Receiver<Ctrl>,
+    logs: &LogStore,
 ) -> Option<ManagedProcess> {
     let mut delay = backoff;
     loop {
@@ -259,7 +280,7 @@ async fn restart(
             },
         }
 
-        match spawn_singbox(bin, config_path).await {
+        match spawn_singbox(bin, config_path, logs).await {
             Ok(proc) => {
                 info!("sing-box restarted (pid {:?})", proc.process.pid());
                 return Some(proc);
@@ -286,10 +307,12 @@ async fn run_one(
     ctrl_rx: &mut mpsc::Receiver<Ctrl>,
     state: &Arc<AtomicU8>,
     last_error: &Arc<Mutex<Option<String>>>,
+    logs: &LogStore,
 ) -> RunOutcome {
     let ManagedProcess {
         mut process,
         cancel,
+        generation,
     } = proc;
     let mut events = match process.events() {
         Ok(events) => events,
@@ -314,7 +337,7 @@ async fn run_one(
                     error!("failed to wait for sing-box: {e}");
                 }
                 while let Some(event) = events.next().await {
-                    if let Some(message) = forward_log(event)
+                    if let Some(message) = forward_log(event, logs, generation)
                         && let Ok(mut slot) = last_error.lock()
                     {
                         *slot = Some(message);
@@ -324,7 +347,7 @@ async fn run_one(
             }
             event = events.next() => match event {
                 Some(event) => {
-                    if let Some(message) = forward_log(event)
+                    if let Some(message) = forward_log(event, logs, generation)
                         && let Ok(mut slot) = last_error.lock()
                     {
                         *slot = Some(message);
@@ -351,14 +374,15 @@ async fn run_one(
     }
 }
 
-/// Maps a sing-box log line onto a tracing level by its embedded level tag,
-/// mirroring the level sing-box itself assigns.
+/// Captures one line of sing-box output and forwards it to local logging.
 ///
-/// sing-box colours its own output with ANSI escapes. Those are stripped here:
-/// `tracing`'s formatter escapes control bytes in a message (so a raw ESC would
-/// print as a literal `\x1b[36m`), and the level colour is re-applied by our own
-/// subscriber anyway — so the embedded codes are pure noise.
-fn forward_log(event: ProcessEvent) -> Option<String> {
+/// sing-box colours its own output with ANSI escapes, which are stripped first:
+/// `tracing`'s formatter would otherwise print the raw escapes, and our own
+/// subscriber applies level colour anyway. The level comes from the tag sing-box
+/// embeds in the line, mirroring the level sing-box itself assigns. The buffer
+/// records the line with its real source and process run, so the tracing layer
+/// skips it under [`SING_BOX_OUTPUT_TARGET`] to avoid a second copy.
+fn forward_log(event: ProcessEvent, logs: &LogStore, generation: u64) -> Option<String> {
     let raw = match &event {
         ProcessEvent::Stdout(line) | ProcessEvent::Stderr(line) => line.text(),
         _ => return None,
@@ -368,52 +392,44 @@ fn forward_log(event: ProcessEvent) -> Option<String> {
     if line.is_empty() {
         return None;
     }
-    if line.contains("ERROR") || line.contains("FATAL") {
-        error!("sing-box: {line}");
-        Some(line.chars().take(4096).collect())
-    } else if line.contains("WARN") {
-        warn!("sing-box: {line}");
-        None
-    } else if line.contains("DEBUG") || line.contains("TRACE") {
-        debug!("sing-box: {line}");
-        None
-    } else {
-        info!("sing-box: {line}");
-        None
+    let level = singbox_level(line);
+    logs.record(LogSource::SingBox, level, generation, line);
+    match level {
+        LogLevel::Error => {
+            error!(target: SING_BOX_OUTPUT_TARGET, "sing-box: {line}");
+            Some(line.chars().take(4096).collect())
+        }
+        LogLevel::Warn => {
+            warn!(target: SING_BOX_OUTPUT_TARGET, "sing-box: {line}");
+            None
+        }
+        LogLevel::Debug | LogLevel::Trace => {
+            debug!(target: SING_BOX_OUTPUT_TARGET, "sing-box: {line}");
+            None
+        }
+        LogLevel::Info => {
+            info!(target: SING_BOX_OUTPUT_TARGET, "sing-box: {line}");
+            None
+        }
     }
 }
 
-/// Removes ANSI escape sequences (CSI `ESC [ … final`, plus stray lone ESCs).
-/// Returns the input unchanged when it holds no ESC, avoiding an allocation on
-/// the common path.
-fn strip_ansi(input: &str) -> std::borrow::Cow<'_, str> {
-    if !input.contains('\x1b') {
-        return std::borrow::Cow::Borrowed(input);
+/// Reads the level tag sing-box writes into a line.
+fn singbox_level(line: &str) -> LogLevel {
+    if line.contains("ERROR") || line.contains("FATAL") {
+        LogLevel::Error
+    } else if line.contains("WARN") {
+        LogLevel::Warn
+    } else if line.contains("DEBUG") || line.contains("TRACE") {
+        LogLevel::Debug
+    } else {
+        LogLevel::Info
     }
-    let mut out = String::with_capacity(input.len());
-    let mut chars = input.chars();
-    while let Some(c) = chars.next() {
-        if c != '\x1b' {
-            out.push(c);
-            continue;
-        }
-        // Skip a CSI sequence: `ESC [` then params/intermediates up to a final
-        // byte in 0x40..=0x7e. A bare ESC (no `[`) just drops the ESC itself.
-        if chars.clone().next() == Some('[') {
-            chars.next();
-            for f in chars.by_ref() {
-                if ('\u{40}'..='\u{7e}').contains(&f) {
-                    break;
-                }
-            }
-        }
-    }
-    std::borrow::Cow::Owned(out)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{check_config, strip_ansi};
+    use super::{Duration, SingBoxManager, check_config, strip_ansi};
 
     #[cfg(unix)]
     #[tokio::test]
@@ -434,10 +450,15 @@ mod tests {
         let outcome = tokio::time::timeout(
             Duration::from_secs(5),
             run_one(
-                ManagedProcess { process, cancel },
+                ManagedProcess {
+                    process,
+                    cancel,
+                    generation: 1,
+                },
                 &mut rx,
                 &state,
                 &last_error,
+                &LogStore::default(),
             ),
         )
         .await
@@ -474,16 +495,170 @@ mod tests {
         let outcome = tokio::time::timeout(
             Duration::from_secs(10),
             run_one(
-                ManagedProcess { process, cancel },
+                ManagedProcess {
+                    process,
+                    cancel,
+                    generation: 1,
+                },
                 &mut rx,
                 &state,
                 &last_error,
+                &LogStore::default(),
             ),
         )
         .await
         .unwrap();
         assert!(matches!(outcome, RunOutcome::Stopped));
         received.await.unwrap();
+    }
+
+    /// Writes an executable stand-in for sing-box into a fresh directory.
+    #[cfg(target_os = "linux")]
+    fn fake_singbox(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let bin = dir.join("fake-sing-box");
+        std::fs::write(&bin, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+        bin
+    }
+
+    #[cfg(target_os = "linux")]
+    fn scratch_dir(name: &str) -> std::path::PathBuf {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("blossom-{name}-{suffix}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Polls until `ready` holds, failing the test after five seconds.
+    #[cfg(target_os = "linux")]
+    async fn wait_until(mut ready: impl FnMut() -> bool) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !ready() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("condition not reached in time");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn supervised_output_is_captured_by_source_and_shuts_down_cleanly() {
+        use crate::logs::{LogLevel, LogSource, LogStore};
+
+        let dir = scratch_dir("supervise");
+        let pid_file = dir.join("pid");
+        let bin = fake_singbox(
+            &dir,
+            &format!(
+                "echo 'INFO sing-box ready'\n\
+                 echo 'ERROR listener failed secret=hunter2-secret-token' >&2\n\
+                 echo $$ > '{}'\n\
+                 exec sleep 60",
+                pid_file.display()
+            ),
+        );
+        let logs = LogStore::default();
+        logs.register_secret("hunter2-secret-token");
+        let manager = SingBoxManager::start_with_logs(bin, dir.join("config.json"), logs.clone())
+            .await
+            .unwrap();
+
+        let captured = || logs.resume(None, 100).unwrap().records;
+        wait_until(|| captured().len() == 2 && pid_file.exists()).await;
+        let pid: u32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let live = std::path::PathBuf::from(format!("/proc/{pid}"));
+        assert!(
+            live.exists(),
+            "sing-box child should be running before shutdown"
+        );
+
+        let records = captured();
+        assert_eq!(records.len(), 2, "each child line is captured exactly once");
+        let shapes: Vec<_> = records
+            .iter()
+            .map(|r| (r.source, r.level, r.process_generation, r.text.as_str()))
+            .collect();
+        assert!(shapes.contains(&(LogSource::SingBox, LogLevel::Info, 1, "INFO sing-box ready")));
+        assert!(shapes.contains(&(
+            LogSource::SingBox,
+            LogLevel::Error,
+            1,
+            "ERROR listener failed secret=[REDACTED]"
+        )));
+
+        manager.shutdown().await;
+        assert!(!live.exists(), "sing-box child survived shutdown");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn high_volume_child_output_is_bounded_and_never_stalls_the_child() {
+        use crate::logs::{LogCursor, LogSource, LogStore};
+
+        let dir = scratch_dir("volume");
+        let done_file = dir.join("done");
+        let bin = fake_singbox(
+            &dir,
+            &format!(
+                "i=0\nwhile [ $i -lt 5000 ]; do echo \"INFO line $i\"; i=$((i+1)); done\n\
+                 touch '{}'\nexec sleep 60",
+                done_file.display()
+            ),
+        );
+        let logs = LogStore::default();
+        let manager = SingBoxManager::start_with_logs(bin, dir.join("config.json"), logs.clone())
+            .await
+            .unwrap();
+
+        // The child reaches its final statement only if its pipe kept draining.
+        wait_until(|| done_file.exists()).await;
+        wait_until(|| {
+            logs.resume(None, 1)
+                .unwrap()
+                .records
+                .first()
+                .is_some_and(|r| r.text == "INFO line 4999")
+        })
+        .await;
+        // Replay the whole buffer in bounded batches. Nothing is evicted at this
+        // volume, so every line is retained exactly once and in order.
+        let generation = logs.generation().unwrap();
+        let mut cursor = LogCursor { generation, seq: 0 };
+        let mut replayed = Vec::new();
+        loop {
+            let batch = logs.resume(Some(cursor), 500).unwrap();
+            assert_eq!(batch.gap, None);
+            replayed.extend(batch.records.iter().map(|r| r.text.clone()));
+            cursor = batch.next;
+            if !batch.has_more {
+                break;
+            }
+        }
+        assert_eq!(replayed.len(), 5000);
+        assert_eq!(replayed.first().map(String::as_str), Some("INFO line 0"));
+        assert_eq!(replayed.last().map(String::as_str), Some("INFO line 4999"));
+        assert!(
+            logs.resume(None, 1)
+                .unwrap()
+                .records
+                .iter()
+                .all(|r| r.source == LogSource::SingBox)
+        );
+        manager.shutdown().await;
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
