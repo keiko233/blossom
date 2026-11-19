@@ -89,13 +89,14 @@ Discard a partial snapshot on disconnect and request a new one after reconnect. 
 
 The admin update, certificate, and terminal surfaces use the same typed payloads as v1, carried in v2 envelopes. The control plane only sends these to the current session, and each agent-to-control write is fenced or bound to that session.
 
-| Operation | Frames | Notes |
-| --- | --- | --- |
-| Agent and sing-box updates | `update.trigger`, `update.status` | `trigger` is the immediate operation; the desired versions in `welcome.updatePolicy` and every `agent.status.ack` remain the replayable policy. `update.status` streams the reconciler's state. |
-| ACME | `acme.issue`, `acme.dns_present`, `acme.dns_cleanup`, `acme.dns_ack`, `acme.result` | Same job id, issuer-server, generation, challenge-expiry, and bounded DNS record fences as v1. The control plane also checks that the result came from the job's current agent session. |
-| Admin PTY | `pty.open`, `pty.started`, `pty.data`, `pty.resize`, `pty.close`, `pty.exit` | `pty.data` is the one type valid in both directions. The admin relay binds the browser shell to the exact `wsSessionId`; a replaced session cannot receive or deliver its bytes. |
+| Operation                  | Frames                                                                              | Notes                                                                                                                                                                                           |
+| -------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Agent and sing-box updates | `update.trigger`, `update.status`                                                   | `trigger` is the immediate operation; the desired versions in `welcome.updatePolicy` and every `agent.status.ack` remain the replayable policy. `update.status` streams the reconciler's state. |
+| ACME                       | `acme.issue`, `acme.dns_present`, `acme.dns_cleanup`, `acme.dns_ack`, `acme.result` | Same job id, issuer-server, generation, challenge-expiry, and bounded DNS record fences as v1. The control plane also checks that the result came from the job's current agent session.         |
+| Admin PTY                  | `pty.open`, `pty.started`, `pty.data`, `pty.resize`, `pty.close`, `pty.exit`        | `pty.data` is the one type valid in both directions. The admin relay binds the browser shell to the exact `wsSessionId`; a replaced session cannot receive or deliver its bytes.                |
 
 `pty-v2` is advertised only when the agent runs with `AGENT_PTY_ENABLED=true` under a non-root service account. A v2 agent does not advertise `pty-v1`, so an older control plane never attempts the v1 relay on a v2 socket. `AGENT_PTY_MAX_SESSIONS`, the idle/hard lifetime limits, input/output backpressure, dimension clamping, and the local shell allowlist are unchanged from v1.
+
 ## Logs
 
 The Rust agent serves the retained redacted log buffer over v2 when it advertises:
@@ -111,6 +112,7 @@ The contract and its fixtures were imported from PR #137 (`d9426331f54ef9cc67565
 - **Context.** `logs.context` returns the target plus up to 50 same-source, same-process-run neighbours before and after it. A changed generation, eviction or missing sequence is a typed `logs.error`.
 - **Bounds and deadlines.** One connection serves at most 16 tails, two searches and eight context lookups. Requests queue on a bounded channel; overflow is `busy`. Searches and context lookups run on blocking workers with an 8 s deadline and a cancellation token, so the v2 socket loop keeps handling status and configuration.
 - **Session scope.** The worker and all of its tails and requests belong to one WebSocket connection. A reconnect, replacement or close cancels them, so a late result can never answer the next session. Request and subscription ids are echoed exactly.
+
 ## Telemetry
 
 Telemetry additions are additive to v2; v1 `telemetry.*` frames are unchanged.
@@ -119,13 +121,13 @@ An agent advertises `telemetry-v2` for live samples and
 advertise neither, either or both. The control plane subscribes only when the
 matching capability is present.
 
-| Frame | Direction | Notes |
-| --- | --- | --- |
-| `telemetry.subscribe` `{subscriptionId, purpose, intervalMs}` | control plane to agent | `purpose` is `live` or `history`; `intervalMs` is 1000–300000. The control plane uses 2000 for a coalesced live stream and 60000 for history. |
-| `telemetry.unsubscribe` `{subscriptionId}` | control plane to agent | Sent when the last admin viewer of a live stream leaves, or on replacement. |
-| `telemetry.inspect` `{requestId}` | control plane to agent | Requests the existing listener/interface snapshot. |
-| `telemetry.sample` `{subscriptionId?, purpose, sampledAt, cpuPercent, memory, disk, environment, networkScope, cgroupVersion, cpuLimit, memoryLimit, scopeKey, network?}` | agent to control plane | `network` is `{txBytesPerSecond, rxBytesPerSecond, windowMs}` or null. |
-| `telemetry.snapshot` | agent to control plane | Same payload as the v1 inspection snapshot. |
+| Frame                                                                                                                                                                     | Direction              | Notes                                                                                                                                         |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `telemetry.subscribe` `{subscriptionId, purpose, intervalMs}`                                                                                                             | control plane to agent | `purpose` is `live` or `history`; `intervalMs` is 1000–300000. The control plane uses 2000 for a coalesced live stream and 60000 for history. |
+| `telemetry.unsubscribe` `{subscriptionId}`                                                                                                                                | control plane to agent | Sent when the last admin viewer of a live stream leaves, or on replacement.                                                                   |
+| `telemetry.inspect` `{requestId}`                                                                                                                                         | control plane to agent | Requests the existing listener/interface snapshot.                                                                                            |
+| `telemetry.sample` `{subscriptionId?, purpose, sampledAt, cpuPercent, memory, disk, environment, networkScope, cgroupVersion, cpuLimit, memoryLimit, scopeKey, network?}` | agent to control plane | `network` is `{txBytesPerSecond, rxBytesPerSecond, windowMs}` or null.                                                                        |
+| `telemetry.snapshot`                                                                                                                                                      | agent to control plane | Same payload as the v1 inspection snapshot.                                                                                                   |
 
 - **Established.** Live v2 samples feed the same-origin admin WebSocket, which
   coalesces one sampler per server/session across viewers. They are not stored.
@@ -208,13 +210,13 @@ the agent wire are relay-generated, and the browser only ever sees its own
 ids. A response for an unknown id, another server or a replaced session is
 dropped.
 
-| Browser request | Agent request | Agent result | Browser result |
-| --- | --- | --- | --- |
-| `logs.subscribe` | `logs.subscribe` | `logs.batch` / `logs.gap` | `logs.batch` / `logs.gap` |
-| `logs.unsubscribe` | `logs.unsubscribe` | — | — |
-| `logs.search` | `logs.search` | `logs.search.result` / `logs.error` | `logs.search.result` / `logs.error` |
-| `logs.search.cancel` | `logs.search.cancel` | late result, dropped | — |
-| `logs.context` | `logs.context` | `logs.context.result` / `logs.error` | `logs.context.result` / `logs.error` |
+| Browser request      | Agent request        | Agent result                         | Browser result                       |
+| -------------------- | -------------------- | ------------------------------------ | ------------------------------------ |
+| `logs.subscribe`     | `logs.subscribe`     | `logs.batch` / `logs.gap`            | `logs.batch` / `logs.gap`            |
+| `logs.unsubscribe`   | `logs.unsubscribe`   | —                                    | —                                    |
+| `logs.search`        | `logs.search`        | `logs.search.result` / `logs.error`  | `logs.search.result` / `logs.error`  |
+| `logs.search.cancel` | `logs.search.cancel` | late result, dropped                 | —                                    |
+| `logs.context`       | `logs.context`       | `logs.context.result` / `logs.error` | `logs.context.result` / `logs.error` |
 
 Bounds:
 
@@ -272,16 +274,16 @@ The identifier is compiled from every input of the v3 document. The control plan
 
 The inputs, and how each one reaches the identifier:
 
-| Input | Changed by | How the identifier learns of it |
-| --- | --- | --- |
-| Server enabled state, node set and node settings, node credentials, subscription plan, status and expiry, group membership, user ban | Publish-gate mutations (`recordConfigChange`) | The sequence moves, so the cache no longer matches. Change notifications also invalidate. |
-| Routing rules | `app/src/query/rules.ts` | Each edit invalidates every server. |
-| Certificate material, active version, bindings | Import, replace, activate and discard (`withCertificateTransaction` in `app/src/query/certificates.ts`), and each issued install (`persistMaterial` in `app/src/lib/certificate-issuance.ts`) | Invalidated after the change commits, never before, so a concurrent compile cannot cache the old state under the new version. |
-| Subscription expiry | The clock | The deadline is the earliest expiry among the compiled subscriptions. |
-| Temporary user-ban expiry | The clock | Bounded by the maximum cache age (below). The ban expiry is not part of the deadline. |
-| Traffic quota exhaustion | Traffic reports | Bounded by the maximum cache age. A report does not invalidate. |
-| Certificate creation, renewal, deletion and DNS challenge steps | `app/src/query/certificates.ts` | No direct invalidation. They change no compiled input until an install, which invalidates. |
-| Desired agent and sing-box versions, poll and heartbeat intervals, server name and address | Admin edits | Not in the identifier. Versions reach the agent through `updatePolicy`. Intervals in the document body and in `welcome` take effect at the next handshake. |
+| Input                                                                                                                                | Changed by                                                                                                                                                                                    | How the identifier learns of it                                                                                                                            |
+| ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Server enabled state, node set and node settings, node credentials, subscription plan, status and expiry, group membership, user ban | Publish-gate mutations (`recordConfigChange`)                                                                                                                                                 | The sequence moves, so the cache no longer matches. Change notifications also invalidate.                                                                  |
+| Routing rules                                                                                                                        | `app/src/query/rules.ts`                                                                                                                                                                      | Each edit invalidates every server.                                                                                                                        |
+| Certificate material, active version, bindings                                                                                       | Import, replace, activate and discard (`withCertificateTransaction` in `app/src/query/certificates.ts`), and each issued install (`persistMaterial` in `app/src/lib/certificate-issuance.ts`) | Invalidated after the change commits, never before, so a concurrent compile cannot cache the old state under the new version.                              |
+| Subscription expiry                                                                                                                  | The clock                                                                                                                                                                                     | The deadline is the earliest expiry among the compiled subscriptions.                                                                                      |
+| Temporary user-ban expiry                                                                                                            | The clock                                                                                                                                                                                     | Bounded by the maximum cache age (below). The ban expiry is not part of the deadline.                                                                      |
+| Traffic quota exhaustion                                                                                                             | Traffic reports                                                                                                                                                                               | Bounded by the maximum cache age. A report does not invalidate.                                                                                            |
+| Certificate creation, renewal, deletion and DNS challenge steps                                                                      | `app/src/query/certificates.ts`                                                                                                                                                               | No direct invalidation. They change no compiled input until an install, which invalidates.                                                                 |
+| Desired agent and sing-box versions, poll and heartbeat intervals, server name and address                                           | Admin edits                                                                                                                                                                                   | Not in the identifier. Versions reach the agent through `updatePolicy`. Intervals in the document body and in `welcome` take effect at the next handshake. |
 
 Two bounds apply to anything the table does not cover, and to changes whose notification was lost. **The maximum cache age is 120 seconds** (`AGENT_DESIRED_CONFIG_MAX_AGE_MS` in `app/src/orpc/proxy/agent-desired-state.ts`), so an unsignalled change is reflected at the first status exchange after that. The deadline also caps at the earliest subscription expiry. Notifications make the update faster and are not needed for correctness. A status exchange within the deadline costs a read and no compile.
 
