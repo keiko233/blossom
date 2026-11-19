@@ -225,6 +225,10 @@ export const agentWsTelemetrySamplePayloadSchema = z.object({
   memoryLimit: byteCount.nullable(),
 });
 
+export type AgentWsTelemetrySamplePayload = z.infer<
+  typeof agentWsTelemetrySamplePayloadSchema
+>;
+
 export const agentWsTelemetryInspectPayloadSchema = z.object({
   requestId: correlationIdSchema,
 });
@@ -262,6 +266,10 @@ export const agentWsTelemetrySnapshotPayloadSchema = z.object({
     )
     .max(128),
 });
+
+export type AgentWsTelemetrySnapshotPayload = z.infer<
+  typeof agentWsTelemetrySnapshotPayloadSchema
+>;
 
 export const agentWsPtyOpenPayloadSchema = z.object({
   sessionId: z.string().min(1).max(128),

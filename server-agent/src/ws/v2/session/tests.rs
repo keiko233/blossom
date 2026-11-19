@@ -21,7 +21,11 @@ use crate::ws::ports::{WsCommand, WsError};
 use crate::ws::v2::codec::{
     AckStage, ConfigIdentifier, ConfigState, LogLevel, LogPolicyAck, LogPolicyDesired,
     LogPolicySource, RuntimeState, TrafficEntry, TrafficReport, UpdatePolicy,
+    TelemetryEnvironment,
+    TelemetryInterface, TelemetryListener, TelemetryProtocol, TelemetryUsage, TrafficEntry,
+    TrafficReport, UpdatePolicy,
 };
+use crate::ws::v2::telemetry::{HostSampler, Inspection, Measurement};
 
 const D7: &str = "7:sha256:48a9e1aa59f365863b57348ccd1701026c39652cfb74b8e2b039811611802ec6";
 const D8: &str = "8:sha256:2e8ae9a0be2819b1d63bef33ca897ea498557c1677a201bb59fb80fc01104422";
@@ -96,6 +100,43 @@ fn identity() -> HelloIdentity {
     }
 }
 
+struct TestSampler;
+
+impl HostSampler for TestSampler {
+    fn measure(&mut self) -> Measurement {
+        Measurement {
+            sampled_at: chrono::Utc::now(),
+            cpu_percent: Some(12.5),
+            memory: Some(TelemetryUsage {
+                used: 512,
+                total: 1024,
+            }),
+            disk: None,
+            environment: TelemetryEnvironment::Systemd,
+            cgroup_version: None,
+            cpu_limit: None,
+            memory_limit: None,
+            scope_key: "systemd|-|-|-|eth0".to_string(),
+            network: None,
+        }
+    }
+
+    fn inspect(&self) -> Inspection {
+        Inspection {
+            partial: false,
+            listeners: vec![TelemetryListener {
+                protocol: TelemetryProtocol::Tcp,
+                address: "127.0.0.1".to_string(),
+                port: 8080,
+            }],
+            interfaces: vec![TelemetryInterface {
+                name: "eth0".to_string(),
+                address: "192.0.2.10".to_string(),
+            }],
+        }
+    }
+}
+
 fn start(applied: Option<&str>) -> Harness {
     start_with_token_deadline(applied, None)
 }
@@ -128,6 +169,7 @@ fn start_with_token_deadline(
             &mut session_ports,
             &identity(),
             &SessionTiming::default(),
+            Some(Box::new(TestSampler)),
             &task_cancel,
             &store,
         )
@@ -1138,4 +1180,57 @@ fn report(report_id: &str) -> TrafficReport {
             downlink_bytes: 4096,
         }],
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_live_subscription_is_sampled_and_unsubscribe_stops_it() {
+    let mut harness = start(Some(D7));
+    expect_type(&mut harness, "hello").await;
+    harness.peer.send(Ok(welcome(D7, 30, None))).unwrap();
+    harness
+        .peer
+        .send(Ok(peer_frame(
+            "telemetry.subscribe",
+            json!({
+                "subscriptionId": "live-srv-1",
+                "purpose": "live",
+                "intervalMs": 1000,
+            }),
+        )))
+        .unwrap();
+
+    let sample = expect_type(&mut harness, "telemetry.sample").await;
+    assert_eq!(sample["subscriptionId"], "live-srv-1");
+    assert_eq!(sample["purpose"], "live");
+    assert_eq!(sample["scopeKey"], "systemd|-|-|-|eth0");
+    assert_eq!(sample["cpuPercent"], 12.5);
+
+    harness
+        .peer
+        .send(Ok(peer_frame(
+            "telemetry.unsubscribe",
+            json!({"subscriptionId": "live-srv-1"}),
+        )))
+        .unwrap();
+    expect_silence(&mut harness).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn inspection_answers_with_the_existing_snapshot_payload() {
+    let mut harness = start(Some(D7));
+    expect_type(&mut harness, "hello").await;
+    harness.peer.send(Ok(welcome(D7, 30, None))).unwrap();
+    harness
+        .peer
+        .send(Ok(peer_frame(
+            "telemetry.inspect",
+            json!({"requestId": "inspect-1"}),
+        )))
+        .unwrap();
+
+    let snapshot = expect_type(&mut harness, "telemetry.snapshot").await;
+    assert_eq!(snapshot["requestId"], "inspect-1");
+    assert_eq!(snapshot["partial"], false);
+    assert_eq!(snapshot["listeners"][0]["port"], 8080);
+    assert_eq!(snapshot["interfaces"][0]["name"], "eth0");
 }

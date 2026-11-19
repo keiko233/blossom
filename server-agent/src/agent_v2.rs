@@ -10,9 +10,10 @@
 //! sing-box restart. Status is published on change, so the session can send
 //! `agent.status` as soon as the core's state moves.
 //!
-//! Not yet served by v2, so none is advertised: PTY, ACME, and telemetry. The
-//! update targets arrive as `updatePolicy` in `welcome` and in
-//! `agent.status.ack`, so v2 applies them without `update.trigger`.
+//! Not yet served by v2, so neither is advertised: PTY and ACME. Telemetry is
+//! served on Linux through the additive v2 subscription frames. The update
+//! targets arrive as `updatePolicy` in `welcome` and in `agent.status.ack`, so
+//! v2 applies them without `update.trigger`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -48,6 +49,7 @@ use crate::ws::v2::session::{
     self, ApplyJob, ApplyOutcome, ApplyResult, Command, CoreStatus, HelloIdentity, LogPolicyJob,
     SnapshotRefusal,
 };
+use crate::ws::v2::telemetry;
 use crate::ws::v2::traffic::run_reporter;
 use crate::{
     AGENT_BUILD_ID, AGENT_VERSION, AgentStatus, Args, AuthMode, ReportedError, ServiceStartup,
@@ -56,8 +58,7 @@ use crate::{
     shutdown_signal, start_last_known_good, update_status_payload_from,
 };
 
-/// What v2 advertises in `hello`. Telemetry and log policy remain v1-only, and
-/// `ws-v1` is not spoken on this transport.
+/// What v2 advertises in `hello`; `ws-v1` is not spoken on this transport.
 const V2_CAPABILITIES: &[&str] = &[
     "config-v3",
     "managed-tls-v3",
@@ -80,6 +81,10 @@ fn v2_capabilities(pty_enabled: bool) -> Vec<String> {
         .collect();
     if pty_enabled {
         capabilities.push(V2_PTY_CAPABILITY.to_string());
+    }
+    if telemetry::supported() {
+        capabilities.push("telemetry-v2".to_string());
+        capabilities.push("telemetry-history-v2".to_string());
     }
     capabilities
 }

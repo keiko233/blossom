@@ -148,6 +148,7 @@ function fakeV2Store() {
       ],
     })),
     recordLogPolicyAck: vi.fn(async () => "recorded" as const),
+    recordMetricHistory: vi.fn(async () => "written" as const),
     compile: vi.fn(async () => ({
       desiredRevision: REVISION,
       document: {},

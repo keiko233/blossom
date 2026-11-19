@@ -22,6 +22,7 @@ use tracing::{debug, info, warn};
 use super::adapter::V2Connector;
 use super::session::{self, HelloIdentity, SessionEnd, SessionPorts, SessionTiming, Wire};
 use crate::logs::LogStore;
+use super::telemetry;
 use crate::ws::Jitter;
 use crate::ws::ports::WsError;
 
@@ -124,6 +125,7 @@ pub async fn run<C, J>(
                     ports,
                     &options.identity,
                     &options.timing,
+                    telemetry::production_sampler(),
                     cancel,
                     store,
                 )

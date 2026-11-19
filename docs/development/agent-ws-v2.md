@@ -111,12 +111,82 @@ The contract and its fixtures were imported from PR #137 (`d9426331f54ef9cc67565
 - **Context.** `logs.context` returns the target plus up to 50 same-source, same-process-run neighbours before and after it. A changed generation, eviction or missing sequence is a typed `logs.error`.
 - **Bounds and deadlines.** One connection serves at most 16 tails, two searches and eight context lookups. Requests queue on a bounded channel; overflow is `busy`. Searches and context lookups run on blocking workers with an 8 s deadline and a cancellation token, so the v2 socket loop keeps handling status and configuration.
 - **Session scope.** The worker and all of its tails and requests belong to one WebSocket connection. A reconnect, replacement or close cancels them, so a late result can never answer the next session. Request and subscription ids are echoed exactly.
+## Telemetry
+
+Telemetry additions are additive to v2; v1 `telemetry.*` frames are unchanged.
+An agent advertises `telemetry-v2` for live samples and
+`telemetry-history-v2` for the independent history cadence. An agent may
+advertise neither, either or both. The control plane subscribes only when the
+matching capability is present.
+
+| Frame | Direction | Notes |
+| --- | --- | --- |
+| `telemetry.subscribe` `{subscriptionId, purpose, intervalMs}` | control plane to agent | `purpose` is `live` or `history`; `intervalMs` is 1000–300000. The control plane uses 2000 for a coalesced live stream and 60000 for history. |
+| `telemetry.unsubscribe` `{subscriptionId}` | control plane to agent | Sent when the last admin viewer of a live stream leaves, or on replacement. |
+| `telemetry.inspect` `{requestId}` | control plane to agent | Requests the existing listener/interface snapshot. |
+| `telemetry.sample` `{subscriptionId?, purpose, sampledAt, cpuPercent, memory, disk, environment, networkScope, cgroupVersion, cpuLimit, memoryLimit, scopeKey, network?}` | agent to control plane | `network` is `{txBytesPerSecond, rxBytesPerSecond, windowMs}` or null. |
+| `telemetry.snapshot` | agent to control plane | Same payload as the v1 inspection snapshot. |
+
+- **Established.** Live v2 samples feed the same-origin admin WebSocket, which
+  coalesces one sampler per server/session across viewers. They are not stored.
+- **Established.** On `hello` with `telemetry-history-v2`, the control plane
+  sends the history subscription itself, before any browser connects. The
+  receipt minute is the bucket key and the write is conditional on the exact
+  v2 `sessionId` still matching `server.ws_session_id`, in the same SQL
+  statement as the upsert. A replaced or disabled session cannot write.
+- **Established.** `scopeKey` is the canonical identity of the measurement
+  denominator and network interface set. The control plane stores and charts
+  by it; a changed key breaks the series instead of joining incomparable
+  values. A missing measurement is null and becomes a gap.
+- **Established.** The Rust agent computes network rates from counter deltas
+  across a stable, non-loopback interface set, using monotonic elapsed time.
+  The first observation, a restart, a counter reset or an unreadable counter
+  sends `network: null`; a changed interface set also changes `scopeKey` so
+  incomparable series are not joined.
+- **Established.** Live and history frames never carry certificate material,
+  terminal bytes or log contents.
+
+The machine-checked frames are in
+`packages/contracts/fixtures/agent-ws-v2.frames.json`. They include a live
+subscription and sample with network rates, a history subscription and sample
+with a missing network reading, unsubscribe, inspect and snapshot. The Rust
+client must reproduce those frames byte-for-byte after JSON parsing.
+
+### Rust agent implementation
+
+The production Rust agent implements this surface behind `--ws-protocol v2`:
+
+1. A Linux v2 `hello` advertises `telemetry-v2` and `telemetry-history-v2`;
+   non-Linux builds and v1 sessions do not.
+2. `src/ws/v2/telemetry/` decodes the three control-plane frames and keeps
+   subscriptions in per-session state. A new subscription with the same id
+   replaces the cadence; unsubscribe stops future sends; a replaced session
+   starts empty.
+3. Live samples follow `intervalMs` and carry the same `subscriptionId`.
+   History is sampled independently on at least a 60-second cadence, so it
+   continues with no browser and does not depend on live subscriptions.
+4. One sampler serves every subscription due on the same tick, reusing the v1
+   `environment`, cgroup version/limit, `/proc` and inspection collection.
+   Blocking reads run behind bounded queues so config and traffic stay
+   responsive.
+5. Network rates sum counter deltas over the stable interface set with a
+   monotonic `windowMs`; initial, reset, read-failure and window
+   discontinuities send null. `scopeKey` is built from environment, cgroup
+   version, limits and the sorted interface set, e.g.
+   `systemd|-|-|-|eth0,eth1`.
+6. `telemetry.inspect` returns the existing snapshot with the same `requestId`;
+   no snapshot is sent unsolicited.
+7. Outbound telemetry is checked against the negotiated `maxFrameBytes`; an
+   oversized sample or snapshot is dropped instead of closing the session.
+
+The fixtures pin the JSON shape. The Rust codec decodes them directly, and
+the process-level lifecycle test exercises live, history (before a viewer),
+network rates, inspection and unsubscribe.
 
 ## Not in v2 yet
 
-These remain v1-only and are never sent to v2 sessions:
-
-- `telemetry.*`, the log policy messages, and the admin log tail, search and context frames; see [Admin log relay](#admin-log-relay).
+None. Update, ACME, PTY, telemetry, log policy, and log tail/search are carried
+in v2 for capable agents; v1 remains for clients that do not negotiate v2.
 
 ## Admin log relay
 
@@ -232,19 +302,15 @@ The control plane advertises `reconnectBeforeSeconds`. Remote delivery across in
 
 Each target is listed separately. "Not run" means the change has no evidence on that target.
 
-- **Automated, no database.** Contract schemas, direction and size checks, and both sides of the wire fixtures (`packages/contracts`), including `pty.data` in both directions and the update/ACME/PTY fixtures. Session state machine, snapshot chunking, deadline expiry, fenced snapshots, disabled servers and hub routing, including the token-bound start (`app/src/lib/agent-ws-v2-*.test.ts`, `app/src/lib/realtime-hub-v2.test.ts`). Operation parity is covered by the v2 session and hub tests, the admin PTY route/authorization tests, and the Cloudflare PTY tests for exact session routing.
+- **Automated, no database.** Contract schemas, direction and size checks, and both sides of the wire fixtures (`packages/contracts`), including PTY, update/ACME, log-policy, log tail/search and telemetry fixtures. Session state machine, snapshot chunking, deadline expiry, fenced snapshots, disabled servers, hub routing, telemetry normalization, the shared live sampler and the admin metric route (`app/src/lib/agent-ws-v2-*.test.ts`, `app/src/lib/realtime-hub-v2.test.ts`, `app/src/lib/live-metrics.test.ts`, `app/src/lib/realtime-hub-live-metrics.test.ts`, `app/src/lib/admin-metrics-route.test.ts`).
 - **Disposable PostgreSQL, node-postgres and neon-http.** Fenced acknowledgements, status, update status, traffic, the version fence on cached identifiers, token rotation, the token-bound start, and v1/v2 disconnect identity (`app/src/query/agent-ws-v2-state.integration.test.ts`, `app/src/query/agent-ws-session.integration.test.ts`). Log-policy revision CAS, expiry normalization, stale and replaced ACKs, failed-apply status and reconnect snapshots (`app/src/query/log-policy.integration.test.ts`). Convergence through the real store adapter and compiler: a routing-rule change with no notification is recovered by the status exchange after the deadline, an invalidated change is reported on the next status, and a rotated credential, a disabled server and a snapshot each stop or serve as specified (`app/src/query/agent-ws-v2-convergence.integration.test.ts`). The neon-http runs use a local `/sql` proxy in front of the same database, not Neon's hosted service.
 - **Disposable PostgreSQL, OAuth.** `agent-ws-v2-oauth.integration.test.ts` uses real provider tokens for the pending proof, first promotion, generation replacement, interrupted-rotation recovery, replay refusal, revocation, expiry, certificate-deployment fencing, and server deletion cleanup. Ran on node-postgres and on neon-http through a local `/sql` proxy in front of the same database.
-- **Rust lifecycle.** `server-agent/tests/ws_v2_lifecycle.rs` runs the real agent binary against a local v2 WebSocket control plane and a fake sing-box with disposable state. It covers a cold multi-chunk snapshot apply, an unacknowledged traffic report replayed byte-for-byte under the same id, missed-notification recovery through `agent.status.ack`, a failed candidate rolling back to the last-known-good config, and an offline restart from that config. The control plane records and fails every plain HTTP agent API request; the test asserts none occurred.
-- **Node server + Rust agent, built and run locally.** On 2026-11-19 the built Node target ran against a disposable PostgreSQL and the real `server-agent` in `--ws-protocol v2` mode with a fake sing-box and disposable state. The agent completed `hello`/`welcome`, applied the compiled snapshot, advertised `pty-v2`, and the database recorded the fenced session and applied revision. A first-user admin then opened the real `/api/admin/servers/$id/pty/ws` route, and `echo INTEROP_PTY_OK` round-tripped through the browser relay, Node hub, Rust PTY, and back. The earlier Node-only sequence also covered the subprotocol echo, status acknowledgement, digest-verified snapshot, a credential rotation during a live session (a `config.get` then sends no snapshot, `session_replaced` with close 4000), and the old token refused with `401`. That client is a scratch script and is not committed. Update download and ACME order execution were not driven end to end because they would need a fake release feed/CA; their frames are covered by unit and fixture tests.
-- **Cloudflare, local workerd.** The earlier `wrangler dev --local` (Wrangler 4.164) run covered the Durable Object's upgrade, message path, fenced close, a 70-second idle welcome, and `server_disabled`. PTY v2 framing and exact-session routing in `pty-session.cloudflare.ts` are unit-tested, but this change did not re-run workerd or open a terminal there.
+- **Disposable PostgreSQL, v2 metric history.** A write with the exact `ws_session_id` succeeds, a replaced session id and a disabled server are fenced, and the newer receipt wins within a minute (`app/src/query/server-metric-history.integration.test.ts`, node-postgres).
+- **Rust lifecycle.** `server-agent/tests/ws_v2_lifecycle.rs` runs the real agent binary against a local v2 WebSocket control plane and a fake sing-box with disposable state. It covers a cold multi-chunk snapshot apply, an unacknowledged traffic report replayed byte-for-byte under the same id, missed-notification recovery through `agent.status.ack`, a failed candidate rolling back to the last-known-good config, an offline restart from that config, history before any live viewer, a live sample with counter-derived network rates, inspection and unsubscribe, and redacted log tail/search with session reset. The control plane records and fails every plain HTTP agent API request; the test asserts none occurred.
+- **Node server + Rust agent, built and run locally.** On 2026-11-19 the built Node target ran against a disposable PostgreSQL and the real `server-agent` in `--ws-protocol v2` mode with a fake sing-box and disposable state. The agent completed `hello`/`welcome`, applied the compiled snapshot, advertised `pty-v2` and both telemetry capabilities, wrote a metric history minute before any viewer, and served a live sample with network rates over the admin metric WebSocket. A first-user admin then opened the real `/api/admin/servers/$id/pty/ws` route, and `echo INTEROP_PTY_OK` round-tripped through the browser relay, Node hub, Rust PTY, and back. The earlier Node-only sequence also covered the subprotocol echo, status acknowledgement, digest-verified snapshot, a credential rotation during a live session (a `config.get` then sends no snapshot, `session_replaced` with close 4000), and the old token refused with `401`. That client is a scratch script and is not committed. Update download and ACME order execution were not driven end to end because they would need a fake release feed/CA; their frames are covered by unit and fixture tests.
+- **Cloudflare, local workerd.** The earlier `wrangler dev --local` (Wrangler 4.164) run covered the Durable Object's upgrade, message path, fenced close, a 70-second idle welcome, and `server_disabled`. PTY v2 framing and exact-session routing in `pty-session.cloudflare.ts` are unit-tested, but this change did not re-run workerd or open a terminal there. Metric relay and log relay attachment/alarm paths are unit-tested with stand-in agents.
 - **Cloudflare, hibernation.** Not verified. Hibernation was not observed, and timer behaviour and the `4000`-series close after a real wake were not run in any environment. Check them against a deployment before relying on them.
 - **Cloudflare, hosted.** Not verified. Nothing was deployed, and hosted Hyperdrive and the `Sec-WebSocket-Protocol` response through the platform were not exercised.
 - **Vercel.** Built only. Connection lifetime, `reconnectBeforeSeconds` and cross-instance Redis delivery are not verified.
-- **Rust agent.** The v2 codec decodes every shared fixture; the session tests cover update triggers, ACME issue/ack, PTY commands, log-policy requests/acks, and outbound terminal frames; the full Rust suite covers the existing PTY and ACME managers. The process lifecycle test covers configuration, traffic, status, rollback, and `log-policy-v1`.
-- Admin log relay: reducer, route admission, Nitro relay, hub Redis routing and
-  Cloudflare attachment/alarm relay are unit-tested with stand-in agents.
-  Workerd hibernation and a real browser client remain unverified.
-- Retained tail, search, context, gaps and session reset: unit-tested against the real in-memory buffer and the shared log fixtures.
-- The Rust lifecycle test streams the fake sing-box synthetic stdout and stderr through `logs.subscribe`, asserts a redacted credential never reaches the wire, checks that a reconnect drops the old tail, and drives paginated search and context over the retained buffer.
-- The Rust log surface was not exercised through the Node relay or under workerd in this change; the control-plane side remains covered by the shared contract fixtures and relay tests.
+- **Rust agent.** The v2 codec decodes every shared fixture; session tests cover update triggers, ACME issue/ack, PTY commands, log-policy requests/acks, log tail/search, telemetry subscriptions and outbound frames; the full Rust suite covers the existing PTY, ACME, log and telemetry managers. The process lifecycle test covers configuration, traffic, status, rollback, `log-policy-v1`, telemetry and retained logs.
+- Admin log relay: reducer, route admission, Nitro relay, hub Redis routing and Cloudflare attachment/alarm relay are unit-tested with stand-in agents. Workerd hibernation and a real browser client remain unverified.

@@ -549,7 +549,16 @@ async fn session_two(stream: TcpStream, first_traffic: Value) {
 async fn run_first_session(socket: &mut WebSocket) -> Value {
     let mut config_acked = false;
     let mut traffic = None;
-    while !config_acked || traffic.is_none() {
+    let mut history_seen = false;
+    let mut live_seen = false;
+    let mut snapshot_seen = false;
+    let has_interfaces = has_non_loopback_interface();
+    send(
+        socket,
+        &telemetry_subscribe("history-session-1", "history", 60_000),
+    )
+    .await;
+    while !config_acked || traffic.is_none() || !history_seen || !live_seen || !snapshot_seen {
         let frame = receive(socket).await;
         match frame["type"].as_str().unwrap() {
             "config.get" => {
@@ -563,6 +572,75 @@ async fn run_first_session(socket: &mut WebSocket) -> Value {
                 config_acked = true;
             }
             "traffic.report" => traffic = Some(frame["payload"].clone()),
+            "telemetry.sample" => {
+                let payload = &frame["payload"];
+                let purpose = payload["purpose"].as_str().unwrap();
+                assert!(!payload["scopeKey"].as_str().unwrap().contains(' '));
+                assert!(
+                    payload["sampledAt"].as_str().unwrap().contains('T'),
+                    "{frame}"
+                );
+                if purpose == "history" {
+                    assert_eq!(payload["subscriptionId"], "history-session-1");
+                    assert!(!history_seen, "one history sample before any live view");
+                    history_seen = true;
+                    send(
+                        socket,
+                        &telemetry_subscribe("live-session-1", "live", 1_000),
+                    )
+                    .await;
+                } else {
+                    assert_eq!(purpose, "live", "{frame}");
+                    assert_eq!(payload["subscriptionId"], "live-session-1");
+                    if has_interfaces {
+                        let network = &payload["network"];
+                        assert!(
+                            network.is_object(),
+                            "a second observation with interfaces must yield rates: {frame}"
+                        );
+                        assert!(network["windowMs"].as_u64().unwrap() >= 1);
+                        assert!(network["txBytesPerSecond"].is_number(), "{frame}");
+                        assert!(network["rxBytesPerSecond"].is_number(), "{frame}");
+                    }
+                    live_seen = true;
+                    send(
+                        socket,
+                        &json!({
+                            "v": 2,
+                            "type": "telemetry.inspect",
+                            "ts": chrono::Utc::now().to_rfc3339(),
+                            "payload": {"requestId": "inspect-1"},
+                        }),
+                    )
+                    .await;
+                }
+            }
+            "telemetry.snapshot" => {
+                assert_eq!(frame["payload"]["requestId"], "inspect-1");
+                assert_eq!(frame["payload"]["partial"], false);
+                assert!(frame["payload"]["listeners"].is_array());
+                snapshot_seen = true;
+                send(
+                    socket,
+                    &json!({
+                        "v": 2,
+                        "type": "telemetry.unsubscribe",
+                        "ts": chrono::Utc::now().to_rfc3339(),
+                        "payload": {"subscriptionId": "live-session-1"},
+                    }),
+                )
+                .await;
+                send(
+                    socket,
+                    &json!({
+                        "v": 2,
+                        "type": "telemetry.unsubscribe",
+                        "ts": chrono::Utc::now().to_rfc3339(),
+                        "payload": {"subscriptionId": "history-session-1"},
+                    }),
+                )
+                .await;
+            }
             "agent.status" => {}
             "log.policy.ack" => {}
             other => panic!("unexpected frame in the first session: {other}: {frame}"),
@@ -700,6 +778,28 @@ async fn check_tail(socket: &mut WebSocket) {
             other => panic!("unexpected frame while tailing logs: {other}: {frame}"),
         }
     }
+fn telemetry_subscribe(subscription_id: &str, purpose: &str, interval_ms: u64) -> Value {
+    json!({
+        "v": 2,
+        "type": "telemetry.subscribe",
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "payload": {
+            "subscriptionId": subscription_id,
+            "purpose": purpose,
+            "intervalMs": interval_ms,
+        },
+    })
+}
+
+fn has_non_loopback_interface() -> bool {
+    std::fs::read_to_string("/proc/net/dev")
+        .map(|input| {
+            input.lines().skip(2).any(|line| {
+                line.split_once(':')
+                    .is_some_and(|(name, _)| !name.trim().is_empty() && name.trim() != "lo")
+            })
+        })
+        .unwrap_or(false)
 }
 
 async fn run_second_session(socket: &mut WebSocket, first_traffic: Value) {

@@ -42,6 +42,8 @@ export const serverEnvSchema = z.object({
   // Optional shared backplane for agent WebSocket fan-out across Node/Vercel
   // instances. Cloudflare uses the AgentSessionDO binding instead.
   REDIS_URL: z.string().url().optional(),
+  /** Scheduler-only bearer token for bounded maintenance routes. */
+  MAINTENANCE_TOKEN: z.string().min(16).optional(),
 });
 
 export const clientEnvSchema = z.object({

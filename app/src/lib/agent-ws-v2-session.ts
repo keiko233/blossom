@@ -10,6 +10,7 @@ import type {
 } from "@blossom/contracts/agent-ws";
 import {
   AGENT_WS_V2_LIMITS,
+  AGENT_WS_V2_TELEMETRY_HISTORY_CAPABILITY,
   createAgentWsV2Frame,
   encodeAgentWsV2Frame,
   parseAgentWsV2Frame,
@@ -21,6 +22,9 @@ import {
   type AgentWsV2Message,
   type AgentWsV2PayloadOf,
   type AgentWsV2StatusPayload,
+  type AgentWsV2TelemetrySamplePayload,
+  type AgentWsV2TelemetrySnapshotPayload,
+  type AgentWsV2TelemetrySubscribePayload,
   type AgentWsV2TrafficReportPayload,
   type AgentWsV2UpdatePolicy,
   type AgentWsV2ControlMessageType,
@@ -66,6 +70,11 @@ export type AgentWsV2PtyFrame =
   | { type: "pty.started"; payload: AgentWsPtyStartedPayload }
   | { type: "pty.data"; payload: AgentWsPtyDataPayload }
   | { type: "pty.exit"; payload: AgentWsPtyExitPayload };
+export type AgentWsV2MetricOutcome =
+  | "written"
+  | "superseded"
+  | "fenced"
+  | "invalid";
 
 /**
  * Persistence port for one v2 session. Every write names the session, and the
@@ -168,6 +177,17 @@ export interface AgentWsV2Store {
     ack: LogPolicyAckPayload,
   ): Promise<LogPolicyAckOutcome>;
   /**
+   * Records the independent history cadence. The write is conditional on this
+   * exact session still being `server.ws_session_id`, so a replaced session
+   * can never fill or overwrite a minute bucket. Browser requests never call
+   * this path.
+   */
+  recordMetricHistory(
+    serverId: string,
+    sessionId: string,
+    sample: AgentWsV2TelemetrySamplePayload,
+  ): Promise<AgentWsV2MetricOutcome>;
+  /**
    * Compiles the same desired state the v3 HTTP response serves. `validUntil`
    * is the instant the identifier must be recompiled by, even with no change.
    */
@@ -206,11 +226,18 @@ export interface OpenAgentWsV2SessionOptions {
    * agent to stop the shell.
    */
   onPtyFrame?: (frame: AgentWsV2PtyFrame) => boolean | Promise<boolean>;
+  /**
    * Receives the raw text of an `agent`-direction log frame after direction,
    * envelope and payload validation. The admin log relay owns these frames;
    * a session without a relay simply ignores them.
    */
   onLogFrame?: (text: string) => void | Promise<void>;
+  /** Called for every valid sample, independent of whether it was stored. */
+  onSample?: (sample: AgentWsV2TelemetrySamplePayload) => void;
+  /** Called for an on-demand inspection snapshot. */
+  onSnapshot?: (snapshot: AgentWsV2TelemetrySnapshotPayload) => void;
+  /** Called after `welcome` is sent, for subscriptions held by viewers. */
+  onWelcome?: () => void;
 }
 
 export interface AgentWsV2Session {
@@ -227,6 +254,11 @@ export interface AgentWsV2Session {
    * before `welcome`, after close, or when the socket refuses the frame.
    */
   sendLogFrame(text: string): boolean;
+  /** Starts or replaces a telemetry subscription on a welcomed session. */
+  subscribeTelemetry(payload: AgentWsV2TelemetrySubscribePayload): void;
+  unsubscribeTelemetry(subscriptionId: string): void;
+  /** Requests the listener/interface snapshot used by the inspection panel. */
+  inspectTelemetry(requestId: string): void;
   close(): Promise<void>;
 }
 
@@ -292,6 +324,7 @@ export function openAgentWsV2Session(
   let pending = options.pending ?? false;
   let closed = false;
   let snapshotGeneration = 0;
+  let capabilities: readonly string[] = [];
 
   function send<T extends AgentWsV2ControlMessageType>(
     type: T,
@@ -469,6 +502,15 @@ export function openAgentWsV2Session(
       },
       id,
     );
+    options.onWelcome?.();
+    capabilities = hello.capabilities;
+    if (capabilities.includes(AGENT_WS_V2_TELEMETRY_HISTORY_CAPABILITY)) {
+      send("telemetry.subscribe", {
+        subscriptionId: `history-${sessionId}`,
+        purpose: "history",
+        intervalMs: 60_000,
+      });
+    }
   }
 
   async function onStatus(status: AgentWsV2StatusPayload, id?: string) {
@@ -649,6 +691,28 @@ export function openAgentWsV2Session(
     }
   }
 
+  async function onTelemetrySample(sample: AgentWsV2TelemetrySamplePayload) {
+    options.onSample?.(sample);
+    if (sample.purpose !== "history") {
+      return;
+    }
+    const outcome = await store.recordMetricHistory(
+      serverId,
+      sessionId,
+      sample,
+    );
+    if (outcome === "invalid") {
+      logFailure(
+        "metric history",
+        new Error("sample contained no usable measurement"),
+      );
+    }
+  }
+
+  function onTelemetrySnapshot(snapshot: AgentWsV2TelemetrySnapshotPayload) {
+    options.onSnapshot?.(snapshot);
+  }
+
   return {
     get welcomed() {
       return welcomed;
@@ -754,10 +818,37 @@ export function openAgentWsV2Session(
           case "log.policy.ack":
             await onLogPolicyAck(message.payload);
             return;
+          case "telemetry.sample":
+            await onTelemetrySample(message.payload);
+            return;
+          case "telemetry.snapshot":
+            onTelemetrySnapshot(message.payload);
+            return;
         }
       } catch (error) {
         logFailure(message.kind, error);
       }
+    },
+
+    subscribeTelemetry(payload) {
+      if (closed || !welcomed) {
+        return;
+      }
+      send("telemetry.subscribe", payload);
+    },
+
+    unsubscribeTelemetry(subscriptionId) {
+      if (closed || !welcomed) {
+        return;
+      }
+      send("telemetry.unsubscribe", { subscriptionId });
+    },
+
+    inspectTelemetry(requestId) {
+      if (closed || !welcomed) {
+        return;
+      }
+      send("telemetry.inspect", { requestId });
     },
 
     async close() {

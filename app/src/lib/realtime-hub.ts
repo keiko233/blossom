@@ -1,4 +1,5 @@
 import {
+  agentWsTelemetrySnapshotPayloadSchema,
   createAgentWsFrame,
   encodeAgentWsFrame,
   type AgentWsAcmeDnsAckPayload,
@@ -13,6 +14,8 @@ import {
   AGENT_WS_V2_SUBPROTOCOL,
   createAgentWsV2Frame,
   encodeAgentWsV2Frame,
+  type AgentWsV2TelemetrySamplePayload,
+  type AgentWsV2TelemetrySnapshotPayload,
 } from "@blossom/contracts/agent-ws-v2";
 import type { LogPolicyNotifyPayload } from "@blossom/contracts/log-policy";
 import Redis from "ioredis";
@@ -58,8 +61,14 @@ import type {
 } from "./logs-relay-types";
 import { NitroAdminLogRelay } from "./logs-relay.nitro";
 import {
-  type AgentPtyTarget,
+  LIVE_METRIC_INTERVAL_MS,
+  liveSampleFromV1,
+  liveSampleFromV2,
+  type LiveMetricSample,
+} from "./live-metrics";
+import {
   REALTIME_BACKPLANE_CHANNEL,
+  type AgentPtyTarget,
   type RealtimeBackplane,
   type RealtimeBackplaneMessage,
   type RealtimeHub,
@@ -177,6 +186,23 @@ type LocalV2Connection = {
   leaseTimer?: ReturnType<typeof setTimeout>;
 };
 
+export interface LiveMetricsSubscriptionContext {
+  serverId: string;
+  connectedAt: string;
+  /** The fenced v2 session id, or null for a v1 socket. */
+  sessionId: string | null;
+  protocol: "v1" | "v2";
+}
+
+export type LiveMetricsHandler = (sample: LiveMetricSample) => void;
+
+interface LiveMetricsGroup {
+  context: LiveMetricsSubscriptionContext;
+  handlers: Set<LiveMetricsHandler>;
+  subscriptionId?: string;
+  interval?: ReturnType<typeof setInterval>;
+}
+
 export type PtyRelayEvent =
   | { type: "frame"; frame: string }
   | { type: "agent_disconnected" };
@@ -245,6 +271,11 @@ export class NitroRealtimeHub implements RealtimeHub {
     record: LogRelayAuditRecord,
   ) => Promise<void>;
   private readonly telemetry = new TelemetryRequests();
+  private readonly liveMetrics = new Map<string, LiveMetricsGroup>();
+  private readonly pendingSnapshots = new Map<
+    string,
+    (snapshot: unknown) => void
+  >();
   private backplaneReady: Promise<void> | undefined;
 
   constructor(
@@ -405,6 +436,16 @@ export class NitroRealtimeHub implements RealtimeHub {
               this.deliverV2PtyFrame(serverId, started.sessionId, frame),
             onLogFrame: (text) =>
               this.deliverLogAgentFrame(serverId, started.sessionId, text),
+            onSample: (sample) =>
+              this.acceptV2MetricSample(serverId, started.sessionId, sample),
+            onSnapshot: (snapshot) =>
+              this.acceptV2MetricSnapshot(
+                serverId,
+                started.sessionId,
+                snapshot,
+              ),
+            onWelcome: () =>
+              this.resubscribeLiveMetrics(serverId, started.sessionId),
           });
           connection.sessionId = started.sessionId;
           connection.connectedAt = started.connectedAt.toISOString();
@@ -443,7 +484,7 @@ export class NitroRealtimeHub implements RealtimeHub {
           return;
         }
         const session = await connection.session;
-        await session?.handleText(message.text());
+        await session?.session.handleText(message.text());
       },
       close: async (peer) => {
         const connection = this.removeV2Connection(serverId, peer);
@@ -485,7 +526,7 @@ export class NitroRealtimeHub implements RealtimeHub {
           }));
         }
         const session = await connection.session.catch(() => undefined);
-        await session?.close();
+        await session?.session.close();
       },
       error: (peer, error) => {
         const message = error instanceof Error ? error.message : String(error);
@@ -609,6 +650,174 @@ export class NitroRealtimeHub implements RealtimeHub {
       const reason = error instanceof Error ? error.message : String(error);
       console.warn(`realtime backplane publish failed: ${reason}`);
     });
+  }
+
+  /**
+   * One sampler per server/session, shared by every admin viewer on this
+   * instance. v1 is polled at the coalesced interval; v2 subscribes once and
+   * streams samples from the agent.
+   */
+  subscribeLiveMetrics(
+    context: LiveMetricsSubscriptionContext,
+    handler: LiveMetricsHandler,
+  ): () => void {
+    const key = liveMetricsKey(context);
+    let group = this.liveMetrics.get(key);
+    if (!group) {
+      group = { context, handlers: new Set() };
+      this.liveMetrics.set(key, group);
+      if (context.protocol === "v2" && context.sessionId) {
+        group.subscriptionId = `live-${context.sessionId}`;
+        this.sendV2TelemetrySubscription(context, group.subscriptionId);
+      } else {
+        this.startV1LiveSampling(key, group);
+      }
+    }
+    group.handlers.add(handler);
+
+    return () => {
+      const current = this.liveMetrics.get(key);
+      if (!current) return;
+      current.handlers.delete(handler);
+      if (current.handlers.size > 0) return;
+      this.liveMetrics.delete(key);
+      if (current.interval) clearInterval(current.interval);
+      if (current.subscriptionId) {
+        this.sendV2TelemetryUnsubscribe(
+          current.context,
+          current.subscriptionId,
+        );
+      }
+    };
+  }
+
+  private resubscribeLiveMetrics(serverId: string, sessionId: string): void {
+    const group = this.liveMetrics.get(
+      liveMetricsKey({
+        serverId,
+        sessionId,
+        connectedAt: "",
+        protocol: "v2",
+      }),
+    );
+    if (!group?.subscriptionId) return;
+    this.sendV2TelemetrySubscription(group.context, group.subscriptionId);
+  }
+
+  private startV1LiveSampling(key: string, group: LiveMetricsGroup): void {
+    const { serverId, connectedAt } = group.context;
+    const tick = () => {
+      void this.requestTelemetry(serverId, "sample", connectedAt)
+        .then((reply) => {
+          const current = this.liveMetrics.get(key);
+          if (!current || reply?.kind !== "sample") return;
+          const sample = liveSampleFromV1(reply.data, Date.now());
+          for (const handler of current.handlers) handler(sample);
+        })
+        .catch(() => undefined);
+    };
+    group.interval = setInterval(tick, LIVE_METRIC_INTERVAL_MS);
+    (group.interval as { unref?: () => void }).unref?.();
+    tick();
+  }
+
+  private sendV2TelemetrySubscription(
+    context: LiveMetricsSubscriptionContext,
+    subscriptionId: string,
+  ): void {
+    if (!context.sessionId) return;
+    const payload = {
+      subscriptionId,
+      purpose: "live" as const,
+      intervalMs: LIVE_METRIC_INTERVAL_MS,
+    };
+    this.publishV2(
+      context.serverId,
+      encodeAgentWsV2Frame(
+        createAgentWsV2Frame("telemetry.subscribe", payload),
+      ),
+    );
+  }
+
+  private sendV2TelemetryUnsubscribe(
+    context: LiveMetricsSubscriptionContext,
+    subscriptionId: string,
+  ): void {
+    if (!context.sessionId) return;
+    const payload = { subscriptionId };
+    this.publishV2(
+      context.serverId,
+      encodeAgentWsV2Frame(
+        createAgentWsV2Frame("telemetry.unsubscribe", payload),
+      ),
+    );
+  }
+
+  private acceptV2MetricSample(
+    serverId: string,
+    sessionId: string,
+    sample: AgentWsV2TelemetrySamplePayload,
+  ): void {
+    if (sample.purpose !== "live") return;
+    const normalized = liveSampleFromV2(sample);
+    this.deliverLiveMetric(serverId, sessionId, normalized);
+    const backplane = this.backplane;
+    if (!backplane) return;
+    const ready = this.startBackplane();
+    const relay = () =>
+      backplane.publish({
+        origin: this.id,
+        serverId,
+        frame: "",
+        liveMetricSample: normalized,
+        liveMetricSessionId: sessionId,
+      });
+    void (ready ? ready.then(relay) : relay()).catch(() => undefined);
+  }
+
+  private acceptV2MetricSnapshot(
+    serverId: string,
+    _sessionId: string,
+    snapshot: AgentWsV2TelemetrySnapshotPayload,
+  ): void {
+    this.resolveSnapshot(snapshot.requestId, snapshot);
+    const backplane = this.backplane;
+    if (!backplane) return;
+    const ready = this.startBackplane();
+    const relay = () =>
+      backplane.publish({
+        origin: this.id,
+        serverId,
+        frame: "",
+        agentSnapshot: {
+          requestId: snapshot.requestId,
+          snapshot,
+        },
+      });
+    void (ready ? ready.then(relay) : relay()).catch(() => undefined);
+  }
+
+  private deliverLiveMetric(
+    serverId: string,
+    sessionId: string,
+    sample: LiveMetricSample,
+  ): void {
+    const key = liveMetricsKey({
+      serverId,
+      sessionId,
+      connectedAt: "",
+      protocol: "v2",
+    });
+    const group = this.liveMetrics.get(key);
+    if (!group) return;
+    for (const handler of group.handlers) handler(sample);
+  }
+
+  private resolveSnapshot(requestId: string, snapshot: unknown): void {
+    const finish = this.pendingSnapshots.get(requestId);
+    if (!finish) return;
+    this.pendingSnapshots.delete(requestId);
+    finish(snapshot);
   }
 
   private createHooks(
@@ -1280,6 +1489,21 @@ export class NitroRealtimeHub implements RealtimeHub {
           }
           return;
         }
+        if (message.liveMetricSample && message.liveMetricSessionId) {
+          this.deliverLiveMetric(
+            message.serverId,
+            message.liveMetricSessionId,
+            message.liveMetricSample,
+          );
+          return;
+        }
+        if (message.agentSnapshot) {
+          this.resolveSnapshot(
+            message.agentSnapshot.requestId,
+            message.agentSnapshot.snapshot,
+          );
+          return;
+        }
         if (message.ptyTarget === "browser" && message.ptySessionId) {
           const target = ptyTargetFromBackplane(message);
           if (!target) {
@@ -1427,6 +1651,44 @@ export class NitroRealtimeHub implements RealtimeHub {
     );
   }
 
+  async inspectTelemetry(
+    serverId: string,
+    connectedAt: string,
+    sessionId: string | null,
+  ) {
+    if (!sessionId) {
+      return this.requestTelemetry(serverId, "snapshot", connectedAt);
+    }
+    if (!this.v2Connections.has(serverId) && !this.backplane) return null;
+    if (this.pendingSnapshots.size >= 64) return null;
+    const requestId = crypto.randomUUID();
+    let finish!: (snapshot: unknown) => void;
+    const result = new Promise<unknown>((resolve) => {
+      finish = resolve;
+    });
+    this.pendingSnapshots.set(requestId, finish);
+    const timer = setTimeout(
+      () => this.resolveSnapshot(requestId, null),
+      2_500,
+    );
+    try {
+      this.publishV2(
+        serverId,
+        encodeAgentWsV2Frame(
+          createAgentWsV2Frame("telemetry.inspect", { requestId }),
+        ),
+      );
+      const snapshot = await result;
+      const parsed = agentWsTelemetrySnapshotPayloadSchema.safeParse(snapshot);
+      return parsed.success
+        ? { kind: "snapshot" as const, data: parsed.data }
+        : null;
+    } finally {
+      clearTimeout(timer);
+      this.pendingSnapshots.delete(requestId);
+    }
+  }
+
   async notifyConfigChanged(
     serverId: string,
     payload: AgentWsConfigNotifyPayload,
@@ -1504,6 +1766,13 @@ function defaultBackplane(): RealtimeBackplane | undefined {
   } catch {
     return undefined;
   }
+}
+
+function liveMetricsKey(context: LiveMetricsSubscriptionContext): string {
+  return JSON.stringify([
+    context.serverId,
+    context.sessionId ?? context.connectedAt,
+  ]);
 }
 
 let hub: NitroRealtimeHub | undefined;

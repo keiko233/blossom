@@ -12,4 +12,5 @@ pub mod link;
 mod logs;
 pub mod session;
 pub mod snapshot;
+pub mod telemetry;
 pub mod traffic;

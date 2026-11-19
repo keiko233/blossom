@@ -13,7 +13,7 @@ use super::{
     types::{Interface, Usage},
 };
 
-pub(super) struct Linux;
+pub(crate) struct Linux;
 
 impl LinuxRead for Linux {
     fn text(&self, path: &str) -> Option<String> {
