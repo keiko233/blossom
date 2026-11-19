@@ -4,17 +4,12 @@ on:
   release:
     types: [published]
   push:
-    tags: ["v*", "server-agent-v*"]
+    tags: ["v*"]
   workflow_dispatch:
   workflow_call:
     inputs:
-      app-tag:
-        description: App release tag (e.g. v1.4.0)
-        required: false
-        type: string
-        default: ""
-      agent-tag:
-        description: Server agent release tag (e.g. server-agent-v1.4.0)
+      tag:
+        description: Unified release tag (e.g. v1.4.0)
         required: false
         type: string
         default: ""
@@ -29,13 +24,12 @@ permissions:
   packages: write
 
 concurrency:
-  group: docker-${{ inputs.app-tag || inputs.agent-tag || github.ref }}
+  group: docker-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
-  # Decide which images need building: app tags (`v*`) build the control plane,
-  # agent tags (`server-agent-v*`) build the server agent, and manual dispatches
-  # build both.
+  # Build both the control plane and server agent images for every unified
+  # release (`v*`) or manual dispatch.
   prepare:
     runs-on: ubuntu-latest
     outputs:
@@ -46,57 +40,41 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           TAG_NAME: ${{ github.event.release.tag_name || github.ref_name }}
-          INPUT_APP_TAG: ${{ inputs.app-tag }}
-          INPUT_AGENT_TAG: ${{ inputs.agent-tag }}
+          INPUT_TAG: ${{ inputs.tag }}
           INPUT_COMMIT_SHA: ${{ inputs.commit-sha }}
         run: |
-          build_app=false
-          build_agent=false
-          app_tag=""
-          agent_tag=""
+          tag=""
           if [ "$EVENT_NAME" = "workflow_call" ]; then
-            if [ -n "$INPUT_APP_TAG" ]; then
-              build_app=true
-              app_tag="$INPUT_APP_TAG"
-            fi
-            if [ -n "$INPUT_AGENT_TAG" ]; then
-              build_agent=true
-              agent_tag="$INPUT_AGENT_TAG"
-            fi
-          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            build_app=true
-            build_agent=true
-          elif [[ "$TAG_NAME" == server-agent-v* ]]; then
-            build_agent=true
-            agent_tag="$TAG_NAME"
-          elif [[ "$TAG_NAME" == v* ]]; then
-            build_app=true
-            app_tag="$TAG_NAME"
+            tag="$INPUT_TAG"
+          elif [ "$EVENT_NAME" != "workflow_dispatch" ] && [[ "$TAG_NAME" == v* ]]; then
+            tag="$TAG_NAME"
           fi
 
-          targets=$(jq -cn \
-            --arg repo "ghcr.io/$GITHUB_REPOSITORY" \
-            --arg app "$build_app" \
-            --arg agent "$build_agent" \
-            --arg app_tag "$app_tag" \
-            --arg agent_tag "$agent_tag" '
-            []
-            + (if $app == "true" then [{
-                name: "app",
-                context: ".",
-                image: $repo,
-                tag: $app_tag,
-                "cache-path": "pnpm-store",
-                "cache-map": {"pnpm-store": "/pnpm/store"}
-              }] else [] end)
-            + (if $agent == "true" then [{
-                name: "server-agent",
-                context: "./server-agent",
-                image: ($repo + "/server-agent"),
-                tag: $agent_tag,
-                "cache-path": "",
-                "cache-map": {}
-              }] else [] end)')
+          if [ "$EVENT_NAME" != "workflow_dispatch" ] && [ -z "$tag" ]; then
+            targets="[]"
+          else
+            targets=$(jq -cn \
+              --arg repo "ghcr.io/$GITHUB_REPOSITORY" \
+              --arg tag "$tag" '
+              [
+                {
+                  name: "app",
+                  context: ".",
+                  image: $repo,
+                  tag: $tag,
+                  "cache-path": "pnpm-store",
+                  "cache-map": {"pnpm-store": "/pnpm/store"}
+                },
+                {
+                  name: "server-agent",
+                  context: "./server-agent",
+                  image: ($repo + "/server-agent"),
+                  tag: $tag,
+                  "cache-path": "",
+                  "cache-map": {}
+                }
+              ]')
+          fi
           echo "targets=$targets" >> "$GITHUB_OUTPUT"
           echo "commit-sha=${INPUT_COMMIT_SHA:-$GITHUB_SHA}" >> "$GITHUB_OUTPUT"
           echo "building: $(jq -r 'map(.name) | join(", ") | if . == "" then "(nothing)" else . end' <<< "$targets")"
@@ -206,30 +184,22 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=match,pattern=^server-agent-v(.*)$
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
 
       - id: resolve-tags
         env:
           EVENT_NAME: ${{ github.event_name }}
-          TARGET_NAME: ${{ matrix.target.name }}
           IMAGE: ${{ matrix.target.image }}
           TAG: ${{ matrix.target.tag }}
           COMMIT_SHA: ${{ needs.prepare.outputs.commit-sha }}
         run: |
           if [ "$EVENT_NAME" = "workflow_call" ]; then
             short_sha="${COMMIT_SHA:0:7}"
-            if [ "$TARGET_NAME" = "app" ]; then
-              version="${TAG#v}"
-              minor="${version%.*}"
-              tag_flags="-t ${IMAGE}:${version} -t ${IMAGE}:${minor} -t ${IMAGE}:latest -t ${IMAGE}:sha-${short_sha}"
-              first_tag="${IMAGE}:${version}"
-            else
-              version="${TAG#server-agent-v}"
-              tag_flags="-t ${IMAGE}:${version} -t ${IMAGE}:sha-${short_sha}"
-              first_tag="${IMAGE}:${version}"
-            fi
+            version="${TAG#v}"
+            minor="${version%.*}"
+            tag_flags="-t ${IMAGE}:${version} -t ${IMAGE}:${minor} -t ${IMAGE}:latest -t ${IMAGE}:sha-${short_sha}"
+            first_tag="${IMAGE}:${version}"
           else
             tag_flags="$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
             first_tag="$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")"

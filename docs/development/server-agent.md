@@ -204,7 +204,7 @@ The thin image contains no agent or sing-box binary. `scripts/entrypoint.sh` cre
 
 At runtime `src/update.rs` compares the polled desired versions with the running versions:
 
-- Exact versions are fetched by tag (`server-agent-v<version>`, `v<version>` for sing-box); `latest` resolves the newest non-draft, non-prerelease release and is cached for six hours.
+- Exact versions are fetched by tag (`v<version>` for both `server-agent` and `sing-box`); `latest` resolves the newest non-draft, non-prerelease release that includes the expected `server-agent-linux-<arch>` asset and is cached for six hours.
 - Every downloaded asset is checked against the SHA-256 `digest` returned by the GitHub API. There is no unverified fallback.
 - sing-box is extracted to `downloads/`, preflighted with `sing-box check` against the active config, installed atomically over `/data/bin/sing-box` (previous kept as `sing-box.prev`), and must survive `RUNTIME_PROBATION`. A failed start restores `sing-box.prev` and the previous process.
 - The agent copies itself to `server-agent.prev`, replaces `/data/bin/server-agent`, writes `state/agent-update.json`, and exits with code `75`. The entrypoint restarts it; if the replacement exits three times within two minutes it restores `server-agent.prev`. On startup an unresolved pending marker is turned into a failure record.
@@ -246,13 +246,12 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 
 ## Releasing
 
-Static binaries are published by `.github/workflows/server-agent-release.yml`, which is separate from the Docker image release in `docker.yml`:
+The server agent shares a single unified version and release line (`vX.Y.Z`) with the control plane, orchestrated by `.github/workflows/publish.yml` (which calls `docker.yml` for both container images and `server-agent-release.yml` for static binaries):
 
-1. Bump `version` in `server-agent/Cargo.toml` (and let `cargo check`/`cargo build` update `Cargo.lock`).
-2. Tag and push the tag as `server-agent-vX.Y.Z`; it must match the `Cargo.toml` version or the workflow fails.
-3. The workflow runs `cargo test --locked`, `cargo fmt --check` and `cargo clippy -D warnings`, then builds fully static musl binaries per architecture (amd64 on `ubuntu-latest`, arm64 on `ubuntu-24.04-arm`, both inside a `rust:alpine` container like `Dockerfile.test`'s build stage) and publishes a GitHub Release with `server-agent-linux-amd64`, `server-agent-linux-arm64` and a `SHA256SUMS` covering them. Asset names carry no version so `releases/download/<tag>/...` URLs stay stable (`releases/latest/download/...` does not point at these releases); releases are published with `make_latest: false`, and consumers must resolve releases via the `server-agent-v` tag prefix (GitHub API `GET /repos/{owner}/{repo}/releases` filtered by `tag_name`), since this repo also publishes app image `v*` tags that share the `latest` feed.
+1. Trigger `.github/workflows/publish.yml` (`workflow_dispatch`) with `version_type` (`major` | `minor` | `patch`), or manually bump `version` across `package.json`, `app/package.json`, `server-agent/Cargo.toml`, and `server-agent/Cargo.lock` and push tag `vX.Y.Z`.
+2. `server-agent-release.yml` checks that `vX.Y.Z` matches all four manifests, runs `cargo test --locked`, `cargo fmt --check` and `cargo clippy -D warnings`, then builds fully static musl binaries per architecture (amd64 on `ubuntu-latest`, arm64 on `ubuntu-24.04-arm`, both inside a `rust:alpine` container like `Dockerfile.test`'s build stage) and uploads `server-agent-linux-amd64`, `server-agent-linux-arm64`, and `SHA256SUMS` to the unified `vX.Y.Z` GitHub Release (creating the release if it does not already exist). Asset names carry no version so `releases/download/<tag>/...` URLs stay stable.
 
-`workflow_dispatch` runs only build and check; a release is created only from a `server-agent-v*` tag.
+`workflow_dispatch` on `server-agent-release.yml` runs only build and check; release assets are uploaded on `v*` tag pushes and `workflow_call` from `publish.yml`.
 
 The systemd installer does not resolve GitHub releases at runtime. After
 reviewing a published release's `SHA256SUMS`, add its exact version, both

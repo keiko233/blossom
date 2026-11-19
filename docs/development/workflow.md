@@ -75,13 +75,14 @@ For multi-PR feature or refactoring work, run changes in isolated git worktrees 
 
 ## CI and GitHub workflows
 
-Currently three workflows exist in `.github/workflows/`:
+Currently four workflows exist in `.github/workflows/`:
 
 | Workflow                    | Trigger                             | What it does                                                                                                                                                                     |
 | --------------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `test.yml` (`CI`)           | pull requests, manual               | Job `app` (`App tests and build`): `pnpm install --frozen-lockfile`, `pnpm test` (with Postgres service), then `pnpm build` (Cloudflare), `build:node`, `build:vercel`. Job `server-agent` (`Server agent tests`): `cargo test --locked`, `cargo fmt --check`, `cargo clippy -D warnings`, Docker builds, managed-TLS lifecycle test. |
-| `docker.yml` (`Docker`)     | release/tags, manual                | Filters changed paths and builds/publishes multi-arch GHCR manifests (`ghcr.io/<repo>` and `ghcr.io/<repo>/server-agent`). *(Target redesign moves publishing to release tags via `publish.yml`.)* |
-| `server-agent-release.yml`  | `server-agent-v*` tags, manual      | Checks `Cargo.toml`/`Cargo.lock` tag agreement, runs Rust tests/fmt/clippy, builds static amd64/arm64 musl binaries, publishes GitHub Release with `make_latest: false`.         |
+| `publish.yml`               | manual (`workflow_dispatch`)        | Bumps unified version across `package.json`, `app/package.json`, `server-agent/Cargo.toml`, and `server-agent/Cargo.lock`, prepends `CHANGELOG.md`, tags `vX.Y.Z`, creates the GitHub Release, and calls `docker.yml` + `server-agent-release.yml`. |
+| `docker.yml` (`Docker`)     | release, `v*` tags, manual, called  | Builds and publishes multi-arch GHCR manifests (`ghcr.io/<repo>` and `ghcr.io/<repo>/server-agent`) for unified releases.                                                        |
+| `server-agent-release.yml`  | `v*` tags, manual, called           | Checks `package.json`/`app/package.json`/`Cargo.toml`/`Cargo.lock` tag agreement, runs Rust tests/fmt/clippy, builds static amd64/arm64 musl binaries, uploads binaries + `SHA256SUMS` to the unified `v*` GitHub Release. |
 
 ### Workflow conventions
 
