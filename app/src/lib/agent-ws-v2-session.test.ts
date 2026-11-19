@@ -27,6 +27,8 @@ const SESSION_ID = "11111111-1111-4111-8111-111111111111";
 const REVISION = `7:sha256:${"a".repeat(64)}`;
 const NEXT_REVISION = `8:sha256:${"b".repeat(64)}`;
 const SAME_SEQ_REVISION = `7:sha256:${"c".repeat(64)}`;
+const FAR_FUTURE = new Date("2099-01-01T00:00:00.000Z");
+const PAST = new Date("2000-01-01T00:00:00.000Z");
 
 const CURRENT_HELLO: AgentWsV2HelloPayload = {
   agentVersion: "0.4.0",
@@ -43,6 +45,8 @@ function server(overrides: Partial<Server> = {}): Server {
     enabled: true,
     desiredRevisionSeq: 7,
     desiredConfigRevision: REVISION,
+    desiredInputsVersion: 0,
+    desiredConfigValidUntil: FAR_FUTURE,
     heartbeatIntervalSeconds: 30,
     configPollIntervalSeconds: 60,
     desiredAgentVersion: null,
@@ -53,7 +57,7 @@ function server(overrides: Partial<Server> = {}): Server {
 
 function makeStore(overrides: Partial<AgentWsV2Store> = {}) {
   const store = {
-    loadServer: vi.fn(async () => server()),
+    loadCurrentServer: vi.fn(async () => server()),
     recordHello: vi.fn(async () => server()),
     recordStatus: vi.fn(async () => server()),
     recordConfigAck: vi.fn(async () => "applied" as const),
@@ -67,6 +71,7 @@ function makeStore(overrides: Partial<AgentWsV2Store> = {}) {
     compile: vi.fn(async () => ({
       desiredRevision: REVISION,
       document: { apiVersion: 3, desiredRevision: REVISION },
+      validUntil: FAR_FUTURE,
     })),
     endSession: vi.fn(async () => undefined),
     ...overrides,
@@ -171,8 +176,12 @@ describe("agent WebSocket v2 session handshake", () => {
     expect(store.cacheDesiredRevision).toHaveBeenCalledWith(
       SERVER_ID,
       SESSION_ID,
-      7,
-      REVISION,
+      {
+        desiredRevisionSeq: 7,
+        desiredInputsVersion: 0,
+        desiredRevision: REVISION,
+        validUntil: FAR_FUTURE,
+      },
     );
     expect(received(peer)[0]).toMatchObject({
       kind: "welcome",
@@ -235,7 +244,7 @@ describe("agent WebSocket v2 session handshake", () => {
     await session.handleText(
       agentFrame("config.get", { requestId: "snap-1", reason: "initial" }),
     );
-    expect(store.loadServer).not.toHaveBeenCalled();
+    expect(store.loadCurrentServer).not.toHaveBeenCalled();
     expect(received(peer)[0]).toMatchObject({
       kind: "error",
       payload: { code: "invalid_payload" },
@@ -244,6 +253,147 @@ describe("agent WebSocket v2 session handshake", () => {
     await session.handleText(agentFrame("hello", CURRENT_HELLO));
     await session.handleText(agentFrame("hello", CURRENT_HELLO));
     expect(store.recordHello).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("agent WebSocket v2 identifier freshness", () => {
+  it("recompiles once the cached identifier's deadline has passed", async () => {
+    const store = makeStore({
+      recordHello: vi.fn(async () => server({ desiredConfigValidUntil: PAST })),
+    });
+    const peer = makePeer();
+    await open(store, peer).handleText(agentFrame("hello", CURRENT_HELLO));
+
+    expect(store.compile).toHaveBeenCalledTimes(1);
+    expect(store.cacheDesiredRevision).toHaveBeenCalledWith(
+      SERVER_ID,
+      SESSION_ID,
+      expect.objectContaining({ desiredRevision: REVISION }),
+    );
+  });
+
+  it("answers a status with the recompiled identifier once the cache has aged out", async () => {
+    // A compiled input changed without moving the sequence and without a
+    // notification. The status acknowledgement reports the new identifier once
+    // the cached one is out of date.
+    const store = makeStore({
+      recordStatus: vi.fn(async () =>
+        server({ desiredConfigValidUntil: PAST }),
+      ),
+      compile: vi.fn(async () => ({
+        desiredRevision: SAME_SEQ_REVISION,
+        document: { apiVersion: 3 },
+        validUntil: FAR_FUTURE,
+      })),
+    });
+    const peer = makePeer();
+    const session = await welcomed(store, peer);
+    await session.handleText(agentFrame("agent.status", STATUS, "status-1"));
+
+    expect(received(peer).at(-1)).toMatchObject({
+      kind: "agent.status.ack",
+      payload: {
+        desired: { desiredRevisionSeq: 7, desiredRevision: SAME_SEQ_REVISION },
+      },
+    });
+  });
+
+  it("keeps answering from the cache inside the deadline without compiling", async () => {
+    const store = makeStore();
+    const peer = makePeer();
+    const session = await welcomed(store, peer);
+    await session.handleText(agentFrame("agent.status", STATUS, "status-1"));
+
+    expect(store.compile).not.toHaveBeenCalled();
+    expect(received(peer).at(-1)).toMatchObject({
+      kind: "agent.status.ack",
+      payload: { desired: { desiredRevision: REVISION } },
+    });
+  });
+
+  it("does not stop the session when the identifier cache write is refused", async () => {
+    const store = makeStore({
+      recordHello: vi.fn(async () => server({ desiredConfigRevision: null })),
+      cacheDesiredRevision: vi.fn(async () => {
+        throw new Error("write refused");
+      }),
+    });
+    const peer = makePeer();
+    await open(store, peer).handleText(agentFrame("hello", CURRENT_HELLO));
+
+    expect(received(peer)[0]).toMatchObject({
+      kind: "welcome",
+      payload: { desired: { desiredRevision: REVISION } },
+    });
+    expect(peer.close).not.toHaveBeenCalled();
+  });
+});
+
+describe("agent WebSocket v2 current-session reads", () => {
+  it("sends no snapshot to a session that is replaced during the compile", async () => {
+    let currentChecks = 0;
+    const store = makeStore({
+      loadCurrentServer: vi.fn(async () => {
+        currentChecks += 1;
+        // Current when the request starts, replaced before the snapshot goes.
+        return currentChecks === 1 ? server() : null;
+      }),
+    });
+    const peer = makePeer();
+    const session = await welcomed(store, peer);
+    await session.handleText(
+      agentFrame("config.get", { requestId: "snap-r", reason: "mismatch" }),
+    );
+
+    expect(received(peer).slice(1)).toEqual([
+      {
+        kind: "error",
+        payload: expect.objectContaining({ code: "session_replaced" }),
+      },
+    ]);
+    expect(peer.close).toHaveBeenCalledWith(4000, "session_replaced");
+    expect(store.cacheDesiredRevision).not.toHaveBeenCalled();
+  });
+
+  it("compiles nothing and sends nothing for a session whose credential was rotated", async () => {
+    const store = makeStore();
+    const peer = makePeer();
+    const session = await welcomed(store, peer);
+    (store.loadCurrentServer as ReturnType<typeof vi.fn>).mockResolvedValue(
+      null,
+    );
+    await session.handleText(
+      agentFrame("config.get", { requestId: "snap-x", reason: "initial" }),
+    );
+
+    expect(store.compile).not.toHaveBeenCalled();
+    expect(received(peer).slice(1)).toEqual([
+      {
+        kind: "error",
+        payload: expect.objectContaining({ code: "session_replaced" }),
+      },
+    ]);
+    expect(peer.close).toHaveBeenCalledWith(4000, "session_replaced");
+  });
+
+  it("stops a disabled server before compiling a snapshot", async () => {
+    const store = makeStore({
+      loadCurrentServer: vi.fn(async () => server({ enabled: false })),
+    });
+    const peer = makePeer();
+    const session = await welcomed(store, peer);
+    await session.handleText(
+      agentFrame("config.get", { requestId: "snap-d", reason: "notify" }),
+    );
+
+    expect(store.compile).not.toHaveBeenCalled();
+    expect(received(peer).slice(1)).toEqual([
+      {
+        kind: "error",
+        payload: expect.objectContaining({ code: "server_disabled" }),
+      },
+    ]);
+    expect(peer.close).toHaveBeenCalledWith(4000, "server_disabled");
   });
 });
 
@@ -315,6 +465,12 @@ describe("agent WebSocket v2 frame validation", () => {
     expect(peer.sent).toEqual([]);
   });
 });
+
+const STATUS: AgentWsV2StatusPayload = {
+  reason: "interval",
+  runtimeState: "running",
+  certificateDeployments: [],
+};
 
 async function welcomed(store: AgentWsV2Store, peer: AgentWsV2Peer) {
   const session = open(store, peer);
@@ -391,6 +547,7 @@ describe("agent WebSocket v2 status and configuration", () => {
       compile: vi.fn(async () => ({
         desiredRevision: REVISION,
         document: body,
+        validUntil: FAR_FUTURE,
       })),
     });
     const peer = makePeer();
@@ -431,8 +588,12 @@ describe("agent WebSocket v2 status and configuration", () => {
     expect(store.cacheDesiredRevision).toHaveBeenCalledWith(
       SERVER_ID,
       SESSION_ID,
-      7,
-      REVISION,
+      {
+        desiredRevisionSeq: 7,
+        desiredInputsVersion: 0,
+        desiredRevision: REVISION,
+        validUntil: FAR_FUTURE,
+      },
     );
   });
 
@@ -441,6 +602,7 @@ describe("agent WebSocket v2 status and configuration", () => {
       compile: vi.fn(async () => ({
         desiredRevision: REVISION,
         document: { pad: "x".repeat(AGENT_WS_V2_LIMITS.maxSnapshotBytes) },
+        validUntil: FAR_FUTURE,
       })),
     });
     const peer = makePeer();
@@ -473,9 +635,17 @@ describe("agent WebSocket v2 status and configuration", () => {
         calls += 1;
         if (calls === 1) {
           await firstGate;
-          return { desiredRevision: REVISION, document: { n: 1 } };
+          return {
+            desiredRevision: REVISION,
+            document: { n: 1 },
+            validUntil: FAR_FUTURE,
+          };
         }
-        return { desiredRevision: SAME_SEQ_REVISION, document: { n: 2 } };
+        return {
+          desiredRevision: SAME_SEQ_REVISION,
+          document: { n: 2 },
+          validUntil: FAR_FUTURE,
+        };
       }),
     });
     const peer = makePeer();
@@ -665,6 +835,6 @@ describe("agent WebSocket v2 pushes and teardown", () => {
     );
 
     expect(peer.sent).toHaveLength(count);
-    expect(store.loadServer).not.toHaveBeenCalled();
+    expect(store.loadCurrentServer).not.toHaveBeenCalled();
   });
 });

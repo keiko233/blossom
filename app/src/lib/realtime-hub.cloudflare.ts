@@ -82,7 +82,17 @@ export class CloudflareRealtimeHub implements RealtimeHub {
   }
 
   async acceptAgentV2(request: Request, server: Server): Promise<Response> {
-    const started = await createAgentWsV2Store().startSession(server.id);
+    const started = await createAgentWsV2Store().startSession(
+      server.id,
+      server.agentTokenHash,
+    );
+    if (!started) {
+      // The credential changed after the upgrade was authenticated.
+      return new Response("Unauthorized", {
+        status: 401,
+        headers: { "cache-control": "no-store" },
+      });
+    }
 
     const headers = new Headers(request.headers);
     headers.delete("authorization");
