@@ -479,7 +479,7 @@ fn singbox_level(line: &str) -> LogLevel {
 
 #[cfg(test)]
 mod tests {
-    use super::{Duration, SingBoxManager, check_config, strip_ansi};
+    use super::{Duration, SingBoxManager, check_config, check_config_with_logs, strip_ansi};
     use crate::logs::{LogStore, SecretScope};
 
     #[cfg(unix)]
@@ -704,6 +704,29 @@ mod tests {
 
         manager.shutdown().await;
         assert!(!live.exists(), "sing-box child survived shutdown");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn check_config_errors_are_redacted_before_retention() {
+        use crate::logs::{LogStore, SecretScope};
+
+        const SECRET: &str = "synthetic-check-credential";
+        let dir = scratch_dir("check-redact");
+        let bin = fake_singbox(
+            &dir,
+            &format!("echo \"FATAL invalid credential {SECRET}\" >&2\nexit 1"),
+        );
+        let logs = LogStore::default();
+        logs.replace_secrets(SecretScope::NodeCredentials, [SECRET])
+            .unwrap();
+        let error = check_config_with_logs(&bin, &dir.join("config.json"), &logs)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains(SECRET), "{error}");
+        assert!(error.contains("[REDACTED]"), "{error}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -26,6 +26,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -35,6 +36,9 @@ use crate::certificate::{
     CertificateManager, CertificateRef, FULLCHAIN_FILE, GENERATION_DIR_PREFIX, PRIVATE_KEY_FILE,
 };
 use crate::client::{Client, types};
+use crate::log_policy::{
+    Level as LogLevelPolicy, LogOverlay, LogPolicy, Source as LogSourcePolicy,
+};
 use crate::logs::{LogStore, SecretRegistryFull, SecretScope};
 
 /// The agent always injects its own `api` service for traffic stats. The
@@ -134,6 +138,9 @@ pub struct CandidateConfig {
     pub materialized_node_ids: Vec<String>,
     pub api_endpoint: ApiEndpoint,
     pub referenced_generations: Vec<CertificateRef>,
+    /// Local overlay written into the candidate. A commit records this as the
+    /// effective sing-box level; a later policy change stages another reload.
+    pub log_level: LogLevelPolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -215,6 +222,7 @@ pub struct ConfigManager {
     client: Client,
     certificate_manager: CertificateManager,
     logs: LogStore,
+    log_policy: Arc<LogPolicy>,
     state_dir: PathBuf,
     active_path: PathBuf,
     candidate_path: PathBuf,
@@ -228,7 +236,12 @@ pub struct ConfigManager {
 }
 
 impl ConfigManager {
-    pub(crate) fn new(client: Client, state_dir: PathBuf, logs: LogStore) -> Result<Self> {
+    pub(crate) fn new(
+        client: Client,
+        state_dir: PathBuf,
+        logs: LogStore,
+        log_policy: Arc<LogPolicy>,
+    ) -> Result<Self> {
         std::fs::create_dir_all(&state_dir)
             .with_context(|| format!("failed to create state dir {}", state_dir.display()))?;
         #[cfg(unix)]
@@ -291,6 +304,7 @@ impl ConfigManager {
             client,
             certificate_manager,
             logs,
+            log_policy,
             state_dir,
             active_path,
             candidate_path,
@@ -304,6 +318,19 @@ impl ConfigManager {
         };
         manager.recompute_installed_deployments();
         manager.refresh_credentials_or_warn();
+        manager.adopt_legacy_log_baseline();
+        if let Err(error) = manager.reapply_log_overlay() {
+            warn!(
+                "failed to restore the persisted log-level overlay before starting services: {error}"
+            );
+            let level = manager.log_policy.target_level(LogSourcePolicy::SingBox);
+            manager.log_policy.record(
+                LogSourcePolicy::SingBox,
+                level,
+                Err(error.to_string()),
+                chrono::Utc::now(),
+            );
+        }
         Ok(manager)
     }
 
@@ -339,13 +366,17 @@ impl ConfigManager {
         &self.api_endpoint
     }
 
-    /// Registers the credentials of both the config the supervised process is
-    /// running and any candidate being staged. Keeping both sets current means
-    /// rotation, rollback and shutdown never leave a value unregistered while
-    /// a process that used it can still write output.
-    fn refresh_credentials(&self) -> Result<(), SecretRegistryFull> {
+    /// Registers the credentials of the running and staged configs plus any
+    /// additional set, before a value can reach output or an error message.
+    fn register_credentials<I>(&self, extra: I) -> Result<(), SecretRegistryFull>
+    where
+        I: IntoIterator<Item = String>,
+    {
         let mut credentials = node_credentials_from_path(&self.active_path);
         credentials.extend(node_credentials_from_path(&self.candidate_path));
+        credentials.extend(extra);
+        credentials.sort();
+        credentials.dedup();
         self.logs
             .replace_secrets(SecretScope::StatsApi, self.api_endpoint.secret.iter())?;
         self.logs
@@ -355,11 +386,100 @@ impl ConfigManager {
     /// A registration overflow switches the buffer to fail-closed redaction, so
     /// it must never block the proxy. Surface it without a credential value.
     fn refresh_credentials_or_warn(&self) {
-        if let Err(error) = self.refresh_credentials() {
+        self.register_credentials_or_warn(std::iter::empty());
+    }
+
+    fn register_credentials_or_warn<I>(&self, extra: I)
+    where
+        I: IntoIterator<Item = String>,
+    {
+        if let Err(error) = self.register_credentials(extra) {
             warn!(
                 "node credential registration for retained-log redaction failed; captured text is fully redacted: {error}"
             );
         }
+    }
+
+    fn redacted_error(&self, message: &str) -> String {
+        self.logs.redact_message(message)
+    }
+
+    /// Before the first policy file exists, the committed configuration is the
+    /// only source of the generated baseline. After that, the persisted
+    /// baseline wins so an override cannot be mistaken for a generated level.
+    fn adopt_legacy_log_baseline(&self) {
+        if self.log_policy.has_persisted_state() {
+            return;
+        }
+        let Ok(config) = read_config_map(&self.active_path) else {
+            return;
+        };
+        let baseline = LogPolicy::config_baseline(&config);
+        if let Err(error) = self
+            .log_policy
+            .set_singbox_baseline(baseline, chrono::Utc::now())
+        {
+            warn!("failed to adopt the committed log baseline: {error}");
+        }
+    }
+
+    /// Rewrites the committed and last-known-good configurations with the
+    /// current local overlay. This runs before sing-box is started, so an
+    /// expired override cannot survive a restart.
+    pub(crate) fn reapply_log_overlay(&self) -> Result<()> {
+        let now = chrono::Utc::now();
+        let status = self.log_policy.status(LogSourcePolicy::SingBox, now);
+        if status.error.is_some() {
+            // A failed overlay must not overwrite the configuration that is
+            // still serving. The supervision loop retries under its bound.
+            return Ok(());
+        }
+        let overlay = self.log_policy.overlay(now);
+        let mut applied = false;
+        for path in [&self.active_path, &self.last_good_path] {
+            let mut config = match read_config_map(path) {
+                Ok(config) => config,
+                Err(error) if path.exists() => return Err(error),
+                Err(_) => continue,
+            };
+            LogPolicy::apply_overlay(&mut config, overlay);
+            let bytes = serde_json::to_vec_pretty(&config)?;
+            if std::fs::read(path).ok().as_deref() != Some(bytes.as_slice()) {
+                write_secret_file(path, &bytes)?;
+            }
+            applied = true;
+        }
+        self.refresh_credentials_or_warn();
+        if applied {
+            let _ =
+                self.log_policy
+                    .record(LogSourcePolicy::SingBox, overlay.effective, Ok(()), now);
+        }
+        Ok(())
+    }
+
+    /// Stages the committed configuration with a new log overlay. The desired
+    /// revision and node set are untouched; only the local `log.level` changes.
+    pub(crate) fn stage_log_overlay(&self, overlay: LogOverlay) -> Result<()> {
+        let mut config = read_config_map(&self.active_path)
+            .context("cannot stage a log overlay without an active config")?;
+        LogPolicy::apply_overlay(&mut config, overlay);
+        let bytes = serde_json::to_vec_pretty(&config)?;
+        write_secret_file(&self.candidate_path, &bytes)?;
+        self.refresh_credentials_or_warn();
+        Ok(())
+    }
+
+    /// Commits an applied log overlay to last-known-good without changing the
+    /// desired revision, active node set or publish sequencing.
+    pub(crate) fn commit_log_overlay(&mut self) -> Result<()> {
+        replace_from(
+            &self.active_path,
+            &self.last_good_path,
+            &self.state_dir.join("last-known-good.json.tmp"),
+        )?;
+        self.refresh_credentials_or_warn();
+        self.persist_state()
     }
 
     pub fn startup_error(&self) -> Option<&str> {
@@ -456,12 +576,32 @@ impl ConfigManager {
         body: &[u8],
         expected_revision: &str,
     ) -> Result<FetchStatus, ConfigError> {
+        // Parse once into a value so node credentials can be registered before
+        // a type error can echo an unexpected string value into the retained
+        // buffer. A body that is not JSON at all only yields a position.
+        let raw: serde_json::Value = serde_json::from_slice(body).map_err(|error| {
+            ConfigError::new(
+                "receive",
+                "SNAPSHOT_INVALID",
+                self.redacted_error(&format!("snapshot is not a v3 document: {error}")),
+                None,
+            )
+        })?;
+        if let Some(config) = raw
+            .get("singboxConfig")
+            .and_then(serde_json::Value::as_object)
+        {
+            self.register_credentials_or_warn(node_credentials(config));
+        }
+        let mut raw_candidates = Vec::new();
+        raw_credential_candidates(&raw, &mut raw_candidates);
+        self.register_credentials_or_warn(raw_candidates);
         let document: types::GetAgentConfigV3Response =
-            serde_json::from_slice(body).map_err(|error| {
+            serde_json::from_value(raw).map_err(|error| {
                 ConfigError::new(
                     "receive",
                     "SNAPSHOT_INVALID",
-                    format!("snapshot is not a v3 document: {error}"),
+                    self.redacted_error(&format!("snapshot is not a v3 document: {error}")),
                     None,
                 )
             })?;
@@ -519,7 +659,7 @@ impl ConfigManager {
                     self.upsert_deployment(&material);
                 }
                 Err(error) => {
-                    let message = sanitize_error(&error.to_string());
+                    let message = self.redacted_error(&sanitize_error(&error.to_string()));
                     warn!(
                         certificate_id = artifact.certificate_id.as_str(),
                         generation = artifact.generation.get(),
@@ -545,6 +685,9 @@ impl ConfigManager {
         // Materialize managed TLS bindings into the base config. Only local
         // generation paths are injected; inline material is stripped.
         let mut config = document.singbox_config;
+        // Register node credentials from the incoming document before any
+        // validation error can carry them into the retained buffer.
+        self.register_credentials_or_warn(node_credentials(&config));
         strip_base_tls_material(&mut config);
         let (referenced_generations, binding_errors) = materialize_bindings(
             &mut config,
@@ -582,6 +725,19 @@ impl ConfigManager {
             &self.api_endpoint.addr,
             self.api_endpoint.secret.as_deref().unwrap_or(""),
         );
+        // The control-plane document supplies the generated baseline; the
+        // local policy overlays only `log.level`. The desired revision and its
+        // digest are already fixed above, so this never changes publish
+        // sequencing.
+        let baseline = LogPolicy::config_baseline(&config);
+        if let Err(error) = self
+            .log_policy
+            .set_singbox_baseline(baseline, chrono::Utc::now())
+        {
+            warn!("failed to persist the compiled log baseline: {error}");
+        }
+        let overlay = self.log_policy.overlay(chrono::Utc::now());
+        LogPolicy::apply_overlay(&mut config, overlay);
         let serialized = serde_json::to_vec_pretty(&config).map_err(|error| {
             ConfigError::new(
                 "reconcile",
@@ -597,6 +753,12 @@ impl ConfigManager {
             &referenced_generations,
             &artifacts,
         ) {
+            let _ = self.log_policy.record(
+                LogSourcePolicy::SingBox,
+                overlay.effective,
+                Ok(()),
+                chrono::Utc::now(),
+            );
             self.refresh_credentials_or_warn();
             self.persist_state().map_err(|error| {
                 ConfigError::new("reconcile", "STATE_PERSIST_FAILED", error.to_string(), None)
@@ -632,6 +794,7 @@ impl ConfigManager {
                     .collect(),
                 api_endpoint: self.api_endpoint.clone(),
                 referenced_generations,
+                log_level: overlay.effective,
             },
         })
     }
@@ -733,13 +896,14 @@ impl ConfigManager {
         phase: &str,
         message: &str,
     ) {
+        let message = self.redacted_error(&sanitize_error(message));
         let record = self.persisted.deployments.iter_mut().find(|record| {
             record.certificate_id == certificate_id && record.generation == generation
         });
         match record {
             Some(record) => {
                 record.error_phase = Some(phase.to_string());
-                record.error_message = Some(sanitize_error(message));
+                record.error_message = Some(message);
             }
             None => {
                 // No fingerprint known for an unstaged/unknown generation; the
@@ -810,7 +974,23 @@ impl ConfigManager {
             })
         });
         self.needs_reapply = false;
-        self.persist_state()
+        self.persist_state()?;
+        if let Some(status) = self.log_policy.record(
+            LogSourcePolicy::SingBox,
+            candidate.log_level,
+            Ok(()),
+            chrono::Utc::now(),
+        ) && status.pending
+        {
+            // The policy moved during probation; the supervision loop stages
+            // the newer overlay through the same validated path.
+            info!(
+                requested = status.requested.as_str(),
+                effective = status.effective.as_str(),
+                "sing-box log policy changed during probation"
+            );
+        }
+        Ok(())
     }
 
     pub fn rollback(&mut self) -> Result<bool> {
@@ -835,6 +1015,8 @@ impl ConfigManager {
         self.api_endpoint =
             read_api_endpoint(&self.active_path).unwrap_or_else(ApiEndpoint::generate);
         self.recompute_installed_deployments();
+        // Last-known-good carries the overlay it was committed with. Rewriting
+        // it here would reintroduce the overlay that just failed.
         self.refresh_credentials_or_warn();
         Ok(true)
     }
@@ -1063,6 +1245,45 @@ fn node_credentials(config: &serde_json::Map<String, serde_json::Value>) -> Vec<
     credentials
 }
 
+/// Best-effort credential extraction from a snapshot that may not match the
+/// generated schema. A type error can echo an unexpected string value, so
+/// sensitive keys are collected before `serde` turns the document into a
+/// typed value. This never widens the redaction registry to ordinary config
+/// text: only credential-shaped fields and a malformed `users` value count.
+fn raw_credential_candidates(value: &serde_json::Value, out: &mut Vec<String>) {
+    const CREDENTIAL_KEYS: &[&str] = &[
+        "uuid",
+        concat!("pass", "word"),
+        "auth_str",
+        "auth",
+        "psk",
+        "secret",
+        "token",
+        "private_key",
+        "privatekeypem",
+    ];
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, value) in map {
+                let lower = key.to_ascii_lowercase();
+                if (CREDENTIAL_KEYS.contains(&lower.as_str())
+                    || (lower == "users" && value.is_string()))
+                    && let Some(secret) = value.as_str().filter(|value| !value.is_empty())
+                {
+                    out.push(secret.to_owned());
+                }
+                raw_credential_candidates(value, out);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                raw_credential_candidates(item, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn read_config_map(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>> {
     let bytes =
         std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
@@ -1123,12 +1344,25 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ApiEndpoint, ConfigManager, DeploymentRecord, extract_api_endpoint, inject_api_service,
-        materialize_bindings, node_credentials, sanitize_error, strip_base_tls_material,
-        strip_untrusted_api, write_config_atomic,
+        ApiEndpoint, ConfigManager, DeploymentRecord, FetchStatus, extract_api_endpoint,
+        inject_api_service, materialize_bindings, node_credentials, sanitize_error,
+        strip_base_tls_material, strip_untrusted_api, write_config_atomic,
     };
     use crate::certificate::StagedMaterial;
     use crate::client::types;
+    use crate::log_policy::{Level as PolicyLevel, LogPolicy, RecordingFilter};
+
+    fn test_policy(dir: &Path) -> std::sync::Arc<LogPolicy> {
+        std::sync::Arc::new(
+            LogPolicy::load(
+                dir,
+                PolicyLevel::Info,
+                RecordingFilter::new(),
+                chrono::Utc::now(),
+            )
+            .0,
+        )
+    }
 
     fn staged(certificate_id: &str, generation: u64) -> StagedMaterial {
         StagedMaterial {
@@ -1438,8 +1672,8 @@ mod tests {
         let logs = LogStore::default();
         let client = crate::client::new_client("http://127.0.0.1:1/api", "test-token")
             .expect("client builds");
-        let mut manager =
-            ConfigManager::new(client, dir.clone(), logs.clone()).expect("config manager builds");
+        let mut manager = ConfigManager::new(client, dir.clone(), logs.clone(), test_policy(&dir))
+            .expect("config manager builds");
 
         let active = json!({
             "inbounds": [{
@@ -1467,7 +1701,7 @@ mod tests {
         });
         write_config_atomic(manager.config_path(), active.as_object().unwrap()).unwrap();
         write_config_atomic(manager.candidate_path(), candidate.as_object().unwrap()).unwrap();
-        manager.refresh_credentials().unwrap();
+        manager.register_credentials(std::iter::empty()).unwrap();
 
         let stored = |text: &str| {
             logs.record(LogSource::SingBox, LogLevel::Error, 1, text);
@@ -1512,5 +1746,174 @@ mod tests {
         assert_eq!(stored("stats lkg-stats-secret"), "stats [REDACTED]");
 
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn compile_snapshot_overlays_log_level_without_moving_the_revision() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        use crate::log_policy::{PolicyRequest, Source as PolicySource};
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("blossom-log-overlay-{suffix}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let logs = crate::logs::LogStore::default();
+        let policy = test_policy(&dir);
+        let now = chrono::Utc::now();
+        policy
+            .request(
+                PolicyRequest::new(PolicySource::SingBox, 1, PolicyLevel::Trace),
+                now,
+            )
+            .unwrap();
+        let mut manager = ConfigManager::new(
+            crate::client::new_client("http://127.0.0.1:1/api", "test-token")
+                .expect("client builds"),
+            dir.clone(),
+            logs,
+            policy.clone(),
+        )
+        .expect("config manager builds");
+
+        let document = json!({
+            "agent": {
+                "configPollIntervalSeconds": 60,
+                "heartbeatIntervalSeconds": 30
+            },
+            "apiVersion": 3,
+            "certificateArtifacts": [],
+            "desiredRevision": "sha256:rev-1",
+            "managedTlsBindings": [],
+            "materializedNodeIds": [],
+            "singboxConfig": {
+                "log": {"level": "warn", "timestamp": true},
+                "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": 1080}]
+            }
+        });
+        let body = serde_json::to_vec(&document).unwrap();
+        let fetched = manager
+            .compile_snapshot(&body, "sha256:rev-1")
+            .expect("snapshot compiles");
+        let FetchStatus::Updated { candidate, .. } = fetched else {
+            panic!("a new revision stages a candidate");
+        };
+        assert_eq!(candidate.revision, "sha256:rev-1");
+        assert_eq!(candidate.log_level, PolicyLevel::Trace);
+        let staged: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(manager.candidate_path()).unwrap()).unwrap();
+        assert_eq!(staged["log"]["level"], "trace");
+        assert_eq!(staged["log"]["timestamp"], true);
+        assert_eq!(manager.observed_revision(), Some("sha256:rev-1"));
+        assert_eq!(manager.applied_revision(), None);
+        assert_eq!(
+            policy.overlay(now).baseline,
+            PolicyLevel::Warn,
+            "the generated level is remembered as the baseline"
+        );
+
+        manager.promote_candidate().unwrap();
+        manager.commit_applied(&candidate).unwrap();
+        assert_eq!(manager.applied_revision(), Some("sha256:rev-1"));
+        let active: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(manager.config_path()).unwrap()).unwrap();
+        let last_good: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("last-known-good.json")).unwrap())
+                .unwrap();
+        assert_eq!(active["log"]["level"], "trace");
+        assert_eq!(last_good["log"]["level"], "trace");
+
+        // The override expires while the control plane is offline; the local
+        // restoration rewrites both configurations before the next service
+        // start and leaves the desired revision where it was.
+        let later = now + chrono::Duration::minutes(30);
+        let decisions = policy.expire(later);
+        assert_eq!(decisions.len(), 1);
+        policy
+            .record(
+                PolicySource::SingBox,
+                policy.target_level_at(PolicySource::SingBox, later),
+                Ok(()),
+                later,
+            )
+            .unwrap();
+        manager.reapply_log_overlay().unwrap();
+        let active: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(manager.config_path()).unwrap()).unwrap();
+        let last_good: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("last-known-good.json")).unwrap())
+                .unwrap();
+        assert_eq!(active["log"]["level"], "warn");
+        assert_eq!(last_good["log"]["level"], "warn");
+        assert_eq!(manager.applied_revision(), Some("sha256:rev-1"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn compile_snapshot_registers_new_node_credentials_for_retained_logs() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("blossom-log-redact-{suffix}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let logs = crate::logs::LogStore::default();
+        let policy = test_policy(&dir);
+        let mut manager = ConfigManager::new(
+            crate::client::new_client("http://127.0.0.1:1/api", "test-token")
+                .expect("client builds"),
+            dir.clone(),
+            logs.clone(),
+            policy,
+        )
+        .expect("config manager builds");
+        let secret = "synthetic-credential";
+        let document = json!({
+            "agent": {
+                "configPollIntervalSeconds": 60,
+                "heartbeatIntervalSeconds": 30
+            },
+            "apiVersion": 3,
+            "certificateArtifacts": [],
+            "desiredRevision": "sha256:rev-2",
+            "managedTlsBindings": [],
+            "materializedNodeIds": [],
+            "singboxConfig": {
+                "inbounds": [{
+                    "type": "vless",
+                    "listen": "127.0.0.1",
+                    "listen_port": 1081,
+                    "users": [{"name": "node-1-sub-1", "uuid": secret}]
+                }]
+            }
+        });
+        manager
+            .compile_snapshot(&serde_json::to_vec(&document).unwrap(), "sha256:rev-2")
+            .expect("snapshot compiles");
+        // A candidate is not trusted yet, but its credentials are registered
+        // before the process can emit an error mentioning them.
+        assert_eq!(
+            logs.redact_message(&format!("rejected credential {secret}")),
+            "rejected credential [REDACTED]"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn malformed_snapshot_raw_values_are_collected_before_deserialization() {
+        let users_secret = "synthetic-user-credential";
+        let key_secret = "synthetic-private-key-body";
+        let raw = json!({
+            "singboxConfig": {"inbounds": [{"users": users_secret}]},
+            "certificateArtifacts": [{"privateKeyPem": key_secret}]
+        });
+        let mut out = Vec::new();
+        super::raw_credential_candidates(&raw, &mut out);
+        assert!(out.iter().any(|value| value == users_secret), "{out:?}");
+        assert!(out.iter().any(|value| value == key_secret), "{out:?}");
     }
 }

@@ -38,6 +38,7 @@ shell commands.
 | `src/certificate.rs` | Validated, generation-addressed certificate store under `<state_dir>/certificates/<id>/generation-<n>/`.                                                      |
 | `src/process.rs`   | Supervises the sing-box child (`processkit`): stdout/stderr capture into the log buffer and tracing, restart with backoff, graceful replacement, `sing-box check` preflight. |
 | `src/logs/`        | Bounded in-memory log buffer: tracing capture (`layer.rs`), byte/line/age budgets (`ring.rs`, `model.rs`), known-secret redaction and normalization (`text.rs`), retained search (`search.rs`), and the locked facade (`store.rs`). |
+| `src/log_policy.rs` | Bounded local log-level policy: per-source revisions, persisted baseline/deadline, agent tracing-filter reloads, sing-box `log.level` overlays, expiry restoration and retry status. |
 | `src/stats.rs`     | Hand-written tonic/prost client for sing-box's built-in `api` service (`StartedService.SubscribeConnections`; no `.proto` files, no `tonic-build`).              |
 | `src/accountant.rs` | Pure per-connection accounting state machine that turns connection events into per-user deltas.                                                                 |
 | `src/traffic.rs`   | Runs the connection stream in the background, accumulates per-user deltas, maps them to subscription/node ids and reports them.                                  |
@@ -103,6 +104,19 @@ The admin terminal is disabled unless the agent starts with `--pty-enabled` / `A
 - `cols`/`rows` are clamped to 20–400 × 5–200. Session ids must be 1–128 ASCII alphanumerics, `-` or `_`.
 - Reader, waiter and writer work runs on dedicated OS threads, never on Tokio workers. Reader output is bounded by a 64-frame queue; writer input by a 64-write queue of 16 KiB chunks. A full writer queue closes the session with `input_backpressure`; a full outbound WebSocket queue closes it with `output_backpressure` instead of growing memory.
 - PTY output is decoded incrementally, so a UTF-8 character split across reads is not corrupted. A shell exit, idle timeout, protocol error or WebSocket drop kills the child and emits `pty.exit` when the socket is still available.
+
+### Local log-level policy
+
+This branch implements the local half of the [log-level controls](../spec/2026-11-19-agent-ws-oauth-server-workspace/server-workspace.md#log-level-controls). It is not reachable from the control plane yet: no WebSocket frame, admin mutation, UI or `log-policy-v1` capability is added here.
+
+- `src/log_policy.rs` persists one record per source (`agent`, `sing-box`) in `<state_dir>/log-policy.json` (mode `0600`). Each record carries a revision scoped to that source, the requested level, the generated or local baseline, the effective level, an optional deadline and the last error.
+- Requests accept `error`, `warn`, `info` and `default` as baselines. `debug` and `trace` are temporary only: the default lifetime is 15 minutes and the local maximum is 60 minutes, regardless of a longer control-plane deadline. A baseline request carrying a deadline and a stale revision are rejected.
+- Agent levels change a `tracing_subscriber::reload` layer shared by local formatting and the retained `CaptureLayer`, so the buffer, its quotas and its redaction state are never rebuilt. A filter reload failure leaves the previous level effective and records the error.
+- Sing-box levels are a local overlay on `log.level` in the compiled candidate. The overlay is applied after certificate bindings and the agent `api` service, and the desired revision and digest are untouched. A log-only change writes a candidate, runs `sing-box check`, promotes and restarts the process, waits through probation and commits to last-known-good; any failure rolls back to the working configuration. The applied revision, node set and publish sequencing do not change.
+- Every desired-config compile re-reads the generated `log.level` as the new baseline and reapplies the current overlay, so refreshes, retries and a malformed `log` object converge on the same combined config. Newly received node credentials are registered for retained-log redaction before validation errors can be captured.
+- Supervisors call policy maintenance on a local timer even when the control plane is offline. Expired overrides restore the baseline through the same reload path, and a failed restoration keeps the working configuration, reports the requested/effective/error status and retries with a 30-second bound. At startup the persisted state is loaded and the committed and last-known-good configs are rewritten before `start_last_known_good`, so an override never outlives a restart.
+
+Handoff for the later policy contract: map an authenticated `log-policy-v1` revision to `PolicyRequest`, call `LogPolicy::request`, then execute the returned `PolicyAction`. An agent action calls `LogPolicy::apply_agent`; a sing-box action stages the overlay through the validated reload path and calls `LogPolicy::record` with the outcome. Publish `PolicyStatus` as the requested/effective/error view. The local API is unit-tested with recording filters and a fake sing-box process; the wire contract must add the capability and tests when it lands.
 
 ## Safety invariants
 

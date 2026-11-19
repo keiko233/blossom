@@ -15,6 +15,7 @@
 //! `agent.status.ack`, so v2 applies them without `update.trigger`.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Result, bail};
@@ -24,6 +25,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::config::{AgentPolicy, ConfigError, ConfigManager};
+use crate::log_policy::LogPolicy;
 use crate::logs::{LogStore, SecretScope};
 use crate::process::{ProcessState, SingBoxManager, resolve_binary, singbox_version};
 use crate::traffic::TrafficReporter;
@@ -64,7 +66,7 @@ const RUNTIME_SAMPLE: Duration = Duration::from_secs(5);
 const MAX_STATUS_MESSAGE_CHARS: usize = 4096;
 
 /// Runs the v2 agent until shutdown or until a self-update asks for a restart.
-pub async fn run(args: &Args, logs: LogStore) -> Result<()> {
+pub async fn run(args: &Args, logs: LogStore, log_policy: Arc<LogPolicy>) -> Result<()> {
     if !args.ws_enabled {
         bail!("--ws-protocol v2 is the WebSocket path and cannot run with --ws-enabled=false");
     }
@@ -87,7 +89,8 @@ pub async fn run(args: &Args, logs: LogStore) -> Result<()> {
         warn!("sing-box {version} is too old for connection-stream traffic");
     }
     let state_dir = args.state_dir.clone();
-    let mut config = ConfigManager::new(client, state_dir.clone(), logs.clone())?;
+    let mut config =
+        ConfigManager::new(client, state_dir.clone(), logs.clone(), log_policy.clone())?;
     logs.replace_secrets(SecretScope::StatsApi, config.api_endpoint().secret.iter())?;
     let mut updates = new_update_manager(args, sing_box_version.clone())?;
 
@@ -158,6 +161,9 @@ pub async fn run(args: &Args, logs: LogStore) -> Result<()> {
     let mut runtime_tick = tokio::time::interval(RUNTIME_SAMPLE);
     runtime_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     runtime_tick.tick().await;
+    let mut log_policy_tick = tokio::time::interval(Duration::from_secs(5));
+    log_policy_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    log_policy_tick.tick().await;
 
     loop {
         tokio::select! {
@@ -202,6 +208,16 @@ pub async fn run(args: &Args, logs: LogStore) -> Result<()> {
                     break;
                 };
                 record_refusal(&mut status, refusal);
+            }
+            _ = log_policy_tick.tick() => {
+                crate::log_policy_maintenance(
+                    &log_policy,
+                    &mut config,
+                    &mut manager,
+                    &bin,
+                    probation,
+                )
+                .await;
             }
             _ = runtime_tick.tick() => {}
         }
