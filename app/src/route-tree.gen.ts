@@ -72,6 +72,7 @@ import { Route as adminAdminProxiesServersServerIdRouteRouteImport } from './rou
 import { Route as adminAdminProxiesServersNewRouteImport } from './routes/(admin)/admin/proxies/servers/new'
 import { Route as ApiAdminServersIdStreamRouteImport } from './routes/api/admin/servers/$id/stream'
 import { Route as adminAdminProxiesServersServerIdIndexRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId/index'
+import { Route as adminAdminProxiesServersServerIdConnectionRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId/connection'
 import { Route as adminAdminProxiesServersServerIdNodesRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId/nodes'
 import { Route as adminAdminProxiesServersServerIdSettingsRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId/settings'
 import { Route as adminAdminProxiesServersServerIdTerminalRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId/terminal'
@@ -426,6 +427,12 @@ const adminAdminProxiesServersServerIdIndexRoute =
     path: '/',
     getParentRoute: () => adminAdminProxiesServersServerIdRouteRoute,
   } as any)
+const adminAdminProxiesServersServerIdConnectionRoute =
+  adminAdminProxiesServersServerIdConnectionRouteImport.update({
+    id: '/connection',
+    path: '/connection',
+    getParentRoute: () => adminAdminProxiesServersServerIdRouteRoute,
+  } as any)
 const adminAdminProxiesServersServerIdNodesRoute =
   adminAdminProxiesServersServerIdNodesRouteImport.update({
     id: '/nodes',
@@ -524,6 +531,7 @@ export interface FileRoutesByFullPath {
   '/admin/proxies/nodes/': typeof adminAdminProxiesNodesIndexRoute
   '/admin/proxies/rules/': typeof adminAdminProxiesRulesIndexRoute
   '/admin/proxies/servers/': typeof adminAdminProxiesServersIndexRoute
+  '/admin/proxies/servers/$serverId/connection': typeof adminAdminProxiesServersServerIdConnectionRoute
   '/admin/proxies/servers/$serverId/nodes': typeof adminAdminProxiesServersServerIdNodesRoute
   '/admin/proxies/servers/$serverId/settings': typeof adminAdminProxiesServersServerIdSettingsRoute
   '/admin/proxies/servers/$serverId/terminal': typeof adminAdminProxiesServersServerIdTerminalRoute
@@ -580,6 +588,7 @@ export interface FileRoutesByTo {
   '/admin/proxies/nodes': typeof adminAdminProxiesNodesIndexRoute
   '/admin/proxies/rules': typeof adminAdminProxiesRulesIndexRoute
   '/admin/proxies/servers': typeof adminAdminProxiesServersIndexRoute
+  '/admin/proxies/servers/$serverId/connection': typeof adminAdminProxiesServersServerIdConnectionRoute
   '/admin/proxies/servers/$serverId/nodes': typeof adminAdminProxiesServersServerIdNodesRoute
   '/admin/proxies/servers/$serverId/settings': typeof adminAdminProxiesServersServerIdSettingsRoute
   '/admin/proxies/servers/$serverId/terminal': typeof adminAdminProxiesServersServerIdTerminalRoute
@@ -654,6 +663,7 @@ export interface FileRoutesById {
   '/(admin)/admin/proxies/nodes/': typeof adminAdminProxiesNodesIndexRoute
   '/(admin)/admin/proxies/rules/': typeof adminAdminProxiesRulesIndexRoute
   '/(admin)/admin/proxies/servers/': typeof adminAdminProxiesServersIndexRoute
+  '/(admin)/admin/proxies/servers/$serverId/connection': typeof adminAdminProxiesServersServerIdConnectionRoute
   '/(admin)/admin/proxies/servers/$serverId/nodes': typeof adminAdminProxiesServersServerIdNodesRoute
   '/(admin)/admin/proxies/servers/$serverId/settings': typeof adminAdminProxiesServersServerIdSettingsRoute
   '/(admin)/admin/proxies/servers/$serverId/terminal': typeof adminAdminProxiesServersServerIdTerminalRoute
@@ -726,6 +736,7 @@ export interface FileRouteTypes {
     | '/admin/proxies/nodes/'
     | '/admin/proxies/rules/'
     | '/admin/proxies/servers/'
+    | '/admin/proxies/servers/$serverId/connection'
     | '/admin/proxies/servers/$serverId/nodes'
     | '/admin/proxies/servers/$serverId/settings'
     | '/admin/proxies/servers/$serverId/terminal'
@@ -782,6 +793,7 @@ export interface FileRouteTypes {
     | '/admin/proxies/nodes'
     | '/admin/proxies/rules'
     | '/admin/proxies/servers'
+    | '/admin/proxies/servers/$serverId/connection'
     | '/admin/proxies/servers/$serverId/nodes'
     | '/admin/proxies/servers/$serverId/settings'
     | '/admin/proxies/servers/$serverId/terminal'
@@ -855,6 +867,7 @@ export interface FileRouteTypes {
     | '/(admin)/admin/proxies/nodes/'
     | '/(admin)/admin/proxies/rules/'
     | '/(admin)/admin/proxies/servers/'
+    | '/(admin)/admin/proxies/servers/$serverId/connection'
     | '/(admin)/admin/proxies/servers/$serverId/nodes'
     | '/(admin)/admin/proxies/servers/$serverId/settings'
     | '/(admin)/admin/proxies/servers/$serverId/terminal'
@@ -1342,6 +1355,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof adminAdminProxiesServersServerIdIndexRouteImport
       parentRoute: typeof adminAdminProxiesServersServerIdRouteRoute
     }
+    '/(admin)/admin/proxies/servers/$serverId/connection': {
+      id: '/(admin)/admin/proxies/servers/$serverId/connection'
+      path: '/connection'
+      fullPath: '/admin/proxies/servers/$serverId/connection'
+      preLoaderRoute: typeof adminAdminProxiesServersServerIdConnectionRouteImport
+      parentRoute: typeof adminAdminProxiesServersServerIdRouteRoute
+    }
     '/(admin)/admin/proxies/servers/$serverId/nodes': {
       id: '/(admin)/admin/proxies/servers/$serverId/nodes'
       path: '/nodes'
@@ -1476,6 +1496,7 @@ const adminAdminProxiesNodesRouteRouteWithChildren =
   )
 
 interface adminAdminProxiesServersServerIdRouteRouteChildren {
+  adminAdminProxiesServersServerIdConnectionRoute: typeof adminAdminProxiesServersServerIdConnectionRoute
   adminAdminProxiesServersServerIdNodesRoute: typeof adminAdminProxiesServersServerIdNodesRoute
   adminAdminProxiesServersServerIdSettingsRoute: typeof adminAdminProxiesServersServerIdSettingsRoute
   adminAdminProxiesServersServerIdTerminalRoute: typeof adminAdminProxiesServersServerIdTerminalRoute
@@ -1484,6 +1505,8 @@ interface adminAdminProxiesServersServerIdRouteRouteChildren {
 
 const adminAdminProxiesServersServerIdRouteRouteChildren: adminAdminProxiesServersServerIdRouteRouteChildren =
   {
+    adminAdminProxiesServersServerIdConnectionRoute:
+      adminAdminProxiesServersServerIdConnectionRoute,
     adminAdminProxiesServersServerIdNodesRoute:
       adminAdminProxiesServersServerIdNodesRoute,
     adminAdminProxiesServersServerIdSettingsRoute:
