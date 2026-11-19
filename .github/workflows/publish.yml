@@ -1,4 +1,4 @@
-name: "[Release] Prepare Version and Release"
+name: "[Release] Prepare Draft Release"
 
 on:
   workflow_dispatch:
@@ -14,7 +14,6 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 concurrency:
   group: release
@@ -25,8 +24,6 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.plan.outputs.version }}
-      commit-sha: ${{ steps.commit.outputs.sha }}
       tag: ${{ steps.commit.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
@@ -91,11 +88,7 @@ jobs:
           git commit -m "chore(release): prepare ${tag}"
 
           git tag -a "$tag" -m "Blossom ${tag}"
-          git push origin HEAD:main
-          git push origin "$tag"
-
-          commit_sha="$(git rev-parse HEAD)"
-          echo "sha=${commit_sha}" >> "$GITHUB_OUTPUT"
+          git push --atomic origin HEAD:main "refs/tags/$tag"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
 
   release:
@@ -108,33 +101,14 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.tag }}
 
-      - name: Create release
+      - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           set -euo pipefail
           gh release create "$TAG" \
+            --draft \
             --verify-tag \
             --title "Blossom ${TAG}" \
             --generate-notes
-
-  docker:
-    needs: prepare
-    permissions:
-      contents: read
-      packages: write
-    uses: ./.github/workflows/docker.yml
-    with:
-      tag: ${{ needs.prepare.outputs.tag }}
-      commit-sha: ${{ needs.prepare.outputs.commit-sha }}
-    secrets: inherit
-
-  server-agent-release:
-    needs: [prepare, release]
-    permissions:
-      contents: write
-    uses: ./.github/workflows/server-agent-release.yml
-    with:
-      tag: ${{ needs.prepare.outputs.tag }}
-    secrets: inherit

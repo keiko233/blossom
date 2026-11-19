@@ -1,31 +1,19 @@
-name: "[Release] Build and Publish Server Agent Binaries"
+name: "[Reusable] Build and Publish Server Agent Binaries"
 
 on:
-  push:
-    tags: ["v*"]
-  workflow_dispatch:
   workflow_call:
     inputs:
       tag:
-        description: Unified release tag (e.g. v1.4.0)
+        description: Published release tag
+        required: true
+        type: string
+      commit-sha:
+        description: Commit SHA from the release event
         required: true
         type: string
 
-# This workflow builds static `server-agent` binaries and uploads them (plus
-# `SHA256SUMS`) to the unified `v*` GitHub Release. Asset names deliberately
-# carry no version so `.../releases/download/<tag>/server-agent-linux-amd64`
-# stays stable.
-#
-# workflow_dispatch only builds and checks (assets stay as workflow artifacts);
-# `v*` tag pushes and `workflow_call` upload the binaries to the `v*` release
-# (creating it first if it does not already exist).
-
 permissions:
   contents: read
-
-concurrency:
-  group: server-agent-release-${{ inputs.tag || github.ref }}
-  cancel-in-progress: false
 
 jobs:
   # Gate on the checks the CI `server-agent` job runs, plus tag/version
@@ -35,34 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag || github.ref }}
-
-      - name: Verify tag matches manifest versions
-        if: github.ref_type == 'tag' || github.event_name == 'workflow_call'
-        env:
-          TAG_NAME: ${{ inputs.tag || github.ref_name }}
-        run: |
-          agent_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' server-agent/Cargo.toml | head -n1)"
-          expected="v${agent_version}"
-          if [ "${TAG_NAME}" != "${expected}" ]; then
-            echo "tag ${TAG_NAME} does not match Cargo.toml version ${agent_version} (expected ${expected})" >&2
-            exit 1
-          fi
-          root_version="$(jq -r .version package.json)"
-          app_version="$(jq -r .version app/package.json)"
-          if [ "${root_version}" != "${agent_version}" ] || [ "${app_version}" != "${agent_version}" ]; then
-            echo "manifest version mismatch: package.json=${root_version}, app/package.json=${app_version}, Cargo.toml=${agent_version}" >&2
-            exit 1
-          fi
-
-      - name: Verify Cargo.lock version matches Cargo.toml
-        run: |
-          manifest_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' server-agent/Cargo.toml | head -n1)"
-          lock_version="$(awk '/^name = "server-agent"$/{found=1; next} found && /^version = /{print; exit}' server-agent/Cargo.lock | sed 's/^version = "\(.*\)"$/\1/')"
-          if [ "${manifest_version}" != "${lock_version}" ]; then
-            echo "Cargo.lock pins server-agent ${lock_version}, but Cargo.toml says ${manifest_version}" >&2
-            exit 1
-          fi
+          ref: ${{ inputs.commit-sha }}
 
       # Same checks as the `server-agent` job in test.yml (minus the Docker
       # lifecycle test, which this workflow does not need).
@@ -92,7 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ inputs.commit-sha }}
 
       # Build inside `rust:alpine` (like stage 2 of server-agent/Dockerfile) so
       # the binary is a fully static musl build without cross-compilation. The
@@ -123,18 +84,18 @@ jobs:
           name: ${{ matrix.asset }}
           path: ${{ matrix.asset }}
           if-no-files-found: error
-          retention-days: 1
+          overwrite: true
+          retention-days: 7
 
   release:
     needs: build
-    if: github.ref_type == 'tag' || github.event_name == 'workflow_call'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ inputs.commit-sha }}
 
       - uses: actions/download-artifact@v8
         with:
@@ -144,19 +105,15 @@ jobs:
 
       - name: Build SHA256SUMS
         working-directory: release-assets
-        run: sha256sum server-agent-linux-* > SHA256SUMS
+        run: sha256sum server-agent-linux-amd64 server-agent-linux-arm64 > SHA256SUMS
 
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ inputs.tag || github.ref_name }}
+          TAG_NAME: ${{ inputs.tag }}
         run: |
-          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
-            gh release upload "${TAG_NAME}" release-assets/* --clobber
-          else
-            gh release create "${TAG_NAME}" \
-              --verify-tag \
-              --title "Blossom ${TAG_NAME}" \
-              --generate-notes \
-              release-assets/*
-          fi
+          gh release upload "$TAG_NAME" \
+            release-assets/server-agent-linux-amd64 \
+            release-assets/server-agent-linux-arm64 \
+            release-assets/SHA256SUMS \
+            --clobber

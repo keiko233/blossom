@@ -1,89 +1,52 @@
-name: "[Release] Build and Publish Container Images"
+name: "[Reusable] Build and Publish Container Images"
 
 on:
-  release:
-    types: [published]
-  push:
-    tags: ["v*"]
-  workflow_dispatch:
   workflow_call:
     inputs:
       tag:
-        description: Unified release tag (e.g. v1.4.0)
-        required: false
+        description: Published release tag
+        required: true
         type: string
-        default: ""
       commit-sha:
-        description: Commit SHA for the release
-        required: false
+        description: Commit SHA from the release event
+        required: true
         type: string
-        default: ""
 
 permissions:
   contents: read
   packages: write
 
-concurrency:
-  group: docker-${{ inputs.tag || github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  # Build both the control plane and server agent images for every unified
-  # release (`v*`) or manual dispatch.
   prepare:
     runs-on: ubuntu-latest
     outputs:
       targets: ${{ steps.targets.outputs.targets }}
-      commit-sha: ${{ steps.targets.outputs.commit-sha }}
     steps:
       - id: targets
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          TAG_NAME: ${{ github.event.release.tag_name || github.ref_name }}
-          INPUT_TAG: ${{ inputs.tag }}
-          INPUT_COMMIT_SHA: ${{ inputs.commit-sha }}
         run: |
-          tag=""
-          if [ "$EVENT_NAME" = "workflow_call" ]; then
-            tag="$INPUT_TAG"
-          elif [ "$EVENT_NAME" != "workflow_dispatch" ] && [[ "$TAG_NAME" == v* ]]; then
-            tag="$TAG_NAME"
-          fi
-
-          if [ "$EVENT_NAME" != "workflow_dispatch" ] && [ -z "$tag" ]; then
-            targets="[]"
-          else
-            targets=$(jq -cn \
-              --arg repo "ghcr.io/$GITHUB_REPOSITORY" \
-              --arg tag "$tag" '
-              [
-                {
-                  name: "app",
-                  context: ".",
-                  image: $repo,
-                  tag: $tag,
-                  "cache-path": "pnpm-store",
-                  "cache-map": {"pnpm-store": "/pnpm/store"}
-                },
-                {
-                  name: "server-agent",
-                  context: "./server-agent",
-                  image: ($repo + "/server-agent"),
-                  tag: $tag,
-                  "cache-path": "",
-                  "cache-map": {}
-                }
-              ]')
-          fi
+          targets=$(jq -cn --arg repo "ghcr.io/$GITHUB_REPOSITORY" '
+            [
+              {
+                name: "app",
+                context: ".",
+                image: $repo,
+                "cache-path": "pnpm-store",
+                "cache-map": {"pnpm-store": "/pnpm/store"}
+              },
+              {
+                name: "server-agent",
+                context: "./server-agent",
+                image: ($repo + "/server-agent"),
+                "cache-path": "",
+                "cache-map": {}
+              }
+            ]')
           echo "targets=$targets" >> "$GITHUB_OUTPUT"
-          echo "commit-sha=${INPUT_COMMIT_SHA:-$GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-          echo "building: $(jq -r 'map(.name) | join(", ") | if . == "" then "(nothing)" else . end' <<< "$targets")"
 
   # Build each image natively per architecture (no QEMU emulation) and push
   # by digest; the merge job below assembles the multi-arch manifest.
   build:
     needs: prepare
-    if: needs.prepare.outputs.targets != '[]'
     strategy:
       fail-fast: false
       matrix:
@@ -97,7 +60,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ matrix.target.tag || github.ref }}
+          ref: ${{ inputs.commit-sha }}
 
       - uses: docker/setup-buildx-action@v4
 
@@ -137,7 +100,7 @@ jobs:
           # Bake the OCI revision (commit sha) into the agent binary as its
           # build ID; harmless for the app image which ignores it.
           build-args: |
-            BUILD_ID=${{ needs.prepare.outputs.commit-sha }}
+            BUILD_ID=${{ inputs.commit-sha }}
 
       - name: Export digest
         run: |
@@ -150,12 +113,12 @@ jobs:
           name: digests-${{ matrix.target.name }}-${{ matrix.platform.arch }}
           path: /tmp/digests/*
           if-no-files-found: error
-          retention-days: 1
+          overwrite: true
+          retention-days: 7
 
   # Combine the per-arch digests into one tagged multi-arch manifest per image.
   merge:
     needs: [prepare, build]
-    if: needs.prepare.outputs.targets != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -176,43 +139,31 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - id: meta
-        if: github.event_name != 'workflow_call'
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ matrix.target.image }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - id: resolve-tags
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          IMAGE: ${{ matrix.target.image }}
-          TAG: ${{ matrix.target.tag }}
-          COMMIT_SHA: ${{ needs.prepare.outputs.commit-sha }}
-        run: |
-          if [ "$EVENT_NAME" = "workflow_call" ]; then
-            short_sha="${COMMIT_SHA:0:7}"
-            version="${TAG#v}"
-            minor="${version%.*}"
-            tag_flags="-t ${IMAGE}:${version} -t ${IMAGE}:${minor} -t ${IMAGE}:latest -t ${IMAGE}:sha-${short_sha}"
-            first_tag="${IMAGE}:${version}"
-          else
-            tag_flags="$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
-            first_tag="$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
-          fi
-          echo "tag-flags=$tag_flags" >> "$GITHUB_OUTPUT"
-          echo "first-tag=$first_tag" >> "$GITHUB_OUTPUT"
-
-      - name: Create manifest list and push
+      - name: Create and inspect multi-arch manifest
         working-directory: /tmp/digests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ matrix.target.image }}
+          TAG: ${{ inputs.tag }}
+          COMMIT_SHA: ${{ inputs.commit-sha }}
         run: |
-          docker buildx imagetools create \
-            ${{ steps.resolve-tags.outputs.tag-flags }} \
-            $(printf '${{ matrix.target.image }}@sha256:%s ' *)
+          set -euo pipefail
+          version="${TAG#v}"
+          tags=(-t "$IMAGE:$version" -t "$IMAGE:${version%.*}" -t "$IMAGE:sha-${COMMIT_SHA:0:7}")
+          latest="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
+          if [[ "$TAG" == "$latest" ]]; then
+            tags+=(-t "$IMAGE:latest")
+          fi
 
-      - name: Inspect
-        run: docker buildx imagetools inspect "${{ steps.resolve-tags.outputs.first-tag }}"
+          shopt -s nullglob
+          digest_files=(*)
+          if (( ${#digest_files[@]} != 2 )); then
+            echo "Expected two platform image digests" >&2
+            exit 1
+          fi
+          digests=()
+          for digest in "${digest_files[@]}"; do
+            digests+=("$IMAGE@sha256:$digest")
+          done
+          docker buildx imagetools create "${tags[@]}" "${digests[@]}"
+          docker buildx imagetools inspect "$IMAGE:$version"

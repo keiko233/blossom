@@ -75,14 +75,15 @@ For multi-PR feature or refactoring work, run changes in isolated git worktrees 
 
 ## CI and GitHub workflows
 
-Currently four workflows exist in `.github/workflows/`:
+| Workflow | Trigger | What it does |
+| --- | --- | --- |
+| [`test.yml`](../../.github/workflows/test.yml) | Pull requests, manual | Runs app tests and the Cloudflare, Node, and Vercel builds. Runs Agent tests, formatting, Clippy, Docker builds, and the managed-TLS lifecycle test. |
+| [`publish.yml`](../../.github/workflows/publish.yml) | Manual on `main` | Bumps the unified version, prepends `CHANGELOG.md`, pushes the version commit and `vX.Y.Z` tag together, and creates a draft GitHub Release. |
+| [`release-ci.yml`](../../.github/workflows/release-ci.yml) | GitHub Release published | Validates the stable release tag against the manifests and builds from the tagged commit. |
+| [`docker.yml`](../../.github/workflows/docker.yml) | Called by Release CI | Builds and publishes the amd64 and arm64 app and Agent images to GHCR. |
+| [`server-agent-release.yml`](../../.github/workflows/server-agent-release.yml) | Called by Release CI | Runs Agent checks, builds static amd64 and arm64 binaries, and uploads both binaries and `SHA256SUMS` to the published release. |
 
-| Workflow                    | Trigger                             | What it does                                                                                                                                                                     |
-| --------------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `test.yml` (`CI`)           | pull requests, manual               | Job `app` (`App tests and build`): `pnpm install --frozen-lockfile`, `pnpm test` (with Postgres service), then `pnpm build` (Cloudflare), `build:node`, `build:vercel`. Job `server-agent` (`Server agent tests`): `cargo test --locked`, `cargo fmt --check`, `cargo clippy -D warnings`, Docker builds, managed-TLS lifecycle test. |
-| `publish.yml`               | manual (`workflow_dispatch`)        | Bumps unified version across `package.json`, `app/package.json`, `server-agent/Cargo.toml`, and `server-agent/Cargo.lock`, prepends `CHANGELOG.md`, tags `vX.Y.Z`, creates the GitHub Release, and calls `docker.yml` + `server-agent-release.yml`. |
-| `docker.yml` (`Docker`)     | release, `v*` tags, manual, called  | Builds and publishes multi-arch GHCR manifests (`ghcr.io/<repo>` and `ghcr.io/<repo>/server-agent`) for unified releases.                                                        |
-| `server-agent-release.yml`  | `v*` tags, manual, called           | Checks `package.json`/`app/package.json`/`Cargo.toml`/`Cargo.lock` tag agreement, runs Rust tests/fmt/clippy, builds static amd64/arm64 musl binaries, uploads binaries + `SHA256SUMS` to the unified `v*` GitHub Release. |
+Run **[Release] Prepare Draft Release** and choose `major`, `minor`, or `patch`. Review the draft on GitHub and click **Publish release** to start **[Release] Build Published Release**. The release page goes live immediately. Images and binaries become available as their jobs finish, so wait for Release CI to pass before deploying that version. If a build or upload fails, rerun the failed jobs from that Release CI run. The release must allow assets to be added after publication.
 
 ### Workflow conventions
 
