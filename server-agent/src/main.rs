@@ -196,8 +196,9 @@ struct Args {
     )]
     update_retry_seconds: u64,
 
-    /// Connect the push WebSocket; when disabled (or rejected by the control
-    /// plane) the agent keeps the HTTP config poll and heartbeat.
+    /// Connect the push WebSocket. This is required for protocol v2; the
+    /// explicit legacy protocol may run with it disabled and use only the HTTP
+    /// config poll and heartbeat.
     #[arg(
         long,
         default_value_t = true,
@@ -206,11 +207,12 @@ struct Args {
     )]
     ws_enabled: bool,
 
-    /// Agent WebSocket protocol. `legacy` keeps the v1 WebSocket with the HTTP
-    /// config poll, heartbeat, and traffic reports. `v2` carries configuration,
-    /// status, and traffic over `blossom-agent.v2` and makes no HTTP requests.
-    /// An OAuth credential file selects `v2` unless this is given as `legacy`
-    /// (which is refused) or `v2`.
+    /// Agent WebSocket protocol. `v2` is the default for both OAuth credential
+    /// files and explicit static backup tokens: configuration, status, and
+    /// traffic travel over `blossom-agent.v2` and no HTTP agent API is used.
+    /// `legacy` is an explicit opt-in for installations that still need the v1
+    /// WebSocket with the HTTP config poll, heartbeat, and traffic reports.
+    /// OAuth credentials are refused with `legacy`.
     #[arg(long, value_enum, env = "AGENT_WS_PROTOCOL")]
     ws_protocol: Option<WsProtocol>,
 
@@ -304,9 +306,10 @@ struct Args {
 /// The agent WebSocket protocol selected at start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum WsProtocol {
-    /// The v1 WebSocket with HTTP config poll, heartbeat, and traffic (the shipped default).
+    /// Explicit legacy mode: the v1 WebSocket with HTTP config poll,
+    /// heartbeat, and traffic.
     Legacy,
-    /// Protocol v2: WebSocket-only, with no HTTP agent API calls.
+    /// Protocol v2 (the default): WebSocket-only, with no HTTP agent API calls.
     V2,
 }
 
@@ -335,9 +338,10 @@ pub(crate) struct ServiceStartup {
 impl Args {
     /// Resolves the base URL, the one credential input, and the transport.
     ///
-    /// An OAuth credential file defaults to protocol v2 to match the
-    /// installer unit, which passes only `--credentials-file`. Static tokens
-    /// remain an explicit legacy/backup mode; OAuth never falls back to one.
+    /// Both OAuth credential files and explicit static backup tokens default to
+    /// protocol v2, so the installer unit and the container entry point need no
+    /// protocol flag. `--ws-protocol legacy` is the explicit compatibility
+    /// opt-in; OAuth never falls back to a static token or HTTP.
     fn startup(&self) -> Result<ServiceStartup> {
         let url = self
             .url
@@ -348,11 +352,11 @@ impl Args {
             .to_string();
 
         let (auth, default_protocol) = match (self.token.as_deref(), &self.credentials_file) {
-            (Some(token), None) => (AuthMode::Static(token.to_string()), WsProtocol::Legacy),
+            (Some(token), None) => (AuthMode::Static(token.to_string()), WsProtocol::V2),
             (None, Some(path)) => (AuthMode::OAuth(path.clone()), WsProtocol::V2),
             (Some(_), Some(_)) => {
                 return Err(anyhow::anyhow!(
-                    "choose either --token (static, legacy/backup) or --credentials-file (OAuth), not both"
+                    "choose either --token (static backup) or --credentials-file (OAuth), not both"
                 ));
             }
             (None, None) => {
@@ -364,12 +368,12 @@ impl Args {
         let protocol = self.ws_protocol.unwrap_or(default_protocol);
         if matches!(auth, AuthMode::OAuth(_)) && protocol != WsProtocol::V2 {
             return Err(anyhow::anyhow!(
-                "OAuth credentials require --ws-protocol v2; static-token mode is a separate, explicit choice"
+                "OAuth credentials require protocol v2; --ws-protocol legacy is a separate, explicit static-token mode"
             ));
         }
         if !self.ws_enabled && protocol == WsProtocol::V2 {
             return Err(anyhow::anyhow!(
-                "--ws-protocol v2 is the WebSocket path and cannot run with --ws-enabled=false"
+                "protocol v2 is the WebSocket path and cannot run with --ws-enabled=false"
             ));
         }
         Ok(ServiceStartup {
@@ -2609,22 +2613,22 @@ mod tests {
     }
 
     #[test]
-    fn a_static_token_keeps_the_legacy_default_and_can_opt_into_v2() {
-        let legacy = service_startup(&["--url", "http://127.0.0.1:1/api", "--token", "agt_test"])
+    fn a_static_token_selects_v2_by_default_and_can_opt_into_legacy() {
+        let default = service_startup(&["--url", "http://127.0.0.1:1/api", "--token", "agt_test"])
             .expect("static startup resolves");
-        assert_eq!(legacy.protocol, WsProtocol::Legacy);
-        assert_eq!(legacy.auth.static_token(), Some("agt_test"));
+        assert_eq!(default.protocol, WsProtocol::V2);
+        assert_eq!(default.auth.static_token(), Some("agt_test"));
 
-        let backup = service_startup(&[
+        let legacy = service_startup(&[
             "--url",
             "http://127.0.0.1:1/api",
             "--token",
             "agt_test",
             "--ws-protocol",
-            "v2",
+            "legacy",
         ])
-        .expect("static v2 startup resolves");
-        assert_eq!(backup.protocol, WsProtocol::V2);
+        .expect("static legacy startup resolves");
+        assert_eq!(legacy.protocol, WsProtocol::Legacy);
     }
 
     #[test]

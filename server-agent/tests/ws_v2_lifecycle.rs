@@ -1,8 +1,11 @@
-//! Process-level lifecycle test for protocol v2.
+//! Process-level lifecycle test for the default protocol v2 path.
 //!
 //! The real agent binary runs against a local WebSocket control plane and a
 //! fake sing-box. The control plane never serves the old HTTP agent API; any
-//! such request is recorded and failed. The test covers a cold snapshot apply,
+//! such request is recorded and failed. The agent is started without
+//! `--ws-protocol` (and with any inherited `AGENT_WS_PROTOCOL` removed), so
+//! this is the same entry point an installed static backup uses. The test
+//! covers a cold snapshot apply,
 //! a traffic acknowledgement lost with the socket and replayed under the same
 //! report id, a missed-notification recovery through `agent.status.ack`, a
 //! failed candidate that rolls back to the last-known-good config, and an
@@ -94,13 +97,14 @@ impl Harness {
             .open(&self.agent_log)
             .unwrap();
         let mut command = Command::new(env!("CARGO_BIN_EXE_server-agent"));
+        // Exercise the shipped default: a static backup token with no
+        // `--ws-protocol` flag and no `AGENT_WS_PROTOCOL` override.
         command
+            .env_remove("AGENT_WS_PROTOCOL")
             .arg("--url")
             .arg(url)
             .arg("--token")
             .arg("test-agent-token")
-            .arg("--ws-protocol")
-            .arg("v2")
             .arg("--state-dir")
             .arg(&self.state_dir)
             .arg("--sing-box-path")
@@ -1040,7 +1044,7 @@ async fn stop_agent(child: &mut Child) {
 }
 
 #[tokio::test]
-async fn the_v2_agent_completes_its_lifecycle_without_the_http_agent_api() {
+async fn the_default_agent_completes_its_lifecycle_without_the_http_agent_api() {
     let harness = Harness::new();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();

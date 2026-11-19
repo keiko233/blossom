@@ -402,6 +402,8 @@ fn write_fake_singbox(path: &Path, run_log: &Path) {
 fn agent_command(base: &str, credentials: &Path, state_dir: &Path, bin: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_server-agent"));
     command
+        // OAuth startup must select protocol v2 with no protocol flag.
+        .env_remove("AGENT_WS_PROTOCOL")
         .arg("--url")
         .arg(base)
         .arg("--credentials-file")

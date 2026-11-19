@@ -1,8 +1,11 @@
-//! The protocol v2 agent runtime, selected with `--ws-protocol v2`.
+//! The protocol v2 agent runtime, the default for both credential modes.
 //!
 //! The WebSocket is the only control path. Configuration arrives as snapshots
 //! that are verified before they reach the core, status and traffic travel
 //! over the same session, and nothing polls the HTTP agent API.
+//! `--ws-protocol legacy` is the explicit compatibility opt-in for the v1
+//! transport; this runtime never substitutes an HTTP poll when the socket is
+//! unavailable.
 //!
 //! The core loop owns sing-box, the candidate and last-known-good configs,
 //! and the updater. It runs one apply at a time, and the session never waits
@@ -102,7 +105,7 @@ pub async fn run(
     log_policy: Arc<LogPolicy>,
 ) -> Result<()> {
     if !args.ws_enabled {
-        bail!("--ws-protocol v2 is the WebSocket path and cannot run with --ws-enabled=false");
+        bail!("protocol v2 is the WebSocket path and cannot run with --ws-enabled=false");
     }
     let url = ws_url(&startup.url)?;
     let transport = match &startup.auth {
