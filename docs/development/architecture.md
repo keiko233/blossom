@@ -67,9 +67,15 @@ API.
   port or command. Nitro keeps the relay in process (or on the Redis
   backplane), while Cloudflare forwards the browser upgrade into the same
   `AgentSessionDO` that holds the agent socket. The agent advertises `pty-v1`
-  only when started with `AGENT_PTY_ENABLED=true`. Session open and close are
-  written to `admin_audit_log` as metadata only; terminal bytes are never
-  stored.
+  only when started with `AGENT_PTY_ENABLED=true` and not running as root. The
+  browser shows the terminal as connected only after `pty.started`. Session open
+  and close are written to `admin_audit_log` as metadata only; terminal bytes are
+  never stored. Both relays re-check the admin session, the user's admin role,
+  the server and the agent connection every 30 seconds, and close the shell
+  with `authorization_revoked` on failure. The Durable Object re-checks from a
+  storage alarm, so it also runs while the object hibernates, and it stores the
+  better-auth session row id, never the cookie or bearer token. A database
+  error or a 10-second timeout counts as a failed check.
 
 ### Agent-executed ACME
 

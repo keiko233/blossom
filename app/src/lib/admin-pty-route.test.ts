@@ -2,13 +2,17 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   handleAdminPtyRequest,
+  handleAdminPtyStatus,
   type AdminPtyAuthSession,
   type AdminPtyRouteDependencies,
   type AdminPtyServerState,
 } from "./admin-pty-route";
+import type { AdminPtyAcceptContext } from "./pty-relay-types";
+
+const { getSession } = vi.hoisted(() => ({ getSession: vi.fn() }));
 
 vi.mock("@/lib/auth", () => ({
-  getAuth: () => ({ api: { getSession: vi.fn() } }),
+  getAuth: () => ({ api: { getSession } }),
 }));
 
 const ORIGIN = "https://panel.example.com";
@@ -50,7 +54,7 @@ function dependencies(
             email: "admin@example.com",
             role: "admin",
           },
-          session: { impersonatedBy: null },
+          session: { id: "auth-session-1", impersonatedBy: null },
         }) as unknown as AdminPtyAuthSession,
     ),
     loadServer: vi.fn(async () => row()),
@@ -156,5 +160,92 @@ describe("admin PTY upgrade", () => {
       expect.objectContaining({ sessionId: "pty-1" }),
       { failed: true },
     );
+  });
+
+  it("re-checks the admin session and agent connection while the shell is open", async () => {
+    const accept = vi.fn(
+      async (_request: Request, _context: AdminPtyAcceptContext) =>
+        new Response(null, { status: 426 }),
+    );
+    const deps = dependencies({ accept });
+    await handleAdminPtyRequest(request(), { serverId: "srv-1" }, deps);
+    const context = accept.mock.calls[0]?.[1];
+    expect(context?.authSessionId).toBe("auth-session-1");
+    expect(await context?.isAuthorized()).toBe(true);
+
+    deps.authenticate = vi.fn(async () => null);
+    expect(await context?.isAuthorized()).toBe(false);
+    deps.authenticate = dependencies().authenticate;
+
+    deps.loadServer = vi.fn(async () => row({ enabled: false }));
+    expect(await context?.isAuthorized()).toBe(false);
+
+    deps.loadServer = vi.fn(async () =>
+      row({ wsConnectedAt: new Date("2026-11-19T00:00:01.000Z") }),
+    );
+    expect(await context?.isAuthorized()).toBe(false);
+
+    deps.loadServer = vi.fn(async () => row());
+    expect(await context?.isAuthorized()).toBe(true);
+  });
+});
+
+describe("admin PTY status probe", () => {
+  it("denies unauthenticated and non-admin callers before reading the server", async () => {
+    const deps = dependencies({ authenticate: vi.fn(async () => null) });
+    const response = await handleAdminPtyStatus(
+      new Request(`${ORIGIN}/api/admin/servers/srv-1/pty/status`),
+      { serverId: "srv-1" },
+      deps,
+    );
+    expect(response.status).toBe(403);
+    expect(deps.loadServer).not.toHaveBeenCalled();
+  });
+
+  it("reports readiness and each unavailable state without a server name", async () => {
+    const probe = (loaded: AdminPtyServerState | null) =>
+      handleAdminPtyStatus(
+        new Request(`${ORIGIN}/api/admin/servers/srv-1/pty/status`),
+        { serverId: "srv-1" },
+        dependencies({ loadServer: vi.fn(async () => loaded) }),
+      );
+
+    const ready = await probe(row());
+    expect(ready.status).toBe(200);
+    expect(await ready.json()).toEqual({ available: true });
+
+    expect(await (await probe(null)).status).toBe(404);
+    expect(await (await probe(row({ enabled: false }))).json()).toEqual({
+      available: false,
+      reason: "disabled",
+    });
+    expect(
+      await (
+        await probe(row({ transportMode: "http", wsConnectedAt: null }))
+      ).json(),
+    ).toEqual({ available: false, reason: "offline" });
+    const unsupported = await (
+      await probe(row({ agentCapabilities: ["ws-v1"] }))
+    ).text();
+    expect(unsupported).toBe('{"available":false,"reason":"unsupported"}');
+    expect(unsupported).not.toContain("edge");
+  });
+});
+
+describe("admin PTY session lookup", () => {
+  it("reads the admin session without refreshing it, so the upgrade keeps its 101 shape", async () => {
+    // A rolling refresh sets a cookie; TanStack then rebuilds the response to
+    // apply it, and workerd rejects a rebuilt 101 without its webSocket.
+    getSession.mockResolvedValueOnce(null);
+
+    const response = await handleAdminPtyRequest(request(), {
+      serverId: "srv-1",
+    });
+
+    expect(response.status).toBe(403);
+    expect(getSession).toHaveBeenCalledWith({
+      headers: expect.any(Headers),
+      query: { disableRefresh: true },
+    });
   });
 });

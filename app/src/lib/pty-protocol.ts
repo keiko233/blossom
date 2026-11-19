@@ -11,10 +11,13 @@ import {
   type AgentWsPtyExitPayload,
   type AgentWsPtyExitReason,
   type AgentWsPtyResizePayload,
+  type AgentWsPtyStartedPayload,
 } from "@blossom/contracts/agent-ws";
 
 export const PTY_CAPABILITY = AGENT_WS_PTY_CAPABILITY;
-export const PTY_MAX_SESSIONS_PER_SERVER = 2;
+export const PTY_MAX_SESSIONS_PER_SERVER = 1;
+/** Browser-side deadline for `pty.started` after the upgrade succeeds. */
+export const PTY_OPEN_TIMEOUT_MS = 15 * 1000;
 export const PTY_MIN_COLS = 20;
 export const PTY_MAX_COLS = 400;
 export const PTY_MIN_ROWS = 5;
@@ -57,6 +60,7 @@ export type PtyBrowserMessage =
   | { type: "pty.close"; payload: AgentWsPtyClosePayload };
 
 export type PtyAgentMessage =
+  | { type: "pty.started"; payload: AgentWsPtyStartedPayload }
   | { type: "pty.data"; payload: AgentWsPtyDataPayload }
   | { type: "pty.exit"; payload: AgentWsPtyExitPayload };
 
@@ -104,7 +108,11 @@ export function parsePtyBrowserFrame(
   if (!pty.ok) {
     return { ok: false, code: "invalid-payload" };
   }
-  if (pty.message.type === "pty.open" || pty.message.type === "pty.exit") {
+  if (
+    pty.message.type === "pty.open" ||
+    pty.message.type === "pty.started" ||
+    pty.message.type === "pty.exit"
+  ) {
     return { ok: false, code: "wrong-type" };
   }
   if (pty.message.payload.sessionId !== sessionId) {
@@ -135,7 +143,11 @@ export function parsePtyAgentFrame(
   if (!pty.ok) {
     return { ok: false, code: "invalid-payload" };
   }
-  if (pty.message.type !== "pty.data" && pty.message.type !== "pty.exit") {
+  if (
+    pty.message.type !== "pty.started" &&
+    pty.message.type !== "pty.data" &&
+    pty.message.type !== "pty.exit"
+  ) {
     return { ok: false, code: "wrong-type" };
   }
   if (pty.message.payload.sessionId !== sessionId) {
