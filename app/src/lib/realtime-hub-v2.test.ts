@@ -118,7 +118,10 @@ function fakeV2Store() {
 
 function fakeV1Store(): AgentWsStore {
   return {
-    markConnected: vi.fn(async () => new Date()),
+    markConnected: vi.fn(async () => ({
+      connectedAt: new Date(),
+      sessionId: "session-v1",
+    })),
     markDisconnected: vi.fn(async () => undefined),
     recordHello: vi.fn(async () => undefined),
     recordConfigAck: vi.fn(async () => undefined),

@@ -62,6 +62,7 @@ interface AgentSessionAttachmentBase {
  */
 interface V1AgentSessionAttachment extends AgentSessionAttachmentBase {
   protocol: "v1";
+  sessionId: string;
   welcome: AgentWsWelcomePayload;
 }
 
@@ -104,6 +105,9 @@ function readAttachment(ws: WebSocket): AgentSessionAttachment | null {
       welcomed: candidate.welcomed === true,
     };
   }
+  if (typeof candidate.sessionId !== "string") {
+    return null;
+  }
   const welcome = agentWsWelcomePayloadSchema.safeParse(candidate.welcome);
   if (!welcome.success) {
     return null;
@@ -112,6 +116,7 @@ function readAttachment(ws: WebSocket): AgentSessionAttachment | null {
     protocol: "v1",
     serverId: candidate.serverId,
     connectedAt: candidate.connectedAt,
+    sessionId: candidate.sessionId,
     welcome: welcome.data,
   };
 }
@@ -276,8 +281,9 @@ export class AgentSessionDO extends DurableObject {
     if (request.headers.get(AGENT_WS_INTERNAL_PROTOCOL) === "v2") {
       return this.connectV2(request, serverId, connectedAt);
     }
+    const sessionId = request.headers.get(AGENT_WS_INTERNAL_SESSION_ID);
     const welcomeHeader = request.headers.get(AGENT_WS_INTERNAL_WELCOME);
-    if (!serverId || !connectedAt || !welcomeHeader) {
+    if (!serverId || !connectedAt || !sessionId || !welcomeHeader) {
       return new Response("Bad Request", { status: 400 });
     }
 
@@ -298,6 +304,7 @@ export class AgentSessionDO extends DurableObject {
       protocol: "v1",
       serverId,
       connectedAt,
+      sessionId,
       welcome,
     } satisfies V1AgentSessionAttachment);
 
@@ -358,7 +365,10 @@ export class AgentSessionDO extends DurableObject {
     return openAgentWsSession({
       serverId: attachment.serverId,
       welcome: attachment.welcome,
-      connectedAt: new Date(attachment.connectedAt),
+      session: {
+        connectedAt: new Date(attachment.connectedAt),
+        sessionId: attachment.sessionId,
+      },
       store,
     });
   }

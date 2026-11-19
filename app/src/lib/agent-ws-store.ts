@@ -44,8 +44,8 @@ import type { AgentWsV2Store } from "./agent-ws-v2-session";
 export function createAgentWsStore(database: Database = db): AgentWsStore {
   return {
     markConnected: (serverId) => markAgentWsConnected(serverId, database),
-    markDisconnected: (serverId, connectedAt) =>
-      markAgentWsDisconnected(serverId, connectedAt, database),
+    markDisconnected: (serverId, sessionId) =>
+      markAgentWsDisconnected(serverId, sessionId, database),
     recordHello: (serverId, hello: AgentWsHelloPayload) =>
       recordAgentHello(serverId, hello, database),
     recordConfigAck: (serverId, ack: AgentWsConfigAckPayload) =>

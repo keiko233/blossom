@@ -36,7 +36,10 @@ const welcome: AgentWsWelcomePayload = {
 
 function fakeStore(): AgentWsStore {
   return {
-    markConnected: vi.fn(async () => new Date("2026-11-19T00:00:00.000Z")),
+    markConnected: vi.fn(async () => ({
+      connectedAt: new Date("2026-11-19T00:00:00.000Z"),
+      sessionId: "session-1",
+    })),
     markDisconnected: vi.fn(async () => undefined),
     recordHello: vi.fn(async () => undefined),
     recordConfigAck: vi.fn(async () => undefined),
@@ -179,9 +182,6 @@ describe("NitroRealtimeHub", () => {
     );
 
     await response.crossws.close(peer, {});
-    expect(store.markDisconnected).toHaveBeenCalledWith(
-      "srv-1",
-      new Date("2026-11-19T00:00:00.000Z"),
-    );
+    expect(store.markDisconnected).toHaveBeenCalledWith("srv-1", "session-1");
   });
 });
