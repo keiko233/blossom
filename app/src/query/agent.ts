@@ -669,14 +669,14 @@ export async function revalidatePendingAgentV2Session(
 export async function markAgentWsConnected(
   serverId: string,
   database: DbHandle = db,
-): Promise<Date> {
-  return (await startAgentWsSession(serverId, database)).connectedAt;
+): Promise<AgentWsSessionStart> {
+  return startAgentWsSession(serverId, database);
 }
 
-/** Clears only the handshake that is still current; a reconnect wins races. */
+/** Clears only the session that is still current; a reconnect wins races. */
 export async function markAgentWsDisconnected(
   serverId: string,
-  connectedAt: Date,
+  sessionId: string,
   database: DbHandle = db,
 ): Promise<void> {
   await database
@@ -690,7 +690,7 @@ export async function markAgentWsDisconnected(
       wsCredentialGeneration: null,
       wsCredentialExpiresAt: null,
     })
-    .where(and(eq(server.id, serverId), eq(server.wsConnectedAt, connectedAt)));
+    .where(and(eq(server.id, serverId), eq(server.wsSessionId, sessionId)));
 }
 
 /**
@@ -861,6 +861,29 @@ export async function recordAgentUpdateStatus(
     .where(eq(server.id, serverId));
 }
 
+/**
+ * Records an `update.status` from a v2 session. Returns false when the session
+ * was replaced, so the caller stops it instead of continuing to stream into a
+ * session the server no longer treats as current.
+ */
+export async function recordAgentV2UpdateStatus(
+  serverId: string,
+  sessionId: string,
+  updates: AgentWsUpdateStatuses,
+  database: DbHandle = db,
+): Promise<boolean> {
+  const rows = await database
+    .update(server)
+    .set({
+      lastSeenAt: new Date(),
+      statusReportedAt: new Date(),
+      ...updateStatusColumns(updates),
+    })
+    .where(currentSession(serverId, sessionId))
+    .returning({ id: server.id });
+  return rows.length > 0;
+}
+
 export async function listServerNodeIds(
   serverId: string,
   database: DbHandle = db,
@@ -896,6 +919,19 @@ function currentSession(serverId: string, sessionId: string) {
     eq(server.wsSessionId, sessionId),
     currentAgentCredentialSql(),
   );
+}
+
+/** True while `sessionId` is still the server's current WebSocket session. */
+export async function isAgentWsSessionCurrent(
+  serverId: string,
+  sessionId: string,
+  database: DbHandle = db,
+): Promise<boolean> {
+  const [row] = await database
+    .select({ id: server.id })
+    .from(server)
+    .where(currentSession(serverId, sessionId));
+  return Boolean(row);
 }
 
 /**

@@ -4,7 +4,7 @@ import { db } from "@/db";
 import { server } from "@/db/proxy-schema";
 import { getAuth } from "@/lib/auth";
 import { getClientIp } from "@/lib/client-ip";
-import { ptyAvailability } from "@/lib/pty-authorization";
+import { ptyAvailability, ptyProtocol } from "@/lib/pty-authorization";
 import { clampPtyDimensions, isValidPtySessionId } from "@/lib/pty-protocol";
 import { acceptAdminPty } from "@/lib/pty-relay";
 import type { AdminPtyAcceptContext } from "@/lib/pty-relay-types";
@@ -24,6 +24,7 @@ export interface AdminPtyServerState {
   enabled: boolean;
   transportMode: string;
   wsConnectedAt: Date | null;
+  wsSessionId: string | null;
   agentCapabilities: string[];
 }
 
@@ -56,6 +57,7 @@ const defaultDependencies: AdminPtyRouteDependencies = {
         enabled: server.enabled,
         transportMode: server.transportMode,
         wsConnectedAt: server.wsConnectedAt,
+        wsSessionId: server.wsSessionId,
         agentCapabilities: server.agentCapabilities,
       })
       .from(server)
@@ -203,9 +205,15 @@ export async function handleAdminPtyRequest(
 
   try {
     const connectedAt = row.wsConnectedAt!.toISOString();
+    const agentProtocol = ptyProtocol(row);
+    if (!agentProtocol) {
+      return plain(409, "Terminal unsupported");
+    }
     const response = await dependencies.accept(request, {
       serverId: row.id,
       connectedAt,
+      agentProtocol,
+      agentSessionId: agentProtocol === "v2" ? row.wsSessionId : null,
       sessionId,
       cols: dimensions.cols,
       rows: dimensions.rows,
@@ -220,7 +228,12 @@ export async function handleAdminPtyRequest(
         return (
           current.ok &&
           ptyAvailability(current.row) === null &&
-          current.row.wsConnectedAt?.toISOString() === connectedAt
+          ptyProtocol(current.row) === agentProtocol &&
+          (agentProtocol === "v2"
+            ? Boolean(
+                row.wsSessionId && current.row.wsSessionId === row.wsSessionId,
+              )
+            : current.row.wsConnectedAt?.toISOString() === connectedAt)
         );
       },
     });

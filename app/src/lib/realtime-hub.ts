@@ -9,7 +9,11 @@ import {
   type AgentWsUpdateTriggerPayload,
   type AgentWsWelcomePayload,
 } from "@blossom/contracts/agent-ws";
-import { AGENT_WS_V2_SUBPROTOCOL } from "@blossom/contracts/agent-ws-v2";
+import {
+  AGENT_WS_V2_SUBPROTOCOL,
+  createAgentWsV2Frame,
+  encodeAgentWsV2Frame,
+} from "@blossom/contracts/agent-ws-v2";
 import Redis from "ioredis";
 
 import type { Server } from "@/db/proxy-schema";
@@ -34,11 +38,16 @@ import {
   type AgentWsV2HubStore,
 } from "./agent-ws-store";
 import {
+  encodePtyFrameForAgentV2,
+  v2PtyFrameForBrowser,
+} from "./agent-ws-v2-pty";
+import {
   encodeAgentWsV2ConfigNotify,
   openAgentWsV2Session,
   type AgentWsV2Session,
 } from "./agent-ws-v2-session";
 import {
+  type AgentPtyTarget,
   REALTIME_BACKPLANE_CHANNEL,
   type RealtimeBackplane,
   type RealtimeBackplaneMessage,
@@ -152,6 +161,9 @@ type LocalV2Connection = {
   session: Promise<AgentWsV2Session | null>;
   /** Periodic authoritative lease check, including the token deadline. */
   leaseTimer?: ReturnType<typeof setTimeout>;
+  /** Set once `startSession` makes this connection the current v2 session. */
+  sessionId: string | null;
+  connectedAt: string;
 };
 
 export type PtyRelayEvent =
@@ -161,14 +173,50 @@ export type PtyRelayEvent =
 export type PtyRelayHandler = (event: PtyRelayEvent) => void;
 
 interface LocalPtyRelay {
-  connectedAt: string;
+  target: AgentPtyTarget;
   handler: PtyRelayHandler;
+}
+
+function samePtyTarget(left: AgentPtyTarget, right: AgentPtyTarget): boolean {
+  if (left.protocol !== right.protocol) {
+    return false;
+  }
+  return left.protocol === "v2"
+    ? Boolean(
+        left.agentSessionId &&
+        right.agentSessionId &&
+        left.agentSessionId === right.agentSessionId,
+      )
+    : left.connectedAt === right.connectedAt;
+}
+
+function ptyTargetFromBackplane(
+  message: RealtimeBackplaneMessage,
+): AgentPtyTarget | null {
+  if (message.agentProtocol === "v2") {
+    return message.agentSessionId && message.connectedAt
+      ? {
+          protocol: "v2",
+          connectedAt: message.connectedAt,
+          agentSessionId: message.agentSessionId,
+        }
+      : null;
+  }
+  return message.connectedAt
+    ? {
+        protocol: "v1",
+        connectedAt: message.connectedAt,
+        agentSessionId: null,
+      }
+    : null;
 }
 
 export class NitroRealtimeHub implements RealtimeHub {
   readonly id = crypto.randomUUID();
   private readonly connections = new Map<string, Set<LocalConnection>>();
   private readonly v2Connections = new Map<string, Set<LocalV2Connection>>();
+  /** The newest v2 session this instance started for a server. */
+  private readonly currentV2Sessions = new Map<string, LocalV2Connection>();
   private readonly ptyRelays = new Map<string, Map<string, LocalPtyRelay>>();
   private readonly backplane: RealtimeBackplane | undefined;
   private readonly store: ReturnType<typeof createAgentWsStore>;
@@ -227,12 +275,18 @@ export class NitroRealtimeHub implements RealtimeHub {
     return {
       upgrade: () => ({ protocol: AGENT_WS_V2_SUBPROTOCOL }),
       open: async (peer) => {
+        const connection: LocalV2Connection = {
+          peer,
+          session: Promise.resolve(null),
+          sessionId: null,
+          connectedAt: "",
+        };
         const session = (async () => {
           const started = await this.v2Store.startSession(serverId, credential);
           if (!started) {
             return null;
           }
-          return openAgentWsV2Session({
+          const opened = openAgentWsV2Session({
             serverId,
             sessionId: started.sessionId,
             credential,
@@ -240,14 +294,20 @@ export class NitroRealtimeHub implements RealtimeHub {
             peer,
             store: this.v2Store,
             reconnectBeforeSeconds: reconnectBeforeSecondsForRuntime(),
+            onPtyFrame: (frame) =>
+              this.deliverV2PtyFrame(serverId, started.sessionId, frame),
           });
+          connection.sessionId = started.sessionId;
+          connection.connectedAt = started.connectedAt.toISOString();
+          this.currentV2Sessions.set(serverId, connection);
+          return opened;
         })();
         let peers = this.v2Connections.get(serverId);
         if (!peers) {
           peers = new Set();
           this.v2Connections.set(serverId, peers);
         }
-        const connection: LocalV2Connection = { peer, session };
+        connection.session = session;
         peers.add(connection);
         this.startBackplane();
         try {
@@ -280,6 +340,27 @@ export class NitroRealtimeHub implements RealtimeHub {
         const connection = this.removeV2Connection(serverId, peer);
         if (!connection) {
           return;
+        }
+        if (connection.sessionId) {
+          this.closePtyRelays(serverId, {
+            protocol: "v2",
+            connectedAt: connection.connectedAt,
+            agentSessionId: connection.sessionId,
+          });
+          if (this.backplane) {
+            void this.backplane
+              .publish({
+                origin: this.id,
+                serverId,
+                frame: "",
+                connectedAt: connection.connectedAt,
+                agentProtocol: "v2",
+                agentSessionId: connection.sessionId,
+                ptyTarget: "browser",
+                agentDisconnected: true,
+              })
+              .catch(() => undefined);
+          }
         }
         const session = await connection.session.catch(() => undefined);
         await session?.close();
@@ -316,6 +397,9 @@ export class NitroRealtimeHub implements RealtimeHub {
       peers?.delete(connection);
       if (peers?.size === 0) {
         this.v2Connections.delete(serverId);
+      }
+      if (this.currentV2Sessions.get(serverId) === connection) {
+        this.currentV2Sessions.delete(serverId);
       }
     }
     return connection;
@@ -357,29 +441,48 @@ export class NitroRealtimeHub implements RealtimeHub {
   }
 
   /**
-   * Delivers a v2 push to every welcomed session of the server on this
-   * instance. A session that has not been welcomed reconciles through hello,
-   * so it must not receive pushes that could precede its configuration.
+   * Delivers a v2 push only to the current, welcomed session. An older socket
+   * that has not observed its replacement yet must not see configuration,
+   * update, ACME, or terminal traffic for the newer session.
    */
-  private deliverV2(serverId: string, frame: string): void {
-    for (const connection of this.v2Connections.get(serverId) ?? []) {
-      void connection.session
-        .then((session) => {
-          if (session?.welcomed) {
-            connection.peer.send(frame);
-          }
-        })
-        .catch(() => undefined);
+  private deliverV2(
+    serverId: string,
+    frame: string,
+    agentSessionId?: string,
+  ): void {
+    const connection = this.currentV2Sessions.get(serverId);
+    if (
+      !connection?.sessionId ||
+      (agentSessionId !== undefined && connection.sessionId !== agentSessionId)
+    ) {
+      return;
     }
+    void connection.session
+      .then((session) => {
+        if (session?.welcomed) {
+          connection.peer.send(frame);
+        }
+      })
+      .catch(() => undefined);
   }
 
   private publishV2(serverId: string, frame: string): void {
-    this.deliverV2(serverId, frame);
+    const agentSessionId = this.currentV2Sessions.get(serverId)?.sessionId;
+    if (!agentSessionId) {
+      return;
+    }
+    this.deliverV2(serverId, frame, agentSessionId);
     const backplane = this.backplane;
     if (!backplane) return;
     const ready = this.startBackplane();
     const relay = () =>
-      backplane.publish({ origin: this.id, serverId, frame, protocol: "v2" });
+      backplane.publish({
+        origin: this.id,
+        serverId,
+        frame,
+        protocol: "v2",
+        agentSessionId,
+      });
     void (ready ? ready.then(relay) : relay()).catch((error: unknown) => {
       const reason = error instanceof Error ? error.message : String(error);
       console.warn(`realtime backplane publish failed: ${reason}`);
@@ -449,7 +552,11 @@ export class NitroRealtimeHub implements RealtimeHub {
         }
         const session = await connection.session;
         const connectedAt = session.connectedAt.toISOString();
-        this.closePtyRelays(serverId, connectedAt);
+        this.closePtyRelays(serverId, {
+          protocol: "v1",
+          connectedAt,
+          agentSessionId: null,
+        });
         if (this.backplane) {
           void this.backplane
             .publish({
@@ -512,19 +619,36 @@ export class NitroRealtimeHub implements RealtimeHub {
     return undefined;
   }
 
+  private findV2ConnectionBySession(
+    serverId: string,
+    sessionId: string,
+  ): LocalV2Connection | undefined {
+    const current = this.currentV2Sessions.get(serverId);
+    return current?.sessionId === sessionId ? current : undefined;
+  }
+
   async hasAgentConnection(
     serverId: string,
-    connectedAt: string,
+    target: AgentPtyTarget,
   ): Promise<boolean> {
+    if (target.protocol === "v2") {
+      return (
+        Boolean(
+          target.agentSessionId &&
+          this.findV2ConnectionBySession(serverId, target.agentSessionId),
+        ) || Boolean(this.backplane)
+      );
+    }
     return (
-      Boolean(await this.findConnectionByConnectedAt(serverId, connectedAt)) ||
-      Boolean(this.backplane)
+      Boolean(
+        await this.findConnectionByConnectedAt(serverId, target.connectedAt),
+      ) || Boolean(this.backplane)
     );
   }
 
   registerPtyRelay(
     serverId: string,
-    connectedAt: string,
+    target: AgentPtyTarget,
     sessionId: string,
     handler: PtyRelayHandler,
   ): () => void {
@@ -533,7 +657,7 @@ export class NitroRealtimeHub implements RealtimeHub {
       relays = new Map();
       this.ptyRelays.set(serverId, relays);
     }
-    const relay = { connectedAt, handler };
+    const relay = { target, handler };
     relays.set(sessionId, relay);
     return () => {
       const current = this.ptyRelays.get(serverId);
@@ -556,17 +680,40 @@ export class NitroRealtimeHub implements RealtimeHub {
 
   async sendPtyFrame(
     serverId: string,
-    connectedAt: string,
-    sessionId: string,
-    frame: string,
+    target: AgentPtyTarget,
+    ptySessionId: string,
+    browserFrame: string,
   ): Promise<boolean> {
+    let agentFrame = browserFrame;
+    if (target.protocol === "v2") {
+      const parsed = parseAgentWsFrame(browserFrame);
+      const encoded = parsed.ok ? encodePtyFrameForAgentV2(parsed.frame) : null;
+      if (!encoded) {
+        return false;
+      }
+      agentFrame = encoded;
+    }
+    if (target.protocol === "v2") {
+      const connection = target.agentSessionId
+        ? this.findV2ConnectionBySession(serverId, target.agentSessionId)
+        : undefined;
+      if (connection) {
+        try {
+          connection.peer.send(agentFrame);
+          return true;
+        } catch {
+          return false;
+        }
+      }
+      return this.relayPtyFrame(serverId, target, ptySessionId, agentFrame);
+    }
     const connection = await this.findConnectionByConnectedAt(
       serverId,
-      connectedAt,
+      target.connectedAt,
     );
     if (connection) {
       try {
-        connection.peer.send(frame);
+        connection.peer.send(agentFrame);
         return true;
       } catch {
         return false;
@@ -575,15 +722,32 @@ export class NitroRealtimeHub implements RealtimeHub {
     if (!this.backplane) {
       return false;
     }
+    return this.relayPtyFrame(serverId, target, ptySessionId, agentFrame);
+  }
+
+  private async relayPtyFrame(
+    serverId: string,
+    target: AgentPtyTarget,
+    ptySessionId: string,
+    frame: string,
+  ): Promise<boolean> {
+    const backplane = this.backplane;
+    if (!backplane) {
+      return false;
+    }
     try {
       await this.startBackplane();
-      await this.backplane.publish({
+      await backplane.publish({
         origin: this.id,
         serverId,
         frame,
-        connectedAt,
+        connectedAt: target.connectedAt,
+        agentProtocol: target.protocol,
+        ...(target.agentSessionId
+          ? { agentSessionId: target.agentSessionId }
+          : {}),
         ptyTarget: "agent",
-        ptySessionId: sessionId,
+        ptySessionId,
       });
       return true;
     } catch {
@@ -612,7 +776,7 @@ export class NitroRealtimeHub implements RealtimeHub {
     );
     this.deliverPtyFrame(
       serverId,
-      connectedAt,
+      { protocol: "v1", connectedAt, agentSessionId: null },
       message.message.payload.sessionId,
       frame,
     );
@@ -623,6 +787,7 @@ export class NitroRealtimeHub implements RealtimeHub {
           serverId,
           frame,
           connectedAt,
+          agentProtocol: "v1",
           ptyTarget: "browser",
           ptySessionId: message.message.payload.sessionId,
         })
@@ -631,14 +796,70 @@ export class NitroRealtimeHub implements RealtimeHub {
     return true;
   }
 
+  /**
+   * Routes an agent v2 `pty.*` frame to the browser relay bound to that same
+   * agent session. A relay for any other session is never considered.
+   */
+  private deliverV2PtyFrame(
+    serverId: string,
+    agentSessionId: string,
+    frame: {
+      type: "pty.started" | "pty.data" | "pty.exit";
+      payload: unknown;
+    },
+  ): boolean {
+    const connection = this.findV2ConnectionBySession(serverId, agentSessionId);
+    if (!connection) {
+      return false;
+    }
+    const browserFrame = v2PtyFrameForBrowser(frame.type, frame.payload);
+    if (!browserFrame) {
+      return false;
+    }
+    const payload = frame.payload as { sessionId?: unknown };
+    const ptySessionId =
+      typeof payload.sessionId === "string" ? payload.sessionId : "";
+    if (!ptySessionId) {
+      return false;
+    }
+    this.deliverPtyFrame(
+      serverId,
+      {
+        protocol: "v2",
+        connectedAt: connection.connectedAt,
+        agentSessionId,
+      },
+      ptySessionId,
+      browserFrame,
+    );
+    if (this.backplane) {
+      void this.backplane
+        .publish({
+          origin: this.id,
+          serverId,
+          frame: browserFrame,
+          connectedAt: connection.connectedAt,
+          agentProtocol: "v2",
+          agentSessionId,
+          ptyTarget: "browser",
+          ptySessionId,
+        })
+        .catch(() => undefined);
+    }
+    return Boolean(
+      this.ptyRelays.get(serverId)?.get(ptySessionId)?.target.agentSessionId ===
+      agentSessionId,
+    );
+  }
+
   private deliverPtyFrame(
     serverId: string,
-    connectedAt: string,
-    sessionId: string,
+    target: AgentPtyTarget,
+    ptySessionId: string,
     frame: string,
   ): void {
-    const relay = this.ptyRelays.get(serverId)?.get(sessionId);
-    if (!relay || relay.connectedAt !== connectedAt) {
+    const relay = this.ptyRelays.get(serverId)?.get(ptySessionId);
+    if (!relay || !samePtyTarget(relay.target, target)) {
       return;
     }
     try {
@@ -648,13 +869,13 @@ export class NitroRealtimeHub implements RealtimeHub {
     }
   }
 
-  private closePtyRelays(serverId: string, connectedAt: string): void {
+  private closePtyRelays(serverId: string, target: AgentPtyTarget): void {
     const relays = this.ptyRelays.get(serverId);
     if (!relays) {
       return;
     }
     for (const [sessionId, relay] of relays) {
-      if (relay.connectedAt !== connectedAt) {
+      if (!samePtyTarget(relay.target, target)) {
         continue;
       }
       relays.delete(sessionId);
@@ -679,28 +900,58 @@ export class NitroRealtimeHub implements RealtimeHub {
           return;
         }
         if (message.protocol === "v2") {
-          this.deliverV2(message.serverId, message.frame);
+          this.deliverV2(
+            message.serverId,
+            message.frame,
+            message.agentSessionId,
+          );
           return;
         }
         if (message.agentDisconnected) {
-          this.closePtyRelays(message.serverId, message.connectedAt ?? "");
+          const target = ptyTargetFromBackplane(message);
+          if (target) {
+            this.closePtyRelays(message.serverId, target);
+          }
           return;
         }
         if (message.ptyTarget === "browser" && message.ptySessionId) {
+          const target = ptyTargetFromBackplane(message);
+          if (!target) {
+            return;
+          }
           this.deliverPtyFrame(
             message.serverId,
-            message.connectedAt ?? "",
+            target,
             message.ptySessionId,
             message.frame,
           );
           return;
         }
         if (message.ptyTarget === "agent" && message.connectedAt) {
-          void this.sendLocalAgentFrame(
-            message.serverId,
-            message.connectedAt,
-            message.frame,
-          );
+          const target = ptyTargetFromBackplane(message);
+          if (target?.protocol === "v2") {
+            const connection = target.agentSessionId
+              ? this.findV2ConnectionBySession(
+                  message.serverId,
+                  target.agentSessionId,
+                )
+              : undefined;
+            if (connection) {
+              void connection.session
+                .then((session) => {
+                  if (session?.welcomed) {
+                    connection.peer.send(message.frame);
+                  }
+                })
+                .catch(() => undefined);
+            }
+          } else {
+            void this.sendLocalAgentFrame(
+              message.serverId,
+              message.connectedAt,
+              message.frame,
+            );
+          }
           return;
         }
         if (message.telemetryReply) {
@@ -838,6 +1089,10 @@ export class NitroRealtimeHub implements RealtimeHub {
       serverId,
       encodeAgentWsFrame(createAgentWsFrame("update.trigger", payload)),
     );
+    this.publishV2(
+      serverId,
+      encodeAgentWsV2Frame(createAgentWsV2Frame("update.trigger", payload)),
+    );
   }
 
   async notifyAcmeIssue(
@@ -848,6 +1103,10 @@ export class NitroRealtimeHub implements RealtimeHub {
       serverId,
       encodeAgentWsFrame(createAgentWsFrame("acme.issue", payload)),
     );
+    this.publishV2(
+      serverId,
+      encodeAgentWsV2Frame(createAgentWsV2Frame("acme.issue", payload)),
+    );
   }
 
   async notifyAcmeDnsAck(
@@ -857,6 +1116,10 @@ export class NitroRealtimeHub implements RealtimeHub {
     this.publish(
       serverId,
       encodeAgentWsFrame(createAgentWsFrame("acme.dns_ack", payload)),
+    );
+    this.publishV2(
+      serverId,
+      encodeAgentWsV2Frame(createAgentWsV2Frame("acme.dns_ack", payload)),
     );
   }
 }

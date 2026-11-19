@@ -171,7 +171,10 @@ export function AgentTerminalPanel({
     ? "disabled"
     : server.transportMode !== "ws" || !server.wsConnectedAt
       ? "offline"
-      : !server.agentCapabilities?.includes("pty-v1")
+      : !(
+            server.agentCapabilities?.includes("pty-v1") ||
+            server.agentCapabilities?.includes("pty-v2")
+          )
         ? "unsupported"
         : null;
   const unavailable = unavailableReason

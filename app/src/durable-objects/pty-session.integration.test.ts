@@ -53,6 +53,8 @@ const CONNECTED_AT = new Date("2026-11-19T00:00:00.000Z");
       kind: "pty",
       serverId: ids.server,
       connectedAt: CONNECTED_AT.toISOString(),
+      agentProtocol: "v1",
+      agentSessionId: null,
       sessionId: "pty-1",
       authSessionId: ids.session,
       actor: {

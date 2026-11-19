@@ -202,10 +202,18 @@ describe.skipIf(!pgUrl).each(drivers)(
       const v1Connected = await markAgentWsConnected("srv1", database);
       const v2 = await startAgentWsSession("srv1", database);
 
-      await markAgentWsDisconnected("srv1", v1Connected, database);
+      await markAgentWsDisconnected(
+        "srv1",
+        v1Connected.sessionId,
+        database,
+      );
       expect((await markerOf("srv1")).ws_session_id).toBe(v2.sessionId);
 
-      await markAgentWsDisconnected("srv1", v2.connectedAt, database);
+      await markAgentWsDisconnected(
+        "srv1",
+        v2.sessionId,
+        database,
+      );
       expect(await markerOf("srv1")).toMatchObject({
         ws_session_id: null,
         transport_mode: "http",

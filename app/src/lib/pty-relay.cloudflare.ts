@@ -36,6 +36,10 @@ export async function acceptAdminPty(
   headers.set("x-blossom-pty-session", context.sessionId);
   headers.set("x-blossom-pty-auth-session", context.authSessionId);
   headers.set("x-blossom-pty-connected-at", context.connectedAt);
+  headers.set("x-blossom-pty-protocol", context.agentProtocol);
+  if (context.agentSessionId) {
+    headers.set("x-blossom-pty-agent-session", context.agentSessionId);
+  }
   headers.set("x-blossom-pty-cols", String(context.cols));
   headers.set("x-blossom-pty-rows", String(context.rows));
   headers.set(

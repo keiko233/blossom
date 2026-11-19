@@ -21,12 +21,14 @@ shell commands.
 | File               | Responsibility                                                                                                                                                  |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/main.rs`      | CLI (`clap`, flags mirrored by `AGENT_*` env vars), startup from the last-known-good config, the config-poll/heartbeat loops, WebSocket event wiring, shutdown.  |
+| `src/agent_v2.rs`  | Protocol v2 core loop (`--ws-protocol v2`): no HTTP agent API, snapshot apply/rollback, status publication, update/ACME/PTY operations, and v2 traffic reporting. |
 | `src/client.rs`    | Wraps the progenitor-generated client; injects the `Authorization: Bearer` token as a sensitive default header.                                                  |
 | `src/config.rs`    | Fetches the v3 desired state, applies certificate bindings to the base sing-box config, writes candidates, tracks active / last-known-good, reports errors.      |
 | `src/ws/codec.rs`  | Frozen v1 JSON frame envelope (`hello`/`welcome`, `ping`/`pong`, `config.*`, `update.*`) and typed message decoding that ignores unknown frames.                  |
 | `src/ws/ports.rs`  | Narrow `WsTransport`/`WsConnection`/`AgentCommandSink` traits, the bounded outbound queue, and the jittered backoff/fallback policy.                            |
 | `src/ws/adapters.rs` | `tokio-tungstenite` transport: `/api/agent/ws` URL derivation, sensitive bearer header, `rustls` (`ring`) TLS.                                                |
 | `src/ws/mod.rs`    | Reconnect loop: `hello` on every connect, keepalive ping/pong, proactive reconnect, and HTTP-fallback signalling.                                               |
+| `src/ws/v2/`       | Opt-in protocol v2: `serde`-backed codec, subprotocol adapter, bounded snapshot assembler, session state machine, reconnect/backoff, and traffic acknowledgement routing. |
 | `src/acme/mod.rs`  | Bounded ACME job manager: typed issue/ack dispatch, per-job deadline, duplicate-result replay, and challenge solver wiring.                                      |
 | `src/acme/ports.rs` | Consumer-owned ACME/DNS/challenge ports, redacting secret wrappers, typed error phases, and the order state machine.                                             |
 | `src/acme/instant_backend.rs` | `instant-acme` adapter for Let's Encrypt/ZeroSSL, EAB decoding, order/finalize/certificate flow, and cleanup on every exit path.                           |
@@ -63,6 +65,15 @@ The agent opens one outbound WebSocket to `<AGENT_URL>/agent/ws` (`https` -> `ws
 - `update.trigger` runs the ordinary update reconciler and streams `update.status` transitions through the status observer. SHA-256 verification and `server-agent.prev` / `sing-box.prev` rollback are untouched.
 - Keepalive pings are answered with `pong`; `welcome.reconnectBeforeSeconds` arms a proactive reconnect for serverless targets that cap connection lifetime.
 - Reconnect uses 1s -> 2s -> 5s -> 15s -> 30s backoff with jitter. A rejected upgrade (400/403/404/426/501) or a failure streak announces HTTP fallback, and the poll/heartbeat loops plus `TrafficReporter` keep running throughout.
+
+### Protocol v2 (opt-in)
+
+`--ws-protocol v2` / `AGENT_WS_PROTOCOL=v2` selects the WebSocket-first path in `src/agent_v2.rs`; `legacy` remains the default. The v2 client offers `blossom-agent.v2`, requires the echo before it proceeds, and makes no HTTP agent API calls. Configuration, status, and traffic all travel over that session.
+
+- Configuration arrives as bounded, ordered, digest-validated snapshots and only the verified body reaches the ordinary compile, preflight, promote, probation, and rollback path. A partial snapshot is discarded on disconnect; a failed identifier (including a refused snapshot) is held briefly so status reconciliation cannot spin on the same request.
+- `hello` reports the applied identifier or `null`. `welcome` and `agent.status.ack` carry the authoritative identifier, so a missed `config.notify` is recovered on the next status exchange. Deadlines, liveness, proactive `reconnectBeforeSeconds`, and jittered backoff (about 1 s to 60 s) are handled in `src/ws/v2/link.rs`; no HTTP fallback is attempted.
+- Traffic uses the same durable outbox as v1. A report stays on disk until `traffic.ack`; a lost acknowledgement or session resends the identical `reportId` and payload, and the control-plane ledger answers `duplicate`.
+- Updates, ACME, and PTY are served over v2. `update.trigger` and `update.status` use the v1 payloads, while `welcome.updatePolicy` and `agent.status.ack.updatePolicy` still replay the version targets. The v2 `hello` advertises `acme-v1`, and `pty-v2` when local PTY sessions are enabled under a non-root account; it never advertises `pty-v1`. Telemetry and log policy remain v1-only. Promoting v2 to the global default remains a separate change.
 
 ### Agent-executed ACME
 
@@ -142,6 +153,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 ```
 
 - Unit tests are inline in each module (`#[test]` / `#[tokio::test]`); they need neither sing-box nor a network. `rcgen` (dev-dependency) builds throw-away certificates for the certificate tests.
+- `tests/ws_v2_lifecycle.rs` is a process-level, loopback-only test. It runs the built agent with a temporary state directory, a fake sing-box, and a local v2 WebSocket control plane that fails and records any HTTP agent API request. It covers cold apply, exact traffic replay after a lost `traffic.ack`, status reconciliation, failed-apply rollback, and offline last-known-good startup. It runs as part of `cargo test --locked`.
 - CI additionally builds the agent image and runs the managed-TLS lifecycle test:
 
   ```bash

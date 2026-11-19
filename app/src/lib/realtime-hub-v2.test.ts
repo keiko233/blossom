@@ -110,9 +110,13 @@ function fakeV2Store() {
         }) as unknown as Server,
     ),
     recordStatus: vi.fn(async () => null),
+    recordUpdateStatus: vi.fn(async () => true),
     recordConfigAck: vi.fn(async () => "applied" as const),
     cacheDesiredRevision: vi.fn(async () => undefined),
     applyCertificateDeployments: vi.fn(async () => undefined),
+    handleAcmeDnsPresent: vi.fn(async () => true),
+    handleAcmeDnsCleanup: vi.fn(async () => true),
+    handleAcmeResult: vi.fn(async () => true),
     revalidateSession: vi.fn(async () => "ok" as const),
     applyTraffic: vi.fn(async () => ({
       status: "applied" as const,
@@ -131,7 +135,10 @@ function fakeV2Store() {
 
 function fakeV1Store(): AgentWsStore {
   return {
-    markConnected: vi.fn(async () => new Date()),
+    markConnected: vi.fn(async () => ({
+      connectedAt: new Date(),
+      sessionId: SESSION_ID,
+    })),
     markDisconnected: vi.fn(async () => undefined),
     recordHello: vi.fn(async () => undefined),
     recordConfigAck: vi.fn(async () => undefined),
@@ -235,13 +242,12 @@ describe("NitroRealtimeHub v2 sessions", () => {
     );
   });
 
-  it("pushes config.notify only to welcomed v2 sessions and publishes it for other instances", async () => {
+  it("pushes config.notify only to the current welcomed v2 session and publishes it for other instances", async () => {
     const { hub, backplane } = makeHub();
     const hooks = await acceptV2(hub);
     const welcomed = makePeer("welcomed");
     const pending = makePeer("pending");
     await hooks.open(welcomed);
-    await hooks.open(pending);
     await hooks.message(
       welcomed,
       agentFrame("hello", {
@@ -260,12 +266,20 @@ describe("NitroRealtimeHub v2 sessions", () => {
     });
 
     expect(sentTypes(welcomed)).toEqual(["welcome", "config.notify"]);
-    expect(sentTypes(pending)).toEqual([]);
     // The cross-instance relay starts once the backplane is subscribed.
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(backplane.publish).toHaveBeenCalledWith(
       expect.objectContaining({ serverId: "srv-1", protocol: "v2" }),
     );
+
+    await hooks.open(pending);
+    await hub.notifyConfigChanged("srv-1", {
+      desiredRevisionSeq: 9,
+      desiredRevision: NEXT,
+      reason: "node updated again",
+    });
+    expect(sentTypes(welcomed)).toEqual(["welcome", "config.notify"]);
+    expect(sentTypes(pending)).toEqual([]);
   });
 
   it("keeps v1 frames off v2 sessions", async () => {

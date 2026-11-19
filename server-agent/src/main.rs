@@ -8,6 +8,7 @@
 
 mod accountant;
 mod acme;
+mod agent_v2;
 mod certificate;
 mod client;
 mod config;
@@ -38,7 +39,7 @@ use crate::acme::AcmeManager;
 use crate::acme::instant_backend::InstantAcmeBackend;
 use crate::acme::ports::DEFAULT_CHALLENGE_TIMEOUT;
 use crate::acme::solver_dns01::DnsAck;
-use crate::config::{AgentPolicy, CandidateConfig, ConfigManager, FetchStatus};
+use crate::config::{AgentPolicy, CandidateConfig, ConfigError, ConfigManager, FetchStatus};
 use crate::process::{ProcessState, SingBoxManager, check_config, resolve_binary, singbox_version};
 use crate::traffic::TrafficReporter;
 use crate::update::{
@@ -47,9 +48,10 @@ use crate::update::{
 use crate::ws::adapters::{SensitiveHeader, TokioWsTransport, WsTransportConfig, ws_url};
 use crate::ws::codec::{
     AgentMessage, AgentWsFrame, CertificateDeployment, ConfigAckPayload, HelloPayload,
-    UpdateStatePayload, UpdateStatusPayload, UpdateTarget, WelcomePayload, frame_type,
+    UpdateStatePayload, UpdateStatusPayload, UpdateTarget, UpdateTriggerPayload, WelcomePayload,
+    frame_type,
 };
-use crate::ws::ports::{AgentCommandSink as _, ChannelCommandSink, WsCommand, WsEvent};
+use crate::ws::ports::{AgentCommandSink, ChannelCommandSink, WsCommand, WsEvent};
 
 const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const AGENT_BUILD_ID: &str = env!("AGENT_BUILD_ID");
@@ -168,6 +170,32 @@ struct Args {
     )]
     ws_enabled: bool,
 
+    /// Agent WebSocket protocol. `legacy` keeps the v1 WebSocket with the HTTP
+    /// config poll, heartbeat, and traffic reports. `v2` carries configuration,
+    /// status, and traffic over `blossom-agent.v2` and makes no HTTP requests.
+    #[arg(long, value_enum, default_value_t = WsProtocol::Legacy, env = "AGENT_WS_PROTOCOL")]
+    ws_protocol: WsProtocol,
+
+    /// Probation before a v2 candidate config is committed. A test harness knob.
+    #[arg(
+        long,
+        hide = true,
+        default_value_t = 11_000,
+        env = "AGENT_V2_PROBATION_MS",
+        value_parser = clap::value_parser!(u64).range(100..=60_000)
+    )]
+    v2_probation_ms: u64,
+
+    /// How often v2 flushes sealed traffic reports. A test harness knob.
+    #[arg(
+        long,
+        hide = true,
+        default_value_t = 60,
+        env = "AGENT_V2_TRAFFIC_INTERVAL_SECONDS",
+        value_parser = clap::value_parser!(u64).range(1..=3_600)
+    )]
+    v2_traffic_interval_seconds: u64,
+
     /// Address the ephemeral HTTP-01 responder binds while an http-01 job is
     /// active. It is closed again as soon as the order finishes.
     #[arg(long, default_value = "0.0.0.0:80", env = "AGENT_ACME_HTTP_BIND")]
@@ -235,6 +263,93 @@ struct Args {
     pty_working_dir: PathBuf,
 }
 
+/// The agent WebSocket protocol selected at start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum WsProtocol {
+    /// The v1 WebSocket with HTTP config poll, heartbeat, and traffic (the shipped default).
+    Legacy,
+    /// Protocol v2: WebSocket-only, with no HTTP agent API calls.
+    V2,
+}
+
+fn new_update_manager(args: &Args, sing_box_version: Option<String>) -> Result<UpdateManager> {
+    let state_dir = args.state_dir.clone();
+    UpdateManager::new(
+        UpdateConfig {
+            state_dir: state_dir.clone(),
+            download_dir: args
+                .download_dir
+                .clone()
+                .unwrap_or_else(|| state_dir.join("downloads")),
+            github_api: args.github_api.clone(),
+            agent_repo: args.release_repo.clone(),
+            singbox_repo: args.sing_box_release_repo.clone(),
+            github_token: args.github_token.clone(),
+            self_update: args.self_update,
+            retry_after: Duration::from_secs(args.update_retry_seconds),
+        },
+        AGENT_VERSION.to_string(),
+        sing_box_version,
+    )
+}
+
+fn new_pty_manager(args: &Args, events: mpsc::Sender<pty::PtyEvent>) -> (pty::PtyManager, bool) {
+    // A root agent would hand the browser a root shell, so PTY stays off there
+    // even when opted in. The installer runs the agent as a dedicated account.
+    let identity = pty::PtyIdentity::current();
+    let enabled = args.pty_enabled && !identity.is_root();
+    if args.pty_enabled && !enabled {
+        error!(
+            "agent PTY terminal disabled: the agent runs as root; run it under its dedicated non-root service account"
+        );
+    }
+    let launch = pty::launch::LaunchConfig {
+        shell: args.pty_shell.clone(),
+        working_dir: args.pty_working_dir.clone(),
+    };
+    let manager = pty::PtyManager::new(
+        pty::PtyLimits::new(
+            enabled,
+            args.pty_max_sessions as usize,
+            Duration::from_secs(args.pty_idle_timeout_seconds),
+            Duration::from_secs(args.pty_max_session_seconds),
+        ),
+        identity.user.clone(),
+        Box::new(pty::session::PortablePtyFactory::new(
+            events,
+            launch.clone(),
+            identity.user.clone(),
+        )),
+    );
+    if enabled {
+        info!(
+            max_sessions = manager.limits().max_sessions(),
+            idle_timeout_seconds = manager.limits().idle_timeout().as_secs(),
+            max_session_seconds = manager.limits().max_session().as_secs(),
+            working_dir = %args.pty_working_dir.display(),
+            user = %identity.user,
+            "agent PTY terminal enabled"
+        );
+        match pty::launch::resolve_shell(launch.shell.as_deref(), pty::launch::is_runnable_file) {
+            Ok(shell) => info!(shell = %shell.display(), "PTY shell resolved"),
+            Err(error) => warn!("PTY sessions will fail until this is fixed: {error}"),
+        }
+    } else {
+        info!("agent PTY terminal disabled; set AGENT_PTY_ENABLED=true to opt in");
+    }
+    (manager, enabled)
+}
+
+fn new_acme_manager(args: &Args, sink: Arc<dyn AgentCommandSink>) -> Arc<AcmeManager> {
+    Arc::new(AcmeManager::new(
+        Arc::new(InstantAcmeBackend::new()),
+        args.acme_http_bind,
+        sink,
+        DEFAULT_CHALLENGE_TIMEOUT + Duration::from_secs(30),
+        Duration::from_secs(args.acme_dns_settle_seconds),
+    ))
+}
+
 fn parse_level(level: &str) -> tracing::Level {
     match level.to_lowercase().as_str() {
         "trace" => tracing::Level::TRACE,
@@ -252,10 +367,13 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_max_level(parse_level(&args.log_level))
         .init();
+    if args.ws_protocol == WsProtocol::V2 {
+        return agent_v2::run(&args).await;
+    }
 
     let client = client::new_client(&args.url, &args.token)?;
 
-    let bin = resolve_binary(args.sing_box_path);
+    let bin = resolve_binary(args.sing_box_path.clone());
     let mut sing_box_version = singbox_version(&bin).await;
     if let Some(version) = sing_box_version.as_deref()
         && !supports_singbox_version(version)
@@ -267,44 +385,8 @@ async fn main() -> Result<()> {
     let state_dir = args.state_dir.clone();
     let traffic_dir = state_dir.join("traffic");
     let mut config = ConfigManager::new(client.clone(), state_dir.clone())?;
-    let mut updates = UpdateManager::new(
-        UpdateConfig {
-            state_dir: state_dir.clone(),
-            download_dir: args
-                .download_dir
-                .clone()
-                .unwrap_or_else(|| state_dir.join("downloads")),
-            github_api: args.github_api.clone(),
-            agent_repo: args.release_repo.clone(),
-            singbox_repo: args.sing_box_release_repo.clone(),
-            github_token: args.github_token.clone(),
-            self_update: args.self_update,
-            retry_after: Duration::from_secs(args.update_retry_seconds),
-        },
-        AGENT_VERSION.to_string(),
-        sing_box_version.clone(),
-    )?;
-    let (mut manager, startup_error) = if config.has_active_config() {
-        match check_config(&bin, config.config_path()).await {
-            Ok(()) => {
-                match SingBoxManager::start(bin.clone(), config.config_path().clone()).await {
-                    Ok(manager) => (Some(manager), config.startup_error().map(str::to_owned)),
-                    Err(error) => {
-                        error!("failed to start last-known-good config: {error}");
-                        config.mark_needs_reapply();
-                        (None, Some(error.to_string()))
-                    }
-                }
-            }
-            Err(error) => {
-                error!("last-known-good config failed startup preflight: {error}");
-                config.mark_needs_reapply();
-                (None, Some(error.to_string()))
-            }
-        }
-    } else {
-        (None, config.startup_error().map(str::to_owned))
-    };
+    let mut updates = new_update_manager(&args, sing_box_version.clone())?;
+    let (mut manager, startup_error) = start_last_known_good(&mut config, &bin).await;
     let api_endpoint = config.api_endpoint().clone();
     let mut reporter = match TrafficReporter::new(
         api_endpoint.addr.clone(),
@@ -333,62 +415,18 @@ async fn main() -> Result<()> {
         desired_agent_version: None,
         desired_sing_box_version: None,
     };
-    // A root agent would hand the browser a root shell, so PTY stays off there
-    // even when opted in. The installer runs the agent as a dedicated account.
-    let pty_identity = pty::PtyIdentity::current();
-    let pty_enabled = args.pty_enabled && !pty_identity.is_root();
-    if args.pty_enabled && !pty_enabled {
-        error!(
-            "agent PTY terminal disabled: the agent runs as root; run it under its dedicated non-root service account"
-        );
-    }
-    let capabilities = agent_capabilities(pty_enabled);
-
     // The push channel is optional: it is never required for correctness, and
     // every failure path leaves the HTTP poll/heartbeat loop untouched.
     let (command_sink, command_receiver) = ws::ports::command_channel(64);
     let command_sink = Arc::new(command_sink);
+    let (pty_event_sender, mut pty_events) = mpsc::channel::<pty::PtyEvent>(64);
+    let (mut pty_manager, pty_enabled) = new_pty_manager(&args, pty_event_sender);
+    let capabilities = agent_capabilities(pty_enabled);
     let hello_snapshot = Arc::new(Mutex::new(HelloSnapshot::capture(
         &config,
         &updates,
         &capabilities,
     )));
-    let (pty_event_sender, mut pty_events) = mpsc::channel::<pty::PtyEvent>(64);
-    let pty_launch = pty::launch::LaunchConfig {
-        shell: args.pty_shell.clone(),
-        working_dir: args.pty_working_dir.clone(),
-    };
-    let mut pty_manager = pty::PtyManager::new(
-        pty::PtyLimits::new(
-            pty_enabled,
-            args.pty_max_sessions as usize,
-            Duration::from_secs(args.pty_idle_timeout_seconds),
-            Duration::from_secs(args.pty_max_session_seconds),
-        ),
-        pty_identity.user.clone(),
-        Box::new(pty::session::PortablePtyFactory::new(
-            pty_event_sender,
-            pty_launch.clone(),
-            pty_identity.user.clone(),
-        )),
-    );
-    if pty_enabled {
-        info!(
-            max_sessions = pty_manager.limits().max_sessions(),
-            idle_timeout_seconds = pty_manager.limits().idle_timeout().as_secs(),
-            max_session_seconds = pty_manager.limits().max_session().as_secs(),
-            working_dir = %args.pty_working_dir.display(),
-            user = %pty_identity.user,
-            "agent PTY terminal enabled"
-        );
-        match pty::launch::resolve_shell(pty_launch.shell.as_deref(), pty::launch::is_runnable_file)
-        {
-            Ok(shell) => info!(shell = %shell.display(), "PTY shell resolved"),
-            Err(error) => warn!("PTY sessions will fail until this is fixed: {error}"),
-        }
-    } else {
-        info!("agent PTY terminal disabled; set AGENT_PTY_ENABLED=true to opt in");
-    }
     if args.ws_enabled {
         let sink = command_sink.clone();
         updates.set_status_observer(Arc::new(move |agent, singbox| {
@@ -412,13 +450,7 @@ async fn main() -> Result<()> {
         info!("agent websocket disabled; using HTTP config poll and heartbeat");
         WsLink::disabled()
     };
-    let acme = Arc::new(AcmeManager::new(
-        Arc::new(InstantAcmeBackend::new()),
-        args.acme_http_bind,
-        command_sink.clone(),
-        DEFAULT_CHALLENGE_TIMEOUT + Duration::from_secs(30),
-        Duration::from_secs(args.acme_dns_settle_seconds),
-    ));
+    let acme = new_acme_manager(&args, command_sink.clone());
 
     match sync_config(&mut config, &mut manager, &bin, &mut status).await {
         Ok(next) => policy = next,
@@ -494,12 +526,12 @@ async fn main() -> Result<()> {
         tokio::select! {
             _ = pty_tick.tick() => {
                 for exit in pty_manager.reap_expired(Instant::now()) {
-                    send_pty_exit(&command_sink, exit);
+                    send_pty_exit(command_sink.as_ref(), exit);
                 }
             }
             event = pty_events.recv() => {
                 if let Some(event) = event {
-                    handle_pty_event(event, &mut pty_manager, &command_sink);
+                    handle_pty_event(event, &mut pty_manager, command_sink.as_ref());
                 }
             }
             _ = &mut config_sleep => {
@@ -588,7 +620,7 @@ async fn main() -> Result<()> {
                     WsEvent::Fallback { reason } => {
                         ws_transport = "http-fallback";
                         for exit in pty_manager.close_all(pty::PtyExitReason::AgentDisconnected) {
-                            send_pty_exit(&command_sink, exit);
+                            send_pty_exit(command_sink.as_ref(), exit);
                         }
                         warn!(
                             "agent websocket unavailable ({reason}); using HTTP config poll and heartbeat"
@@ -597,7 +629,7 @@ async fn main() -> Result<()> {
                     WsEvent::Disconnected { reason } => {
                         ws_transport = "http-fallback";
                         for exit in pty_manager.close_all(pty::PtyExitReason::AgentDisconnected) {
-                            send_pty_exit(&command_sink, exit);
+                            send_pty_exit(command_sink.as_ref(), exit);
                         }
                         info!("agent websocket disconnected: {reason}");
                     }
@@ -612,7 +644,7 @@ async fn main() -> Result<()> {
                             &mut policy,
                             &mut updates,
                             &mut sing_box_version,
-                            &command_sink,
+                            command_sink.as_ref(),
                             &acme,
                             &capabilities,
                             &mut pty_manager,
@@ -676,17 +708,66 @@ async fn sync_config(
     status: &mut AgentStatus,
 ) -> Result<AgentPolicy> {
     let fetched = config.fetch().await.map_err(|error| {
-        status.config_state = "apply_failed";
-        status.observed_revision = config.observed_revision().map(str::to_owned);
-        status.error = Some(ReportedError {
-            phase: error.phase,
-            code: error.code,
-            message: error.message.clone(),
-            node_id: error.node_id.clone(),
-            occurred_at: Utc::now(),
-        });
+        record_config_error(config, status, &error);
         anyhow::Error::new(error)
     })?;
+    apply_fetched(config, manager, bin, status, fetched, RUNTIME_PROBATION).await
+}
+
+/// Records a failed reconcile so the next heartbeat or config acknowledgement
+/// reports it. Shared by the HTTP poll path and the WebSocket v2 path.
+fn record_config_error(config: &ConfigManager, status: &mut AgentStatus, error: &ConfigError) {
+    status.config_state = "apply_failed";
+    status.observed_revision = config.observed_revision().map(str::to_owned);
+    status.error = Some(ReportedError {
+        phase: error.phase,
+        code: error.code,
+        message: error.message.clone(),
+        node_id: error.node_id.clone(),
+        occurred_at: Utc::now(),
+    });
+}
+
+/// Starts sing-box from the committed config on disk, if there is one. A config
+/// that fails preflight or launch is marked for re-apply, so the next reconcile
+/// cannot skip it.
+async fn start_last_known_good(
+    config: &mut ConfigManager,
+    bin: &Path,
+) -> (Option<SingBoxManager>, Option<String>) {
+    if !config.has_active_config() {
+        return (None, config.startup_error().map(str::to_owned));
+    }
+    match check_config(bin, config.config_path()).await {
+        Ok(()) => {
+            match SingBoxManager::start(bin.to_path_buf(), config.config_path().clone()).await {
+                Ok(manager) => (Some(manager), config.startup_error().map(str::to_owned)),
+                Err(error) => {
+                    error!("failed to start last-known-good config: {error}");
+                    config.mark_needs_reapply();
+                    (None, Some(error.to_string()))
+                }
+            }
+        }
+        Err(error) => {
+            error!("last-known-good config failed startup preflight: {error}");
+            config.mark_needs_reapply();
+            (None, Some(error.to_string()))
+        }
+    }
+}
+
+/// Applies a compiled desired state with every safety invariant: candidate
+/// preflight, promotion, process replacement, probation, then commit or
+/// rollback. The HTTP poll path and the WebSocket v2 snapshot path both use it.
+async fn apply_fetched(
+    config: &mut ConfigManager,
+    manager: &mut Option<SingBoxManager>,
+    bin: &Path,
+    status: &mut AgentStatus,
+    fetched: FetchStatus,
+    probation: Duration,
+) -> Result<AgentPolicy> {
     let (policy, candidate) = match fetched {
         FetchStatus::Unchanged(policy) => {
             status.observed_revision = config.observed_revision().map(str::to_owned);
@@ -801,7 +882,7 @@ async fn sync_config(
         );
         config.mark_candidate_error(&candidate, "apply", &e.to_string());
         let rolled_back = config.rollback().unwrap_or(false);
-        restore_runtime(manager, bin, config, rolled_back).await;
+        restore_runtime(manager, bin, config, rolled_back, probation).await;
         status.config_state = "apply_failed";
         status.error = Some(ReportedError {
             phase: "apply",
@@ -815,7 +896,7 @@ async fn sync_config(
 
     // Only commit the candidate after the replacement process survives the
     // health window.
-    tokio::time::sleep(RUNTIME_PROBATION).await;
+    tokio::time::sleep(probation).await;
     if manager.as_ref().map(SingBoxManager::state) == Some(ProcessState::Running) {
         config.commit_applied(&candidate)?;
         config.set_runtime_confirmed(true);
@@ -829,7 +910,7 @@ async fn sync_config(
             "health",
             "candidate did not become healthy during probation",
         );
-        restore_runtime(manager, bin, config, rolled_back).await;
+        restore_runtime(manager, bin, config, rolled_back, probation).await;
         error!(
             revision = %candidate.revision,
             rolled_back,
@@ -998,6 +1079,49 @@ fn apply_ws_policy(welcome: &WelcomePayload, policy: &mut AgentPolicy) {
     policy.heartbeat_interval_seconds = welcome.heartbeat_interval_seconds.clamp(5, 3_600);
 }
 
+/// Runs one `update.trigger` through the ordinary reconciler. A missing
+/// version means "resolve latest"; a single-target trigger never touches the
+/// other binary. The v1 and v2 transports share this policy translation.
+pub(crate) async fn apply_update_trigger(
+    trigger: UpdateTriggerPayload,
+    updates: &mut UpdateManager,
+    manager: &mut Option<SingBoxManager>,
+    bin: &Path,
+    config: &mut ConfigManager,
+    sing_box_version: &mut Option<String>,
+    policy: &AgentPolicy,
+) -> bool {
+    if trigger.force {
+        match trigger.target {
+            UpdateTarget::Agent | UpdateTarget::All => updates.clear_agent_cooldown(),
+            UpdateTarget::SingBox => {}
+        }
+        if matches!(trigger.target, UpdateTarget::SingBox | UpdateTarget::All) {
+            updates.clear_singbox_cooldown();
+        }
+    }
+    let mut targeted = policy.clone();
+    targeted.desired_agent_version = match trigger.target {
+        UpdateTarget::Agent | UpdateTarget::All => Some(
+            trigger
+                .desired_agent_version
+                .clone()
+                .unwrap_or_else(|| "latest".to_string()),
+        ),
+        UpdateTarget::SingBox => None,
+    };
+    targeted.desired_sing_box_version = match trigger.target {
+        UpdateTarget::SingBox | UpdateTarget::All => Some(
+            trigger
+                .desired_sing_box_version
+                .clone()
+                .unwrap_or_else(|| "latest".to_string()),
+        ),
+        UpdateTarget::Agent => None,
+    };
+    reconcile_updates(updates, &targeted, manager, bin, config, sing_box_version).await
+}
+
 /// Dispatches a pushed frame through the same reconcilers the poll timer uses.
 ///
 /// `config.notify` re-fetches the full v3 document (never trusting the push
@@ -1015,7 +1139,7 @@ async fn handle_ws_frame(
     policy: &mut AgentPolicy,
     updates: &mut UpdateManager,
     sing_box_version: &mut Option<String>,
-    sink: &Arc<ChannelCommandSink>,
+    sink: &dyn AgentCommandSink,
     acme: &Arc<AcmeManager>,
     capabilities: &[&str],
     pty: &mut pty::PtyManager,
@@ -1059,38 +1183,16 @@ async fn handle_ws_frame(
                 force = trigger.force,
                 "update push received; reconciling immediately"
             );
-            if trigger.force {
-                match trigger.target {
-                    UpdateTarget::Agent | UpdateTarget::All => updates.clear_agent_cooldown(),
-                    UpdateTarget::SingBox => {}
-                }
-                if matches!(trigger.target, UpdateTarget::SingBox | UpdateTarget::All) {
-                    updates.clear_singbox_cooldown();
-                }
-            }
-            let mut targeted = policy.clone();
-            // A missing version means "resolve latest"; a single-target
-            // trigger must not also touch the other binary.
-            targeted.desired_agent_version = match trigger.target {
-                UpdateTarget::Agent | UpdateTarget::All => Some(
-                    trigger
-                        .desired_agent_version
-                        .clone()
-                        .unwrap_or_else(|| "latest".to_string()),
-                ),
-                UpdateTarget::SingBox => None,
-            };
-            targeted.desired_sing_box_version = match trigger.target {
-                UpdateTarget::SingBox | UpdateTarget::All => Some(
-                    trigger
-                        .desired_sing_box_version
-                        .clone()
-                        .unwrap_or_else(|| "latest".to_string()),
-                ),
-                UpdateTarget::Agent => None,
-            };
-            let exit =
-                reconcile_updates(updates, &targeted, manager, bin, config, sing_box_version).await;
+            let exit = apply_update_trigger(
+                trigger,
+                updates,
+                manager,
+                bin,
+                config,
+                sing_box_version,
+                policy,
+            )
+            .await;
             if exit {
                 exit_for_restart(
                     manager.take(),
@@ -1210,7 +1312,7 @@ struct PtyExitPayload<'a> {
 fn handle_pty_frame(
     frame: crate::ws::codec::ReservedFrame,
     manager: &mut pty::PtyManager,
-    sink: &Arc<ChannelCommandSink>,
+    sink: &dyn AgentCommandSink,
 ) {
     match frame.frame_type.as_str() {
         frame_type::PTY_OPEN => {
@@ -1306,7 +1408,7 @@ fn handle_pty_frame(
 fn handle_pty_event(
     event: pty::PtyEvent,
     manager: &mut pty::PtyManager,
-    sink: &Arc<ChannelCommandSink>,
+    sink: &dyn AgentCommandSink,
 ) {
     match event {
         pty::PtyEvent::Data { session_id, data } => {
@@ -1335,7 +1437,7 @@ fn handle_pty_event(
     }
 }
 
-fn send_pty_data(sink: &Arc<ChannelCommandSink>, session_id: &str, data: &str) -> bool {
+fn send_pty_data(sink: &dyn AgentCommandSink, session_id: &str, data: &str) -> bool {
     if data.is_empty() {
         return true;
     }
@@ -1348,7 +1450,7 @@ fn send_pty_data(sink: &Arc<ChannelCommandSink>, session_id: &str, data: &str) -
     }
 }
 
-fn send_pty_started(sink: &Arc<ChannelCommandSink>, session_id: &str, started: &pty::PtyStarted) {
+fn send_pty_started(sink: &dyn AgentCommandSink, session_id: &str, started: &pty::PtyStarted) {
     match AgentWsFrame::new(
         frame_type::PTY_STARTED,
         PtyStartedPayload {
@@ -1369,7 +1471,7 @@ fn bounded_detail(message: &str) -> String {
     message.chars().take(256).collect()
 }
 
-fn send_pty_exit(sink: &Arc<ChannelCommandSink>, exit: pty::PtyExit) {
+fn send_pty_exit(sink: &dyn AgentCommandSink, exit: pty::PtyExit) {
     match AgentWsFrame::new(
         frame_type::PTY_EXIT,
         PtyExitPayload {
@@ -1387,7 +1489,7 @@ fn send_pty_exit(sink: &Arc<ChannelCommandSink>, exit: pty::PtyExit) {
     }
 }
 
-fn enqueue_pty_frame(sink: &Arc<ChannelCommandSink>, frame: AgentWsFrame) -> bool {
+fn enqueue_pty_frame(sink: &dyn AgentCommandSink, frame: AgentWsFrame) -> bool {
     match sink.enqueue(WsCommand::Send(frame)) {
         Ok(()) => true,
         Err(error) => {
@@ -1401,7 +1503,7 @@ fn enqueue_pty_frame(sink: &Arc<ChannelCommandSink>, frame: AgentWsFrame) -> boo
 /// current deployments. When nothing was ever committed this is the empty
 /// string rather than the desired revision: the control plane must not read a
 /// failed apply as an applied one.
-fn send_config_ack(sink: &ChannelCommandSink, config: &ConfigManager, status: &AgentStatus) {
+fn send_config_ack(sink: &dyn AgentCommandSink, config: &ConfigManager, status: &AgentStatus) {
     let applied_revision = config.applied_revision().unwrap_or_default().to_string();
     let error = status.error.as_ref().map(|error| error.message.clone());
     let payload = ConfigAckPayload {
@@ -1513,6 +1615,7 @@ async fn restore_runtime(
     bin: &Path,
     config: &mut ConfigManager,
     rolled_back: bool,
+    probation: Duration,
 ) {
     if !rolled_back || !config.has_active_config() {
         if let Some(current) = manager.take() {
@@ -1533,7 +1636,7 @@ async fn restore_runtime(
             return;
         }
     }
-    tokio::time::sleep(RUNTIME_PROBATION).await;
+    tokio::time::sleep(probation).await;
     config.set_runtime_confirmed(
         manager.as_ref().map(SingBoxManager::state) == Some(ProcessState::Running),
     );
@@ -1989,7 +2092,7 @@ mod tests {
         let sink = std::sync::Arc::new(sink);
         let mut manager = pty_manager(Some("/bin/sh"), 1);
 
-        super::handle_pty_frame(pty_open_frame("pty-1"), &mut manager, &sink);
+        super::handle_pty_frame(pty_open_frame("pty-1"), &mut manager, sink.as_ref());
         let Some(WsCommand::Send(started)) = commands.recv().await else {
             panic!("expected pty.started");
         };
@@ -1998,7 +2101,7 @@ mod tests {
         assert_eq!(started.payload["shell"], "/bin/sh");
         assert_eq!(started.payload["user"], "tester");
 
-        super::handle_pty_frame(pty_open_frame("pty-2"), &mut manager, &sink);
+        super::handle_pty_frame(pty_open_frame("pty-2"), &mut manager, sink.as_ref());
         let Some(WsCommand::Send(refused)) = commands.recv().await else {
             panic!("expected pty.exit for the session limit");
         };
@@ -2007,7 +2110,7 @@ mod tests {
         assert_eq!(refused.payload["sessionId"], "pty-2");
 
         let mut missing = pty_manager(Some("/nonexistent/blossom-shell"), 1);
-        super::handle_pty_frame(pty_open_frame("pty-3"), &mut missing, &sink);
+        super::handle_pty_frame(pty_open_frame("pty-3"), &mut missing, sink.as_ref());
         let Some(WsCommand::Send(failed)) = commands.recv().await else {
             panic!("expected pty.exit for the missing shell");
         };

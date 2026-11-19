@@ -27,6 +27,7 @@ function row(
     enabled: true,
     transportMode: "ws",
     wsConnectedAt: new Date("2026-11-19T00:00:00.000Z"),
+    wsSessionId: null,
     agentCapabilities: ["pty-v1"],
     ...overrides,
   };
@@ -131,6 +132,8 @@ describe("admin PTY upgrade", () => {
       expect.objectContaining({
         serverId: "srv-1",
         connectedAt: "2026-11-19T00:00:00.000Z",
+        agentProtocol: "v1",
+        agentSessionId: null,
         sessionId: "pty-1",
         cols: 400,
         rows: 5,
@@ -144,6 +147,42 @@ describe("admin PTY upgrade", () => {
       expect.objectContaining({ sessionId: "pty-1" }),
       { failed: false },
     );
+  });
+
+  it("binds a v2 shell to the exact current agent session", async () => {
+    const v2Row = row({
+      wsSessionId: "agent-session-1",
+      agentCapabilities: ["ws-v2", "pty-v2"],
+    });
+    const deps = dependencies({ loadServer: vi.fn(async () => v2Row) });
+    const response = await handleAdminPtyRequest(
+      request(),
+      { serverId: "srv-1" },
+      deps,
+    );
+
+    expect(response.status).toBe(426);
+    expect(deps.accept).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.objectContaining({
+        agentProtocol: "v2",
+        agentSessionId: "agent-session-1",
+      }),
+    );
+
+    const unsupported = await handleAdminPtyRequest(
+      request(),
+      { serverId: "srv-1" },
+      dependencies({
+        loadServer: vi.fn(async () =>
+          row({
+            wsSessionId: null,
+            agentCapabilities: ["ws-v2", "pty-v2"],
+          }),
+        ),
+      }),
+    );
+    expect(unsupported.status).toBe(409);
   });
 
   it("records a failed upgrade without exposing details to the client", async () => {

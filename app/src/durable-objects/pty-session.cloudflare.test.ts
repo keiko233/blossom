@@ -112,6 +112,8 @@ function shellAttachment(
     kind: "pty",
     serverId: "srv-1",
     connectedAt: CONNECTED_AT,
+    agentProtocol: "v1",
+    agentSessionId: null,
     sessionId: "pty-1",
     authSessionId: "auth-session-1",
     actor: {
@@ -218,6 +220,8 @@ describe("PTY storage alarm", () => {
     // Only lifecycle fields are stored: no cookie, bearer or token material.
     const lifecycleKeys = [
       "actor",
+      "agentProtocol",
+      "agentSessionId",
       "authSessionId",
       "closeAudited",
       "closeReason",
@@ -412,6 +416,7 @@ describe("PTY connect", () => {
         upgrade: "websocket",
         "x-blossom-pty-session": "pty-1",
         "x-blossom-pty-connected-at": CONNECTED_AT,
+        "x-blossom-pty-protocol": "v1",
         "x-blossom-pty-started-at": "2026-11-19T00:30:00.000Z",
         "x-blossom-pty-auth-session": "auth-session-1",
         "x-blossom-pty-actor": encodeURIComponent(

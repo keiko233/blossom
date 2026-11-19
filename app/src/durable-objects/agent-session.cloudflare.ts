@@ -2,7 +2,11 @@ import {
   agentWsWelcomePayloadSchema,
   type AgentWsWelcomePayload,
 } from "@blossom/contracts/agent-ws";
-import { AGENT_WS_V2_SUBPROTOCOL } from "@blossom/contracts/agent-ws-v2";
+import {
+  AGENT_WS_V2_SUBPROTOCOL,
+  createAgentWsV2Frame,
+  encodeAgentWsV2Frame,
+} from "@blossom/contracts/agent-ws-v2";
 import { DurableObject, env } from "cloudflare:workers";
 import { drizzle } from "drizzle-orm/node-postgres";
 
@@ -43,6 +47,7 @@ import {
   handlePtyBrowserClose,
   handlePtyBrowserMessage,
   handlePtyConnect,
+  handleAgentV2PtyFrame,
   isPtySessionAuthorized,
   readPtyAttachment,
   revalidatePtySockets,
@@ -61,6 +66,8 @@ interface AgentSessionAttachmentBase {
  */
 interface V1AgentSessionAttachment extends AgentSessionAttachmentBase {
   protocol: "v1";
+  /** Fence recorded by the v1 handshake; every current attachment carries it. */
+  sessionId: string;
   welcome: AgentWsWelcomePayload;
 }
 
@@ -68,6 +75,8 @@ interface V2AgentSessionAttachment extends AgentSessionAttachmentBase {
   protocol: "v2";
   sessionId: string;
   welcomed: boolean;
+  /** A newer v2 connection for the same server exists. */
+  superseded?: boolean;
   pending: boolean;
   credentialKind: AgentSessionCredential["kind"];
   identityId?: string;
@@ -107,6 +116,7 @@ function readAttachment(ws: WebSocket): AgentSessionAttachment | null {
       connectedAt: candidate.connectedAt,
       sessionId: candidate.sessionId,
       welcomed: candidate.welcomed === true,
+      superseded: candidate.superseded === true,
       pending: candidate.pending === true,
       credentialKind: candidate.credentialKind === "oauth" ? "oauth" : "static",
       ...(typeof candidate.identityId === "string"
@@ -119,6 +129,9 @@ function readAttachment(ws: WebSocket): AgentSessionAttachment | null {
         typeof candidate.expiresAt === "number" ? candidate.expiresAt : null,
     };
   }
+  if (typeof candidate.sessionId !== "string") {
+    return null;
+  }
   const welcome = agentWsWelcomePayloadSchema.safeParse(candidate.welcome);
   if (!welcome.success) {
     return null;
@@ -127,6 +140,7 @@ function readAttachment(ws: WebSocket): AgentSessionAttachment | null {
     protocol: "v1",
     serverId: candidate.serverId,
     connectedAt: candidate.connectedAt,
+    sessionId: candidate.sessionId,
     welcome: welcome.data,
   };
 }
@@ -135,6 +149,44 @@ function decodeMessage(message: string | ArrayBuffer): string {
   return typeof message === "string"
     ? message
     : new TextDecoder().decode(message);
+}
+
+/**
+ * A newer v2 handshake ends the old sockets. Marking them superseded alone
+ * would ignore the old agent's next frame, so the database fence would never
+ * run and a terminal bound to that session could stay open until the agent's
+ * liveness deadline. The contract instead requires an error frame and close
+ * 4000, which also lets `webSocketClose` close the bound PTY sockets.
+ */
+function supersedeV2Socket(
+  ws: WebSocket,
+  attachment: V2AgentSessionAttachment,
+): void {
+  try {
+    ws.serializeAttachment({
+      ...attachment,
+      superseded: true,
+    } satisfies V2AgentSessionAttachment);
+  } catch {
+    // The socket may already be closing; the close below still ends it.
+  }
+  try {
+    ws.send(
+      encodeAgentWsV2Frame(
+        createAgentWsV2Frame("error", {
+          code: "session_replaced",
+          message: "a newer session is active",
+        }),
+      ),
+    );
+  } catch {
+    // A failed send is covered by the close.
+  }
+  try {
+    ws.close(4000, "session_replaced");
+  } catch {
+    // Already closed.
+  }
 }
 
 export class AgentSessionDO extends DurableObject {
@@ -244,7 +296,10 @@ export class AgentSessionDO extends DurableObject {
       if (attachment?.protocol !== target) {
         continue;
       }
-      if (attachment.protocol === "v2" && !attachment.welcomed) {
+      if (
+        attachment.protocol === "v2" &&
+        (!attachment.welcomed || attachment.superseded)
+      ) {
         continue;
       }
       try {
@@ -270,7 +325,8 @@ export class AgentSessionDO extends DurableObject {
       return this.connectV2(request, serverId, connectedAt);
     }
     const welcomeHeader = request.headers.get(AGENT_WS_INTERNAL_WELCOME);
-    if (!serverId || !connectedAt || !welcomeHeader) {
+    const sessionId = request.headers.get(AGENT_WS_INTERNAL_SESSION_ID);
+    if (!serverId || !connectedAt || !sessionId || !welcomeHeader) {
       return new Response("Bad Request", { status: 400 });
     }
 
@@ -291,6 +347,7 @@ export class AgentSessionDO extends DurableObject {
       protocol: "v1",
       serverId,
       connectedAt,
+      sessionId,
       welcome,
     } satisfies V1AgentSessionAttachment);
 
@@ -330,6 +387,16 @@ export class AgentSessionDO extends DurableObject {
         !Number.isFinite(expiresAt))
     ) {
       return new Response("Bad Request", { status: 400 });
+    }
+
+    // A newer handshake ends older v2 sockets with the contract's
+    // `session_replaced` error and close 4000. Terminal relays are tied to the
+    // exact session, so they never blend across the two.
+    for (const existing of this.ctx.getWebSockets(serverId)) {
+      const attachment = readAttachment(existing);
+      if (attachment?.protocol === "v2" && !attachment.superseded) {
+        supersedeV2Socket(existing, attachment);
+      }
     }
 
     const pair = new WebSocketPair();
@@ -469,7 +536,10 @@ export class AgentSessionDO extends DurableObject {
     return openAgentWsSession({
       serverId: attachment.serverId,
       welcome: attachment.welcome,
-      connectedAt: new Date(attachment.connectedAt),
+      session: {
+        connectedAt: new Date(attachment.connectedAt),
+        sessionId: attachment.sessionId,
+      },
       store,
     });
   }
@@ -540,7 +610,17 @@ export class AgentSessionDO extends DurableObject {
     await closePtySocketsForAgent(
       this.ctx,
       attachment.serverId,
-      attachment.connectedAt,
+      attachment.protocol === "v2"
+        ? {
+            protocol: "v2",
+            connectedAt: attachment.connectedAt,
+            agentSessionId: attachment.sessionId,
+          }
+        : {
+            protocol: "v1",
+            connectedAt: attachment.connectedAt,
+            agentSessionId: null,
+          },
       this.recordPtyClose,
     );
     if (attachment.protocol === "v2") {
@@ -570,6 +650,9 @@ export class AgentSessionDO extends DurableObject {
     attachment: V2AgentSessionAttachment,
     raw: string,
   ): Promise<void> {
+    if (attachment.superseded) {
+      return;
+    }
     await this.withDatabase(async (database) => {
       const session = openAgentWsV2Session({
         serverId: attachment.serverId,
@@ -579,6 +662,14 @@ export class AgentSessionDO extends DurableObject {
         peer: ws,
         store: createAgentWsV2Store(database),
         welcomed: attachment.welcomed,
+        onPtyFrame: (frame) =>
+          handleAgentV2PtyFrame(
+            this.ctx,
+            attachment.serverId,
+            attachment.sessionId,
+            frame,
+            this.recordPtyClose,
+          ),
       });
       await session.handleText(raw);
       if (
@@ -612,7 +703,17 @@ export class AgentSessionDO extends DurableObject {
       await closePtySocketsForAgent(
         this.ctx,
         attachment.serverId,
-        attachment.connectedAt,
+        attachment.protocol === "v2"
+          ? {
+              protocol: "v2",
+              connectedAt: attachment.connectedAt,
+              agentSessionId: attachment.sessionId,
+            }
+          : {
+              protocol: "v1",
+              connectedAt: attachment.connectedAt,
+              agentSessionId: null,
+            },
         this.recordPtyClose,
         "io_error",
       );
