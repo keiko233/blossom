@@ -7,6 +7,7 @@ import {
   AgentAuthError,
   verifyAgentAccessToken,
   type AgentIdentityUse,
+  type AgentTokenPurpose,
 } from "@/lib/agent-oauth";
 import { authenticateStaticAgentToken } from "@/lib/agent-static-auth";
 import { parseBearerToken } from "@/lib/agent-token";
@@ -38,6 +39,10 @@ export interface AgentWsAuthentication {
   credential: AgentSessionCredential;
 }
 
+/** Header the agent requires before it treats an authenticated 409 as a disable. */
+export const AGENT_WS_DISABLED_STATE_HEADER = "x-blossom-agent-state";
+export const AGENT_WS_DISABLED_STATE_VALUE = "disabled";
+
 /**
  * Authenticates an agent WebSocket upgrade. Static tokens are checked first
  * with the existing hash lookup; an OAuth machine token is then verified
@@ -51,6 +56,7 @@ export async function authenticateAgentWsRequest(
   ) => Promise<Server | null> = findAgentServerByTokenHash,
   verifyOauth: (
     token: string,
+    purpose: AgentTokenPurpose,
   ) => Promise<AgentIdentityUse | null> = verifyAgentOauthToken,
   loadServer: (
     serverId: string,
@@ -75,12 +81,14 @@ export async function authenticateAgentWsRequest(
     };
   }
 
-  const identity = await verifyOauth(token).catch((error: unknown) => {
-    if (error instanceof AgentAuthError) {
-      return null;
-    }
-    throw error;
-  });
+  const identity = await verifyOauth(token, "handshake").catch(
+    (error: unknown) => {
+      if (error instanceof AgentAuthError) {
+        return null;
+      }
+      throw error;
+    },
+  );
   if (!identity) {
     return null;
   }
@@ -101,8 +109,77 @@ export async function authenticateAgentWsRequest(
   };
 }
 
+/**
+ * Recognizes only a still-valid credential whose server is disabled. This is
+ * a narrow disablement signal, not a session: it starts no session, updates no
+ * fence, and returns no configuration. Invalid, revoked, expired, pending, or
+ * client-disabled credentials remain ordinary authentication failures.
+ */
+export async function authenticateDisabledAgentWsRequest(
+  request: Request,
+  lookup: (
+    tokenHash: string,
+  ) => Promise<Server | null> = findAgentServerByTokenHash,
+  verifyOauth: (
+    token: string,
+    purpose: AgentTokenPurpose,
+  ) => Promise<AgentIdentityUse | null> = verifyAgentOauthToken,
+  loadServer: (
+    serverId: string,
+  ) => Promise<Server | null> = findAgentServerById,
+): Promise<AgentWsAuthentication | null> {
+  const token = parseBearerToken(request.headers.get("authorization"));
+  if (!token) {
+    return null;
+  }
+  const staticAuthentication = await authenticateStaticAgentToken(
+    token,
+    { allowDisabled: true },
+    lookup,
+  );
+  if (staticAuthentication) {
+    return staticAuthentication.server.enabled
+      ? null
+      : {
+          server: staticAuthentication.server,
+          credential: {
+            kind: "static",
+            tokenHash: staticAuthentication.tokenHash,
+          },
+        };
+  }
+
+  const identity = await verifyOauth(token, "status").catch(
+    (error: unknown) => {
+      if (error instanceof AgentAuthError) {
+        return null;
+      }
+      throw error;
+    },
+  );
+  if (!identity || identity.identityStatus !== "active") {
+    return null;
+  }
+  const server = await loadServer(identity.serverId);
+  if (!server || server.enabled) {
+    return null;
+  }
+  return {
+    server,
+    credential: {
+      kind: "oauth",
+      identityId: identity.identityId,
+      generation: identity.generation,
+      clientId: identity.clientId,
+      expiresAt: identity.expiresAt,
+      identityStatus: identity.identityStatus,
+    },
+  };
+}
+
 async function verifyAgentOauthToken(
   token: string,
+  purpose: AgentTokenPurpose,
 ): Promise<AgentIdentityUse | null> {
   const origin = getServerEnv().BETTER_AUTH_URL.replace(/\/$/, "");
   const { getAuth } = await import("@/lib/auth");
@@ -111,7 +188,7 @@ async function verifyAgentOauthToken(
       issuer: `${origin}/api/auth`,
       audience: getOAuthResourceIdentifiers(origin).agent,
       getJwks: () => getAuth().api.getJwks(),
-      purpose: "handshake",
+      purpose,
     });
   } catch (error) {
     if (error instanceof AgentAuthError) {
@@ -123,6 +200,11 @@ async function verifyAgentOauthToken(
 
 export interface AgentWsRouteDependencies {
   authenticate(request: Request): Promise<AgentWsAuthentication | null>;
+  /**
+   * Recognizes a still-valid credential for a disabled server. The route uses
+   * it only for a v2 upgrade after normal authentication failed.
+   */
+  authenticateDisabled(request: Request): Promise<AgentWsAuthentication | null>;
   buildWelcome(server: Server): Promise<AgentWsWelcomePayload>;
   /**
    * Advances the global certificate issuer on each v2 upgrade. It runs in the
@@ -135,6 +217,7 @@ export interface AgentWsRouteDependencies {
 
 const defaultDependencies: AgentWsRouteDependencies = {
   authenticate: authenticateAgentWsRequest,
+  authenticateDisabled: authenticateDisabledAgentWsRequest,
   buildWelcome: buildAgentWelcome,
   wakeCertificateIssuance: async () => {
     try {
@@ -156,6 +239,16 @@ function plainResponse(status: number, message: string): Response {
   return new Response(message, {
     status,
     headers: { "cache-control": "no-store" },
+  });
+}
+
+function disabledServerResponse(): Response {
+  return new Response("Server disabled", {
+    status: 409,
+    headers: {
+      "cache-control": "no-store",
+      [AGENT_WS_DISABLED_STATE_HEADER]: AGENT_WS_DISABLED_STATE_VALUE,
+    },
   });
 }
 
@@ -182,6 +275,15 @@ export async function handleAgentWsRequest(
 ): Promise<Response> {
   const authentication = await dependencies.authenticate(request);
   if (!authentication) {
+    const negotiation = negotiateAgentWsProtocol(
+      request.headers.get("sec-websocket-protocol"),
+    );
+    if (negotiation.protocol === "v2" && isWebSocketUpgrade(request)) {
+      const disabled = await dependencies.authenticateDisabled(request);
+      if (disabled) {
+        return rejectUpgrade(request, disabledServerResponse());
+      }
+    }
     return rejectUpgrade(request, plainResponse(401, "Unauthorized"));
   }
   const { server, credential } = authentication;

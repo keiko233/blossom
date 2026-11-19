@@ -248,6 +248,9 @@ pub async fn run(
                     break;
                 }
             }
+            Some(()) = core.disabled.recv() => {
+                apply_administrative_disable(&mut config, &mut manager, &bin).await;
+            }
             job = core.log_jobs.recv() => {
                 let Some(job) = job else {
                     break;
@@ -412,6 +415,46 @@ pub async fn run(
     }
     info!("agent stopped (websocket protocol v2)");
     Ok(())
+}
+
+/// A positive disablement: stop the serving process, atomically replace the
+/// active and last-known-good configs with a local no-inbound teardown, and
+/// launch that teardown. The persisted disabled flag prevents startup from
+/// serving the old inbound after a crash or restart. Only a later enabled
+/// authoritative configuration can clear it.
+async fn apply_administrative_disable(
+    config: &mut ConfigManager,
+    manager: &mut Option<SingBoxManager>,
+    bin: &Path,
+) {
+    if config.administratively_disabled() {
+        return;
+    }
+    let candidate = match config.apply_administrative_teardown() {
+        Ok(candidate) => candidate,
+        Err(error) => {
+            error!("failed to persist the administrative teardown: {error:#}");
+            return;
+        }
+    };
+    // Persist the teardown before stopping the process that still serves the
+    // previous memory configuration. A failed write therefore leaves the proxy
+    // untouched and the signal can safely be retried by the next link.
+    if let Some(current) = manager.take() {
+        current.shutdown().await;
+    }
+    match SingBoxManager::start(bin.to_path_buf(), config.config_path().clone()).await {
+        Ok(started) => {
+            manager.replace(started);
+            info!(
+                revision = %candidate.revision,
+                "control plane disabled this server; proxy inbound teardown applied"
+            );
+        }
+        Err(error) => {
+            warn!("administrative teardown persisted but sing-box did not start: {error}");
+        }
+    }
 }
 
 /// Applies the desired levels from one control-plane snapshot through the
@@ -640,7 +683,7 @@ fn snapshot(
             None
         } else {
             config
-                .applied_revision()
+                .served_revision()
                 .and_then(ConfigIdentifier::from_revision)
         },
         runtime_state: runtime.map_or(RuntimeState::Stopped, runtime_state_of),

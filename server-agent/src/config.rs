@@ -213,6 +213,10 @@ pub struct DeploymentRecord {
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct PersistedState {
     applied_revision: Option<String>,
+    /// True after a confirmed administrative disable tore the proxy down. The
+    /// next enabled configuration must be applied before serving resumes.
+    #[serde(default)]
+    disabled: bool,
     active_node_ids: Vec<String>,
     applied_at: Option<chrono::DateTime<chrono::Utc>>,
     deployments: Vec<DeploymentRecord>,
@@ -316,6 +320,16 @@ impl ConfigManager {
             needs_reapply,
             startup_error,
         };
+        if manager.persisted.disabled {
+            // The teardown written before the last shutdown is the only
+            // committed configuration a disabled agent may launch.
+            let teardown = manager.teardown_config()?;
+            write_config_atomic(&manager.active_path, &teardown)?;
+            write_config_atomic(&manager.last_good_path, &teardown)?;
+            // This local teardown is the trusted state until an enabled
+            // authoritative document replaces it.
+            manager.needs_reapply = false;
+        }
         manager.recompute_installed_deployments();
         manager.refresh_credentials_or_warn();
         manager.adopt_legacy_log_baseline();
@@ -497,6 +511,81 @@ impl ConfigManager {
     /// again (startup preflight or launch failed).
     pub fn needs_reapply(&self) -> bool {
         self.needs_reapply
+    }
+
+    /// True after a confirmed administrative disablement. A later enabled
+    /// snapshot must commit before the proxy can serve again.
+    pub fn administratively_disabled(&self) -> bool {
+        self.persisted.disabled
+    }
+
+    /// The applied identifier, but only while the committed configuration is
+    /// enabled and trusted. A disabled server reports no applied revision so
+    /// the control plane must send an authoritative enabled snapshot.
+    pub fn served_revision(&self) -> Option<&str> {
+        if self.persisted.disabled {
+            return None;
+        }
+        self.persisted.applied_revision.as_deref()
+    }
+
+    /// Replaces the served proxy with a locally generated no-inbound teardown
+    /// and then makes it last-known-good. This is called only after a
+    /// authenticated control plane explicitly confirmed the server is disabled.
+    pub fn apply_administrative_teardown(&mut self) -> Result<CandidateConfig> {
+        let candidate = self.teardown_candidate()?;
+        self.promote_candidate()?;
+        replace_from(
+            &self.active_path,
+            &self.last_good_path,
+            &self.state_dir.join("last-known-good.json.tmp"),
+        )?;
+        self.persisted.applied_revision = None;
+        self.persisted.active_node_ids.clear();
+        self.persisted.applied_at = Some(chrono::Utc::now());
+        self.persisted.disabled = true;
+        self.needs_reapply = false;
+        self.recompute_installed_deployments();
+        self.refresh_credentials_or_warn();
+        self.persist_state()?;
+        Ok(candidate)
+    }
+
+    /// The local no-inbound config used by a confirmed disable. It keeps only
+    /// the agent-owned loopback stats service and the local log overlay.
+    fn teardown_config(&self) -> Result<serde_json::Map<String, serde_json::Value>> {
+        let mut config = serde_json::Map::new();
+        config.insert(
+            "log".to_string(),
+            serde_json::json!({"level": "info", "timestamp": true}),
+        );
+        config.insert("inbounds".to_string(), serde_json::Value::Array(Vec::new()));
+        config.insert(
+            "outbounds".to_string(),
+            serde_json::Value::Array(vec![serde_json::json!({"type": "direct"})]),
+        );
+        inject_api_service(
+            &mut config,
+            &self.api_endpoint.addr,
+            self.api_endpoint.secret.as_deref().unwrap_or(""),
+        );
+        let overlay = self.log_policy.overlay(chrono::Utc::now());
+        LogPolicy::apply_overlay(&mut config, overlay);
+        Ok(config)
+    }
+
+    fn teardown_candidate(&self) -> Result<CandidateConfig> {
+        let config = self.teardown_config()?;
+        let serialized = serde_json::to_vec_pretty(&config)?;
+        write_secret_file(&self.candidate_path, &serialized)?;
+        self.refresh_credentials_or_warn();
+        Ok(CandidateConfig {
+            revision: "server-disabled".to_string(),
+            materialized_node_ids: Vec::new(),
+            api_endpoint: self.api_endpoint.clone(),
+            referenced_generations: Vec::new(),
+            log_level: self.log_policy.overlay(chrono::Utc::now()).effective,
+        })
     }
 
     pub fn deployments(&self) -> &[DeploymentRecord] {
@@ -808,7 +897,7 @@ impl ConfigManager {
         references: &[CertificateRef],
         artifacts: &std::collections::HashMap<(String, u64), crate::certificate::StagedMaterial>,
     ) -> bool {
-        if self.needs_reapply {
+        if self.needs_reapply || self.persisted.disabled {
             return false;
         }
         if self.persisted.applied_revision.as_deref() != Some(desired_revision) {
@@ -974,6 +1063,7 @@ impl ConfigManager {
             })
         });
         self.needs_reapply = false;
+        self.persisted.disabled = false;
         self.persist_state()?;
         if let Some(status) = self.log_policy.record(
             LogSourcePolicy::SingBox,
@@ -1618,6 +1708,138 @@ mod tests {
         let decoded: DeploymentRecord = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded.certificate_id, "cert-1");
         assert!(decoded.in_use);
+    }
+
+    #[test]
+    fn a_persisted_disable_is_migrated_as_absent() {
+        use super::PersistedState;
+        let legacy: PersistedState = serde_json::from_str(
+            r#"{"applied_revision":"1:sha256:rev","active_node_ids":["node-1"],"applied_at":null,"deployments":[]}"#,
+        )
+        .unwrap();
+        assert!(!legacy.disabled);
+    }
+
+    #[test]
+    fn an_administrative_teardown_persists_and_blocks_startup_until_replaced() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join(".scratch")
+            .join("tmp")
+            .join(format!("blossom-disable-lifecycle-{suffix}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _cleanup = TempDir(&dir);
+        let logs = crate::logs::LogStore::default();
+        let policy = test_policy(&dir);
+        let mut manager = ConfigManager::new(
+            crate::client::new_client("http://127.0.0.1:1/api", "test-token")
+                .expect("client builds"),
+            dir.clone(),
+            logs,
+            policy,
+        )
+        .expect("config manager builds");
+
+        let document = json!({
+            "agent": {"configPollIntervalSeconds": 60, "heartbeatIntervalSeconds": 30},
+            "apiVersion": 3,
+            "certificateArtifacts": [],
+            "desiredRevision": "sha256:enabled-1",
+            "managedTlsBindings": [],
+            "materializedNodeIds": ["n1"],
+            "singboxConfig": {
+                "log": {"level": "info", "timestamp": true},
+                "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": 1080}]
+            }
+        });
+        let body = serde_json::to_vec(&document).unwrap();
+        let FetchStatus::Updated { candidate, .. } = manager
+            .compile_snapshot(&body, "sha256:enabled-1")
+            .expect("enabled config compiles")
+        else {
+            panic!("a new enabled config must stage");
+        };
+        manager.promote_candidate().unwrap();
+        manager.commit_applied(&candidate).unwrap();
+
+        let teardown = manager
+            .apply_administrative_teardown()
+            .expect("teardown persists");
+        assert_eq!(teardown.revision, "server-disabled");
+        assert!(manager.administratively_disabled());
+        assert!(!manager.needs_reapply());
+        assert!(manager.applied_revision().is_none());
+        assert!(manager.served_revision().is_none());
+        let active: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(manager.config_path()).unwrap()).unwrap();
+        assert_eq!(active["inbounds"], json!([]));
+        assert_eq!(active["outbounds"][0]["type"], "direct");
+        let last_good: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("last-known-good.json")).unwrap())
+                .unwrap();
+        assert_eq!(last_good["inbounds"], json!([]));
+
+        // A restart reconstructs the teardown rather than the previous
+        // enabled last-known-good.
+        let mut restarted = ConfigManager::new(
+            crate::client::new_client("http://127.0.0.1:1/api", "test-token")
+                .expect("client builds"),
+            dir.clone(),
+            crate::logs::LogStore::default(),
+            test_policy(&dir),
+        )
+        .expect("config manager builds");
+        assert!(restarted.administratively_disabled());
+        assert!(!restarted.needs_reapply());
+        assert!(restarted.served_revision().is_none());
+        assert_eq!(
+            std::fs::read(restarted.config_path()).unwrap(),
+            serde_json::to_vec_pretty(&restarted.teardown_config().unwrap()).unwrap()
+        );
+
+        // A later enabled document is staged rather than skipped, and only
+        // its validated commit clears the disable marker.
+        let enabled_again = json!({
+            "agent": {"configPollIntervalSeconds": 60, "heartbeatIntervalSeconds": 30},
+            "apiVersion": 3,
+            "certificateArtifacts": [],
+            "desiredRevision": "sha256:enabled-2",
+            "managedTlsBindings": [],
+            "materializedNodeIds": ["n1"],
+            "singboxConfig": {
+                "log": {"level": "info", "timestamp": true},
+                "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": 1080}]
+            }
+        });
+        let FetchStatus::Updated { candidate, .. } = restarted
+            .compile_snapshot(
+                &serde_json::to_vec(&enabled_again).unwrap(),
+                "sha256:enabled-2",
+            )
+            .expect("enabled config compiles")
+        else {
+            panic!("a disabled agent must not skip a re-enable");
+        };
+        restarted.promote_candidate().unwrap();
+        restarted.commit_applied(&candidate).unwrap();
+        assert!(!restarted.administratively_disabled());
+        assert_eq!(restarted.applied_revision(), Some("sha256:enabled-2"));
+        assert_eq!(restarted.active_node_ids(), ["n1"]);
+    }
+
+    struct TempDir<'a>(&'a Path);
+
+    impl Drop for TempDir<'_> {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(self.0);
+        }
     }
 
     #[test]

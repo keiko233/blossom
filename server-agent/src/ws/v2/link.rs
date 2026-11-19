@@ -31,6 +31,12 @@ pub trait Connector: Send + Sync {
     type Wire: Wire;
 
     fn connect(&self) -> impl Future<Output = Result<Self::Wire, WsError>> + Send;
+
+    /// Connectors that can recognize the explicit disabled marker report it.
+    fn disabled(&self, error: &WsError) -> bool {
+        let _ = error;
+        false
+    }
 }
 
 impl Connector for V2Connector {
@@ -38,6 +44,10 @@ impl Connector for V2Connector {
 
     async fn connect(&self) -> Result<Self::Wire, WsError> {
         V2Connector::connect(self).await
+    }
+
+    fn disabled(&self, error: &WsError) -> bool {
+        matches!(error, WsError::ServerDisabled { .. })
     }
 }
 
@@ -160,11 +170,19 @@ pub async fn run<C, J>(
                 }
             }
             Err(error) => {
+                if connector.disabled(&error) {
+                    let _ = ports.disabled.try_send(());
+                }
                 // The three states stay distinct in the logs: an unsupported
                 // protocol, a rejected handshake, and a network failure.
                 match error {
                     WsError::SubprotocolMismatch => {
                         warn!("control plane does not speak agent websocket v2; retrying v2 only")
+                    }
+                    WsError::ServerDisabled { .. } => {
+                        warn!(
+                            "control plane confirmed this server is disabled; tearing down the proxy"
+                        )
                     }
                     WsError::Rejected { status } => {
                         warn!("agent websocket v2 handshake rejected with HTTP {status}")

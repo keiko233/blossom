@@ -42,7 +42,12 @@ export type AgentTokenPurpose =
   /** The first WebSocket handshake of a pending identity. */
   | "handshake"
   /** Any later use: only an active identity may act. */
-  | "session";
+  | "session"
+  /**
+   * Read-only status for an active identity. A disabled server is reported
+   * instead of rejected so an agent can learn to tear its proxy down.
+   */
+  | "status";
 
 export interface AgentIdentityUse {
   serverId: string;
@@ -122,7 +127,9 @@ export function decideAgentIdentityUse(
 ): Omit<AgentIdentityUse, "clientId" | "expiresAt"> {
   if (row.clientDisabled) throw new AgentAuthError("client_disabled");
   if (!input.linked) throw new AgentAuthError("resource_not_linked");
-  if (!row.serverEnabled) throw new AgentAuthError("server_disabled");
+  if (!row.serverEnabled && input.purpose !== "status") {
+    throw new AgentAuthError("server_disabled");
+  }
   const usable =
     row.status === "active" ||
     (row.status === "pending" && input.purpose === "handshake");
