@@ -24,8 +24,6 @@ import type { ConnectionReleaseOption } from "./connection-types";
 const blockTitle: Record<Exclude<EnrollmentCreateBlock, null>, () => string> = {
   server_disabled:
     m.admin_proxies_servers_connection_installer_block_server_disabled_title,
-  active_identity:
-    m.admin_proxies_servers_connection_installer_block_active_title,
   pending_identity:
     m.admin_proxies_servers_connection_installer_block_pending_title,
 };
@@ -36,13 +34,12 @@ const blockDescription: Record<
 > = {
   server_disabled:
     m.admin_proxies_servers_connection_installer_block_server_disabled_description,
-  active_identity:
-    m.admin_proxies_servers_connection_installer_block_active_description,
   pending_identity:
     m.admin_proxies_servers_connection_installer_block_pending_description,
 };
 
 export interface ConnectionInstallerRequest {
+  mode: "enroll" | "replace";
   release: string;
   capabilities: string[];
 }
@@ -54,6 +51,9 @@ export interface ServerConnectionInstallerProps {
   requiredCapabilities: readonly string[];
   block: EnrollmentCreateBlock;
   phase: InstallationPhase;
+  mode: "enroll" | "replace";
+  /** Active generation that stays connected until a replacement proves. */
+  activeGeneration: number | null;
   lifetimeMinutes: number;
   creating: "stdin" | "inline" | null;
   onCreate: (
@@ -74,6 +74,8 @@ export function ServerConnectionInstaller({
   requiredCapabilities,
   block,
   phase,
+  mode,
+  activeGeneration,
   lifetimeMinutes,
   creating,
   onCreate,
@@ -96,6 +98,7 @@ export function ServerConnectionInstaller({
       return;
     }
     onCreate(delivery, {
+      mode,
       release: selectedRelease.version,
       capabilities: effectivePty ? ["pty-v1"] : [],
     });
@@ -218,7 +221,7 @@ export function ServerConnectionInstaller({
       )}
 
       {block ? (
-        <Alert variant={block === "active_identity" ? "info" : "warning"}>
+        <Alert variant="warning">
           <AlertTitle>{blockTitle[block]()}</AlertTitle>
           <AlertDescription>{blockDescription[block]()}</AlertDescription>
         </Alert>
@@ -232,6 +235,18 @@ export function ServerConnectionInstaller({
 
       {releases && compatibleReleases.length > 0 ? (
         <>
+          {mode === "replace" && activeGeneration !== null ? (
+            <Alert variant="info">
+              <AlertTitle>
+                {m.admin_proxies_servers_connection_installer_replace_title()}
+              </AlertTitle>
+              <AlertDescription>
+                {m.admin_proxies_servers_connection_installer_replace_description(
+                  { generation: activeGeneration },
+                )}
+              </AlertDescription>
+            </Alert>
+          ) : null}
           <div className="flex flex-wrap gap-2">
             <Button
               disabled={block !== null || creating !== null}
@@ -239,7 +254,9 @@ export function ServerConnectionInstaller({
               onClick={() => create("stdin")}
             >
               <FileDownIcon />
-              {m.admin_proxies_servers_connection_installer_create_grant()}
+              {mode === "replace"
+                ? m.admin_proxies_servers_connection_installer_create_replace()
+                : m.admin_proxies_servers_connection_installer_create_grant()}
             </Button>
             <Button
               variant="outline"
@@ -248,15 +265,21 @@ export function ServerConnectionInstaller({
               onClick={() => create("inline")}
             >
               <FileCodeIcon />
-              {m.admin_proxies_servers_connection_installer_create_inline()}
+              {mode === "replace"
+                ? m.admin_proxies_servers_connection_installer_create_replace_inline()
+                : m.admin_proxies_servers_connection_installer_create_inline()}
             </Button>
           </div>
           <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
             <p>
-              {m.admin_proxies_servers_connection_installer_create_grant_description()}
+              {mode === "replace"
+                ? m.admin_proxies_servers_connection_installer_create_replace_description()
+                : m.admin_proxies_servers_connection_installer_create_grant_description()}
             </p>
             <p>
-              {m.admin_proxies_servers_connection_installer_create_inline_description()}
+              {mode === "replace"
+                ? m.admin_proxies_servers_connection_installer_create_replace_inline_description()
+                : m.admin_proxies_servers_connection_installer_create_inline_description()}
             </p>
           </div>
           <p className="text-xs text-muted-foreground">

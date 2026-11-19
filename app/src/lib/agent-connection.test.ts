@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  currentIdentities,
   enrollmentCreateBlock,
   grantDisplayStatus,
   installationPhase,
@@ -149,16 +150,10 @@ describe("installationPhase", () => {
 });
 
 describe("enrollmentCreateBlock", () => {
-  it("blocks disabled servers and existing identities", () => {
+  it("blocks disabled servers and pending identities", () => {
     expect(
       enrollmentCreateBlock({ serverEnabled: false, identities: [] }),
     ).toBe("server_disabled");
-    expect(
-      enrollmentCreateBlock({
-        serverEnabled: true,
-        identities: [{ status: "active" }],
-      }),
-    ).toBe("active_identity");
     expect(
       enrollmentCreateBlock({
         serverEnabled: true,
@@ -168,5 +163,25 @@ describe("enrollmentCreateBlock", () => {
     expect(
       enrollmentCreateBlock({ serverEnabled: true, identities: [] }),
     ).toBeNull();
+  });
+
+  it("allows a replacement while an active identity exists", () => {
+    expect(
+      enrollmentCreateBlock({
+        serverEnabled: true,
+        identities: [{ status: "active" }],
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("currentIdentities", () => {
+  it("reports active and pending generations independently", () => {
+    const active = { id: "old", status: "active", generation: 1 };
+    const pending = { id: "new", status: "pending", generation: 2 };
+
+    expect(currentIdentities([active, pending])).toEqual({ active, pending });
+    expect(currentIdentities([active])).toEqual({ active, pending: null });
+    expect(currentIdentities([])).toEqual({ active: null, pending: null });
   });
 });

@@ -1,27 +1,41 @@
-import { KeyRoundIcon } from "lucide-react";
+import { KeyRoundIcon, ShieldOffIcon } from "lucide-react";
 import type React from "react";
 
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
 import { m } from "@/paraglide/messages";
 
+export type BackupAction = "enable" | "reset" | "disable";
+
 export interface ServerConnectionBackupProps {
-  tokenPrefix: string;
-  resetting: boolean;
-  onResetToken: () => void;
+  backupTokenEnabled: boolean;
+  /** Whether an OAuth identity currently owns the agent lane. */
+  oauthActive: boolean;
+  /** Non-secret prefix; null when no static token exists. */
+  tokenPrefix: string | null;
+  busy: BackupAction | null;
+  onEnable: () => void;
+  onReset: () => void;
+  onDisable: () => void;
 }
 
 /**
- * Static token controls stay in a clearly marked backup area. The existing
- * reset action and one-time reveal are unchanged so legacy agents keep their
- * current admin flow; OAuth-only mode needs a separate backend.
+ * Static bearer credentials are a backup path next to OAuth, not the default.
+ * Legacy servers keep their existing token until an administrator explicitly
+ * resets or disables it; a disabled backup never touches the OAuth socket.
  */
 export function ServerConnectionBackup({
+  backupTokenEnabled,
+  oauthActive,
   tokenPrefix,
-  resetting,
-  onResetToken,
+  busy,
+  onEnable,
+  onReset,
+  onDisable,
 }: ServerConnectionBackupProps): React.ReactElement {
+  const disabled = busy !== null;
+
   return (
     <section
       data-slot="server-connection-backup"
@@ -31,63 +45,92 @@ export function ServerConnectionBackup({
         <h2 className="font-medium">
           {m.admin_proxies_servers_connection_backup_title()}
         </h2>
-        <Badge variant="warning">
-          {m.admin_proxies_servers_connection_backup_badge()}
+        <Badge variant={backupTokenEnabled ? "warning" : "success"}>
+          {backupTokenEnabled
+            ? m.admin_proxies_servers_connection_backup_badge_enabled()
+            : m.admin_proxies_servers_connection_backup_badge_oauth_only()}
         </Badge>
       </div>
       <p className="text-xs text-muted-foreground">
-        {m.admin_proxies_servers_connection_backup_description()}
+        {backupTokenEnabled
+          ? m.admin_proxies_servers_connection_backup_description_enabled()
+          : m.admin_proxies_servers_connection_backup_description_oauth_only()}
       </p>
 
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span className="text-muted-foreground">
           {m.admin_proxies_servers_connection_backup_prefix_label()}
         </span>
-        <code className="rounded border bg-background px-2 py-1 font-mono text-xs">
-          {tokenPrefix}
-        </code>
+        {tokenPrefix ? (
+          <code className="rounded border bg-background px-2 py-1 font-mono text-xs">
+            {tokenPrefix}
+          </code>
+        ) : (
+          <span className="text-xs text-muted-foreground">
+            {m.admin_proxies_servers_connection_backup_prefix_none()}
+          </span>
+        )}
       </div>
 
-      <div className="flex flex-wrap items-start justify-between gap-3 border-t pt-3">
-        <div className="flex max-w-xl flex-col gap-1">
-          <label
-            className="flex items-center gap-2 text-sm font-medium"
-            htmlFor="oauth-only-mode"
-          >
-            {m.admin_proxies_servers_connection_backup_mode_label()}
-            <Badge variant="outline">
-              {m.admin_proxies_servers_connection_backup_mode_unavailable()}
-            </Badge>
-          </label>
+      {backupTokenEnabled ? (
+        <div className="flex flex-col gap-3 border-t pt-3">
+          {oauthActive ? (
+            <p className="text-xs text-muted-foreground">
+              {m.admin_proxies_servers_connection_backup_legacy_note()}
+            </p>
+          ) : (
+            <Alert variant="warning">
+              <AlertTitle>
+                {m.admin_proxies_servers_connection_backup_only_credential_title()}
+              </AlertTitle>
+              <AlertDescription>
+                {m.admin_proxies_servers_connection_backup_only_credential_description()}
+              </AlertDescription>
+            </Alert>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="destructive-outline"
+              disabled={disabled}
+              loading={busy === "reset"}
+              onClick={onReset}
+            >
+              <KeyRoundIcon />
+              {m.admin_proxies_servers_connection_backup_reset()}
+            </Button>
+            <Button
+              size="sm"
+              variant="destructive-outline"
+              disabled={disabled}
+              loading={busy === "disable"}
+              onClick={onDisable}
+            >
+              <ShieldOffIcon />
+              {m.admin_proxies_servers_connection_backup_disable()}
+            </Button>
+          </div>
           <p className="text-xs text-muted-foreground">
-            {m.admin_proxies_servers_connection_backup_mode_description()}
+            {m.admin_proxies_servers_connection_backup_reset_description()}
           </p>
         </div>
-        {/* The OAuth-only mode switch requires a separate backend; keep the
-            mutation visibly unavailable rather than pretending it succeeded. */}
-        <Switch
-          id="oauth-only-mode"
-          checked={false}
-          disabled
-          aria-label={m.admin_proxies_servers_connection_backup_mode_label()}
-        />
-      </div>
-
-      <div className="flex flex-col gap-2 border-t pt-3">
-        <Button
-          size="sm"
-          variant="destructive-outline"
-          className="self-start"
-          loading={resetting}
-          onClick={() => onResetToken()}
-        >
-          <KeyRoundIcon />
-          {m.admin_proxies_servers_connection_backup_reset()}
-        </Button>
-        <p className="text-xs text-muted-foreground">
-          {m.admin_proxies_servers_connection_backup_reset_description()}
-        </p>
-      </div>
+      ) : (
+        <div className="flex flex-col gap-2 border-t pt-3">
+          <Button
+            size="sm"
+            className="self-start"
+            disabled={disabled}
+            loading={busy === "enable"}
+            onClick={onEnable}
+          >
+            <KeyRoundIcon />
+            {m.admin_proxies_servers_connection_backup_enable()}
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            {m.admin_proxies_servers_connection_backup_enable_description()}
+          </p>
+        </div>
+      )}
     </section>
   );
 }

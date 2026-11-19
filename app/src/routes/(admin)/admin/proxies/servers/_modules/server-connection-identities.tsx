@@ -3,6 +3,7 @@ import type React from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { currentIdentities } from "@/lib/agent-connection";
 import { formatDateTime } from "@/lib/format";
 import { m } from "@/paraglide/messages";
 
@@ -35,10 +36,7 @@ export function ServerConnectionIdentities({
   revoking,
   onRevoke,
 }: ServerConnectionIdentitiesProps): React.ReactElement {
-  const hasPending = identities.some(
-    (identity) => identity.status === "pending",
-  );
-  const hasActive = identities.some((identity) => identity.status === "active");
+  const { active, pending } = currentIdentities(identities);
 
   return (
     <section
@@ -54,7 +52,21 @@ export function ServerConnectionIdentities({
         </p>
       </div>
 
-      {hasPending ? (
+      {pending && active ? (
+        <Alert variant="warning">
+          <AlertTitle>
+            {m.admin_proxies_servers_connection_identity_replacement_title()}
+          </AlertTitle>
+          <AlertDescription>
+            {m.admin_proxies_servers_connection_identity_replacement_description(
+              {
+                activeGeneration: active.generation,
+                pendingGeneration: pending.generation,
+              },
+            )}
+          </AlertDescription>
+        </Alert>
+      ) : pending ? (
         <Alert variant="warning">
           <AlertTitle>
             {m.admin_proxies_servers_connection_identity_pending_note_title()}
@@ -65,13 +77,13 @@ export function ServerConnectionIdentities({
         </Alert>
       ) : null}
 
-      {hasActive ? (
+      {active && !pending ? (
         <Alert variant="info">
           <AlertTitle>
-            {m.admin_proxies_servers_connection_identity_active_rotation_title()}
+            {m.admin_proxies_servers_connection_identity_active_only_title()}
           </AlertTitle>
           <AlertDescription>
-            {m.admin_proxies_servers_connection_identity_active_rotation_description()}
+            {m.admin_proxies_servers_connection_identity_active_only_description()}
           </AlertDescription>
         </Alert>
       ) : null}

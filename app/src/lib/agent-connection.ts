@@ -19,6 +19,26 @@ export interface AgentIdentityLike {
   status: string;
 }
 
+export interface IdentityGenerationLike {
+  status: string;
+  generation: number;
+}
+
+/**
+ * The generation that owns the agent lane and the generation trying to
+ * replace or install into it. Both can exist during a rotation; the active
+ * one stays authoritative until the pending one proves its handshake.
+ */
+export function currentIdentities<T extends IdentityGenerationLike>(
+  identities: readonly T[],
+): { active: T | null; pending: T | null } {
+  return {
+    active: identities.find((identity) => identity.status === "active") ?? null,
+    pending:
+      identities.find((identity) => identity.status === "pending") ?? null,
+  };
+}
+
 export type GrantDisplayStatus =
   | "issued"
   | "expired"
@@ -117,20 +137,20 @@ export function installationPhase(
 
 export type EnrollmentCreateBlock =
   | "server_disabled"
-  | "active_identity"
   | "pending_identity"
   | null;
 
-/** Reasons a new enrollment grant cannot be created or redeemed. */
+/**
+ * Reasons a new enroll or replace grant cannot be created. An active identity
+ * does not block a replacement; the backend keeps it active until the pending
+ * generation proves its handshake.
+ */
 export function enrollmentCreateBlock(input: {
   serverEnabled: boolean;
   identities: readonly AgentIdentityLike[];
 }): EnrollmentCreateBlock {
   if (!input.serverEnabled) {
     return "server_disabled";
-  }
-  if (input.identities.some((identity) => identity.status === "active")) {
-    return "active_identity";
   }
   if (input.identities.some((identity) => identity.status === "pending")) {
     return "pending_identity";
