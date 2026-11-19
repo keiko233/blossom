@@ -1,0 +1,75 @@
+name: "[Release] Build Published Release"
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-ci-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: ${{ !github.event.release.prerelease && startsWith(github.event.release.tag_name, 'v') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Validate release tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Expected a release tag of the form vX.Y.Z, got $TAG" >&2
+            exit 1
+          fi
+
+      - name: Verify tag matches manifest versions
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          agent_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' server-agent/Cargo.toml | head -n1)"
+          expected="v${agent_version}"
+          if [ "${TAG_NAME}" != "${expected}" ]; then
+            echo "tag ${TAG_NAME} does not match Cargo.toml version ${agent_version} (expected ${expected})" >&2
+            exit 1
+          fi
+          root_version="$(jq -r .version package.json)"
+          app_version="$(jq -r .version app/package.json)"
+          if [ "${root_version}" != "${agent_version}" ] || [ "${app_version}" != "${agent_version}" ]; then
+            echo "manifest version mismatch: package.json=${root_version}, app/package.json=${app_version}, Cargo.toml=${agent_version}" >&2
+            exit 1
+          fi
+
+      - name: Verify Cargo.lock version matches Cargo.toml
+        run: |
+          manifest_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' server-agent/Cargo.toml | head -n1)"
+          lock_version="$(awk '/^name = "server-agent"$/{found=1; next} found && /^version = /{print; exit}' server-agent/Cargo.lock | sed 's/^version = "\(.*\)"$/\1/')"
+          if [ "${manifest_version}" != "${lock_version}" ]; then
+            echo "Cargo.lock pins server-agent ${lock_version}, but Cargo.toml says ${manifest_version}" >&2
+            exit 1
+          fi
+
+  docker:
+    needs: validate
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker.yml
+    with:
+      tag: ${{ github.event.release.tag_name }}
+      commit-sha: ${{ github.sha }}
+
+  server-agent:
+    needs: validate
+    permissions:
+      contents: write
+    uses: ./.github/workflows/server-agent-release.yml
+    with:
+      tag: ${{ github.event.release.tag_name }}
+      commit-sha: ${{ github.sha }}

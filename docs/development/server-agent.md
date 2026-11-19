@@ -246,12 +246,9 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 
 ## Releasing
 
-The server agent shares a single unified version and release line (`vX.Y.Z`) with the control plane, orchestrated by `.github/workflows/publish.yml` (which calls `docker.yml` for both container images and `server-agent-release.yml` for static binaries):
+The server agent shares the control plane's `vX.Y.Z` release line. Follow the [release workflow](workflow.md#ci-and-github-workflows) to prepare the draft and publish it on GitHub.
 
-1. Trigger `.github/workflows/publish.yml` (`workflow_dispatch`) with `version_type` (`major` | `minor` | `patch`), or manually bump `version` across `package.json`, `app/package.json`, `server-agent/Cargo.toml`, and `server-agent/Cargo.lock` and push tag `vX.Y.Z`.
-2. `server-agent-release.yml` checks that `vX.Y.Z` matches all four manifests, runs `cargo test --locked`, `cargo fmt --check` and `cargo clippy -D warnings`, then builds fully static musl binaries per architecture (amd64 on `ubuntu-latest`, arm64 on `ubuntu-24.04-arm`, both inside a `rust:alpine` container like `Dockerfile.test`'s build stage) and uploads `server-agent-linux-amd64`, `server-agent-linux-arm64`, and `SHA256SUMS` to the unified `vX.Y.Z` GitHub Release (creating the release if it does not already exist). Asset names carry no version so `releases/download/<tag>/...` URLs stay stable.
-
-`workflow_dispatch` on `server-agent-release.yml` runs only build and check; release assets are uploaded on `v*` tag pushes and `workflow_call` from `publish.yml`.
+Release CI verifies that the tag matches the package and Cargo versions. The Agent workflow then runs `cargo test --locked`, `cargo fmt --check`, and `cargo clippy -D warnings`. It builds static musl binaries in `rust:alpine` on native amd64 and arm64 runners and uploads `server-agent-linux-amd64`, `server-agent-linux-arm64`, and `SHA256SUMS` to the published release. Asset names stay stable across versions.
 
 The systemd installer does not resolve GitHub releases at runtime. After
 reviewing a published release's `SHA256SUMS`, add its exact version, both
