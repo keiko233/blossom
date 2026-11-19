@@ -107,6 +107,52 @@ function availability(row: AdminPtyServerState): string | null {
   return null;
 }
 
+async function loadAuthorizedServer(
+  request: Request,
+  serverId: string,
+  dependencies: AdminPtyRouteDependencies,
+): Promise<
+  | { ok: true; auth: AdminPtyAuthSession; row: AdminPtyServerState }
+  | { ok: false; response: Response }
+> {
+  const auth = await dependencies.authenticate(request);
+  if (!auth) {
+    return { ok: false, response: plain(403, "Forbidden") };
+  }
+  const row = await dependencies.loadServer(serverId);
+  if (!row) {
+    return { ok: false, response: plain(404, "Not found") };
+  }
+  return { ok: true, auth, row };
+}
+
+/**
+ * Same-origin readiness probe for the terminal panel. A failed WebSocket
+ * handshake exposes no HTTP status to the browser, so the panel asks here
+ * first to tell denied access apart from an unavailable agent.
+ */
+export async function handleAdminPtyStatus(
+  request: Request,
+  options: { serverId: string },
+  dependencies: AdminPtyRouteDependencies = defaultDependencies,
+): Promise<Response> {
+  const loaded = await loadAuthorizedServer(
+    request,
+    options.serverId,
+    dependencies,
+  );
+  if (!loaded.ok) {
+    return loaded.response;
+  }
+  const unavailable = availability(loaded.row);
+  return Response.json(
+    unavailable
+      ? { available: false, reason: unavailable }
+      : { available: true },
+    { headers: { "cache-control": "no-store" } },
+  );
+}
+
 /**
  * Authenticated browser-to-agent terminal upgrade. There is deliberately no
  * server function or MCP surface for starting a shell: only a human admin
@@ -124,15 +170,15 @@ export async function handleAdminPtyRequest(
     return plain(403, "Cross-origin WebSocket denied");
   }
 
-  const auth = await dependencies.authenticate(request);
-  if (!auth) {
-    return plain(403, "Forbidden");
+  const loaded = await loadAuthorizedServer(
+    request,
+    options.serverId,
+    dependencies,
+  );
+  if (!loaded.ok) {
+    return loaded.response;
   }
-
-  const row = await dependencies.loadServer(options.serverId);
-  if (!row) {
-    return plain(404, "Not found");
-  }
+  const { auth, row } = loaded;
   const unavailable = availability(row);
   if (unavailable) {
     return Response.json(
@@ -168,13 +214,26 @@ export async function handleAdminPtyRequest(
   };
 
   try {
+    const connectedAt = row.wsConnectedAt!.toISOString();
     const response = await dependencies.accept(request, {
       serverId: row.id,
-      connectedAt: row.wsConnectedAt!.toISOString(),
+      connectedAt,
       sessionId,
       cols: dimensions.cols,
       rows: dimensions.rows,
       session,
+      isAuthorized: async () => {
+        const current = await loadAuthorizedServer(
+          request,
+          row.id,
+          dependencies,
+        );
+        return (
+          current.ok &&
+          availability(current.row) === null &&
+          current.row.wsConnectedAt?.toISOString() === connectedAt
+        );
+      },
     });
     const failed = response.status !== 101 && response.status !== 426;
     await dependencies

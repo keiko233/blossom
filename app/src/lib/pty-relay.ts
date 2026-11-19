@@ -31,12 +31,23 @@ interface PtyMessage {
   text(): string;
 }
 
-const RELAY_IDLE_TIMEOUT_MS = 20 * 60 * 1000;
+/**
+ * Re-checks the admin session and agent connection while a shell is open.
+ * Revocation is enforced here and at the agent's own idle and hard limits.
+ */
+const PTY_REVALIDATE_INTERVAL_MS = 30 * 1000;
+/**
+ * Backstop for a silent socket only. The agent enforces the operator's idle
+ * limit (up to one hour) and closes the shell itself, so this must not be
+ * shorter than that limit.
+ */
+const PTY_RELAY_IDLE_BACKSTOP_MS = 60 * 60 * 1000;
 
 class PtyRelay {
   private readonly hub = getRealtimeHub();
   private unregister: (() => void) | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private revalidateTimer: ReturnType<typeof setInterval> | undefined;
   private finished = false;
 
   constructor(
@@ -74,6 +85,10 @@ class PtyRelay {
       return;
     }
     this.touch();
+    this.revalidateTimer = setInterval(() => {
+      void this.revalidate();
+    }, PTY_REVALIDATE_INTERVAL_MS);
+    (this.revalidateTimer as { unref?: () => void }).unref?.();
   }
 
   async handleMessage(message: PtyMessage): Promise<void> {
@@ -167,13 +182,29 @@ class PtyRelay {
     }
     this.timer = setTimeout(() => {
       void this.finish({
-        reason: "session_expired",
+        reason: "idle_timeout",
         closeCode: 1000,
         notifyAgent: true,
         sendExit: true,
       });
-    }, RELAY_IDLE_TIMEOUT_MS);
+    }, PTY_RELAY_IDLE_BACKSTOP_MS);
     (this.timer as { unref?: () => void }).unref?.();
+  }
+
+  /** Fails closed: an error while re-checking is treated as revocation. */
+  private async revalidate(): Promise<void> {
+    if (this.finished) {
+      return;
+    }
+    const authorized = await this.context.isAuthorized().catch(() => false);
+    if (!authorized) {
+      await this.finish({
+        reason: "authorization_revoked",
+        closeCode: 1008,
+        notifyAgent: true,
+        sendExit: true,
+      });
+    }
   }
 
   private send(frame: string): void {
@@ -200,6 +231,10 @@ class PtyRelay {
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = undefined;
+    }
+    if (this.revalidateTimer) {
+      clearInterval(this.revalidateTimer);
+      this.revalidateTimer = undefined;
     }
     this.unregister?.();
     this.unregister = undefined;
