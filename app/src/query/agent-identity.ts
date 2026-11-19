@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { setResponseHeaders } from "@tanstack/react-start/server";
 import { z } from "zod";
 
 import { db } from "@/db";
@@ -9,7 +10,18 @@ import {
   revokeAgentIdentityInputSchema,
   revokeEnrollmentGrantInputSchema,
 } from "@/lib/agent-enrollment";
+import {
+  parseApprovedAgentReleases,
+  selectApprovedAgentRelease,
+} from "@/lib/agent-installer-release";
+import { APPROVED_AGENT_RELEASES } from "@/lib/agent-installer-releases";
+import {
+  assertInstallerIdentifier,
+  assertInstallerOrigin,
+  renderAgentInstallerScript,
+} from "@/lib/agent-installer-script";
 import { ensureAdmin } from "@/lib/ensure-admin";
+import { getServerEnv } from "@/lib/env";
 
 import {
   createEnrollmentGrant,
@@ -34,8 +46,9 @@ export const getAgentIdentityState = createServerFn({ method: "GET" })
   });
 
 /**
- * Issues a one-time enrollment grant. The plaintext `secret` is in this response
- * only; the audit row stores the input and the grant id, never the result.
+ * Issues a one-time enrollment grant. The plaintext grant is returned once:
+ * either as `secret` for protected-stdin delivery or embedded in the inline
+ * script. The audit row stores the input and the grant id, never the result.
  */
 export const createAgentEnrollmentGrant = createServerFn({ method: "POST" })
   .middleware([
@@ -47,15 +60,60 @@ export const createAgentEnrollmentGrant = createServerFn({ method: "POST" })
   .validator(createEnrollmentGrantInputSchema)
   .handler(async ({ data }) => {
     const session = await ensureAdmin();
+    const publicOrigin = assertInstallerOrigin(
+      getServerEnv().BETTER_AUTH_URL.replace(/\/$/, ""),
+    );
+    assertInstallerIdentifier("serverId", data.serverId);
+    const approvedReleases = parseApprovedAgentReleases(
+      APPROVED_AGENT_RELEASES,
+    );
+    const release = selectApprovedAgentRelease(approvedReleases, data.release);
     const { grant, secret } = await createEnrollmentGrant(db, {
       serverId: data.serverId,
       mode: data.mode,
       capabilities: data.capabilities,
-      release: data.release,
+      release: release.version,
       createdById: session.user.id,
       now: new Date(),
     });
-    return { grant, secret };
+
+    setResponseHeaders(
+      new Headers({
+        "cache-control": "private, no-store",
+        pragma: "no-cache",
+      }),
+    );
+
+    const downloadPath = `/api/admin/servers/${encodeURIComponent(grant.serverId)}/installation/script/${encodeURIComponent(grant.id)}`;
+    if (data.delivery === "inline") {
+      let content: string;
+      try {
+        content = renderAgentInstallerScript({
+          publicOrigin,
+          serverId: grant.serverId,
+          grantId: grant.id,
+          mode: grant.mode,
+          capabilities: grant.capabilities,
+          release,
+          enrollmentGrant: secret,
+        });
+      } catch (error) {
+        await revokeEnrollmentGrant(db, {
+          grantId: grant.id,
+          now: new Date(),
+        }).catch(() => undefined);
+        throw error;
+      }
+      return {
+        grant,
+        downloadPath,
+        script: {
+          filename: "blossom-agent-install.sh",
+          content,
+        },
+      };
+    }
+    return { grant, downloadPath, secret };
   });
 
 export const revokeAgentEnrollmentGrant = createServerFn({ method: "POST" })

@@ -165,3 +165,13 @@ Static binaries are published by `.github/workflows/server-agent-release.yml`, w
 3. The workflow runs `cargo test --locked`, `cargo fmt --check` and `cargo clippy -D warnings`, then builds fully static musl binaries per architecture (amd64 on `ubuntu-latest`, arm64 on `ubuntu-24.04-arm`, both inside a `rust:alpine` container like `Dockerfile.test`'s build stage) and publishes a GitHub Release with `server-agent-linux-amd64`, `server-agent-linux-arm64` and a `SHA256SUMS` covering them. Asset names carry no version so `releases/download/<tag>/...` URLs stay stable (`releases/latest/download/...` does not point at these releases); releases are published with `make_latest: false`, and consumers must resolve releases via the `server-agent-v` tag prefix (GitHub API `GET /repos/{owner}/{repo}/releases` filtered by `tag_name`), since this repo also publishes app image `v*` tags that share the `latest` feed.
 
 `workflow_dispatch` runs only build and check; a release is created only from a `server-agent-v*` tag.
+
+The systemd installer does not resolve GitHub releases at runtime. After
+reviewing a published release's `SHA256SUMS`, add its exact version, both
+architecture asset URLs and SHA-256 digests to
+`app/src/lib/agent-installer-releases.ts`. The entry must declare
+`installerContract: 1` and the `oauth-enrollment-cli-v1`,
+`credentials-file-v1` and `oauth-ws-v1` capabilities; the installer gate
+refuses an unapproved or incompatible release. Host-facing setup and the exact
+Rust `enroll`/`--credentials-file` contract are in
+[Installing and running the server agent](../operations/server-agent.md#systemd-installation-oauth-enrollment).

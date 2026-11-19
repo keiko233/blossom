@@ -100,7 +100,10 @@ call reads the database, so a revoked identity fails even for a still-unexpired 
    a designed ordering with recovery (demote the old identity to `superseded` only after
    the new one proves the handshake, and make the promotion idempotent). Not implemented.
 3. **Installer and UI** consume the admin functions above. The installer must treat the
-   `egr_` secret as a one-time value (no argv, no URL, no log).
+   `egr_` secret as a one-time value (no argv, no URL, no log). The Phase 2B
+   installer PR adds the fixed download route, the approved-release gate and the
+   exact Rust enrollment CLI/credential-file contract in
+   [Operations: systemd installation](../../operations/server-agent.md#systemd-installation-oauth-enrollment).
 4. **Rust credential provider** consumes the redeem response. The redeem route is not in
    `server-agent/openapi/spec.json`, so the Rust side hand-writes its client or the
    contract is added to the OpenAPI surface in that PR (regenerate per
