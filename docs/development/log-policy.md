@@ -2,7 +2,7 @@
 
 Statements are **Established** unless marked **Recommended**.
 
-This is the backend half of [log-level controls](../spec/2026-11-19-agent-ws-oauth-server-workspace/server-workspace.md#log-level-controls). It does not add the browser Logs tab, tail/search, Shiki highlighting or UI copy; those belong to their own changes. The admin surface below is the interface that UI can call.
+This is the backend and admin surface of [log-level controls](../spec/2026-11-19-agent-ws-oauth-server-workspace/server-workspace.md#log-level-controls). The Logs tab consumes the audited read/update/reset functions below for per-source level controls; tail/search, Shiki highlighting and their UI copy belong to their own changes.
 
 ## Contract and capability
 
@@ -114,12 +114,13 @@ Audit actions are `server.log_policy_read`, `server.log_policy_write` and `serve
 - Admin role, conflict and reset behavior: `app/src/query/server-log-policy.test.ts` and the structural `app/src/lib/admin-audit.test.ts`.
 - Session reconciliation and stale snapshots: `server-agent/src/ws/v2/session/tests.rs`, `app/src/lib/agent-ws-v2-session.test.ts`, `app/src/lib/realtime-hub-v2.test.ts`. The Nitro and Cloudflare hub paths are covered by `realtime-hub-v2.test.ts` and `realtime-hub-cloudflare-log-policy.test.ts`; both hubs share the same store adapter, so the fenced ACK behavior is the same.
 - Real agent over v2 with no HTTP agent API: `server-agent/tests/ws_v2_lifecycle.rs`, including a notification, snapshot acknowledgement and status-ack recovery.
-- Not verified in this change: the browser Logs tab, live tail/search, Shiki, hosted Cloudflare hibernation and a hosted deployment.
+- Logs tab controls: `app/src/lib/log-policy-view.test.ts` covers the per-source status cues, Restore now/installed-default distinction and bounded duration conversion; typecheck and the app build cover the panel and hook wiring.
+- Not verified in this change: a browser focus/keyboard run or a live mutation against a seeded agent, live tail/search rendering, Shiki, hosted Cloudflare hibernation and a hosted deployment.
 
 ## Sibling integration
 
-- The Logs tab change consumes `getServerLogPolicy`, `updateServerLogPolicy` and `resetServerLogPolicy`; it should render `desiredBaseline`, `desiredLevel`, `targetLevel`, `effectiveLevel`, `desiredDeadline`, `expired`, `pending` and `effectiveError`, and treat `conflict` as a reload-and-retry state.
-- The level controls expose two distinct affordances: Restore now (`resetServerLogPolicy` with `mode: "restore-baseline"`) and Restore installed default (`mode: "restore-default"`). Do not label the second one as clearing an override.
+- The Logs tab consumes `getServerLogPolicy`, `updateServerLogPolicy` and `resetServerLogPolicy`; it renders `desiredBaseline`, `desiredLevel`, `targetLevel`, `effectiveLevel`, `desiredDeadline`, `expired`, `pending` and `effectiveError`, and treats `conflict` as a reload-and-retry state.
+- The level controls expose two distinct affordances: Restore now (`resetServerLogPolicy` with `mode: "restore-baseline"`) and Restore installed default (`mode: "restore-default"`). The second is not labeled as clearing an override, and the panel explains the difference.
 - The tail/search PR owns `logs.*`; do not reuse log policy frames for log data.
 - The Shiki PR owns browser rendering; policy status contains no log text.
 - Any UI that offers level controls must gate them on the agent's `log-policy-v1` capability. The server functions still reject unauthorized callers, but an older agent will simply leave the edit pending.
