@@ -461,6 +461,101 @@ describe("admin log Durable Object relay", () => {
     expect(browser.sent).toHaveLength(before);
   });
 
+  it("keeps a second search while the first result audit is still writing", async () => {
+    const ctx = fakeCtx([agentSocket()]);
+    let releaseAudit: () => void = () => undefined;
+    const auditGate = new Promise<void>((resolve) => {
+      releaseAudit = resolve;
+    });
+    let markAuditStarted: () => void = () => undefined;
+    const auditStarted = new Promise<void>((resolve) => {
+      markAuditStarted = resolve;
+    });
+    const deps = dependencies({
+      recordAudit: vi.fn(async () => {
+        markAuditStarted();
+        await auditGate;
+      }),
+    });
+    const { browser } = await connect(ctx, deps);
+    const ws = browser as unknown as WebSocket;
+    const agent = ctx.sockets[0]!;
+
+    await handleLogsBrowserMessage(
+      ctx,
+      ws,
+      readLogSocketAttachment(ws)!,
+      browserFrame("logs.search", {
+        requestId: "req-1",
+        query: { text: "first" },
+        cursor: null,
+        limit: 20,
+      }),
+      deps,
+    );
+    const first = agentSent(agent);
+    const firstAgentId = first.payload.requestId as string;
+
+    const firstResult = handleAgentLogFrame(
+      ctx,
+      SERVER,
+      AGENT_SESSION,
+      agentFrame("logs.search.result", {
+        requestId: firstAgentId,
+        generation: "1",
+        pinnedSeq: 2,
+        matches: [record(1)],
+        next: null,
+        coverage: { gap: null, searchableFrom: null, searchableTo: null },
+      }),
+      deps,
+    );
+    await auditStarted;
+
+    const secondSearch = handleLogsBrowserMessage(
+      ctx,
+      ws,
+      readLogSocketAttachment(ws)!,
+      browserFrame("logs.search", {
+        requestId: "req-2",
+        query: { text: "second" },
+        cursor: null,
+        limit: 20,
+      }),
+      deps,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    releaseAudit();
+    await Promise.all([firstResult, secondSearch]);
+
+    const searches = agent.sent.flatMap((text) => {
+      const parsed = parseAgentWsV2Frame(text, "control-plane");
+      return parsed.ok && parsed.message.kind === "logs.search"
+        ? [parsed.message.payload.requestId]
+        : [];
+    });
+    expect(searches).toHaveLength(2);
+    const secondAgentId = searches[1]!;
+    await handleAgentLogFrame(
+      ctx,
+      SERVER,
+      AGENT_SESSION,
+      agentFrame("logs.search.result", {
+        requestId: secondAgentId,
+        generation: "1",
+        pinnedSeq: 2,
+        matches: [record(2)],
+        next: null,
+        coverage: { gap: null, searchableFrom: null, searchableTo: null },
+      }),
+      deps,
+    );
+    expect(browserSent(browser)).toMatchObject({
+      type: "logs.search.result",
+      payload: { requestId: "req-2" },
+    });
+  });
+
   it("closes on a failed alarm authority check and tells the agent to stop", async () => {
     const ctx = fakeCtx([agentSocket()]);
     let now = T0;
