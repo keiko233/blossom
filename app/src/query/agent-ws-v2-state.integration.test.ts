@@ -52,13 +52,17 @@ vi.mock("@/db", () => ({
   },
 }));
 
+import type { AgentWsV2StatusPayload } from "@blossom/contracts/agent-ws-v2";
+
 import {
   cacheAgentDesiredRevision,
   invalidateDesiredConfigRevisions,
-  loadAgentServer,
+  loadCurrentAgentServer,
   recordAgentV2ConfigAck,
   recordAgentV2Hello,
   recordAgentV2Status,
+  rotateAgentCredential,
+  startAgentV2WsSession,
   startAgentWsSession,
 } from "./agent";
 
@@ -72,6 +76,22 @@ afterAll(async () => {
 });
 
 const REV = (seq: number, digit: string) => `${seq}:sha256:${digit.repeat(64)}`;
+const FUTURE = new Date("2099-01-01T00:00:00.000Z");
+const cache = (
+  desiredRevisionSeq: number,
+  desiredInputsVersion: number,
+  desiredRevision: string,
+) => ({
+  desiredRevisionSeq,
+  desiredInputsVersion,
+  desiredRevision,
+  validUntil: FUTURE,
+});
+const STATUS: AgentWsV2StatusPayload = {
+  reason: "interval",
+  runtimeState: "running",
+  certificateDeployments: [],
+};
 
 async function useDriver(driver: Driver) {
   if (driver === "node-postgres") {
@@ -92,7 +112,8 @@ async function useDriver(driver: Driver) {
 async function row(serverId: string) {
   const { rows } = await admin.query(
     `select applied_revision, applied_revision_seq, config_state, desired_revision_seq,
-            desired_config_revision, runtime_state, last_error_code, last_error_message,
+            desired_config_revision, desired_inputs_version, desired_config_valid_until,
+            runtime_state, last_error_code, last_error_message,
             ws_session_id, transport_mode
        from server where id = $1`,
     [serverId],
@@ -262,8 +283,7 @@ describe.skipIf(!pgUrl).each(drivers)(
       await cacheAgentDesiredRevision(
         "srv1",
         old.sessionId,
-        8,
-        REV(8, "b"),
+        cache(8, 0, REV(8, "b")),
         database,
       );
 
@@ -310,8 +330,7 @@ describe.skipIf(!pgUrl).each(drivers)(
       await cacheAgentDesiredRevision(
         "srv1",
         session.sessionId,
-        8,
-        REV(8, "b"),
+        cache(8, 0, REV(8, "b")),
         database,
       );
 
@@ -354,8 +373,7 @@ describe.skipIf(!pgUrl).each(drivers)(
       await cacheAgentDesiredRevision(
         "srv1",
         session.sessionId,
-        7,
-        REV(7, "d"),
+        cache(7, 0, REV(7, "d")),
         database,
       );
       expect((await row("srv1")).desired_config_revision).toBeNull();
@@ -363,23 +381,166 @@ describe.skipIf(!pgUrl).each(drivers)(
       await cacheAgentDesiredRevision(
         "srv1",
         session.sessionId,
-        8,
-        REV(8, "b"),
+        cache(8, 0, REV(8, "b")),
         database,
       );
       expect((await row("srv1")).desired_config_revision).toBe(REV(8, "b"));
+      expect(
+        (
+          await loadCurrentAgentServer("srv1", session.sessionId, database)
+        )?.desiredConfigValidUntil?.getTime(),
+      ).toBe(FUTURE.getTime());
+    });
+
+    it("invalidation clears the identifier and its deadline, and bumps the inputs version", async () => {
+      const session = await startAgentWsSession("srv1", database);
+      await cacheAgentDesiredRevision(
+        "srv1",
+        session.sessionId,
+        cache(8, 0, REV(8, "b")),
+        database,
+      );
 
       await invalidateDesiredConfigRevisions(["srv1"], database);
+      expect(await row("srv1")).toMatchObject({
+        desired_config_revision: null,
+        desired_inputs_version: 1,
+      });
+      expect((await row("srv1")).desired_config_valid_until).toBeNull();
+    });
+
+    it("refuses a cache write compiled before an invalidation that raced it", async () => {
+      // The compile read the row at version 0. Another instance's invalidation
+      // (a certificate change, say) then lands before the compile is cached.
+      const session = await startAgentWsSession("srv1", database);
+      const read = await loadCurrentAgentServer(
+        "srv1",
+        session.sessionId,
+        database,
+      );
+      expect(read?.desiredInputsVersion).toBe(0);
+      await invalidateDesiredConfigRevisions(["srv1"], database);
+
+      await cacheAgentDesiredRevision(
+        "srv1",
+        session.sessionId,
+        cache(8, 0, REV(8, "e")),
+        database,
+      );
+      expect(await row("srv1")).toMatchObject({
+        desired_config_revision: null,
+        desired_inputs_version: 1,
+      });
+
+      // A compile that read the new version is cached normally.
+      await cacheAgentDesiredRevision(
+        "srv1",
+        session.sessionId,
+        cache(8, 1, REV(8, "e")),
+        database,
+      );
+      expect((await row("srv1")).desired_config_revision).toBe(REV(8, "e"));
+    });
+
+    it("refuses a cache write from a replaced session", async () => {
+      const old = await startAgentWsSession("srv1", database);
+      await startAgentWsSession("srv1", database);
+      await cacheAgentDesiredRevision(
+        "srv1",
+        old.sessionId,
+        cache(8, 0, REV(8, "b")),
+        database,
+      );
       expect((await row("srv1")).desired_config_revision).toBeNull();
     });
 
-    it("loads the server row a session compiles from", async () => {
-      expect(await loadAgentServer("srv1", database)).toMatchObject({
+    it("loads the server row only for the session that is current", async () => {
+      const old = await startAgentWsSession("srv1", database);
+      const current = await startAgentWsSession("srv1", database);
+
+      expect(
+        await loadCurrentAgentServer("srv1", old.sessionId, database),
+      ).toBeNull();
+      expect(
+        await loadCurrentAgentServer("srv1", current.sessionId, database),
+      ).toMatchObject({
         id: "srv1",
         desiredRevisionSeq: 8,
         appliedRevisionSeq: 6,
       });
-      expect(await loadAgentServer("missing", database)).toBeNull();
+      expect(
+        await loadCurrentAgentServer("missing", current.sessionId, database),
+      ).toBeNull();
+    });
+
+    it("a credential rotation ends the current session in the same statement", async () => {
+      const session = await startAgentV2WsSession(
+        "srv1",
+        { kind: "static", tokenHash: "srv1-hash" },
+        database,
+      );
+      expect(session).not.toBeNull();
+
+      expect(
+        await rotateAgentCredential(
+          "srv1",
+          { hash: "srv1-rotated-hash", prefix: "srv1-new" },
+          database,
+        ),
+      ).toEqual({ id: "srv1" });
+      expect(await row("srv1")).toMatchObject({ ws_session_id: null });
+
+      // Every fenced read and write of the old session now matches nothing.
+      const sessionId = session!.sessionId;
+      expect(
+        await loadCurrentAgentServer("srv1", sessionId, database),
+      ).toBeNull();
+      expect(
+        await recordAgentV2Status("srv1", sessionId, STATUS, database),
+      ).toBeNull();
+      expect(
+        await recordAgentV2ConfigAck(
+          "srv1",
+          sessionId,
+          {
+            desired: { desiredRevisionSeq: 8, desiredRevision: REV(8, "b") },
+            outcome: "applied",
+          },
+          database,
+        ),
+      ).toBe("replaced");
+      await cacheAgentDesiredRevision(
+        "srv1",
+        sessionId,
+        cache(8, 0, REV(8, "b")),
+        database,
+      );
+      expect((await row("srv1")).desired_config_revision).toBeNull();
+      expect((await row("srv1")).applied_revision_seq).toBe(6);
+    });
+
+    it("refuses a session under a credential that rotated after the upgrade authenticated", async () => {
+      await rotateAgentCredential(
+        "srv1",
+        { hash: "srv1-rotated-hash", prefix: "srv1-new" },
+        database,
+      );
+
+      expect(
+        await startAgentV2WsSession(
+          "srv1",
+          { kind: "static", tokenHash: "srv1-hash" },
+          database,
+        ),
+      ).toBeNull();
+      expect((await row("srv1")).ws_session_id).toBeNull();
+      expect(
+        await startAgentV2WsSession(
+          "srv1",
+          { kind: "static", tokenHash: "srv1-rotated-hash" },
+          database,
+        ),
+      ).not.toBeNull();
     });
   },
 );

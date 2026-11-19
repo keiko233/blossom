@@ -1,0 +1,73 @@
+{
+  "type": "diff",
+  "version": "9",
+  "dialect": "postgres",
+  "id": "4b7f46ef-38b1-4eb7-b709-5a9dd960caeb",
+  "prevIds": ["d4ad4b89-ee74-43f3-869f-773eb441f7d8"],
+  "footprints": [
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "server",
+        "desired_inputs_version"
+      ],
+      "writes": [
+        "s|col|public.server.desired_inputs_version",
+        "n|col|public.server.desired_inputs_version",
+        "e|col|public.server.desired_inputs_version"
+      ],
+      "reads": ["n|tbl|public.server", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "server",
+        "desired_config_valid_until"
+      ],
+      "writes": [
+        "s|col|public.server.desired_config_valid_until",
+        "n|col|public.server.desired_config_valid_until",
+        "e|col|public.server.desired_config_valid_until"
+      ],
+      "reads": ["n|tbl|public.server", "n|sch|public"]
+    }
+  ],
+  "deltas": [
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server",
+        "name": "desired_inputs_version",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "0",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server",
+        "name": "desired_config_valid_until",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    }
+  ]
+}

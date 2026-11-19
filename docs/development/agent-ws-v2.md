@@ -9,6 +9,11 @@ Statements are **Established** when the control plane implements them. The Rust 
 - A client that offers only unknown subprotocols receives `400 Unsupported agent WebSocket subprotocol` before the upgrade.
 - The control plane echoes `blossom-agent.v2` on the upgrade response. A client that required the subprotocol and did not receive it must not proceed.
 - Authentication failures stay `401`, and a non-upgrade request stays `426`.
+- **Established.** A per-server Better Auth machine token (`client_credentials`,
+  audience `<origin>/api/agent`, scope exactly `blossom:agent:connect`) is
+  accepted in place of the static token. OAuth is v2-only: an OAuth credential
+  offered without the subprotocol is refused with `400` before the upgrade.
+  Static tokens continue to work on both v1 and v2, and v1 is unchanged.
 
 ## Envelope
 
@@ -23,7 +28,7 @@ Every v2 text frame is `{"v":2,"id"?:string,"type":string,"ts":RFC3339,"payload"
 
 1. The agent upgrades with the v2 subprotocol.
 2. The agent sends `hello` **first**. Any other frame before `welcome` is rejected with `invalid_payload`. `hello` carries the applied configuration identifier, or `null` when the cache is empty.
-3. The control plane starts a session. It writes a new `ws_session_id` and marks the transport `ws` in one statement, so an older session can no longer write. It replies with `welcome`, which carries `sessionId`, the desired configuration identifier, the update policy, the status interval, the optional `reconnectBeforeSeconds` (set on Vercel), and the limits.
+3. The control plane starts a session. A static or active OAuth credential writes the new `ws_session_id`, marks the transport `ws`, and records the credential kind (plus the active identity generation and token expiry for OAuth) in one statement, so an older session can no longer write. A pending OAuth identity gets a proof-only lane naming its exact session, identity, generation, and token deadline; it owns no fence until its `hello`. The proof and the switch are one statement: the old active generation is superseded, the pending generation becomes active, and the server fence moves to this socket, or none of that changes. A wrong session, an expired pending token, a revoked client, or a newer generation leaves the old credential, identity, and session intact. The session start also requires the credential that authenticated the upgrade to still be current; if it rotated since, the session does not start (see [Known limits](#known-limits-of-the-control-plane)). It replies with `welcome`, which carries `sessionId`, the desired configuration identifier, the update policy, the status interval, the optional `reconnectBeforeSeconds` (set on Vercel), and the limits.
 4. The agent compares its applied identifier with `welcome.desired`. A mismatch or an empty cache sends `config.get`.
 5. Pushes (`config.notify`) reach a session only after `welcome`.
 6. On close, the control plane ends the session by its fence. A replaced session cannot clear its successor's marker.
@@ -59,7 +64,7 @@ Discard a partial snapshot on disconnect and request a new one after reconnect. 
 ## Status
 
 - `agent.status` `{reason, runtimeState?, configState?, singBoxVersion?, activeNodeIds?, error?, certificateDeployments, updates?}` reports only the fields present. `error: null` clears the last error.
-- `agent.status.ack` `{desired, updatePolicy}` carries the authoritative identifier. If it differs from the applied identifier, send `config.get`. This is how a lost `config.notify` is recovered.
+- `agent.status.ack` `{desired, updatePolicy}` carries the control plane's identifier. If it differs from the applied identifier, send `config.get`. This is how a lost `config.notify` is recovered. The identifier is authoritative within the bounds in [Known limits](#known-limits-of-the-control-plane): a change that no path signalled is reflected at the first status exchange after the cached identifier's deadline.
 
 ## Traffic
 
@@ -68,7 +73,7 @@ Discard a partial snapshot on disconnect and request a new one after reconnect. 
   - `applied`: recorded now.
   - `duplicate`: recorded earlier. The counts are the original ones. Treat it as success.
   - `conflict`: the same `reportId` was already used with different content. The report was not applied. Surface the error and drop the batch.
-- No `traffic.ack` means the session was replaced. The write did not happen. Resend the **same** `reportId` and payload on the new session, and the ledger will deduplicate it.
+- **Absence of `traffic.ack` proves nothing.** A report that was replaced before its write does not commit. But a write can commit and its acknowledgement can be lost, on a dropped socket or a replaced session, so the agent cannot tell from a missing ack whether the rows exist. Keep the report on disk and resend the **same** `reportId` and payload on the next session until a `traffic.ack` arrives. The ledger deduplicates the replay and answers `duplicate` with the original counts.
 - Keep the report queue on disk until its `traffic.ack` arrives. Traffic collection must not wait on the socket.
 
 ## Not in v2 yet
@@ -92,15 +97,49 @@ The control plane advertises these values in `welcome.limits`. The agent must en
 
 ## Known limits of the control plane
 
-- **Cached identifier.** The status acknowledgment returns `server.desiredConfigRevision`, which the control plane recompiles when it has been cleared. It is cleared by change notifications and routing-rule edits, so those reach v2 agents through the status exchange even if the push is lost. A change that alters the compiled configuration without either path (for example, a new global setting) is picked up at the next compile, which happens on reconnect or `config.get`. Sequence changes never depend on this cache.
-- **Token rotation.** Rotating a server's static agent token does not close an existing v2 session. It takes effect on the next reconnect. Disablement does close a session, at the next status exchange.
-- **Vercel.** The control plane advertises `reconnectBeforeSeconds`. Remote delivery across instances uses Redis when configured, which is best effort. Reconciliation on the next status exchange recovers any lost push.
+### Configuration identifier
+
+The identifier is compiled from every input of the v3 document. The control plane reuses a cached identifier only while three things hold: its sequence still equals `desiredRevisionSeq`, no invalidation has reset it, and its deadline has not passed. Otherwise it recompiles from the current state and caches the result, together with the inputs version and the sequence it was compiled from. A cache write is refused if either has moved since the compile read them, so a compile that raced a change, possibly on another instance, cannot store a stale identifier.
+
+The inputs, and how each one reaches the identifier:
+
+| Input | Changed by | How the identifier learns of it |
+| --- | --- | --- |
+| Server enabled state, node set and node settings, node credentials, subscription plan, status and expiry, group membership, user ban | Publish-gate mutations (`recordConfigChange`) | The sequence moves, so the cache no longer matches. Change notifications also invalidate. |
+| Routing rules | `app/src/query/rules.ts` | Each edit invalidates every server. |
+| Certificate material, active version, bindings | Import, replace, activate and discard (`withCertificateTransaction` in `app/src/query/certificates.ts`), and each issued install (`persistMaterial` in `app/src/lib/certificate-issuance.ts`) | Invalidated after the change commits, never before, so a concurrent compile cannot cache the old state under the new version. |
+| Subscription expiry | The clock | The deadline is the earliest expiry among the compiled subscriptions. |
+| Temporary user-ban expiry | The clock | Bounded by the maximum cache age (below). The ban expiry is not part of the deadline. |
+| Traffic quota exhaustion | Traffic reports | Bounded by the maximum cache age. A report does not invalidate. |
+| Certificate creation, renewal, deletion and DNS challenge steps | `app/src/query/certificates.ts` | No direct invalidation. They change no compiled input until an install, which invalidates. |
+| Desired agent and sing-box versions, poll and heartbeat intervals, server name and address | Admin edits | Not in the identifier. Versions reach the agent through `updatePolicy`. Intervals in the document body and in `welcome` take effect at the next handshake. |
+
+Two bounds apply to anything the table does not cover, and to changes whose notification was lost. **The maximum cache age is 120 seconds** (`AGENT_DESIRED_CONFIG_MAX_AGE_MS` in `app/src/orpc/proxy/agent-desired-state.ts`), so an unsignalled change is reflected at the first status exchange after that. The deadline also caps at the earliest subscription expiry. Notifications make the update faster and are not needed for correctness. A status exchange within the deadline costs a read and no compile.
+
+### Token rotation and disablement
+
+- **Optional static backup.** New servers have no static token unless creation explicitly enables it. `enableServerBackupToken` creates one once; `disableServerBackupToken` clears the hash and `resetServerBackupToken` replaces it. Disable and reset end a current static session in the same statement (`disableAgentBackupCredential` / `rotateAgentCredential` in `app/src/query/agent.ts`). An active OAuth fence is not displaced. `regenerateServerToken` remains as the reset alias for older callers.
+- **Rotation.** Replacing a server's static backup token replaces the hash and clears only a current static session in one statement. The rotated session's fenced writes then match nothing, its `config.get` reads nothing and sends no snapshot, and it stops with `session_replaced` (close 4000) at its next frame. Its reconnect is refused with `401`, because the old token no longer matches.
+- **Rotation during a handshake.** A token that changes between authentication and the session start is refused. Cloudflare returns `401` before the upgrade. On Node the upgrade is accepted and then closed with `1008` (`credential changed`), before any frame is handled.
+- **Bound.** The control plane sends no proactive close on rotation. The old socket stops at the agent's next frame, which is at most one status interval (`statusIntervalSeconds`, 30 seconds by default). Until then it can still receive `config.notify` pushes, which carry identifiers and a reason label, but no configuration.
+- **Disablement.** Disabling a server does not clear the fence. The session stops with `server_disabled` (close 4000) at its next status or `config.get`. Pushes reach it until then, and carry the same identifiers and reason label.
+- **v1.** Static token rotation and disablement of v1 WebSocket sessions are unchanged apart from the token being optional. v1 writes are not fenced, and a v1 agent's HTTP config poll is refused once the token has rotated.
+- **OAuth.** The fence also names the active identity generation and machine-token expiry. Revocation disables the client, removes its resource link, revokes its tokens, and clears the session fence; supersession by a replacement does the same by making the old generation non-active. Every fenced read and write therefore fails even for an unexpired token, and a revoked or expired identity cannot open a new session. Node re-checks the authoritative state every 30 seconds; the Cloudflare Durable Object schedules an alarm at 30 seconds or the token deadline, whichever is earlier. Idle sessions close at the next check. `session_replaced` (close `4000`) asks the agent to reconnect with a fresh token; a `401` on reconnect asks it to reauthorize.
+
+### Vercel
+
+The control plane advertises `reconnectBeforeSeconds`. Remote delivery across instances uses Redis when configured, which is best effort. Reconciliation on the next status exchange recovers any lost push.
 
 ## Verification status
 
-- Contract schemas, direction and size checks, and both sides of the wire fixtures: unit-tested.
-- Session state machine, snapshot chunking, and hub delivery: unit-tested with fakes.
-- Session and traffic fencing, configuration acknowledgement, and status writes: exercised against a disposable PostgreSQL through node-postgres and neon-http (the latter through a loopback `/sql` shim).
-- The built Node server: a real v2 session (hello, welcome, snapshot with digest, applied ack, status, traffic and its replay, direction error, fenced disconnect) and the v1 handshake on the same route.
-- Cloudflare Durable Object: built, not run under workerd in this change. The state machine is the same, but hibernation rehydration, the `Sec-WebSocket-Protocol` response header, and the 4000-series close are unverified on Cloudflare and must be checked before deployment.
-- Vercel: built only.
+Each target is listed separately. "Not run" means the change has no evidence on that target.
+
+- **Automated, no database.** Contract schemas, direction and size checks, and both sides of the wire fixtures (`packages/contracts`). Session state machine, snapshot chunking, deadline expiry, fenced snapshots, disabled servers and hub routing, including the token-bound start (`app/src/lib/agent-ws-v2-*.test.ts`, `app/src/lib/realtime-hub-v2.test.ts`).
+- **Disposable PostgreSQL, node-postgres and neon-http.** Fenced acknowledgements, status and traffic, the version fence on cached identifiers, token rotation and the token-bound start (`app/src/query/agent-ws-v2-state.integration.test.ts`). Convergence through the real store adapter and compiler: a routing-rule change with no notification is recovered by the status exchange after the deadline, an invalidated change is reported on the next status, and a rotated credential, a disabled server and a snapshot each stop or serve as specified (`app/src/query/agent-ws-v2-convergence.integration.test.ts`). The neon-http runs use a local `/sql` proxy in front of the same database, not Neon's hosted service.
+- **Disposable PostgreSQL, OAuth.** `agent-ws-v2-oauth.integration.test.ts` uses real provider tokens for the pending proof, first promotion, generation replacement, interrupted-rotation recovery, replay refusal, revocation, expiry, certificate-deployment fencing, and server deletion cleanup. Ran on node-postgres and on neon-http through a local `/sql` proxy in front of the same database.
+- **Node server, built and run locally.** Against the built Node target, with PostgreSQL through node-postgres: the subprotocol echo, `hello` and `welcome`, a status acknowledgement, a snapshot whose length and digest verify, a credential rotation during a live session (a `config.get` then sends no snapshot, the session stops with `session_replaced` and close 4000), the old token refused with `401`, and the new token welcomed. Checked on 2026-11-19 with a scratch client that is not committed; the built-server handshake recorded in `adc180c` and the v1 route are not re-run here.
+- **Cloudflare, local workerd.** `wrangler dev --local` (Wrangler 4.164) running a copy of the Cloudflare build, with a local Hyperdrive connection string to the same disposable PostgreSQL. Checked on 2026-11-19 with the same scratch client: the same sequence as the Node run, which covers the Durable Object's upgrade, its message path and its fenced close. A session welcomed, then left idle for 70 seconds, still accepted a status, and disabling the server stopped the next status with `server_disabled` and close 4000. Workerd does not report hibernation, so the idle run shows that the welcomed flag survived the idle period, not that the object hibernated. The `401` on the Cloudflare upgrade for a credential that rotates after authentication is covered only by the unit and database tests, not by a race on workerd.
+- **Cloudflare, hibernation.** Not verified. Hibernation was not observed, and timer behaviour and the `4000`-series close after a real wake were not run in any environment. Check them against a deployment before relying on them.
+- **Cloudflare, hosted.** Not verified. Nothing was deployed, and hosted Hyperdrive and the `Sec-WebSocket-Protocol` response through the platform were not exercised.
+- **Vercel.** Built only. Connection lifetime, `reconnectBeforeSeconds` and cross-instance Redis delivery are not verified.
+- **Rust agent.** The client is not migrated, so no agent behaviour is verified. The wire fixtures are the agreed contract.

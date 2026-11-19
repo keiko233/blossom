@@ -296,6 +296,44 @@ export async function revokeAgentIdentity(
 ): Promise<
   { found: false } | { found: true; serverId: string; changed: boolean }
 > {
+  const [target] = await db
+    .select({
+      identityId: agentIdentity.id,
+      serverId: agentIdentity.serverId,
+      oauthClientId: agentIdentity.oauthClientId,
+    })
+    .from(agentIdentity)
+    .where(eq(agentIdentity.id, input.identityId))
+    .limit(1);
+  if (!target) return { found: false };
+
+  // End the live fences before marking the identity revoked. Promotion locks
+  // the server first, so this ordering avoids a lock inversion and guarantees
+  // that a revoke cannot leave a revoked identity owning a session. Both
+  // updates are conditional on this identity, so another generation's active
+  // OAuth connection is untouched.
+  await db
+    .update(server)
+    .set({
+      transportMode: "http",
+      wsConnectedAt: null,
+      wsSessionId: null,
+      wsCredentialKind: null,
+      wsCredentialIdentityId: null,
+      wsCredentialGeneration: null,
+      wsCredentialExpiresAt: null,
+    })
+    .where(eq(server.wsCredentialIdentityId, target.identityId));
+  await db
+    .update(server)
+    .set({
+      wsPendingSessionId: null,
+      wsPendingIdentityId: null,
+      wsPendingGeneration: null,
+      wsPendingExpiresAt: null,
+    })
+    .where(eq(server.wsPendingIdentityId, target.identityId));
+
   const [changedRow] = await db
     .update(agentIdentity)
     .set({ status: "revoked", revokedAt: input.now, updatedAt: input.now })
@@ -305,23 +343,7 @@ export async function revokeAgentIdentity(
         inArray(agentIdentity.status, ["pending", "active"]),
       ),
     )
-    .returning({
-      serverId: agentIdentity.serverId,
-      oauthClientId: agentIdentity.oauthClientId,
-    });
-
-  let target = changedRow;
-  if (!target) {
-    [target] = await db
-      .select({
-        serverId: agentIdentity.serverId,
-        oauthClientId: agentIdentity.oauthClientId,
-      })
-      .from(agentIdentity)
-      .where(eq(agentIdentity.id, input.identityId))
-      .limit(1);
-  }
-  if (!target) return { found: false };
+    .returning({ id: agentIdentity.id });
 
   await db
     .update(oauthClient)

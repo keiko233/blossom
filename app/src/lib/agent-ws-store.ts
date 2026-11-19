@@ -9,6 +9,7 @@ import type {
 } from "@blossom/contracts/agent-ws";
 
 import { type Database, db } from "@/db";
+import type { Server } from "@/db/proxy-schema";
 import {
   handleAcmeDnsCleanup,
   handleAcmeDnsPresent,
@@ -21,12 +22,15 @@ import {
 import { applyAgentTrafficReport } from "@/orpc/proxy/agent-traffic-report";
 import {
   AgentSessionReplacedError,
-  type AgentWsSessionStart,
+  type AgentSessionCredential,
+  type AgentWsV2SessionStart,
   cacheAgentDesiredRevision,
   endAgentWsSession,
-  loadAgentServer,
+  loadCurrentAgentServer,
   markAgentWsConnected,
-  startAgentWsSession,
+  promoteAgentV2WsSession,
+  revalidatePendingAgentV2Session,
+  startAgentV2WsSession,
   markAgentWsDisconnected,
   recordAgentConfigAck,
   recordAgentHello,
@@ -55,7 +59,7 @@ export function createAgentWsStore(database: Database = db): AgentWsStore {
     applyCertificateDeployments: (
       serverId,
       deployments: AgentWsCertificateDeployment[],
-    ) => applyAgentCertificateDeployments(serverId, deployments, database),
+    ) => applyAgentCertificateDeployments(serverId, deployments, { database }),
     handleAcmeDnsPresent: (serverId, payload: AgentWsAcmeDnsPresentPayload) =>
       handleAcmeDnsPresent(serverId, payload, database),
     handleAcmeDnsCleanup: (serverId, payload: AgentWsAcmeDnsCleanupPayload) =>
@@ -67,7 +71,25 @@ export function createAgentWsStore(database: Database = db): AgentWsStore {
 
 /** The v2 port plus the handshake that makes a new session current. */
 export type AgentWsV2HubStore = AgentWsV2Store & {
-  startSession(serverId: string): Promise<AgentWsSessionStart>;
+  /**
+   * Makes a session current only while the authenticated credential is still
+   * usable. A pending OAuth identity receives a proof-only session and does
+   * not own the fence until `promoteSession` accepts its `hello`.
+   */
+  startSession(
+    serverId: string,
+    credential: AgentSessionCredential,
+  ): Promise<AgentWsV2SessionStart | null>;
+  /**
+   * Completes a pending identity's proof. A first installation is promoted
+   * conditionally; a replacement demotes the old active identity and promotes
+   * the new generation with recovery on both database drivers.
+   */
+  promoteSession(
+    serverId: string,
+    sessionId: string,
+    credential: AgentSessionCredential,
+  ): Promise<Server | null>;
 };
 
 /**
@@ -78,18 +100,42 @@ export function createAgentWsV2Store(
   database: Database = db,
 ): AgentWsV2HubStore {
   return {
-    startSession: (serverId) => startAgentWsSession(serverId, database),
-    loadServer: (serverId) => loadAgentServer(serverId, database),
+    startSession: (serverId, credential) =>
+      startAgentV2WsSession(serverId, credential, database),
+    promoteSession: (serverId, sessionId, credential) =>
+      promoteAgentV2WsSession(serverId, sessionId, credential, database),
+    loadCurrentServer: (serverId, sessionId) =>
+      loadCurrentAgentServer(serverId, sessionId, database),
     recordHello: (serverId, sessionId, hello) =>
       recordAgentV2Hello(serverId, sessionId, hello, database),
     recordStatus: (serverId, sessionId, status) =>
       recordAgentV2Status(serverId, sessionId, status, database),
     recordConfigAck: (serverId, sessionId, ack) =>
       recordAgentV2ConfigAck(serverId, sessionId, ack, database),
-    cacheDesiredRevision: (serverId, sessionId, seq, revision) =>
-      cacheAgentDesiredRevision(serverId, sessionId, seq, revision, database),
-    applyCertificateDeployments: (serverId, deployments) =>
-      applyAgentCertificateDeployments(serverId, deployments, database),
+    cacheDesiredRevision: (serverId, sessionId, cache) =>
+      cacheAgentDesiredRevision(serverId, sessionId, cache, database),
+    applyCertificateDeployments: (serverId, sessionId, deployments) =>
+      applyAgentCertificateDeployments(serverId, deployments, {
+        sessionId,
+        database,
+      }),
+    revalidateSession: async (serverId, sessionId, credential, pending) => {
+      if (pending) {
+        return (await revalidatePendingAgentV2Session(
+          serverId,
+          sessionId,
+          credential,
+          database,
+        ))
+          ? "ok"
+          : "replaced";
+      }
+      const row = await loadCurrentAgentServer(serverId, sessionId, database);
+      if (!row) {
+        return "replaced";
+      }
+      return row.enabled ? "ok" : "disabled";
+    },
     applyTraffic: async (serverId, sessionId, report) => {
       try {
         const result = await applyAgentTrafficReport(serverId, report, {
@@ -120,6 +166,7 @@ export function createAgentWsV2Store(
       return {
         desiredRevision: desired.desiredRevision,
         document: buildAgentConfigV3Output(server, desired),
+        validUntil: desired.validUntil,
       };
     },
     endSession: (serverId, sessionId) =>

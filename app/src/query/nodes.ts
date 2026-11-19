@@ -73,7 +73,7 @@ export interface NodeListItem {
     name: string;
     address: string;
     enabled: boolean;
-    agentTokenPrefix: string;
+    agentTokenPrefix: string | null;
     lastSeenAt: Date | null;
     heartbeatIntervalSeconds: number;
     runtimeState: string;

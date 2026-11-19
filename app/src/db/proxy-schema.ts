@@ -41,14 +41,15 @@ export type AgentUpdateState =
   | "disabled";
 
 export type AgentTransportMode = "http" | "ws";
+export type AgentWsCredentialKind = "static" | "oauth";
 
 /**
  * A server is one physical proxy host managed by a single Rust server-agent:
  * it owns the agent token, heartbeat, agent version, and a default public
  * address. One server has many nodes, each compiled into a separate sing-box
  * inbound that the agent pulls as a single multi-inbound config. The agent
- * authenticates with `server.agentTokenHash`; nodes inherit no token of their
- * own.
+ * authenticates with its OAuth identity, or with `server.agentTokenHash` when
+ * a static backup is enabled; nodes inherit no credential of their own.
  */
 export const server = pgTable(
   "server",
@@ -62,12 +63,13 @@ export const server = pgTable(
     // the node has no address override of its own.
     address: text("address").notNull(),
 
-    // Server-level agent credential (Authorization: Bearer <token>) shared by
-    // every node running on the host. Only a SHA-256 hash is stored; the
-    // plaintext is returned once at create/reset time. The prefix is kept for
-    // display/identification.
-    agentTokenHash: text("agent_token_hash").notNull().unique(),
-    agentTokenPrefix: text("agent_token_prefix").notNull(),
+    // Optional static backup credential (Authorization: Bearer <token>). OAuth
+    // machine identity is the default; a server has a static token only when an
+    // administrator explicitly enables it. Existing rows keep their hash.
+    // Only a SHA-256 hash is stored; the plaintext is returned once at
+    // enable/reset time. The prefix is kept for display/identification.
+    agentTokenHash: text("agent_token_hash").unique(),
+    agentTokenPrefix: text("agent_token_prefix"),
     lastSeenAt: timestamp("last_seen_at"),
     // Current push-channel transport. HTTP polling remains the fallback, so a
     // closed agent WebSocket returns this to "http" until the next handshake.
@@ -80,6 +82,23 @@ export const server = pgTable(
     // handshake replaces it in one UPDATE, and every durable write from a
     // session is conditional on it, so a replaced connection cannot write.
     wsSessionId: text("ws_session_id"),
+    // The credential that started the current v2 session. Static sessions
+    // carry only the kind; OAuth sessions carry the active identity's
+    // generation and token expiry, so every fenced read and write also fails
+    // after revocation, supersession, or token expiry. Raw bearer material is
+    // never stored here.
+    wsCredentialKind: text("ws_credential_kind").$type<AgentWsCredentialKind>(),
+    wsCredentialIdentityId: text("ws_credential_identity_id"),
+    wsCredentialGeneration: integer("ws_credential_generation"),
+    wsCredentialExpiresAt: timestamp("ws_credential_expires_at"),
+    // A pending OAuth identity gets a proof-only lane until its `hello`. These
+    // columns name exactly which socket proof still belongs to the rotation;
+    // promotion consumes them atomically with the active fence transition. A
+    // later pending handshake overwrites them, fencing the older proof socket.
+    wsPendingSessionId: text("ws_pending_session_id"),
+    wsPendingIdentityId: text("ws_pending_identity_id"),
+    wsPendingGeneration: integer("ws_pending_generation"),
+    wsPendingExpiresAt: timestamp("ws_pending_expires_at"),
     agentVersion: text("agent_version"),
     // Build identity and capability surface reported by the agent on every
     // heartbeat. `agentBuildId` is a stable build tag; `agentCapabilities`
@@ -142,6 +161,17 @@ export const server = pgTable(
     // status acknowledgments without compiling. Null means "not compiled since
     // the last change"; the next reader compiles and stores it again.
     desiredConfigRevision: text("desired_config_revision"),
+    // Bumped by every invalidation of the cached identifier. Inputs that no
+    // publish-gate sequence covers (certificates, routing rules) change the
+    // identifier without moving `desiredRevisionSeq`, so a cache write names the
+    // version it was compiled at and is refused if an invalidation raced it.
+    desiredInputsVersion: integer("desired_inputs_version")
+      .default(0)
+      .notNull(),
+    // The cached identifier is trusted only until this instant. It bounds how
+    // long an input with no change record (a subscription that expires with
+    // the clock, a temporary ban) can stay unreflected in the identifier.
+    desiredConfigValidUntil: timestamp("desired_config_valid_until"),
     activeNodeIds: jsonb("active_node_ids")
       .$type<string[]>()
       .default([])
