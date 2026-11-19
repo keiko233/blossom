@@ -83,7 +83,7 @@ impl SensitiveHeader {
         Ok(Self { value })
     }
 
-    fn header_value(&self) -> HeaderValue {
+    pub(super) fn header_value(&self) -> HeaderValue {
         let mut value = self.value.clone();
         value.set_sensitive(true);
         value
@@ -112,10 +112,10 @@ impl TokioWsTransport {
     }
 }
 
-fn web_socket_config() -> WebSocketConfig {
+pub(super) fn web_socket_config(max_message_bytes: usize) -> WebSocketConfig {
     let mut config = WebSocketConfig::default();
-    config.max_message_size = Some(MAX_MESSAGE_SIZE);
-    config.max_frame_size = Some(MAX_MESSAGE_SIZE);
+    config.max_message_size = Some(max_message_bytes);
+    config.max_frame_size = Some(max_message_bytes);
     config
 }
 
@@ -139,7 +139,12 @@ impl WsTransport for TokioWsTransport {
 
         let handshake = tokio::time::timeout(
             self.config.connect_timeout,
-            connect_async_tls_with_config(request, Some(web_socket_config()), false, None),
+            connect_async_tls_with_config(
+                request,
+                Some(web_socket_config(MAX_MESSAGE_SIZE)),
+                false,
+                None,
+            ),
         )
         .await
         .map_err(|_| WsError::Io("websocket upgrade timed out".to_string()))?;
@@ -158,7 +163,7 @@ impl WsTransport for TokioWsTransport {
     }
 }
 
-fn classify(error: TungsteniteError) -> WsError {
+pub(super) fn classify(error: TungsteniteError) -> WsError {
     match error {
         TungsteniteError::ConnectionClosed | TungsteniteError::AlreadyClosed => WsError::Closed,
         TungsteniteError::Io(error) => WsError::Io(error.to_string()),
