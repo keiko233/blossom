@@ -79,6 +79,19 @@ impl DecodeError {
             Self::InvalidPayload(_) => "invalid-payload",
         }
     }
+
+    /// The `error` frame code an agent answers with, when the contract has one.
+    /// An unsupported envelope version has none: the session ends instead.
+    pub fn wire_code(&self) -> Option<ErrorCode> {
+        match self {
+            Self::FrameTooLarge => Some(ErrorCode::FrameTooLarge),
+            Self::InvalidDirection(_) => Some(ErrorCode::InvalidDirection),
+            Self::InvalidJson | Self::InvalidEnvelope | Self::InvalidPayload(_) => {
+                Some(ErrorCode::InvalidPayload)
+            }
+            Self::UnsupportedVersion => None,
+        }
+    }
 }
 
 impl fmt::Display for DecodeError {
