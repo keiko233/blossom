@@ -31,8 +31,7 @@ const C_FALSE = 3;
 // rest (for example every newline in the installer script). The response's
 // `s`/`k` values are that encoded form, so decode them the way seroval's own
 // `deserializeString` does.
-const ESCAPE_SEQUENCE =
-  /(\\\\|\\"|\\n|\\r|\\b|\\t|\\f|\\u2028|\\u2029|\\x3C)/g;
+const ESCAPE_SEQUENCE = /(\\\\|\\"|\\n|\\r|\\b|\\t|\\f|\\u2028|\\u2029|\\x3C)/g;
 
 export function deserializeSerovalString(value) {
   if (typeof value !== "string" || !value.includes("\\")) return value;

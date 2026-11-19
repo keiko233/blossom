@@ -88,8 +88,10 @@ function parseArgs(argv) {
     else if (arg === "--sing-box-archive") {
       options.singBoxArchive = argv[++index];
     } else if (arg === "--workdir") options.workdir = argv[++index];
-    else if (arg === "--release-version") options.releaseVersion = argv[++index];
-    else if (arg === "--sing-box-version") options.singBoxVersion = argv[++index];
+    else if (arg === "--release-version")
+      options.releaseVersion = argv[++index];
+    else if (arg === "--sing-box-version")
+      options.singBoxVersion = argv[++index];
     else if (arg === "--agent-url") options.agentUrl = argv[++index];
     else if (arg === "--sing-box-url") options.singBoxUrl = argv[++index];
     else throw new Error(`unknown argument ${arg}`);
@@ -168,7 +170,8 @@ async function prepareDatabase(root, pg) {
     "postgres",
     "blossom_disposable_oauth",
   ]);
-  if (created.status !== 0) throw new Error(`createdb failed: ${created.stderr}`);
+  if (created.status !== 0)
+    throw new Error(`createdb failed: ${created.stderr}`);
   const url = `postgresql://postgres@127.0.0.1:${pg.port}/blossom_disposable_oauth`;
   secret(url);
   log("applying migrations to the disposable database");
@@ -353,7 +356,9 @@ class FrameReader {
         offset += 4;
       }
       if (this.buffer.length < offset + length) return;
-      const payload = Buffer.from(this.buffer.subarray(offset, offset + length));
+      const payload = Buffer.from(
+        this.buffer.subarray(offset, offset + length),
+      );
       this.buffer = this.buffer.subarray(offset + length);
       if (masked) {
         for (let index = 0; index < payload.length; index += 1) {
@@ -374,8 +379,14 @@ class FrameReader {
     }
     if (opcode === 9 || opcode === 10) return;
     if (opcode === 0) {
-      this.fragments = Buffer.concat([this.fragments ?? Buffer.alloc(0), payload]);
-      if (fin) this.#message(this.fragmentOpcode, this.fragments), (this.fragments = null);
+      this.fragments = Buffer.concat([
+        this.fragments ?? Buffer.alloc(0),
+        payload,
+      ]);
+      if (fin) {
+        this.#message(this.fragmentOpcode, this.fragments);
+        this.fragments = null;
+      }
       return;
     }
     if (!fin) {
@@ -388,7 +399,11 @@ class FrameReader {
 
   #message(opcode, payload) {
     if (opcode !== 1) {
-      this.sink({ direction: this.direction, type: "binary", bytes: payload.length });
+      this.sink({
+        direction: this.direction,
+        type: "binary",
+        bytes: payload.length,
+      });
       return;
     }
     let frame;
@@ -460,7 +475,9 @@ function summarizeFrame(frame) {
     case "traffic.report":
       return {
         reportId: payload.reportId,
-        entries: Array.isArray(payload.entries) ? payload.entries.length : undefined,
+        entries: Array.isArray(payload.entries)
+          ? payload.entries.length
+          : undefined,
       };
     case "traffic.ack":
       return { reportId: payload.reportId, result: payload.result };
@@ -522,15 +539,20 @@ function loggingOrigin({ targetPort }) {
     });
     upstream.on("upgrade", (upstreamResponse, upstreamSocket, upstreamHead) => {
       const record = upgrades.at(-1);
-      record.accepted = upstreamResponse.headers["sec-websocket-protocol"] ?? null;
+      record.accepted =
+        upstreamResponse.headers["sec-websocket-protocol"] ?? null;
       clientSocket.write(
         `HTTP/1.1 ${upstreamResponse.statusCode} ${upstreamResponse.statusMessage}\r\n${rawHeaders(upstreamResponse.rawHeaders)}`,
       );
       if (upstreamHead?.length) clientSocket.write(upstreamHead);
       if (head?.length) upstreamSocket.write(head);
 
-      const toServer = new FrameReader("agent->control", (frame) => frames.push(frame));
-      const toAgent = new FrameReader("control->agent", (frame) => frames.push(frame));
+      const toServer = new FrameReader("agent->control", (frame) =>
+        frames.push(frame),
+      );
+      const toAgent = new FrameReader("control->agent", (frame) =>
+        frames.push(frame),
+      );
       clientSocket.on("data", (chunk) => {
         toServer.feed(chunk);
         upstreamSocket.write(chunk);
@@ -659,7 +681,10 @@ function rewriteInstaller(script, sandbox, user, group) {
       "/usr/local/lib/blossom-agent",
       path.join(sandbox.root, "usr/local/lib/blossom-agent"),
     )
-    .replaceAll("/etc/blossom-agent", path.join(sandbox.root, "etc/blossom-agent"))
+    .replaceAll(
+      "/etc/blossom-agent",
+      path.join(sandbox.root, "etc/blossom-agent"),
+    )
     .replaceAll(
       "/etc/systemd/system",
       path.join(sandbox.root, "etc/systemd/system"),
@@ -716,7 +741,9 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   const { releaseVersion, singBoxVersion } = options;
   if (!existsSync(OUTPUT)) {
-    throw new Error("app/.output is missing; run pnpm --filter @blossom/app build:node");
+    throw new Error(
+      "app/.output is missing; run pnpm --filter @blossom/app build:node",
+    );
   }
   const root = options.workdir
     ? options.workdir
@@ -729,13 +756,17 @@ async function main() {
   const singBoxArchive = path.resolve(options.singBoxArchive);
   const agentDigest = sha256File(agentBin);
   const singBoxDigest = sha256File(singBoxArchive);
-  log(`agent ${agentDigest.slice(0, 12)}… sing-box archive ${singBoxDigest.slice(0, 12)}…`);
+  log(
+    `agent ${agentDigest.slice(0, 12)}… sing-box archive ${singBoxDigest.slice(0, 12)}…`,
+  );
 
   const postgres = await startPostgres(root);
   try {
     const databaseUrl = await prepareDatabase(root, postgres);
     const authSecret = secret(randomUUID().replaceAll("-", ""));
-    const certificateKey = Buffer.from(authSecret.slice(0, 32)).toString("base64url");
+    const certificateKey = Buffer.from(authSecret.slice(0, 32)).toString(
+      "base64url",
+    );
 
     const ports = {
       tls: await freePort(),
@@ -758,9 +789,50 @@ async function main() {
       const result = run("openssl", args, { encoding: "utf8" });
       if (result.status !== 0) throw new Error(result.stderr);
     };
-    openssl(["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", caKey, "-out", caPem, "-days", "1", "-subj", "/CN=Blossom Integration CA"]);
-    openssl(["req", "-newkey", "rsa:2048", "-nodes", "-keyout", serverKey, "-out", serverCsr, "-subj", "/CN=127.0.0.1"]);
-    openssl(["x509", "-req", "-in", serverCsr, "-CA", caPem, "-CAkey", caKey, "-CAcreateserial", "-out", serverPem, "-days", "1", "-extfile", ext]);
+    openssl([
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-keyout",
+      caKey,
+      "-out",
+      caPem,
+      "-days",
+      "1",
+      "-subj",
+      "/CN=Blossom Integration CA",
+    ]);
+    openssl([
+      "req",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-keyout",
+      serverKey,
+      "-out",
+      serverCsr,
+      "-subj",
+      "/CN=127.0.0.1",
+    ]);
+    openssl([
+      "x509",
+      "-req",
+      "-in",
+      serverCsr,
+      "-CA",
+      caPem,
+      "-CAkey",
+      caKey,
+      "-CAcreateserial",
+      "-out",
+      serverPem,
+      "-days",
+      "1",
+      "-extfile",
+      ext,
+    ]);
 
     const tls = tlsOrigin({
       cert: readFileSync(serverPem),
@@ -774,41 +846,31 @@ async function main() {
     listeners.push(logging.server);
 
     log("starting the built Node app on the HTTPS admin/installer origin");
-    const appA = startProcess(
-      "app-a",
-      process.execPath,
-      [OUTPUT],
-      {
-        workdir: root,
-        cwd: path.join(REPO, "app"),
-        env: appEnv({
-          port: ports.appA,
-          databaseUrl,
-          authSecret,
-          authUrl: originA,
-          certificateKey,
-        }),
-      },
-    );
+    startProcess("app-a", process.execPath, [OUTPUT], {
+      workdir: root,
+      cwd: path.join(REPO, "app"),
+      env: appEnv({
+        port: ports.appA,
+        databaseUrl,
+        authSecret,
+        authUrl: originA,
+        certificateKey,
+      }),
+    });
     await waitHttp(originA);
 
     log("starting the same build on the loopback HTTP agent origin");
-    const appB = startProcess(
-      "app-b",
-      process.execPath,
-      [OUTPUT],
-      {
-        workdir: root,
-        cwd: path.join(REPO, "app"),
-        env: appEnv({
-          port: ports.appB,
-          databaseUrl,
-          authSecret,
-          authUrl: originB,
-          certificateKey,
-        }),
-      },
-    );
+    const appB = startProcess("app-b", process.execPath, [OUTPUT], {
+      workdir: root,
+      cwd: path.join(REPO, "app"),
+      env: appEnv({
+        port: ports.appB,
+        databaseUrl,
+        authSecret,
+        authUrl: originB,
+        certificateKey,
+      }),
+    });
     await waitHttp(originB);
 
     // ------------------------------------------------------------ admin
@@ -823,8 +885,14 @@ async function main() {
     const fn = {
       createServer: ["src/query/servers.ts", "createServer"],
       createNode: ["src/query/nodes.ts", "createNode"],
-      createGrant: ["src/query/agent-identity.ts", "createAgentEnrollmentGrant"],
-      revokeIdentity: ["src/query/agent-identity.ts", "revokeAgentIdentityAccess"],
+      createGrant: [
+        "src/query/agent-identity.ts",
+        "createAgentEnrollmentGrant",
+      ],
+      revokeIdentity: [
+        "src/query/agent-identity.ts",
+        "revokeAgentIdentityAccess",
+      ],
       identityState: ["src/query/agent-identity.ts", "getAgentIdentityState"],
     };
     const installerServer = await adminHttp.call(fn.createServer, {
@@ -853,7 +921,9 @@ async function main() {
 
     // ------------------------------------------------------------ installer
 
-    log("creating the inline enrollment grant through the audited admin function");
+    log(
+      "creating the inline enrollment grant through the audited admin function",
+    );
     const inline = await adminHttp.call(fn.createGrant, {
       serverId: installerServer.server.id,
       mode: "enroll",
@@ -888,10 +958,17 @@ async function main() {
     const crossSite = await fetch(
       `http://127.0.0.1:${ports.appA}${inline.downloadPath}`,
       {
-        headers: { cookie: adminHttp.cookieHeader(), origin: "https://evil.example" },
+        headers: {
+          cookie: adminHttp.cookieHeader(),
+          origin: "https://evil.example",
+        },
       },
     );
-    assert.equal(crossSite.status, 403, "cross-site installer download must be refused");
+    assert.equal(
+      crossSite.status,
+      403,
+      "cross-site installer download must be refused",
+    );
 
     const sandbox = {
       root: path.join(root, "installer-root"),
@@ -922,7 +999,12 @@ async function main() {
     const group =
       run("id", ["-gn", user], { encoding: "utf8" }).stdout.trim() || user;
     const scriptPath = path.join(root, "install.sh");
-    const script = rewriteInstaller(inline.script.content, sandbox, user, group);
+    const script = rewriteInstaller(
+      inline.script.content,
+      sandbox,
+      user,
+      group,
+    );
     writeFileSync(scriptPath, script);
     chmodSync(scriptPath, 0o600);
     log("running the exact installer logic in the fake-systemd sandbox");
@@ -948,14 +1030,23 @@ async function main() {
     assert.equal(install.status, 0, install.stderr);
     assert.doesNotMatch(install.stderr, new RegExp(grantSecret));
     const installed = {
-      agent: path.join(sandbox.root, "usr/local/lib/blossom-agent/server-agent"),
+      agent: path.join(
+        sandbox.root,
+        "usr/local/lib/blossom-agent/server-agent",
+      ),
       singBox: path.join(sandbox.root, "usr/local/lib/blossom-agent/sing-box"),
       unit: path.join(sandbox.root, "etc/systemd/system/blossom-agent.service"),
-      credentials: path.join(sandbox.root, "etc/blossom-agent/credentials.json"),
+      credentials: path.join(
+        sandbox.root,
+        "etc/blossom-agent/credentials.json",
+      ),
       metadata: path.join(sandbox.root, "etc/blossom-agent/installation.json"),
       state: path.join(sandbox.root, "var/lib/blossom-agent"),
     };
-    assert.equal(readFileSync(installed.agent).length, readFileSync(agentBin).length);
+    assert.equal(
+      readFileSync(installed.agent).length,
+      readFileSync(agentBin).length,
+    );
     assert.equal(statSync(installed.credentials).mode & 0o777, 0o600);
     assert.equal(statSync(installed.metadata).mode & 0o777, 0o600);
     assert.equal(statSync(installed.state).mode & 0o777, 0o700);
@@ -972,11 +1063,16 @@ async function main() {
     assert.match(credentials.clientSecret, /^ags_/);
     secret(credentials.clientSecret);
     assert.equal(
-      readFileSync(installed.metadata, "utf8").includes(`grant_id=${inline.grant.id}`),
+      readFileSync(installed.metadata, "utf8").includes(
+        `grant_id=${inline.grant.id}`,
+      ),
       true,
     );
     const unit = readFileSync(installed.unit, "utf8");
-    assert.ok(unit.includes(`User=${user}`), "the unit must run as the service user");
+    assert.ok(
+      unit.includes(`User=${user}`),
+      "the unit must run as the service user",
+    );
     assert.match(unit, /UMask=0077/);
     assert.match(unit, /ProtectSystem=strict/);
     assert.match(unit, /NoNewPrivileges=true/);
@@ -1009,7 +1105,9 @@ async function main() {
       ),
       "redeemed",
     );
-    log("installer: exact CLI redemption, 0600 credentials, unit and modes verified");
+    log(
+      "installer: exact CLI redemption, 0600 credentials, unit and modes verified",
+    );
 
     // ------------------------------------------------------------ runtime
 
@@ -1028,7 +1126,9 @@ async function main() {
     chmodSync(runtimeGrantFile, 0o600);
 
     const runtimeCredentials = path.join(root, "runtime-credentials.json");
-    log("redeeming the runtime grant with the real enroll CLI against loopback HTTP");
+    log(
+      "redeeming the runtime grant with the real enroll CLI against loopback HTTP",
+    );
     const enroll = await runCapture(
       agentBin,
       [
@@ -1043,11 +1143,19 @@ async function main() {
       { env: { PATH: process.env.PATH, HOME: path.join(root, "home") } },
     );
     assert.equal(enroll.status, 0, enroll.stderr);
-    assert.doesNotMatch(enroll.stdout + enroll.stderr, new RegExp(runtimeGrant.secret));
+    assert.doesNotMatch(
+      enroll.stdout + enroll.stderr,
+      new RegExp(runtimeGrant.secret),
+    );
     assert.equal(statSync(runtimeCredentials).mode & 0o777, 0o600);
-    const runtimeCredential = JSON.parse(readFileSync(runtimeCredentials, "utf8"));
+    const runtimeCredential = JSON.parse(
+      readFileSync(runtimeCredentials, "utf8"),
+    );
     assert.equal(runtimeCredential.identityStatus, "pending");
-    assert.equal(runtimeCredential.tokenEndpoint, `${originB}/api/auth/oauth2/token`);
+    assert.equal(
+      runtimeCredential.tokenEndpoint,
+      `${originB}/api/auth/oauth2/token`,
+    );
     assert.equal(runtimeCredential.resource, `${originB}/api/agent`);
     secret(runtimeCredential.clientSecret);
     assert.equal(
@@ -1059,7 +1167,9 @@ async function main() {
       "redemption must leave the identity pending",
     );
 
-    log("requesting a client_credentials token and checking the machine claims");
+    log(
+      "requesting a client_credentials token and checking the machine claims",
+    );
     const tokenResponse = await fetch(`${originB}/api/auth/oauth2/token`, {
       method: "POST",
       headers: {
@@ -1147,7 +1257,9 @@ exit 64
         },
       },
     );
-    log("waiting for the real agent to promote the identity and apply a config");
+    log(
+      "waiting for the real agent to promote the identity and apply a config",
+    );
     const applied = await waitFor(
       "the v2 session to apply the desired config",
       () => {
@@ -1165,7 +1277,14 @@ exit 64
           row[3] === "oauth" &&
           row[4] === "ws" &&
           row[5] === "active"
-          ? { configState: row[0], appliedSeq: Number(row[1]), desiredSeq: Number(row[2]), kind: row[3], transport: row[4], identity: row[5] }
+          ? {
+              configState: row[0],
+              appliedSeq: Number(row[1]),
+              desiredSeq: Number(row[2]),
+              kind: row[3],
+              transport: row[4],
+              identity: row[5],
+            }
           : null;
       },
       { timeoutMs: 120_000, intervalMs: 1000 },
@@ -1180,14 +1299,20 @@ exit 64
     const runningConfig = JSON.parse(
       readFileSync(path.join(singBoxState, "running-config.json"), "utf8"),
     );
-    assert.ok(runningConfig.inbounds, "the compiled config must contain inbounds");
-    log(`identity active; config applied at seq ${applied.appliedSeq}; sing-box running`);
+    assert.ok(
+      runningConfig.inbounds,
+      "the compiled config must contain inbounds",
+    );
+    log(
+      `identity active; config applied at seq ${applied.appliedSeq}; sing-box running`,
+    );
 
     const hello = logging.frames.find(
       (frame) => frame.direction === "agent->control" && frame.type === "hello",
     );
     const welcome = logging.frames.find(
-      (frame) => frame.direction === "control->agent" && frame.type === "welcome",
+      (frame) =>
+        frame.direction === "control->agent" && frame.type === "welcome",
     );
     const ack = logging.frames.find(
       (frame) =>
@@ -1203,7 +1328,11 @@ exit 64
     );
     assert.ok(hello, "the agent must send hello first");
     assert.equal(hello.v, 2);
-    assert.equal(welcome?.v, 2, "the control plane must reply with a v2 welcome");
+    assert.equal(
+      welcome?.v,
+      2,
+      "the control plane must reply with a v2 welcome",
+    );
     assert.ok(welcome.payload.sessionId);
     assert.ok(welcome.payload.statusIntervalSeconds >= 1);
     assert.ok(ack, "the agent must acknowledge the applied snapshot");
@@ -1215,14 +1344,26 @@ exit 64
     );
     assert.equal(logging.upgrades.length >= 1, true);
     assert.equal(logging.upgrades.at(-1).accepted, V2_PROTOCOL);
-    const helloIndex = logging.frames.findIndex((frame) => frame.type === "hello");
+    const helloIndex = logging.frames.findIndex(
+      (frame) => frame.type === "hello",
+    );
     const firstAgentFrame = logging.frames.findIndex(
       (frame) => frame.direction === "agent->control",
     );
-    assert.equal(helloIndex, firstAgentFrame, "hello must be the first agent frame");
-    log("v2 hello/welcome, config.get/snapshot, applied ack and status verified");
+    assert.equal(
+      helloIndex,
+      firstAgentFrame,
+      "hello must be the first agent frame",
+    );
+    log(
+      "v2 hello/welcome, config.get/snapshot, applied ack and status verified",
+    );
 
-    const forbidden = ["/api/agent/config/v3", "/api/agent/heartbeat", "/api/agent/traffic"];
+    const forbidden = [
+      "/api/agent/config/v3",
+      "/api/agent/heartbeat",
+      "/api/agent/traffic",
+    ];
     for (const suffix of forbidden) {
       assert.equal(
         logging.requests.some((request) => request.path.startsWith(suffix)),
@@ -1232,7 +1373,9 @@ exit 64
     }
     assert.ok(
       logging.requests.some(
-        (request) => request.method === "POST" && request.path === "/api/auth/oauth2/token",
+        (request) =>
+          request.method === "POST" &&
+          request.path === "/api/auth/oauth2/token",
       ),
       "the agent must obtain a token",
     );
@@ -1258,29 +1401,28 @@ exit 64
       () => process.kill(singBoxPid, 0),
       "the last-known-good sing-box must keep running during the outage",
     );
-    assert.equal(agent.child.exitCode, null, "the agent must not exit during the outage");
+    assert.equal(
+      agent.child.exitCode,
+      null,
+      "the agent must not exit during the outage",
+    );
     log("last-known-good sing-box survived the outage");
 
     log("restarting the control plane on the same origin");
     logging = loggingOrigin({ targetPort: ports.appB });
     await listen(logging.server, ports.proxyB);
     listeners.push(logging.server);
-    const appB2 = startProcess(
-      "app-b2",
-      process.execPath,
-      [OUTPUT],
-      {
-        workdir: root,
-        cwd: path.join(REPO, "app"),
-        env: appEnv({
-          port: ports.appB,
-          databaseUrl,
-          authSecret,
-          authUrl: originB,
-          certificateKey,
-        }),
-      },
-    );
+    startProcess("app-b2", process.execPath, [OUTPUT], {
+      workdir: root,
+      cwd: path.join(REPO, "app"),
+      env: appEnv({
+        port: ports.appB,
+        databaseUrl,
+        authSecret,
+        authUrl: originB,
+        certificateKey,
+      }),
+    });
     await waitHttp(originB);
     await waitFor(
       "the agent to reconnect and welcome a new session",
@@ -1336,7 +1478,9 @@ exit 64
       }),
     });
     assert.notEqual(refreshAfterRevoke.status, 200);
-    log(`revocation closed the session and refused the client (HTTP ${refreshAfterRevoke.status})`);
+    log(
+      `revocation closed the session and refused the client (HTTP ${refreshAfterRevoke.status})`,
+    );
 
     log("re-enrolling a fresh generation and proving reconnection");
     const freshGrant = await adminHttp.call(fn.createGrant, {
