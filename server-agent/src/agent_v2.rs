@@ -10,9 +10,10 @@
 //! sing-box restart. Status is published on change, so the session can send
 //! `agent.status` as soon as the core's state moves.
 //!
-//! Not yet served by v2, so none is advertised: PTY, ACME, and telemetry. The
-//! update targets arrive as `updatePolicy` in `welcome` and in
-//! `agent.status.ack`, so v2 applies them without `update.trigger`.
+//! Not yet served by v2, so neither is advertised: PTY and ACME. Telemetry is
+//! served on Linux through the additive v2 subscription frames. The update
+//! targets arrive as `updatePolicy` in `welcome` and in `agent.status.ack`, so
+//! v2 applies them without `update.trigger`.
 
 use std::path::Path;
 use std::time::Duration;
@@ -37,6 +38,7 @@ use crate::ws::v2::link::{self, LinkOptions};
 use crate::ws::v2::session::{
     self, ApplyJob, ApplyOutcome, ApplyResult, CoreStatus, HelloIdentity, SnapshotRefusal,
 };
+use crate::ws::v2::telemetry;
 use crate::ws::v2::traffic::run_reporter;
 use crate::{
     AGENT_BUILD_ID, AGENT_VERSION, AgentStatus, Args, ReportedError, apply_fetched,
@@ -44,8 +46,8 @@ use crate::{
     shutdown_signal, start_last_known_good, update_status_payload_from,
 };
 
-/// What v2 advertises in `hello`. PTY, ACME, and telemetry are left out
-/// because the v2 peer does not serve them, and `ws-v1` is not spoken on v2.
+/// What v2 advertises in `hello`. PTY and ACME are left out because the v2
+/// peer does not serve them, and `ws-v1` is not spoken on v2.
 const V2_CAPABILITIES: &[&str] = &[
     "config-v3",
     "managed-tls-v3",
@@ -55,6 +57,18 @@ const V2_CAPABILITIES: &[&str] = &[
     "ws-v2",
     "traffic-v2",
 ];
+
+fn v2_capabilities() -> Vec<String> {
+    let mut capabilities: Vec<String> = V2_CAPABILITIES
+        .iter()
+        .map(|capability| (*capability).to_string())
+        .collect();
+    if telemetry::supported() {
+        capabilities.push("telemetry-v2".to_string());
+        capabilities.push("telemetry-history-v2".to_string());
+    }
+    capabilities
+}
 const WS_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// How often the core re-reads sing-box's process state, so a crash loop is
 /// published without waiting for an apply.
@@ -126,7 +140,7 @@ pub async fn run(args: &Args) -> Result<()> {
     let options = LinkOptions::new(HelloIdentity {
         agent_version: AGENT_VERSION.to_string(),
         agent_build_id: AGENT_BUILD_ID.to_string(),
-        capabilities: V2_CAPABILITIES.iter().map(|c| (*c).to_string()).collect(),
+        capabilities: v2_capabilities(),
     });
     let link_cancel = cancel.clone();
     let link_task = tokio::spawn(async move {

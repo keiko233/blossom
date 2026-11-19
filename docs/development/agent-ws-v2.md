@@ -98,10 +98,11 @@ matching capability is present.
   denominator and network interface set. The control plane stores and charts
   by it; a changed key breaks the series instead of joining incomparable
   values. A missing measurement is null and becomes a gap.
-- **Recommended.** The agent computes network rates from counter deltas across
-  a stable interface set, using monotonic elapsed time, and changes `scopeKey`
-  on restart or interface-set change. Until it does, `network` is null and the
-  network chart stays empty.
+- **Established.** The Rust agent computes network rates from counter deltas
+  across a stable, non-loopback interface set, using monotonic elapsed time.
+  The first observation, a restart, a counter reset or an unreadable counter
+  sends `network: null`; a changed interface set also changes `scopeKey` so
+  incomparable series are not joined.
 - **Established.** Live and history frames never carry certificate material,
   terminal bytes or log contents.
 
@@ -111,36 +112,36 @@ subscription and sample with network rates, a history subscription and sample
 with a missing network reading, unsubscribe, inspect and snapshot. The Rust
 client must reproduce those frames byte-for-byte after JSON parsing.
 
-### Rust agent handoff
+### Rust agent implementation
 
-The production Rust agent is not edited by this change. To implement the
-matching client:
+The production Rust agent implements this surface behind `--ws-protocol v2`:
 
-1. Add `telemetry-v2` to the advertised capabilities when the Linux collector
-   is built, and `telemetry-history-v2` only when the 60-second history cadence
-   is implemented.
-2. Decode the three control-plane frames and maintain subscriptions in the
-   WebSocket session state. A new subscription with the same id replaces the
-   old cadence; unsubscribe cancels it and stops future sends.
-3. For `live`, sample about every `intervalMs` and send `telemetry.sample` with
-   `purpose: "live"` and the same `subscriptionId`. Reuse the existing
-   `environment`, cgroup version/limit and `/proc` collection. Add network rate
-   counter deltas with a monotonic `windowMs`; use null when a rate cannot be
-   computed.
-4. For `history`, sample independently every 60 seconds and send
-   `purpose: "history"`. Do not wait for a browser or derive the cadence from
-   live subscriptions. Continue while connected even when no admin is viewing.
-5. Compute `scopeKey` from the environment, cgroup version, CPU/memory limits
-   and the stable interface set, e.g. `systemd|-|-|-|eth0,eth1`. Change it on
-   agent restart or when that set changes.
-6. Answer `telemetry.inspect` with the existing snapshot payload and the same
-   `requestId`. Do not send unsolicited snapshots.
-7. Enforce the values received in `welcome.limits`; a sample frame must stay
-   under `maxFrameBytes`.
+1. A Linux v2 `hello` advertises `telemetry-v2` and `telemetry-history-v2`;
+   non-Linux builds and v1 sessions do not.
+2. `src/ws/v2/telemetry/` decodes the three control-plane frames and keeps
+   subscriptions in per-session state. A new subscription with the same id
+   replaces the cadence; unsubscribe stops future sends; a replaced session
+   starts empty.
+3. Live samples follow `intervalMs` and carry the same `subscriptionId`.
+   History is sampled independently on at least a 60-second cadence, so it
+   continues with no browser and does not depend on live subscriptions.
+4. One sampler serves every subscription due on the same tick, reusing the v1
+   `environment`, cgroup version/limit, `/proc` and inspection collection.
+   Blocking reads run behind bounded queues so config and traffic stay
+   responsive.
+5. Network rates sum counter deltas over the stable interface set with a
+   monotonic `windowMs`; initial, reset, read-failure and window
+   discontinuities send null. `scopeKey` is built from environment, cgroup
+   version, limits and the sorted interface set, e.g.
+   `systemd|-|-|-|eth0,eth1`.
+6. `telemetry.inspect` returns the existing snapshot with the same `requestId`;
+   no snapshot is sent unsolicited.
+7. Outbound telemetry is checked against the negotiated `maxFrameBytes`; an
+   oversized sample or snapshot is dropped instead of closing the session.
 
-The fixtures pin the JSON shape. The existing v1 collector can be reused; only
-the frame envelope, subscription state, scope key and network-rate calculation
-are new.
+The fixtures pin the JSON shape. The Rust codec decodes them directly, and
+the process-level lifecycle test exercises live, history (before a viewer),
+network rates, inspection and unsubscribe.
 
 ## Not in v2 yet
 
@@ -204,9 +205,10 @@ Each target is listed separately. "Not run" means the change has no evidence on 
 - **Disposable PostgreSQL, node-postgres and neon-http.** Fenced acknowledgements, status and traffic, the version fence on cached identifiers, token rotation and the token-bound start (`app/src/query/agent-ws-v2-state.integration.test.ts`). Convergence through the real store adapter and compiler: a routing-rule change with no notification is recovered by the status exchange after the deadline, an invalidated change is reported on the next status, and a rotated credential, a disabled server and a snapshot each stop or serve as specified (`app/src/query/agent-ws-v2-convergence.integration.test.ts`). The neon-http runs use a local `/sql` proxy in front of the same database, not Neon's hosted service.
 - **Disposable PostgreSQL, v2 metric history.** A write with the exact `ws_session_id` succeeds, a replaced session id and a disabled server are fenced, and the newer receipt wins within a minute (`app/src/query/server-metric-history.integration.test.ts`, node-postgres).
 - **Node server, built and run locally.** Against the built Node target, with PostgreSQL through node-postgres: the subprotocol echo, `hello` and `welcome`, a status acknowledgement, a snapshot whose length and digest verify, a credential rotation during a live session (a `config.get` then sends no snapshot, the session stops with `session_replaced` and close 4000), the old token refused with `401`, and the new token welcomed. Checked on 2026-11-19 with a scratch client that is not committed; the built-server handshake recorded in `adc180c` and the v1 route are not re-run here.
+- **Node server, real Rust agent, v2 telemetry.** Against the built Node target, a disposable native PostgreSQL 18 cluster and the real `--ws-protocol v2` agent with a synthetic sing-box binary: the agent advertised both telemetry capabilities, wrote a history minute before any admin metric viewer existed, served a live sample with counter-derived network rates over the admin metric WebSocket, answered inspection, reconnected after its `ws_session_id` was replaced and resumed history. The disposable database's fencing suite (`server-metric-history.integration.test.ts`, 14 tests) separately proves a replaced session and disabled server cannot write. Checked on 2026-11-19; no real sing-box binary, Docker, Cloudflare or Vercel runtime was used.
 - **Cloudflare, local workerd.** `wrangler dev --local` (Wrangler 4.164) running a copy of the Cloudflare build, with a local Hyperdrive connection string to the same disposable PostgreSQL. Checked on 2026-11-19 with the same scratch client: the same sequence as the Node run, which covers the Durable Object's upgrade, its message path and its fenced close. A session welcomed, then left idle for 70 seconds, still accepted a status, and disabling the server stopped the next status with `server_disabled` and close 4000. Workerd does not report hibernation, so the idle run shows that the welcomed flag survived the idle period, not that the object hibernated. The `401` on the Cloudflare upgrade for a credential that rotates after authentication is covered only by the unit and database tests, not by a race on workerd.
 - **Cloudflare, hibernation.** Not verified. Hibernation was not observed, and timer behaviour and the `4000`-series close after a real wake were not run in any environment. Check them against a deployment before relying on them.
 - **Cloudflare, hosted.** Not verified. Nothing was deployed, and hosted Hyperdrive and the `Sec-WebSocket-Protocol` response through the platform were not exercised.
 - **Vercel.** Built only. Connection lifetime, `reconnectBeforeSeconds` and cross-instance Redis delivery are not verified.
-- **Rust agent.** `server-agent/src/ws/v2/codec.rs` includes and decodes the shared fixture file directly, and the opt-in lifecycle (`--ws-protocol v2`) is selected explicitly; `legacy` remains the default.
-- Rust lifecycle: `server-agent/tests/ws_v2_lifecycle.rs` runs the real agent binary against a local v2 WebSocket control plane and a fake sing-box with disposable state. It covers a cold multi-chunk snapshot apply, an unacknowledged traffic report replayed byte-for-byte under the same id, missed-notification recovery through `agent.status.ack`, a failed candidate rolling back to the last-known-good config, and an offline restart from that config. The control plane records and fails every plain HTTP agent API request; the test asserts none occurred.
+- **Rust agent.** `server-agent/src/ws/v2/codec.rs` includes and decodes the shared fixture file directly, and the opt-in lifecycle (`--ws-protocol v2`) is selected explicitly; `legacy` remains the default. Its telemetry engine has paused-time subscription/coalescing tests and pure network-delta tests for initial observation, reset, interface change and oversized windows.
+- Rust lifecycle: `server-agent/tests/ws_v2_lifecycle.rs` runs the real agent binary against a local v2 WebSocket control plane and a fake sing-box with disposable state. It covers a cold multi-chunk snapshot apply, an unacknowledged traffic report replayed byte-for-byte under the same id, missed-notification recovery through `agent.status.ack`, a failed candidate rolling back to the last-known-good config, an offline restart from that config, history before any live subscription, a live sample with network rates, inspection, and unsubscribe. The control plane records and fails every plain HTTP agent API request; the test asserts none occurred.

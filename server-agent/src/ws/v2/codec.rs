@@ -36,6 +36,8 @@ const AGENT_TYPES: &[&str] = &[
     "config.get",
     "config.ack",
     "traffic.report",
+    "telemetry.sample",
+    "telemetry.snapshot",
 ];
 const CONTROL_TYPES: &[&str] = &[
     "welcome",
@@ -46,6 +48,9 @@ const CONTROL_TYPES: &[&str] = &[
     "config.snapshot.end",
     "config.snapshot.error",
     "traffic.ack",
+    "telemetry.subscribe",
+    "telemetry.unsubscribe",
+    "telemetry.inspect",
     "error",
 ];
 
@@ -123,6 +128,8 @@ pub enum Message {
     ConfigGet(ConfigGet),
     ConfigAck(ConfigAck),
     TrafficReport(TrafficReport),
+    TelemetrySample(TelemetrySample),
+    TelemetrySnapshot(TelemetrySnapshot),
     Welcome(Welcome),
     StatusAck(StatusAck),
     ConfigNotify(ConfigNotify),
@@ -131,6 +138,9 @@ pub enum Message {
     SnapshotEnd(SnapshotEnd),
     SnapshotError(SnapshotError),
     TrafficAck(TrafficAck),
+    TelemetrySubscribe(TelemetrySubscribe),
+    TelemetryUnsubscribe(TelemetryUnsubscribe),
+    TelemetryInspect(TelemetryInspect),
     Error(ErrorFrame),
     /// A well-formed frame of a type this codec does not know. Callers ignore it.
     Unknown(String),
@@ -202,6 +212,12 @@ pub fn decode(text: &str, sender: Sender, max_frame_bytes: usize) -> Result<Deco
         "traffic.report" => {
             Message::TrafficReport(checked(payload, TrafficReport::check).ok_or_else(invalid)?)
         }
+        "telemetry.sample" => {
+            Message::TelemetrySample(checked(payload, TelemetrySample::check).ok_or_else(invalid)?)
+        }
+        "telemetry.snapshot" => Message::TelemetrySnapshot(
+            checked(payload, TelemetrySnapshot::check).ok_or_else(invalid)?,
+        ),
         "welcome" => Message::Welcome(checked(payload, Welcome::check).ok_or_else(invalid)?),
         "agent.status.ack" => {
             Message::StatusAck(checked(payload, StatusAck::check).ok_or_else(invalid)?)
@@ -224,6 +240,15 @@ pub fn decode(text: &str, sender: Sender, max_frame_bytes: usize) -> Result<Deco
         "traffic.ack" => {
             Message::TrafficAck(checked(payload, TrafficAck::check).ok_or_else(invalid)?)
         }
+        "telemetry.subscribe" => Message::TelemetrySubscribe(
+            checked(payload, TelemetrySubscribe::check).ok_or_else(invalid)?,
+        ),
+        "telemetry.unsubscribe" => Message::TelemetryUnsubscribe(
+            checked(payload, TelemetryUnsubscribe::check).ok_or_else(invalid)?,
+        ),
+        "telemetry.inspect" => Message::TelemetryInspect(
+            checked(payload, TelemetryInspect::check).ok_or_else(invalid)?,
+        ),
         "error" => Message::Error(checked(payload, ErrorFrame::check).ok_or_else(invalid)?),
         other => Message::Unknown(other.to_string()),
     };
@@ -645,6 +670,224 @@ pub fn report_id_ok(report_id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
+/// `[A-Za-z0-9._-]{1,128}`, the subscription-id shape shared by the
+/// telemetry control frames and samples.
+fn subscription_id_ok(subscription_id: &str) -> bool {
+    bounded(subscription_id, 1, 128)
+        && subscription_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TelemetryPurpose {
+    Live,
+    History,
+}
+
+/// `telemetry.subscribe` (control plane to agent). A subscription is live or
+/// the control plane's independent history cadence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TelemetrySubscribe {
+    pub subscription_id: String,
+    pub purpose: TelemetryPurpose,
+    pub interval_ms: u64,
+}
+
+impl TelemetrySubscribe {
+    fn check(&self) -> bool {
+        subscription_id_ok(&self.subscription_id) && (1_000..=300_000).contains(&self.interval_ms)
+    }
+}
+
+/// `telemetry.unsubscribe` (control plane to agent). The subscription's future
+/// samples stop; one already handed to the session may still be in flight.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TelemetryUnsubscribe {
+    pub subscription_id: String,
+}
+
+impl TelemetryUnsubscribe {
+    fn check(&self) -> bool {
+        subscription_id_ok(&self.subscription_id)
+    }
+}
+
+/// `telemetry.inspect` (control plane to agent): asks for the v1 inspection
+/// snapshot, with the same request id echoed back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TelemetryInspect {
+    pub request_id: String,
+}
+
+impl TelemetryInspect {
+    fn check(&self) -> bool {
+        bounded(&self.request_id, 1, 128)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TelemetryEnvironment {
+    Systemd,
+    Docker,
+    Containerd,
+    Kubernetes,
+    Container,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TelemetryUsage {
+    pub used: u64,
+    pub total: u64,
+}
+
+impl TelemetryUsage {
+    fn check(&self) -> bool {
+        self.used <= self.total
+    }
+}
+
+/// Counter-derived network rates. A rate is null when that counter could not
+/// be compared across the window; the whole object is null when no usable
+/// baseline exists.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TelemetryNetwork {
+    pub tx_bytes_per_second: Option<f64>,
+    pub rx_bytes_per_second: Option<f64>,
+    pub window_ms: u64,
+}
+
+impl TelemetryNetwork {
+    fn check(&self) -> bool {
+        rate_ok(self.tx_bytes_per_second)
+            && rate_ok(self.rx_bytes_per_second)
+            && (1..=300_000).contains(&self.window_ms)
+    }
+}
+
+fn rate_ok(value: Option<f64>) -> bool {
+    value.is_none_or(|rate| rate.is_finite() && rate >= 0.0)
+}
+
+mod rfc3339_millis {
+    use super::*;
+
+    pub fn serialize<S: serde::Serializer>(
+        value: &DateTime<Utc>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&value.to_rfc3339_opts(SecondsFormat::Millis, true))
+    }
+
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<DateTime<Utc>, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        DateTime::parse_from_rfc3339(&text)
+            .map(|value| value.with_timezone(&Utc))
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+/// `telemetry.sample` (agent to control plane). Measurements use the v1 shape
+/// where possible, plus a `scopeKey` and counter-derived network rates.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TelemetrySample {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscription_id: Option<String>,
+    pub purpose: TelemetryPurpose,
+    #[serde(with = "rfc3339_millis")]
+    pub sampled_at: DateTime<Utc>,
+    pub cpu_percent: Option<f64>,
+    pub memory: Option<TelemetryUsage>,
+    pub disk: Option<TelemetryUsage>,
+    pub environment: TelemetryEnvironment,
+    pub network_scope: String,
+    pub cgroup_version: Option<u8>,
+    pub cpu_limit: Option<f64>,
+    pub memory_limit: Option<u64>,
+    pub scope_key: String,
+    pub network: Option<TelemetryNetwork>,
+}
+
+impl TelemetrySample {
+    fn check(&self) -> bool {
+        self.subscription_id
+            .as_ref()
+            .is_none_or(|id| subscription_id_ok(id))
+            && self
+                .cpu_percent
+                .is_none_or(|cpu| cpu.is_finite() && (0.0..=100.0).contains(&cpu))
+            && self.memory.as_ref().is_none_or(TelemetryUsage::check)
+            && self.disk.as_ref().is_none_or(TelemetryUsage::check)
+            && self.network_scope == "agent"
+            && self
+                .cgroup_version
+                .is_none_or(|version| matches!(version, 1 | 2))
+            && self
+                .cpu_limit
+                .is_none_or(|limit| limit.is_finite() && limit > 0.0)
+            && bounded(&self.scope_key, 1, 256)
+            && self.network.as_ref().is_none_or(TelemetryNetwork::check)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TelemetryProtocol {
+    Tcp,
+    Udp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TelemetryListener {
+    pub protocol: TelemetryProtocol,
+    pub address: String,
+    pub port: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TelemetryInterface {
+    pub name: String,
+    pub address: String,
+}
+
+/// `telemetry.snapshot` (agent to control plane): the v1 inspection snapshot,
+/// answered only for a `telemetry.inspect` request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TelemetrySnapshot {
+    pub request_id: String,
+    pub partial: bool,
+    pub listeners: Vec<TelemetryListener>,
+    pub interfaces: Vec<TelemetryInterface>,
+}
+
+impl TelemetrySnapshot {
+    fn check(&self) -> bool {
+        bounded(&self.request_id, 1, 128)
+            && self.listeners.len() <= 128
+            && self.listeners.iter().all(|listener| {
+                listener.port > 0 && !listener.address.is_empty() && listener.address.len() <= 64
+            })
+            && self.interfaces.len() <= 128
+            && self.interfaces.iter().all(|interface| {
+                bounded(&interface.name, 1, 32)
+                    && !interface.address.is_empty()
+                    && interface.address.len() <= 64
+            })
+    }
+}
+
 /// `config.snapshot.begin` (control plane to agent). `desired` names the version
 /// actually compiled, which may be newer than the notified one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -823,6 +1066,119 @@ mod tests {
         };
         assert_eq!(payload.limits.snapshot_chunk_bytes, 65_536);
         assert_eq!(payload.reconnect_before_seconds, Some(240));
+    }
+
+    #[test]
+    fn telemetry_fixtures_decode_to_the_shared_shape() {
+        let document: Value = serde_json::from_str(FIXTURES).unwrap();
+        let frames = document["frames"].as_array().unwrap();
+        let decode_named = |name: &str, sender| {
+            let entry = frames.iter().find(|entry| entry["name"] == name).unwrap();
+            let text = serde_json::to_string(&entry["frame"]).unwrap();
+            decode(&text, sender, MAX_FRAME_BYTES).unwrap().message
+        };
+
+        let Message::TelemetrySubscribe(subscribe) = decode_named(
+            "control telemetry subscription for a coalesced live stream",
+            Sender::ControlPlane,
+        ) else {
+            panic!("expected telemetry.subscribe");
+        };
+        assert_eq!(subscribe.subscription_id, "live-srv-1");
+        assert_eq!(subscribe.purpose, TelemetryPurpose::Live);
+        assert_eq!(subscribe.interval_ms, 2000);
+
+        let Message::TelemetrySample(sample) = decode_named(
+            "agent live telemetry sample with network rates and a scope key",
+            Sender::Agent,
+        ) else {
+            panic!("expected telemetry.sample");
+        };
+        assert_eq!(sample.purpose, TelemetryPurpose::Live);
+        assert_eq!(sample.subscription_id.as_deref(), Some("live-srv-1"));
+        assert_eq!(sample.scope_key, "systemd|-|-|-|eth0,eth1");
+        let network = sample.network.expect("live network rates");
+        assert_eq!(network.tx_bytes_per_second, Some(8192.5));
+        assert_eq!(network.rx_bytes_per_second, Some(65_536.0));
+        assert_eq!(network.window_ms, 2000);
+
+        let Message::TelemetrySample(history) = decode_named(
+            "agent history telemetry sample with a missing network reading",
+            Sender::Agent,
+        ) else {
+            panic!("expected telemetry.sample");
+        };
+        assert_eq!(history.purpose, TelemetryPurpose::History);
+        assert_eq!(history.environment, TelemetryEnvironment::Docker);
+        assert_eq!(history.cgroup_version, Some(2));
+        assert_eq!(history.cpu_limit, Some(2.0));
+        assert_eq!(history.memory_limit, Some(8_589_934_592));
+        assert!(history.network.is_none());
+
+        let Message::TelemetryInspect(inspect) = decode_named(
+            "control on-demand telemetry inspection",
+            Sender::ControlPlane,
+        ) else {
+            panic!("expected telemetry.inspect");
+        };
+        assert_eq!(inspect.request_id, "inspect-1");
+
+        let Message::TelemetrySnapshot(snapshot) =
+            decode_named("agent telemetry snapshot for an inspection", Sender::Agent)
+        else {
+            panic!("expected telemetry.snapshot");
+        };
+        assert_eq!(snapshot.request_id, "inspect-1");
+        assert_eq!(snapshot.listeners.len(), 1);
+        assert_eq!(snapshot.listeners[0].protocol, TelemetryProtocol::Tcp);
+        assert_eq!(snapshot.listeners[0].port, 8080);
+        assert_eq!(snapshot.interfaces[0].name, "eth0");
+    }
+
+    #[test]
+    fn outbound_telemetry_round_trips_with_millisecond_time() {
+        let sample = TelemetrySample {
+            subscription_id: Some("live-srv-1".into()),
+            purpose: TelemetryPurpose::Live,
+            sampled_at: DateTime::parse_from_rfc3339("2026-11-19T00:02:02.000Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            cpu_percent: Some(37.5),
+            memory: Some(TelemetryUsage {
+                used: 1024,
+                total: 2048,
+            }),
+            disk: None,
+            environment: TelemetryEnvironment::Systemd,
+            network_scope: "agent".into(),
+            cgroup_version: None,
+            cpu_limit: None,
+            memory_limit: None,
+            scope_key: "systemd|-|-|-|eth0".into(),
+            network: Some(TelemetryNetwork {
+                tx_bytes_per_second: Some(1.5),
+                rx_bytes_per_second: Some(2.0),
+                window_ms: 2000,
+            }),
+        };
+        let text = encode("telemetry.sample", &sample, None).unwrap();
+        assert!(text.contains("\"sampledAt\":\"2026-11-19T00:02:02.000Z\""));
+        let decoded = decode(&text, Sender::Agent, MAX_FRAME_BYTES).unwrap();
+        assert_eq!(decoded.message, Message::TelemetrySample(sample));
+    }
+
+    #[test]
+    fn telemetry_rejects_out_of_contract_values() {
+        let bad_interval = r#"{"v":2,"type":"telemetry.subscribe","ts":"2026-11-19T00:00:00Z","payload":{"subscriptionId":"live-1","purpose":"live","intervalMs":999}}"#;
+        assert_eq!(
+            decode(bad_interval, Sender::ControlPlane, MAX_FRAME_BYTES).unwrap_err(),
+            DecodeError::InvalidPayload("telemetry.subscribe".into())
+        );
+        let bad_window = r#"{"v":2,"type":"telemetry.sample","ts":"2026-11-19T00:00:00Z","payload":{"purpose":"live","sampledAt":"2026-11-19T00:00:00Z","cpuPercent":null,"memory":null,"disk":null,"environment":"unknown","networkScope":"agent","cgroupVersion":null,"cpuLimit":null,"memoryLimit":null,"scopeKey":"unknown|-|-|-|-","network":{"txBytesPerSecond":null,"rxBytesPerSecond":null,"windowMs":0}}}"#;
+        assert_eq!(
+            decode(bad_window, Sender::Agent, MAX_FRAME_BYTES).unwrap_err(),
+            DecodeError::InvalidPayload("telemetry.sample".into())
+        );
     }
 
     #[test]

@@ -27,10 +27,11 @@ use super::adapter::V2Connection;
 use super::codec::{
     self, AckOutcome, AckStage, ConfigAck, ConfigGet, ConfigIdentifier, ConfigNotify, ConfigState,
     DecodeError, ErrorCode, ErrorFrame, GetReason, Hello, Limits, MAX_FRAME_BYTES, Message,
-    RuntimeState, Sender, StatusError, StatusReason, StatusReport, TrafficReport, TrafficResult,
-    UpdatePolicy,
+    RuntimeState, Sender, StatusError, StatusReason, StatusReport, TelemetrySubscribe,
+    TrafficReport, TrafficResult, UpdatePolicy,
 };
 use super::snapshot::{SnapshotAssembler, SnapshotError, SnapshotLimits, VerifiedSnapshot};
+use super::telemetry::{self, Command as TelemetryCommand, HostSampler, Output as TelemetryOutput};
 use crate::ws::codec::{CertificateDeployment, UpdateStatusPayload};
 use crate::ws::ports::WsError;
 
@@ -300,6 +301,78 @@ struct State {
     failed_hold: Duration,
 }
 
+/// The per-session telemetry task and its bounded queues. Creating a new
+/// session creates a new engine, so subscriptions never cross a replacement.
+struct SessionTelemetry {
+    commands: Option<mpsc::Sender<TelemetryCommand>>,
+    outputs: Option<mpsc::Receiver<TelemetryOutput>>,
+    engine: Option<tokio::task::JoinHandle<()>>,
+    cancel: CancellationToken,
+}
+
+impl SessionTelemetry {
+    fn new(sampler: Option<Box<dyn HostSampler>>, session_cancel: &CancellationToken) -> Self {
+        let cancel = session_cancel.child_token();
+        let Some(sampler) = sampler else {
+            return Self {
+                commands: None,
+                outputs: None,
+                engine: None,
+                cancel,
+            };
+        };
+        let (commands, receiver) = mpsc::channel(8);
+        let (outputs, output_receiver) = mpsc::channel(16);
+        let engine_cancel = cancel.clone();
+        let engine = tokio::spawn(telemetry::run(sampler, receiver, outputs, engine_cancel));
+        Self {
+            commands: Some(commands),
+            outputs: Some(output_receiver),
+            engine: Some(engine),
+            cancel,
+        }
+    }
+
+    fn subscribe(&self, subscription: TelemetrySubscribe) {
+        self.send(TelemetryCommand::Subscribe(subscription));
+    }
+
+    fn unsubscribe(&self, subscription_id: String) {
+        self.send(TelemetryCommand::Unsubscribe(subscription_id));
+    }
+
+    fn inspect(&self, request_id: String) {
+        self.send(TelemetryCommand::Inspect(request_id));
+    }
+
+    fn send(&self, command: TelemetryCommand) {
+        let Some(commands) = self.commands.as_ref() else {
+            return;
+        };
+        if commands.try_send(command).is_err() {
+            debug!("dropping a telemetry command because the session queue is full");
+        }
+    }
+
+    async fn stop(&mut self) {
+        self.cancel.cancel();
+        if let Some(engine) = self.engine.take() {
+            let _ = engine.await;
+        }
+        self.commands = None;
+        self.outputs = None;
+    }
+}
+
+async fn next_telemetry_output(
+    outputs: &mut Option<mpsc::Receiver<TelemetryOutput>>,
+) -> Option<TelemetryOutput> {
+    match outputs {
+        Some(outputs) => outputs.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
 /// Runs one connection to completion. It returns when the connection ends, the
 /// control plane replaces or disables the session, or `cancel` fires.
 pub async fn run<W: Wire>(
@@ -307,9 +380,12 @@ pub async fn run<W: Wire>(
     ports: &mut SessionPorts,
     identity: &HelloIdentity,
     timing: &SessionTiming,
+    sampler: Option<Box<dyn HostSampler>>,
     cancel: &CancellationToken,
 ) -> SessionEnd {
-    let end = run_connection(wire, ports, identity, timing, cancel).await;
+    let mut telemetry = SessionTelemetry::new(sampler, cancel);
+    let end = run_connection(wire, ports, identity, timing, &mut telemetry, cancel).await;
+    telemetry.stop().await;
     // The session is over, so the traffic reports awaiting acknowledgement and
     // any queued apply belong to this connection and are dropped with it.
     let _ = ports.online.send(false);
@@ -322,6 +398,7 @@ async fn run_connection<W: Wire>(
     ports: &mut SessionPorts,
     identity: &HelloIdentity,
     timing: &SessionTiming,
+    telemetry: &mut SessionTelemetry,
     cancel: &CancellationToken,
 ) -> SessionEnd {
     let hello = build_hello(identity, &ports.status.borrow());
@@ -352,6 +429,7 @@ async fn run_connection<W: Wire>(
     let mut ping_tick = tokio::time::interval(timing.ping);
     ping_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     ping_tick.tick().await;
+    let mut telemetry_outputs = telemetry.outputs.take();
 
     let SessionPorts {
         status,
@@ -453,6 +531,22 @@ async fn run_connection<W: Wire>(
                     return SessionEnd::Lost { reason, welcomed: true };
                 }
             }
+            output = next_telemetry_output(&mut telemetry_outputs), if telemetry_outputs.is_some() => {
+                let Some(output) = output else {
+                    return SessionEnd::Cancelled;
+                };
+                let sent = match output {
+                    TelemetryOutput::Sample(sample) => {
+                        send_with_limit(wire, "telemetry.sample", &sample, None, frame_limit).await
+                    }
+                    TelemetryOutput::Snapshot(snapshot) => {
+                        send_with_limit(wire, "telemetry.snapshot", &snapshot, None, frame_limit).await
+                    }
+                };
+                if let Err(reason) = sent {
+                    return SessionEnd::Lost { reason, welcomed: state.welcomed };
+                }
+            }
             received = wire.recv_text() => {
                 let text = match received {
                     Ok(text) => text,
@@ -486,6 +580,7 @@ async fn run_connection<W: Wire>(
                         policy,
                         refusals,
                         online,
+                        telemetry,
                         frame_limit: &mut frame_limit,
                         failed: &mut *failed,
                     },
@@ -512,6 +607,7 @@ struct Context<'a, W: Wire> {
     policy: &'a mut watch::Sender<UpdatePolicy>,
     refusals: &'a mut mpsc::Sender<SnapshotRefusal>,
     online: &'a mut watch::Sender<bool>,
+    telemetry: &'a SessionTelemetry,
     frame_limit: &'a mut usize,
     failed: &'a mut FailedApply,
 }
@@ -527,6 +623,7 @@ async fn handle<W: Wire>(
         policy,
         refusals,
         online,
+        telemetry,
         frame_limit,
         failed,
     } = context;
@@ -664,6 +761,18 @@ async fn handle<W: Wire>(
                 let _ = waiter.send(outcome);
             }
         }
+        Message::TelemetrySubscribe(subscription) => {
+            require_welcome(state, wire, "telemetry.subscribe").await?;
+            telemetry.subscribe(subscription);
+        }
+        Message::TelemetryUnsubscribe(unsubscribe) => {
+            require_welcome(state, wire, "telemetry.unsubscribe").await?;
+            telemetry.unsubscribe(unsubscribe.subscription_id);
+        }
+        Message::TelemetryInspect(inspect) => {
+            require_welcome(state, wire, "telemetry.inspect").await?;
+            telemetry.inspect(inspect.request_id);
+        }
         Message::Error(frame) => match frame.code {
             ErrorCode::SessionReplaced => return Ok(Flow::End(SessionEnd::Replaced)),
             ErrorCode::ServerDisabled => return Ok(Flow::End(SessionEnd::ServerDisabled)),
@@ -683,6 +792,8 @@ async fn handle<W: Wire>(
         | Message::ConfigGet(_)
         | Message::ConfigAck(_)
         | Message::TrafficReport(_)
+        | Message::TelemetrySample(_)
+        | Message::TelemetrySnapshot(_)
         | Message::Unknown(_) => {}
     }
     Ok(Flow::Continue)
@@ -820,6 +931,29 @@ async fn send<W: Wire, P: Serialize>(
     id: Option<&str>,
 ) -> Result<(), String> {
     let text = codec::encode(message_type, payload, id).map_err(|error| error.to_string())?;
+    wire.send_text(text).await.map_err(|error| error.describe())
+}
+
+/// Sends a frame only when its encoded size fits the negotiated limit. A
+/// telemetry snapshot with an unexpectedly large payload is dropped rather
+/// than tearing down the session.
+async fn send_with_limit<W: Wire, P: Serialize>(
+    wire: &mut W,
+    message_type: &str,
+    payload: &P,
+    id: Option<&str>,
+    max_frame_bytes: usize,
+) -> Result<(), String> {
+    let text = codec::encode(message_type, payload, id).map_err(|error| error.to_string())?;
+    if text.len() > max_frame_bytes {
+        warn!(
+            message_type,
+            bytes = text.len(),
+            max = max_frame_bytes,
+            "dropping an oversized outbound telemetry frame"
+        );
+        return Ok(());
+    }
     wire.send_text(text).await.map_err(|error| error.describe())
 }
 

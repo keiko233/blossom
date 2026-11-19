@@ -16,12 +16,23 @@ configured port is an overlap indicator, since a socket can belong to the
 managed sing-box process. Telemetry uses no Docker socket, host mounts or
 shell commands.
 
-The v2 telemetry frames, subscription cadence, scope key and network-rate
-aggregation are a forward contract only: the Rust client still implements
-`telemetry-v1`. The control plane can serve v2 telemetry as soon as an agent
-advertises `telemetry-v2` / `telemetry-history-v2`. See
-[Agent WebSocket v2](agent-ws-v2.md#telemetry) and the wire fixtures before
-changing the collector.
+The same Linux collector also serves protocol v2. A `--ws-protocol v2` agent
+advertises `telemetry-v2` and `telemetry-history-v2`; a legacy agent keeps
+`telemetry-v1`. One sampler runs per v2 connection. `live` subscriptions use
+the control plane's coalesced interval, while `history` runs on its own
+minute-or-longer cadence, including when no admin viewer is connected. A
+replaced session starts with no subscriptions.
+
+Network rates are sums of counter deltas across a stable, sorted set of
+non-loopback `/proc/net/dev` interfaces, divided by a monotonic elapsed
+window. The first observation, a counter reset, an interface-set change, a
+failed read, or a non-monotonic/oversized window sends `network: null`; a
+changed interface set also changes `scopeKey`. `scopeKey` is
+`environment|cgroup|cpulimit|memorylimit|interfaces` with `-` for absent
+values, for example `systemd|-|-|-|eth0,eth1`. Sampling and inspection run on
+blocking threads behind bounded queues, so config application and traffic
+acknowledgements stay responsive. See
+[Agent WebSocket v2](agent-ws-v2.md#telemetry).
 
 ## Module map
 
@@ -35,7 +46,8 @@ changing the collector.
 | `src/ws/ports.rs`  | Narrow `WsTransport`/`WsConnection`/`AgentCommandSink` traits, the bounded outbound queue, and the jittered backoff/fallback policy.                            |
 | `src/ws/adapters.rs` | `tokio-tungstenite` transport: `/api/agent/ws` URL derivation, sensitive bearer header, `rustls` (`ring`) TLS.                                                |
 | `src/ws/mod.rs`    | Reconnect loop: `hello` on every connect, keepalive ping/pong, proactive reconnect, and HTTP-fallback signalling.                                               |
-| `src/ws/v2/`       | Opt-in protocol v2: `serde`-backed codec, subprotocol adapter, bounded snapshot assembler, session state machine, reconnect/backoff, and traffic acknowledgement routing. |
+| `src/ws/v2/`       | Opt-in protocol v2: `serde`-backed codec, subprotocol adapter, bounded snapshot assembler, session state machine, reconnect/backoff, traffic acknowledgement routing, and the per-session telemetry engine. |
+| `src/ws/v2/telemetry/` | v2 subscriptions and coalesced sampling: Linux collector reuse, scoped network counter deltas, inspection snapshots, and bounded output queues. |
 | `src/acme/mod.rs`  | Bounded ACME job manager: typed issue/ack dispatch, per-job deadline, duplicate-result replay, and challenge solver wiring.                                      |
 | `src/acme/ports.rs` | Consumer-owned ACME/DNS/challenge ports, redacting secret wrappers, typed error phases, and the order state machine.                                             |
 | `src/acme/instant_backend.rs` | `instant-acme` adapter for Let's Encrypt/ZeroSSL, EAB decoding, order/finalize/certificate flow, and cleanup on every exit path.                           |
@@ -80,7 +92,8 @@ The agent opens one outbound WebSocket to `<AGENT_URL>/agent/ws` (`https` -> `ws
 - Configuration arrives as bounded, ordered, digest-validated snapshots and only the verified body reaches the ordinary compile, preflight, promote, probation, and rollback path. A partial snapshot is discarded on disconnect; a failed identifier (including a refused snapshot) is held briefly so status reconciliation cannot spin on the same request.
 - `hello` reports the applied identifier or `null`. `welcome` and `agent.status.ack` carry the authoritative identifier, so a missed `config.notify` is recovered on the next status exchange. Deadlines, liveness, proactive `reconnectBeforeSeconds`, and jittered backoff (about 1 s to 60 s) are handled in `src/ws/v2/link.rs`; no HTTP fallback is attempted.
 - Traffic uses the same durable outbox as v1. A report stays on disk until `traffic.ack`; a lost acknowledgement or session resends the identical `reportId` and payload, and the control-plane ledger answers `duplicate`.
-- PTY, ACME, telemetry, update messages, and log-policy messages are not served by v2. The v2 `hello` therefore withholds `pty-v1`, `acme-v1`, and `telemetry-v1`, and version targets arrive only as `updatePolicy`. Promoting v2 to the global default remains a separate change.
+- Telemetry v2 is served on Linux: `telemetry.subscribe` starts or replaces a `live`/`history` cadence, `telemetry.unsubscribe` stops it, `telemetry.inspect` answers with the existing snapshot, and samples carry a `scopeKey` plus counter-derived network rates. Subscriptions belong to one connection and are dropped when it ends.
+- PTY, ACME, update messages, and log-policy messages are not served by v2. The v2 `hello` therefore withholds `pty-v1`, `acme-v1`, and `telemetry-v1`; version targets arrive only as `updatePolicy`. Promoting v2 to the global default remains a separate change.
 
 ### Agent-executed ACME
 
@@ -155,7 +168,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 ```
 
 - Unit tests are inline in each module (`#[test]` / `#[tokio::test]`); they need neither sing-box nor a network. `rcgen` (dev-dependency) builds throw-away certificates for the certificate tests.
-- `tests/ws_v2_lifecycle.rs` is a process-level, loopback-only test. It runs the built agent with a temporary state directory, a fake sing-box, and a local v2 WebSocket control plane that fails and records any HTTP agent API request. It covers cold apply, exact traffic replay after a lost `traffic.ack`, status reconciliation, failed-apply rollback, and offline last-known-good startup. It runs as part of `cargo test --locked`.
+- `tests/ws_v2_lifecycle.rs` is a process-level, loopback-only test. It runs the built agent with a temporary state directory, a fake sing-box, and a local v2 WebSocket control plane that fails and records any HTTP agent API request. It covers cold apply, exact traffic replay after a lost `traffic.ack`, status reconciliation, failed-apply rollback, offline last-known-good startup, a history sample with no viewer, a live sample with network rates, inspection, and unsubscribed sessions. It runs as part of `cargo test --locked`.
 - CI additionally builds the agent image and runs the managed-TLS lifecycle test:
 
   ```bash
