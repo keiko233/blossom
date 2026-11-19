@@ -12,6 +12,9 @@ mod agent_v2;
 mod certificate;
 mod client;
 mod config;
+mod log_policy;
+mod logs;
+mod oauth;
 mod process;
 mod pty;
 mod stats;
@@ -29,17 +32,26 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use chrono::Utc;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use tokio::signal;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
+use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::reload;
+use tracing_subscriber::util::SubscriberInitExt as _;
 
 use crate::acme::AcmeManager;
 use crate::acme::instant_backend::InstantAcmeBackend;
 use crate::acme::ports::DEFAULT_CHALLENGE_TIMEOUT;
 use crate::acme::solver_dns01::DnsAck;
 use crate::config::{AgentPolicy, CandidateConfig, ConfigError, ConfigManager, FetchStatus};
+use crate::log_policy::{
+    AgentFilter, DecisionReason, Level as PolicyLevel, LogOverlay, LogPolicy, PolicyAction,
+    PolicyStatus, Source as PolicySource,
+};
+use crate::logs::{CaptureLayer, LogStore, SecretScope};
 use crate::process::{ProcessState, SingBoxManager, check_config, resolve_binary, singbox_version};
 use crate::traffic::TrafficReporter;
 use crate::update::{
@@ -79,15 +91,37 @@ fn agent_capabilities(pty_enabled: bool) -> Vec<&'static str> {
 
 #[derive(Parser)]
 #[command(name = "server-agent", version, about = "blossom proxy server agent")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
+    #[command(flatten)]
+    service: Args,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Redeem one enrollment grant and write a protected credential file.
+    Enroll(oauth::EnrollArgs),
+}
+
+#[derive(clap::Args)]
 struct Args {
     /// Base URL of the blossom API, including the `/api` prefix
     /// (e.g. http://localhost:3000/api).
     #[arg(long, env = "AGENT_URL")]
-    url: String,
+    url: Option<String>,
 
     /// Per-server agent token (shown once at server creation or token reset).
+    /// Static-token mode is for legacy/backup installations; OAuth
+    /// installations use `--credentials-file` instead.
     #[arg(long, env = "AGENT_TOKEN")]
-    token: String,
+    token: Option<String>,
+
+    /// OAuth machine credential file written by `server-agent enroll`.
+    /// Selecting this file enables protocol v2 automatically.
+    #[arg(long, env = "AGENT_CREDENTIALS_FILE", value_name = "FILE")]
+    credentials_file: Option<PathBuf>,
 
     /// Bootstrap interval until the control plane returns per-server settings.
     #[arg(
@@ -122,6 +156,8 @@ struct Args {
     #[arg(
         long,
         default_value_t = false,
+        num_args = 0..=1,
+        default_missing_value = "true",
         env = "AGENT_SELF_UPDATE",
         value_parser = clap::builder::BoolishValueParser::new()
     )]
@@ -160,21 +196,27 @@ struct Args {
     )]
     update_retry_seconds: u64,
 
-    /// Connect the push WebSocket; when disabled (or rejected by the control
-    /// plane) the agent keeps the HTTP config poll and heartbeat.
+    /// Connect the push WebSocket. This is required for protocol v2; the
+    /// explicit legacy protocol may run with it disabled and use only the HTTP
+    /// config poll and heartbeat.
     #[arg(
         long,
         default_value_t = true,
+        num_args = 0..=1,
+        default_missing_value = "true",
         env = "AGENT_WS_ENABLED",
         value_parser = clap::builder::BoolishValueParser::new()
     )]
     ws_enabled: bool,
 
-    /// Agent WebSocket protocol. `legacy` keeps the v1 WebSocket with the HTTP
-    /// config poll, heartbeat, and traffic reports. `v2` carries configuration,
-    /// status, and traffic over `blossom-agent.v2` and makes no HTTP requests.
-    #[arg(long, value_enum, default_value_t = WsProtocol::Legacy, env = "AGENT_WS_PROTOCOL")]
-    ws_protocol: WsProtocol,
+    /// Agent WebSocket protocol. `v2` is the default for both OAuth credential
+    /// files and explicit static backup tokens: configuration, status, and
+    /// traffic travel over `blossom-agent.v2` and no HTTP agent API is used.
+    /// `legacy` is an explicit opt-in for installations that still need the v1
+    /// WebSocket with the HTTP config poll, heartbeat, and traffic reports.
+    /// OAuth credentials are refused with `legacy`.
+    #[arg(long, value_enum, env = "AGENT_WS_PROTOCOL")]
+    ws_protocol: Option<WsProtocol>,
 
     /// Probation before a v2 candidate config is committed. A test harness knob.
     #[arg(
@@ -266,10 +308,104 @@ struct Args {
 /// The agent WebSocket protocol selected at start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum WsProtocol {
-    /// The v1 WebSocket with HTTP config poll, heartbeat, and traffic (the shipped default).
+    /// Explicit legacy mode: the v1 WebSocket with HTTP config poll,
+    /// heartbeat, and traffic.
     Legacy,
-    /// Protocol v2: WebSocket-only, with no HTTP agent API calls.
+    /// Protocol v2 (the default): WebSocket-only, with no HTTP agent API calls.
     V2,
+}
+
+/// The credential input selected for this process. Exactly one is present.
+pub(crate) enum AuthMode {
+    Static(String),
+    OAuth(PathBuf),
+}
+
+impl AuthMode {
+    pub(crate) fn static_token(&self) -> Option<&str> {
+        match self {
+            Self::Static(token) => Some(token),
+            Self::OAuth(_) => None,
+        }
+    }
+}
+
+/// Validated service startup inputs.
+pub(crate) struct ServiceStartup {
+    pub(crate) url: String,
+    pub(crate) auth: AuthMode,
+    pub(crate) protocol: WsProtocol,
+}
+
+/// The explicit WebSocket-disabled deprecation warning. It names the exact
+/// action that keeps an existing static-token installation running and the
+/// action that removes HTTP from the deployment.
+const WS_DISABLED_DEPRECATION: &str = concat!(
+    "agent websocket disabled without an explicit protocol; starting legacy HTTP-only mode. ",
+    "This implicit fallback is deprecated: keep it explicitly with --ws-protocol legacy ",
+    "(or AGENT_WS_PROTOCOL=legacy), or enable the websocket with --ws-enabled=true ",
+    "(or AGENT_WS_ENABLED=true) to use protocol v2"
+);
+
+impl Args {
+    /// Resolves the base URL, the one credential input, and the transport.
+    ///
+    /// Both OAuth credential files and explicit static backup tokens default to
+    /// protocol v2, so the installer unit and the container entry point need no
+    /// protocol flag. `--ws-protocol legacy` is the explicit compatibility
+    /// opt-in; OAuth never falls back to a static token or HTTP.
+    fn startup(&self) -> Result<ServiceStartup> {
+        let url = self
+            .url
+            .as_deref()
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("--url (or AGENT_URL) is required"))?
+            .to_string();
+
+        let (auth, default_protocol) = match (self.token.as_deref(), &self.credentials_file) {
+            (Some(token), None) => (AuthMode::Static(token.to_string()), WsProtocol::V2),
+            (None, Some(path)) => (AuthMode::OAuth(path.clone()), WsProtocol::V2),
+            (Some(_), Some(_)) => {
+                return Err(anyhow::anyhow!(
+                    "choose either --token (static backup) or --credentials-file (OAuth), not both"
+                ));
+            }
+            (None, None) => {
+                return Err(anyhow::anyhow!(
+                    "one of --token (static) or --credentials-file (OAuth) is required"
+                ));
+            }
+        };
+        // A WS-disabled installation predates the v2 default. With no protocol
+        // flag it keeps its HTTP poll/heartbeat path instead of failing to
+        // start, but the fallback is explicit in the log and deprecated. An
+        // explicit v2 request with the WebSocket disabled stays incompatible.
+        let protocol = match (self.ws_protocol, self.ws_enabled) {
+            (None, false) => WsProtocol::Legacy,
+            (Some(protocol), _) => protocol,
+            (None, true) => default_protocol,
+        };
+        let implicit_legacy = self.ws_protocol.is_none() && !self.ws_enabled;
+        if matches!(auth, AuthMode::OAuth(_)) && protocol != WsProtocol::V2 {
+            return Err(anyhow::anyhow!(
+                "OAuth credentials require protocol v2; legacy HTTP-only mode needs a static token and --ws-protocol legacy"
+            ));
+        }
+        if !self.ws_enabled && protocol == WsProtocol::V2 {
+            return Err(anyhow::anyhow!(
+                "protocol v2 is the WebSocket path and cannot run with --ws-enabled=false; use --ws-protocol legacy with a static token for HTTP-only mode"
+            ));
+        }
+        if implicit_legacy {
+            warn!(WS_DISABLED_DEPRECATION);
+        }
+        Ok(ServiceStartup {
+            url,
+            auth,
+            protocol,
+        })
+    }
 }
 
 fn new_update_manager(args: &Args, sing_box_version: Option<String>) -> Result<UpdateManager> {
@@ -360,18 +496,87 @@ fn parse_level(level: &str) -> tracing::Level {
     }
 }
 
+fn policy_level(level: &str) -> PolicyLevel {
+    match parse_level(level) {
+        tracing::Level::TRACE => PolicyLevel::Trace,
+        tracing::Level::DEBUG => PolicyLevel::Debug,
+        tracing::Level::WARN => PolicyLevel::Warn,
+        tracing::Level::ERROR => PolicyLevel::Error,
+        _ => PolicyLevel::Info,
+    }
+}
+
+fn tracing_level(level: PolicyLevel) -> tracing::Level {
+    match level {
+        PolicyLevel::Trace => tracing::Level::TRACE,
+        PolicyLevel::Debug => tracing::Level::DEBUG,
+        PolicyLevel::Warn => tracing::Level::WARN,
+        PolicyLevel::Error => tracing::Level::ERROR,
+        // `default` is resolved to a concrete baseline before it reaches a
+        // filter, so `info` is only a defensive fallback.
+        PolicyLevel::Default | PolicyLevel::Info => tracing::Level::INFO,
+    }
+}
+
+struct ReloadingFilter {
+    handle: reload::Handle<LevelFilter, tracing_subscriber::Registry>,
+}
+
+impl AgentFilter for ReloadingFilter {
+    fn set_level(&self, level: PolicyLevel) -> Result<(), String> {
+        self.handle
+            .reload(LevelFilter::from_level(tracing_level(level)))
+            .map_err(|error| error.to_string())
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    let cli = Cli::parse();
+    if let Some(Command::Enroll(enroll)) = &cli.command {
+        return oauth::run_enroll(enroll).await;
+    }
+    let args = cli.service;
+    let startup = args.startup()?;
+
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let args = Args::parse();
-    tracing_subscriber::fmt()
-        .with_max_level(parse_level(&args.log_level))
+    let logs = LogStore::shared();
+    let agent_baseline = policy_level(&args.log_level);
+    let (level_filter, level_handle) =
+        reload::Layer::new(LevelFilter::from_level(parse_level(&args.log_level)));
+    tracing_subscriber::registry()
+        .with(level_filter)
+        .with(tracing_subscriber::fmt::layer())
+        .with(CaptureLayer::new(logs.clone()))
         .init();
-    if args.ws_protocol == WsProtocol::V2 {
-        return agent_v2::run(&args).await;
+    let (log_policy, policy_warnings) = LogPolicy::load(
+        &args.state_dir,
+        agent_baseline,
+        Arc::new(ReloadingFilter {
+            handle: level_handle,
+        }),
+        Utc::now(),
+    );
+    let log_policy = Arc::new(log_policy);
+    for warning in policy_warnings {
+        warn!("{warning}");
+    }
+    let agent_secrets: Vec<&str> = startup
+        .auth
+        .static_token()
+        .into_iter()
+        .chain(args.github_token.as_deref())
+        .collect();
+    logs.replace_secrets(SecretScope::Agent, agent_secrets)?;
+    if startup.protocol == WsProtocol::V2 {
+        return agent_v2::run(&args, &startup, logs.clone(), log_policy).await;
     }
 
-    let client = client::new_client(&args.url, &args.token)?;
+    let token = startup
+        .auth
+        .static_token()
+        .expect("legacy protocol requires a static token");
+    let client = client::new_client(&startup.url, token)?;
 
     let bin = resolve_binary(args.sing_box_path.clone());
     let mut sing_box_version = singbox_version(&bin).await;
@@ -384,7 +589,13 @@ async fn main() -> Result<()> {
     }
     let state_dir = args.state_dir.clone();
     let traffic_dir = state_dir.join("traffic");
-    let mut config = ConfigManager::new(client.clone(), state_dir.clone())?;
+    let mut config = ConfigManager::new(
+        client.clone(),
+        state_dir.clone(),
+        logs.clone(),
+        log_policy.clone(),
+    )?;
+    logs.replace_secrets(SecretScope::StatsApi, config.api_endpoint().secret.iter())?;
     let mut updates = new_update_manager(&args, sing_box_version.clone())?;
     let (mut manager, startup_error) = start_last_known_good(&mut config, &bin).await;
     let api_endpoint = config.api_endpoint().clone();
@@ -440,8 +651,8 @@ async fn main() -> Result<()> {
     }
     let mut ws_link = if args.ws_enabled {
         start_ws(
-            &args.url,
-            &args.token,
+            &startup.url,
+            token,
             hello_snapshot.clone(),
             command_receiver,
             command_sink.clone(),
@@ -515,6 +726,9 @@ async fn main() -> Result<()> {
     let mut pty_tick = tokio::time::interval(Duration::from_secs(15));
     pty_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     pty_tick.tick().await;
+    let mut log_policy_tick = tokio::time::interval(Duration::from_secs(5));
+    log_policy_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    log_policy_tick.tick().await;
 
     loop {
         let ws_event = async {
@@ -524,6 +738,16 @@ async fn main() -> Result<()> {
             }
         };
         tokio::select! {
+            _ = log_policy_tick.tick() => {
+                log_policy_maintenance(
+                    &log_policy,
+                    &mut config,
+                    &mut manager,
+                    &bin,
+                    RUNTIME_PROBATION,
+                )
+                .await;
+            }
             _ = pty_tick.tick() => {
                 for exit in pty_manager.reap_expired(Instant::now()) {
                     send_pty_exit(command_sink.as_ref(), exit);
@@ -698,6 +922,126 @@ impl AgentStatus {
             observed_revision: config.observed_revision().map(str::to_owned),
             error: None,
         }
+    }
+}
+
+/// Runs the local half of the log-level policy: expires temporary overrides,
+/// retries failed applications with a bound, and applies agent filter changes.
+/// The v1 supervision loop and the v2 core both call it from their single
+/// select loop, so it is serialized with configuration reconciliation.
+async fn log_policy_maintenance(
+    policy: &Arc<LogPolicy>,
+    config: &mut ConfigManager,
+    manager: &mut Option<SingBoxManager>,
+    bin: &Path,
+    probation: Duration,
+) {
+    let now = Utc::now();
+    let mut decisions = policy.expire(now);
+    decisions.extend(policy.retry_due(now));
+    if decisions.is_empty() {
+        return;
+    }
+    // Apply one source at a time. A sing-box reload awaits probation, and the
+    // policy timestamps must reflect the world when that reload finishes.
+    for decision in decisions {
+        let Some(action) = decision.action.as_ref() else {
+            continue;
+        };
+        match action {
+            PolicyAction::Agent(level) => {
+                if let Some(status) = policy.apply_agent(*level, Utc::now()) {
+                    report_policy_status(&status, decision.reason);
+                }
+            }
+            PolicyAction::SingBox(overlay) => {
+                if !config.has_active_config() {
+                    // There is nothing to overlay yet. Keep the request pending
+                    // until a validated configuration exists.
+                    continue;
+                }
+                let result =
+                    apply_singbox_log_overlay(config, manager, bin, *overlay, probation).await;
+                match policy.record(PolicySource::SingBox, overlay.effective, result, Utc::now()) {
+                    Some(status) => report_policy_status(&status, decision.reason),
+                    None => warn!("log policy changed while the sing-box overlay applied"),
+                }
+            }
+        }
+    }
+}
+
+fn report_policy_status(status: &PolicyStatus, reason: DecisionReason) {
+    match &status.error {
+        Some(error) => warn!(
+            source = status.source.as_str(),
+            requested = status.requested.as_str(),
+            effective = status.effective.as_str(),
+            ?reason,
+            "log policy application failed: {error}"
+        ),
+        None => info!(
+            source = status.source.as_str(),
+            requested = status.requested.as_str(),
+            effective = status.effective.as_str(),
+            ?reason,
+            "log policy applied"
+        ),
+    }
+}
+
+/// Applies one log-only sing-box change through the same preflight, promotion,
+/// process replacement, probation and rollback path as a configuration apply.
+/// The desired revision is untouched; only the local `log.level` overlay moves.
+async fn apply_singbox_log_overlay(
+    config: &mut ConfigManager,
+    manager: &mut Option<SingBoxManager>,
+    bin: &Path,
+    overlay: LogOverlay,
+    probation: Duration,
+) -> Result<(), String> {
+    if !config.has_active_config() {
+        return Err("no active sing-box configuration to overlay".to_string());
+    }
+    if manager.is_some() {
+        warn!(
+            level = overlay.effective.as_str(),
+            "applying a sing-box log level; the process restarts briefly"
+        );
+    }
+    config
+        .stage_log_overlay(overlay)
+        .map_err(|error| error.to_string())?;
+    if let Err(error) = check_config(bin, config.candidate_path()).await {
+        return Err(error.to_string());
+    }
+    config
+        .promote_candidate()
+        .map_err(|error| error.to_string())?;
+
+    if let Some(current) = manager.take() {
+        current.shutdown().await;
+    }
+    match SingBoxManager::start(bin.to_path_buf(), config.config_path().clone()).await {
+        Ok(started) => *manager = Some(started),
+        Err(error) => {
+            let rolled_back = config.rollback().unwrap_or(false);
+            restore_runtime(manager, bin, config, rolled_back, probation).await;
+            return Err(error.to_string());
+        }
+    }
+
+    tokio::time::sleep(probation).await;
+    if manager.as_ref().map(SingBoxManager::state) == Some(ProcessState::Running) {
+        config
+            .commit_log_overlay()
+            .map_err(|error| error.to_string())?;
+        config.set_runtime_confirmed(true);
+        Ok(())
+    } else {
+        let rolled_back = config.rollback().unwrap_or(false);
+        restore_runtime(manager, bin, config, rolled_back, probation).await;
+        Err("sing-box did not become healthy with the new log level".to_string())
     }
 }
 
@@ -1953,11 +2297,16 @@ async fn heartbeat(
 #[cfg(test)]
 mod tests {
     use super::{
-        AGENT_CAPABILITIES, CandidateConfig, HelloSnapshot, PTY_CAPABILITY, agent_capabilities,
-        apply_ws_policy, node_id_from_error,
+        AGENT_CAPABILITIES, CandidateConfig, Cli, HelloSnapshot, PTY_CAPABILITY, WsProtocol,
+        agent_capabilities, apply_singbox_log_overlay, apply_ws_policy, node_id_from_error,
     };
     use crate::config::AgentPolicy;
+    use crate::log_policy::{
+        Level as PolicyLevel, LogPolicy, PolicyRequest, RecordingFilter, Source as PolicySource,
+    };
     use crate::ws::codec::WelcomePayload;
+    use chrono::Utc;
+    use clap::Parser as _;
 
     #[test]
     fn maps_singbox_inbound_index_back_to_node() {
@@ -1969,6 +2318,7 @@ mod tests {
                 secret: None,
             },
             referenced_generations: vec![],
+            log_level: PolicyLevel::Default,
         };
         assert_eq!(
             node_id_from_error(
@@ -1989,6 +2339,139 @@ mod tests {
     fn advertises_pty_only_when_opted_in() {
         assert!(!agent_capabilities(false).contains(&PTY_CAPABILITY));
         assert!(agent_capabilities(true).contains(&PTY_CAPABILITY));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn log_overlay_reloads_the_fake_process_and_keeps_the_revision() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "blossom-log-overlay-process-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let state_dir = dir.join("state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let logs = crate::logs::LogStore::default();
+        let policy = std::sync::Arc::new(
+            LogPolicy::load(
+                &state_dir,
+                PolicyLevel::Info,
+                RecordingFilter::new(),
+                Utc::now(),
+            )
+            .0,
+        );
+        policy
+            .request(
+                PolicyRequest::new(PolicySource::SingBox, 1, PolicyLevel::Debug),
+                Utc::now(),
+            )
+            .unwrap();
+        let mut config = crate::config::ConfigManager::new(
+            crate::client::new_client("http://127.0.0.1:1/api", "test-token")
+                .expect("client builds"),
+            state_dir.clone(),
+            logs.clone(),
+            policy.clone(),
+        )
+        .expect("config manager builds");
+        std::fs::write(
+            config.config_path(),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "log": {"level": "info"},
+                "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": 1080}]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let level_file = dir.join("level");
+        let bin = dir.join("fake-sing-box");
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = \"check\" ]; then exit 0; fi\n\
+                 grep -o '\"level\": \"[a-z]*\"' \"$3\" | head -1 > '{}'\n\
+                 echo 'INFO level applied'\n\
+                 exec sleep 30\n",
+                level_file.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let mut manager = Some(
+            crate::process::SingBoxManager::start_with_logs(
+                bin.clone(),
+                config.config_path().clone(),
+                logs.clone(),
+            )
+            .await
+            .expect("fake sing-box starts"),
+        );
+        let overlay = policy.overlay(Utc::now());
+        assert_eq!(overlay.effective, PolicyLevel::Debug);
+        apply_singbox_log_overlay(
+            &mut config,
+            &mut manager,
+            &bin,
+            overlay,
+            std::time::Duration::from_secs(11),
+        )
+        .await
+        .expect("log overlay applies through the validated path");
+        assert_eq!(
+            manager.as_ref().map(crate::process::SingBoxManager::state),
+            Some(crate::process::ProcessState::Running)
+        );
+        let active: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(config.config_path()).unwrap()).unwrap();
+        assert_eq!(active["log"]["level"], "debug");
+        let last_good: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(state_dir.join("last-known-good.json")).unwrap())
+                .unwrap();
+        assert_eq!(last_good["log"]["level"], "debug");
+        let level = std::fs::read_to_string(&level_file).unwrap();
+        assert!(level.contains("debug"), "{level}");
+        assert_eq!(config.observed_revision(), None);
+        assert_eq!(config.applied_revision(), None);
+
+        if let Some(manager) = manager.take() {
+            manager.shutdown().await;
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn reloadable_filter_changes_capture_without_rebuilding_the_layer() {
+        use crate::log_policy::AgentFilter as _;
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let store = crate::logs::LogStore::default();
+        let (filter, handle) =
+            tracing_subscriber::reload::Layer::new(tracing_subscriber::filter::LevelFilter::INFO);
+        let subscriber = tracing_subscriber::registry()
+            .with(filter)
+            .with(crate::logs::CaptureLayer::new(store.clone()));
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!("dropped before the reload");
+            super::ReloadingFilter { handle }
+                .set_level(PolicyLevel::Debug)
+                .expect("filter reloads");
+            tracing::debug!("kept after the reload");
+        });
+        let texts: Vec<String> = store
+            .resume(None, 10)
+            .unwrap()
+            .records
+            .into_iter()
+            .map(|record| record.text.clone())
+            .collect();
+        assert_eq!(texts, vec!["kept after the reload".to_string()]);
     }
 
     #[test]
@@ -2016,10 +2499,22 @@ mod tests {
 
     #[test]
     fn hello_snapshot_carries_the_capabilities_and_build_id() {
+        let state_dir = std::env::temp_dir().join(format!("blossom-hello-{}", std::process::id()));
+        let policy = std::sync::Arc::new(
+            LogPolicy::load(
+                &state_dir,
+                PolicyLevel::Info,
+                RecordingFilter::new(),
+                Utc::now(),
+            )
+            .0,
+        );
         let config = crate::config::ConfigManager::new(
             crate::client::new_client("http://127.0.0.1:1/api", "test-token")
                 .expect("client builds"),
-            std::env::temp_dir().join(format!("blossom-hello-{}", std::process::id())),
+            state_dir.clone(),
+            crate::logs::LogStore::default(),
+            policy,
         )
         .expect("config manager builds");
         let updates = crate::update::UpdateManager::new(
@@ -2044,9 +2539,7 @@ mod tests {
         assert!(payload.capabilities.iter().any(|value| value == "ws-v1"));
         assert!(!payload.agent_build_id.is_empty());
         assert!(payload.updates.is_some());
-        let _ = std::fs::remove_dir_all(
-            std::env::temp_dir().join(format!("blossom-hello-{}", std::process::id())),
-        );
+        let _ = std::fs::remove_dir_all(state_dir);
         let _ = std::fs::remove_dir_all(
             std::env::temp_dir().join(format!("blossom-hello-state-{}", std::process::id())),
         );
@@ -2121,5 +2614,154 @@ mod tests {
                 .as_str()
                 .is_some_and(|detail| detail.contains("/nonexistent/blossom-shell"))
         );
+    }
+
+    fn service_startup(arguments: &[&str]) -> anyhow::Result<super::ServiceStartup> {
+        let mut argv = vec!["server-agent"];
+        argv.extend_from_slice(arguments);
+        let cli = Cli::try_parse_from(argv).expect("CLI parses");
+        cli.service.startup()
+    }
+
+    #[test]
+    fn a_credentials_file_selects_v2_without_an_explicit_protocol() {
+        let startup = service_startup(&[
+            "--url",
+            "http://127.0.0.1:1/api",
+            "--credentials-file",
+            "/tmp/credentials.json",
+        ])
+        .expect("OAuth startup resolves");
+        assert_eq!(startup.protocol, WsProtocol::V2);
+        assert!(startup.auth.static_token().is_none());
+    }
+
+    #[test]
+    fn a_static_token_selects_v2_by_default_and_can_opt_into_legacy() {
+        let default = service_startup(&["--url", "http://127.0.0.1:1/api", "--token", "agt_test"])
+            .expect("static startup resolves");
+        assert_eq!(default.protocol, WsProtocol::V2);
+        assert_eq!(default.auth.static_token(), Some("agt_test"));
+
+        let legacy = service_startup(&[
+            "--url",
+            "http://127.0.0.1:1/api",
+            "--token",
+            "agt_test",
+            "--ws-protocol",
+            "legacy",
+        ])
+        .expect("static legacy startup resolves");
+        assert_eq!(legacy.protocol, WsProtocol::Legacy);
+    }
+
+    #[test]
+    fn a_ws_disabled_static_installation_without_a_protocol_starts_legacy() {
+        let cli = service_startup(&[
+            "--url",
+            "http://127.0.0.1:1/api",
+            "--token",
+            "agt_test",
+            "--ws-enabled=false",
+        ])
+        .expect("disabled websocket plus a static token keeps HTTP-only mode");
+        assert_eq!(cli.protocol, WsProtocol::Legacy);
+        assert_eq!(cli.auth.static_token(), Some("agt_test"));
+
+        let enabled_false = service_startup(&[
+            "--url",
+            "http://127.0.0.1:1/api",
+            "--token",
+            "agt_test",
+            "--ws-protocol",
+            "legacy",
+            "--ws-enabled=false",
+        ])
+        .expect("explicit legacy plus disabled websocket resolves");
+        assert_eq!(enabled_false.protocol, WsProtocol::Legacy);
+    }
+
+    #[test]
+    fn an_environment_ws_disable_has_the_same_precedence_as_the_flag() {
+        const KEY: &str = "AGENT_WS_ENABLED";
+        let parse = |value: &str| {
+            // SAFETY: this test owns the variable and no other test reads it.
+            unsafe { std::env::set_var(KEY, value) };
+            let result =
+                service_startup(&["--url", "http://127.0.0.1:1/api", "--token", "agt_test"]);
+            // SAFETY: paired with the set above in this single test.
+            unsafe { std::env::remove_var(KEY) };
+            result
+        };
+        let startup = parse("false").expect("AGENT_WS_ENABLED=false resolves legacy");
+        assert_eq!(startup.protocol, WsProtocol::Legacy);
+        let startup = parse("true").expect("AGENT_WS_ENABLED=true keeps the v2 default");
+        assert_eq!(startup.protocol, WsProtocol::V2);
+    }
+
+    #[test]
+    fn an_incompatible_explicit_protocol_and_websocket_state_is_rejected() {
+        assert!(
+            service_startup(&[
+                "--url",
+                "http://127.0.0.1:1/api",
+                "--token",
+                "agt_test",
+                "--ws-protocol",
+                "v2",
+                "--ws-enabled=false",
+            ])
+            .is_err()
+        );
+        assert!(
+            service_startup(&[
+                "--url",
+                "http://127.0.0.1:1/api",
+                "--credentials-file",
+                "/tmp/credentials.json",
+                "--ws-enabled=false",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn oauth_never_downgrades_to_legacy_or_accepts_two_credentials() {
+        assert!(
+            service_startup(&[
+                "--url",
+                "http://127.0.0.1:1/api",
+                "--credentials-file",
+                "/tmp/credentials.json",
+                "--ws-protocol",
+                "legacy",
+            ])
+            .is_err()
+        );
+        assert!(
+            service_startup(&[
+                "--url",
+                "http://127.0.0.1:1/api",
+                "--credentials-file",
+                "/tmp/credentials.json",
+                "--token",
+                "agt_test",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn the_installer_self_update_value_is_accepted() {
+        let parse = |arguments: &[&str]| {
+            let mut argv = vec!["server-agent"];
+            argv.extend_from_slice(arguments);
+            Cli::try_parse_from(argv).expect("CLI parses")
+        };
+
+        assert!(!parse(&[]).service.self_update);
+        assert!(!parse(&["--self-update=false"]).service.self_update);
+        assert!(parse(&["--self-update=true"]).service.self_update);
+        assert!(parse(&["--self-update"]).service.self_update);
     }
 }

@@ -4,6 +4,7 @@ import type {
   AgentWsConfigNotifyPayload,
   AgentWsUpdateTriggerPayload,
 } from "@blossom/contracts/agent-ws";
+import type { LogPolicyNotifyPayload } from "@blossom/contracts/log-policy";
 
 import type { Server } from "@/db/proxy-schema";
 
@@ -130,5 +131,30 @@ export async function notifyAgentAcmeDnsAck(
     await targetHub.notifyAcmeDnsAck(serverId, payload);
   } catch (error) {
     logFailure("acme.dns_ack", error);
+  }
+}
+
+/**
+ * Best-effort log-policy push after the compare-and-swap committed. A missing
+ * v2 session is fine: `welcome` and every `agent.status.ack` carry the
+ * server-wide revision, and the agent fetches a snapshot when it differs.
+ */
+export async function notifyAgentLogPolicyChanged(
+  serverId: string,
+  revision: number,
+  source?: "agent" | "sing-box",
+  hub?: Pick<RealtimeHub, "notifyLogPolicy">,
+): Promise<void> {
+  try {
+    const targetHub =
+      hub ?? (await import("@/lib/realtime-hub")).getRealtimeHub();
+    const payload: LogPolicyNotifyPayload = {
+      revision,
+      ...(source ? { source } : {}),
+      reason: "log policy changed",
+    };
+    await targetHub.notifyLogPolicy(serverId, payload);
+  } catch (error) {
+    logFailure("log.policy.notify", error);
   }
 }

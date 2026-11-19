@@ -6,9 +6,10 @@ One `server-agent` runs per physical proxy server, separately from the control p
 
 Verified (code):
 
-- Config endpoint: `GET <AGENT_URL>/agent/config/v3` (operation `getAgentConfigV3`). `AGENT_URL` **must include the `/api` prefix**, e.g. `https://blossom.example.com/api`, because spec paths are relative to it.
-- Other endpoints: `POST /agent/heartbeat` and `POST /agent/traffic`. All three authenticate with `Authorization: Bearer <agent token>`, resolved to exactly one server by hash.
-- The agent advertises capabilities `config-v3`, `managed-tls-v3`, `certificate-deployments-v1`, `atomic-config-rollback`, `connection-stream-traffic`, `ws-v1`, `telemetry-v1`, and `acme-v1` in its heartbeat. It adds `pty-v1` only when the interactive terminal is enabled.
+- Default transport: protocol v2 over `GET <AGENT_URL>/agent/ws` with `Sec-WebSocket-Protocol: blossom-agent.v2`, for both an OAuth credential file and a static backup token. `AGENT_URL` **must include the `/api` prefix**, e.g. `https://blossom.example.com/api`. V2 carries configuration snapshots, status, and traffic; it makes no HTTP agent API calls and never falls back to them.
+- Explicit legacy transport (`AGENT_WS_PROTOCOL=legacy` or `--ws-protocol legacy`): config endpoint `GET <AGENT_URL>/agent/config/v3` (operation `getAgentConfigV3`), plus `POST /agent/heartbeat` and `POST /agent/traffic`. All authenticate with `Authorization: Bearer <agent token>`, resolved to exactly one server by hash. Use it only while an installation still needs the v1 WebSocket and HTTP polling.
+- Every transport serves the same v3 document. In v2 it arrives as a bounded snapshot. The document carries the server-managed polling intervals, desired agent/sing-box versions, and the sing-box config.
+- The v2 agent advertises `config-v3`, `managed-tls-v3`, `certificate-deployments-v1`, `atomic-config-rollback`, `connection-stream-traffic`, `acme-v1`, `log-policy-v1`, `ws-v2`, `traffic-v2`, log tail/search, and — on Linux — telemetry capabilities. It adds `pty-v2` only when the interactive terminal is enabled. A legacy agent continues to advertise `ws-v1`, `telemetry-v1`, and `pty-v1`.
 - Intervals come from the control plane per server (config poll 5–86400 s, heartbeat 5–300 s). `AGENT_INTERVAL` (default 60) is only the bootstrap value.
 - A candidate config is checked with `sing-box check` before it replaces the active one; the previous good config is kept and used for rollback and for startup.
 
@@ -16,7 +17,7 @@ Older notes and agents may refer to `/agent/config/v2`. The control plane no lon
 
 ### Interactive terminal (opt-in)
 
-The admin server page can open an interactive shell through the agent's existing outbound WebSocket. This is **off by default**: restart the agent with `AGENT_PTY_ENABLED=true` (or `--pty-enabled`) to advertise `pty-v1`. The agent refuses to enable the terminal while it runs as root, so run it under its dedicated non-root service account; a container that runs the agent as root has no terminal. Optional settings are `AGENT_PTY_SHELL` (an absolute path; unset uses `/bin/bash`, then `/bin/sh`), `AGENT_PTY_WORKING_DIR` (default `/`), `AGENT_PTY_MAX_SESSIONS` (default 1, maximum 4), `AGENT_PTY_IDLE_TIMEOUT_SECONDS` (default 300) and `AGENT_PTY_MAX_SESSION_SECONDS` (default 1800). The shell runs as the agent's OS user, with that user's filesystem and network permissions, and its environment is limited to an allowlist; the admin page names that account once the shell starts. Closing the terminal stops the shell and its background jobs. Session start and end are written to the admin audit log, but terminal input and output are never stored. No inbound agent port is opened. If the agent is not on the WebSocket transport, the terminal is unavailable.
+The admin server page can open an interactive shell through the agent's existing outbound WebSocket. This is **off by default**: restart the agent with `AGENT_PTY_ENABLED=true` (or `--pty-enabled`) to advertise `pty-v2` on the default v2 transport (or `pty-v1` in explicit legacy mode). The agent refuses to enable the terminal while it runs as root, so run it under its dedicated non-root service account; a container that runs the agent as root has no terminal. Optional settings are `AGENT_PTY_SHELL` (an absolute path; unset uses `/bin/bash`, then `/bin/sh`), `AGENT_PTY_WORKING_DIR` (default `/`), `AGENT_PTY_MAX_SESSIONS` (default 1, maximum 4), `AGENT_PTY_IDLE_TIMEOUT_SECONDS` (default 300) and `AGENT_PTY_MAX_SESSION_SECONDS` (default 1800). The shell runs as the agent's OS user, with that user's filesystem and network permissions, and its environment is limited to an allowlist; the admin page names that account once the shell starts. Closing the terminal stops the shell and its background jobs. Session start and end are written to the admin audit log, but terminal input and output are never stored. No inbound agent port is opened. Protocol v2 requires the WebSocket; an explicit legacy agent with HTTP-only transport has no terminal.
 
 ## Install
 
@@ -32,7 +33,7 @@ The admin server page can open an interactive shell through the agent's existing
 
    Verified (code): `server-agent/docker-compose.yaml` requires `AGENT_URL` and `AGENT_TOKEN` (`:?` guards), uses host networking, `NET_ADMIN` and `/dev/net/tun`, a named volume `agent-data` at `/data`, `restart: unless-stopped` and log rotation (10 MB × 3). The image is a thin runtime: it contains `curl`, `jq`, `tar`, `tini` and the entrypoint, not sing-box or the agent binary.
 
-3. On first start the entrypoint downloads the requested agent and sing-box releases into `/data/bin` and verifies the SHA-256 digest GitHub reports for each asset. Defaults are `AGENT_BOOTSTRAP_VERSION=latest` and `AGENT_SING_BOX_BOOTSTRAP_VERSION=latest`. Set either to an exact version (or `none` to refuse an automatic download) for a pinned bootstrap. Existing binaries are never overwritten by the bootstrap; later upgrades are driven by the control plane.
+3. On first start the entrypoint downloads the requested agent and sing-box releases into `/data/bin` and verifies the SHA-256 digest GitHub reports for each asset. Defaults are `AGENT_BOOTSTRAP_VERSION=latest` and `AGENT_SING_BOX_BOOTSTRAP_VERSION=latest`. Set either to an exact version (or `none` to refuse an automatic download) for a pinned bootstrap. Existing binaries are never overwritten by the bootstrap; later upgrades are driven by the control plane. The container entry point passes no protocol flag, so a static token uses protocol v2 by default.
    The agent download requires a published `server-agent-v*` GitHub release. Until one exists (or when using a fork/mirror), set `AGENT_RELEASE_REPO`/`AGENT_GITHUB_API` to the release source, or provide `AGENT_SEED_DIR` with `server-agent` and `sing-box` binaries for an offline first start.
 
    For that offline start, drop the two binaries in a directory on the host and mount it read-only; any binary already executable under `/data/bin` is left alone, so nothing is fetched:
@@ -112,7 +113,7 @@ The approved binary must implement this exact issuance interface. The installer 
 The client:
 
 1. Reads the `egr_...` grant from the one-line file (mode `0600`) and never accepts it as a positional argument, flag, environment value, URL component or stdin prompt.
-2. POSTs `{ "enrollmentGrant": "..." }` to `<url>/enrollment/redeem` with `Content-Type: application/json`.
+2. POSTs `{ "enrollmentGrant": "..." }` to `<url>/agent/enrollment/redeem` with `Content-Type: application/json`.
 3. Writes the successful response body atomically to `--credentials-file` with mode `0600`, and writes no secret to stdout, stderr or logs.
 4. Exits non-zero without writing credentials on any non-200 response. A lost response is not retried for a secret; an administrator revokes the grant/pending identity and issues a fresh grant.
 
@@ -149,6 +150,46 @@ The service runs the binary with the same credential file; the file is the only 
 ```
 
 The WebSocket client obtains and refreshes its token from `tokenEndpoint`, `clientId` and `clientSecret`; it must not print or audit those fields. A first enrollment remains pending until the WebSocket handshake promotion in the companion change. A `replace` grant is also pending until that companion promotes the new generation.
+
+The credential file selects protocol v2 automatically, so the unit above does
+not pass `--ws-protocol`. A static `--token` also defaults to protocol v2; keep
+`--ws-protocol legacy` only for an installation that still needs the v1
+WebSocket plus HTTP config poll, heartbeat, and traffic reports. The agent
+refuses to combine `--token` with `--credentials-file`, and OAuth refuses
+legacy mode. Protocol v2 failures never fall back to a static token or the HTTP
+agent API.
+
+An older static-token installation that still sets `--ws-enabled=false` or
+`AGENT_WS_ENABLED=false` (and no protocol) continues to start in legacy
+HTTP-only mode, but the agent logs a deprecation warning. Make the choice
+explicit with `--ws-protocol legacy` or `AGENT_WS_PROTOCOL=legacy`, or remove
+the disable and use the default v2 transport. An explicit `--ws-protocol v2`
+with the WebSocket disabled is rejected.
+
+Upgrading an existing static-token container or systemd installation keeps its
+credential and state directory. With no protocol flag it moves to v2 on the
+next restart. If the control plane at `AGENT_URL` is older than the v2
+WebSocket surface, set `AGENT_WS_PROTOCOL=legacy` first and upgrade the control
+plane before removing that override. A v2 agent that cannot connect keeps
+supervising sing-box from the last-known-good config and retries the socket; it
+does not switch to HTTP.
+
+At startup the service checks that the credential file is a regular file owned
+by the service user with exactly mode `0600`. It also re-checks that
+`tokenEndpoint`, `issuer` and `resource` are on the configured origin before
+it sends the client secret. Tokens are requested with
+`grant_type=client_credentials`, the credential's `resource` and
+`blossom:agent:connect`, and are refreshed before their advertised lifetime
+ends. A refresh failure retries with bounded backoff (1s to 60s); while the
+token endpoint or WebSocket is unavailable the agent keeps the last-known-good
+sing-box process running and does not poll `/agent/config/v3`, `/heartbeat` or
+`/traffic`. Replacing the credential file with a new `replace` grant is picked
+up on the next refresh, and a service restart reuses the same file.
+
+The client secret and every issued token are registered with the bounded,
+scoped log redactor under a dedicated OAuth scope, and previous token values
+stay masked after a refresh or rotation. The grant, the secret and the token
+are never written to stdout, stderr, tracing output or the retained log buffer.
 
 ### Installed layout and permissions
 

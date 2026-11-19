@@ -38,6 +38,22 @@ Switching tabs preserves the selected server. Leaving Terminal or switching serv
 
 Advertise `logs-search-v1` and `log-policy-v1` separately so the workspace can expose live tail, search, and level controls according to agent capabilities.
 
+### Delivery ordering
+
+The browser Logs tab depends on surfaces that other branches own, so it cannot
+land as an independent change. Required order:
+
+1. The server workspace routing and layout (PR #125).
+2. The agent WebSocket v2 relay, shared log contracts and admin log WebSocket
+   (PR #137). It supplies `/api/admin/servers/$id/logs/ws` and the browser
+   frame schemas the tab imports.
+3. The Logs tab itself. Its branch starts at the PR #125 head and merges PR
+   #137 before adding UI; it must not be rebased onto #125 alone. The app build,
+   not a standalone router CLI, regenerates `app/src/route-tree.gen.ts` for the
+   new route.
+4. Remote log level controls, as a separate follow-up after the policy backend
+   lands. The Logs tab deliberately leaves that wiring out.
+
 ### Search and inspect
 
 - Send `logs.search` over the admin log WebSocket and relay it to the selected agent. Search the retained, redacted buffer, including entries outside the live view. Support case-insensitive literal text, source, severity, and UTC time range. Return newest matches first in `logs.search.result`, with a request ID, actual searchable time range, and a cursor for the next page. Pin pagination to the buffer generation and its newest sequence at search start. If eviction overtakes the cursor or the agent restarts, report incomplete coverage and let the operator rerun the search.

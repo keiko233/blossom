@@ -12,14 +12,14 @@ import type { Database } from "@/db";
 import { session, user } from "@/db/auth-schema";
 import { server as serverTable } from "@/db/proxy-schema";
 import {
+  encodePtyFrameForAgentV2,
+  v2PtyFrameForBrowser,
+} from "@/lib/agent-ws-v2-pty";
+import {
   isPtyAuthorized,
   type PtyAuthorizationRecord,
   type PtyProtocol,
 } from "@/lib/pty-authorization";
-import {
-  encodePtyFrameForAgentV2,
-  v2PtyFrameForBrowser,
-} from "@/lib/agent-ws-v2-pty";
 import {
   clampPtyDimensions,
   encodePtyFrame,

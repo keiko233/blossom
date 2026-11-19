@@ -17,6 +17,7 @@ Forward-looking proposals and phased execution plans live under [docs/spec/](../
 | Generated files and how to regenerate them                                        | [Generated files](generated-files.md)                    |
 | Which tests and checks to run                                                     | [Testing and verification](testing.md)                   |
 | Agent WebSocket v2: negotiation, handshake, snapshots, status, traffic            | [Agent WebSocket v2](agent-ws-v2.md)                     |
+| Remote log-level policy: contract, admin functions, fenced ACK and agent apply    | [Remote log-level policy](log-policy.md)                 |
 | Commands, CI, workflows, worktrees, git hooks, commits                            | [Workflow](workflow.md)                                  |
 
 ## How to read these guides

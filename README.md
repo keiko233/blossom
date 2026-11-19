@@ -69,6 +69,7 @@ Server env vars are validated at runtime on the first request, so production bui
 | `CLOUDFLARE_DNS_API_TOKEN` | No | Runtime | Cloudflare token with DNS Edit on the zone, for automatic ACME DNS-01 validation. Set together with `CLOUDFLARE_DNS_ZONE_ID`. |
 | `CLOUDFLARE_DNS_ZONE_ID` | No | Runtime | Cloudflare zone ID used with the token above. |
 | `REDIS_URL` | No | Runtime | Redis pub/sub backplane for agent WebSocket fan-out across multiple Node or Vercel instances. Cloudflare Durable Objects do not use it. |
+| `MAINTENANCE_TOKEN` | No | Runtime | Bearer token accepted by `/api/maintenance/server-metrics` for bounded retention cleanup. Unset disables the route. |
 
 Copy `app/.env.example` to `app/.env.local` for local development.
 
@@ -101,6 +102,8 @@ pnpm --filter @blossom/app db:migrate
 
 The command reads `DATABASE_URL` from the environment. Run it manually or in CI before deploying. When using Docker Compose, a one-shot `migrate` service runs automatically before the `app` service starts.
 
+Host metric history is retained for 30 days. Ingestion prunes one bounded batch after each write, but a deployment that can be idle for long periods should also call `GET` or `POST /api/maintenance/server-metrics` with `Authorization: Bearer $MAINTENANCE_TOKEN` from a scheduler. `batchSize` is clamped to 5000 and `maxBatches` to 100 per call. This repository does not create a scheduler: use an external timer on Node, Vercel Cron or an operator-added Cloudflare Cron Trigger/external scheduler, and allow for the platform's minimum interval and execution limit.
+
 ## Self-hosting quickstart
 
 The Docker Compose setup runs Postgres, applies migrations, and starts the app:
@@ -121,7 +124,7 @@ To skip building locally, point the `app` service at the prebuilt image (`image:
 
 ## Server agent
 
-The Rust server-agent in `server-agent/` consumes the control-plane OpenAPI spec at `/api/agent/*`. Each server owns one OAuth machine identity (with an optional static backup token) and one sing-box process; every enabled node assigned to that server becomes an inbound in the same generated sing-box config. Agents pull the versioned control document from `/api/agent/config/v3` (they advertise the `config-v3` capability), which carries server-managed polling intervals, desired agent/sing-box versions and the sing-box config. Setting `AGENT_WS_PROTOCOL=v2` opts a server into the WebSocket-first path (`blossom-agent.v2`), which carries bounded configuration snapshots, status, and acknowledged traffic without HTTP agent API calls; `legacy` remains the default. Candidates are checked by the target sing-box binary before reload, and the last-known-good config is persisted for rollback. The container stores both binaries, configs, certificates and update state under `/data`; first start downloads the binaries, and later updates are driven by the per-server desired versions in the admin UI. After changing the agent-facing API, regenerate the agent client while the dev server is running:
+The Rust server-agent in `server-agent/` consumes the control-plane OpenAPI spec at `/api/agent/*`. Each server owns one OAuth machine identity (with an optional static backup token) and one sing-box process; every enabled node assigned to that server becomes an inbound in the same generated sing-box config. Agents normally use the WebSocket-first protocol v2 path (`blossom-agent.v2`), which carries bounded configuration snapshots, status, and acknowledged traffic without HTTP agent API calls. Protocol v2 is the default for both an OAuth credential file and an explicit static backup token; set `AGENT_WS_PROTOCOL=legacy` (or pass `--ws-protocol legacy`) only for an installation that still needs the v1 WebSocket plus HTTP config poll, heartbeat, and traffic reports. A static-token installation that explicitly disables the WebSocket with no protocol still starts in legacy HTTP-only mode for compatibility, with a deprecation warning; explicit v2 plus disabled and OAuth plus legacy are rejected. There is no automatic HTTP downgrade from v2. The versioned control document lives at `/api/agent/config/v3` (agents advertise `config-v3`) and carries server-managed polling intervals, desired agent/sing-box versions and the sing-box config. Candidates are checked by the target sing-box binary before reload, and the last-known-good config is persisted for rollback. The container stores both binaries, configs, certificates and update state under `/data`; first start downloads the binaries, and later updates are driven by the per-server desired versions in the admin UI. After changing the agent-facing API, regenerate the agent client while the dev server is running:
 
 ```bash
 pnpm --filter @blossom/app agent:spec

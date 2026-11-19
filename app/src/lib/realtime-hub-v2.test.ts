@@ -1,3 +1,4 @@
+import { parseAgentWsFrame } from "@blossom/contracts/agent-ws";
 import {
   AGENT_WS_V2_SUBPROTOCOL,
   createAgentWsV2Frame,
@@ -36,7 +37,9 @@ const server = {
   name: "edge",
   enabled: true,
   agentTokenHash: "hash-1",
-} as Server;
+  agentCapabilities: [],
+  logPolicyRevision: 0,
+} as unknown as Server;
 
 type Hooks = {
   upgrade(request: Request): { protocol: string };
@@ -107,22 +110,45 @@ function fakeV2Store() {
           heartbeatIntervalSeconds: 30,
           desiredAgentVersion: null,
           desiredSingBoxVersion: null,
+          agentCapabilities: [],
+          logPolicyRevision: 0,
         }) as unknown as Server,
     ),
     recordStatus: vi.fn(async () => null),
-    recordUpdateStatus: vi.fn(async () => true),
     recordConfigAck: vi.fn(async () => "applied" as const),
+    recordUpdateStatus: vi.fn(async () => true),
     cacheDesiredRevision: vi.fn(async () => undefined),
     applyCertificateDeployments: vi.fn(async () => undefined),
-    handleAcmeDnsPresent: vi.fn(async () => true),
-    handleAcmeDnsCleanup: vi.fn(async () => true),
-    handleAcmeResult: vi.fn(async () => true),
     revalidateSession: vi.fn(async () => "ok" as const),
     applyTraffic: vi.fn(async () => ({
       status: "applied" as const,
       accepted: 0,
       dropped: 0,
     })),
+    handleAcmeDnsPresent: vi.fn(async () => true),
+    handleAcmeDnsCleanup: vi.fn(async () => true),
+    handleAcmeResult: vi.fn(async () => true),
+    loadLogPolicy: vi.fn(async () => ({
+      revision: 0,
+      sources: [
+        {
+          source: "agent" as const,
+          revision: 0,
+          baseline: "default" as const,
+          level: "default" as const,
+          deadline: null,
+        },
+        {
+          source: "sing-box" as const,
+          revision: 0,
+          baseline: "default" as const,
+          level: "default" as const,
+          deadline: null,
+        },
+      ],
+    })),
+    recordLogPolicyAck: vi.fn(async () => "recorded" as const),
+    recordMetricHistory: vi.fn(async () => "written" as const),
     compile: vi.fn(async () => ({
       desiredRevision: REVISION,
       document: {},
@@ -137,7 +163,7 @@ function fakeV1Store(): AgentWsStore {
   return {
     markConnected: vi.fn(async () => ({
       connectedAt: new Date(),
-      sessionId: SESSION_ID,
+      sessionId: "session-v1",
     })),
     markDisconnected: vi.fn(async () => undefined),
     recordHello: vi.fn(async () => undefined),
@@ -242,11 +268,12 @@ describe("NitroRealtimeHub v2 sessions", () => {
     );
   });
 
-  it("pushes config.notify only to the current welcomed v2 session and publishes it for other instances", async () => {
+  it("pushes config.notify only to welcomed v2 sessions and publishes it for other instances", async () => {
     const { hub, backplane } = makeHub();
     const hooks = await acceptV2(hub);
     const welcomed = makePeer("welcomed");
     const pending = makePeer("pending");
+    await hooks.open(pending);
     await hooks.open(welcomed);
     await hooks.message(
       welcomed,
@@ -266,20 +293,12 @@ describe("NitroRealtimeHub v2 sessions", () => {
     });
 
     expect(sentTypes(welcomed)).toEqual(["welcome", "config.notify"]);
+    expect(sentTypes(pending)).toEqual([]);
     // The cross-instance relay starts once the backplane is subscribed.
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(backplane.publish).toHaveBeenCalledWith(
       expect.objectContaining({ serverId: "srv-1", protocol: "v2" }),
     );
-
-    await hooks.open(pending);
-    await hub.notifyConfigChanged("srv-1", {
-      desiredRevisionSeq: 9,
-      desiredRevision: NEXT,
-      reason: "node updated again",
-    });
-    expect(sentTypes(welcomed)).toEqual(["welcome", "config.notify"]);
-    expect(sentTypes(pending)).toEqual([]);
   });
 
   it("keeps v1 frames off v2 sessions", async () => {
@@ -291,6 +310,129 @@ describe("NitroRealtimeHub v2 sessions", () => {
     await hub.notifyUpdateTrigger("srv-1", { target: "agent", force: false });
 
     expect(peer.sent).toEqual([]);
+  });
+
+  it("pushes update and ACME operations with the v2 envelope", async () => {
+    const { hub } = makeHub();
+    const hooks = await acceptV2(hub);
+    const peer = makePeer("p1");
+    await hooks.open(peer);
+    await hooks.message(
+      peer,
+      agentFrame("hello", {
+        agentVersion: "0.4.0",
+        agentBuildId: "build-1",
+        capabilities: ["ws-v2", "acme-v1"],
+        applied: null,
+        certificateDeployments: [],
+      }),
+    );
+
+    await hub.notifyUpdateTrigger("srv-1", {
+      target: "agent",
+      desiredAgentVersion: "latest",
+      force: true,
+    });
+    await hub.notifyAcmeIssue("srv-1", {
+      jobId: "job-1",
+      certificateId: "cert-1",
+      generation: 2,
+      domains: ["example.com"],
+      acmeProvider: "letsencrypt",
+      acmeStaging: false,
+      challengeType: "dns-01",
+    });
+
+    expect(sentTypes(peer).slice(-2)).toEqual(["update.trigger", "acme.issue"]);
+  });
+
+  it("relays terminal frames between a v1 browser frame and the v2 session", async () => {
+    const { hub } = makeHub();
+    const hooks = await acceptV2(hub);
+    const peer = makePeer("p1");
+    await hooks.open(peer);
+    await hooks.message(
+      peer,
+      agentFrame("hello", {
+        agentVersion: "0.4.0",
+        agentBuildId: "build-1",
+        capabilities: ["ws-v2", "pty-v2"],
+        applied: null,
+        certificateDeployments: [],
+      }),
+    );
+
+    const handler = vi.fn();
+    const target = {
+      protocol: "v2" as const,
+      connectedAt: "2026-11-19T00:00:00.000Z",
+      agentSessionId: SESSION_ID,
+    };
+    expect(await hub.hasAgentConnection("srv-1", target)).toBe(true);
+    hub.registerPtyRelay("srv-1", target, "pty-1", handler);
+
+    expect(
+      await hub.sendPtyFrame(
+        "srv-1",
+        target,
+        "pty-1",
+        JSON.stringify({
+          v: 1,
+          type: "pty.open",
+          ts: "2026-11-19T00:00:00.000Z",
+          payload: { sessionId: "pty-1", cols: 80, rows: 24 },
+        }),
+      ),
+    ).toBe(true);
+    expect(sentTypes(peer).at(-1)).toBe("pty.open");
+
+    await hooks.message(
+      peer,
+      agentFrame("pty.data", { sessionId: "pty-1", data: "prompt$ " }),
+    );
+    expect(handler).toHaveBeenCalledWith({
+      type: "frame",
+      frame: expect.any(String),
+    });
+    const firstCall = handler.mock.calls[0] as [{ frame: string }] | undefined;
+    expect(firstCall).toBeDefined();
+    const forwarded = parseAgentWsFrame(firstCall![0].frame);
+    expect(forwarded).toMatchObject({
+      ok: true,
+      message: { kind: "reserved" },
+    });
+  });
+
+  it("pushes log policy only to welcomed v2 sessions", async () => {
+    const { hub, backplane } = makeHub();
+    const hooks = await acceptV2(hub);
+    const welcomed = makePeer("welcomed");
+    const pending = makePeer("pending");
+    await hooks.open(pending);
+    await hooks.open(welcomed);
+    await hooks.message(
+      welcomed,
+      agentFrame("hello", {
+        agentVersion: "0.4.0",
+        agentBuildId: "build-1",
+        capabilities: ["log-policy-v1"],
+        applied: null,
+        certificateDeployments: [],
+      }),
+    );
+
+    await hub.notifyLogPolicy("srv-1", {
+      revision: 3,
+      source: "agent",
+      reason: "log policy changed",
+    });
+
+    expect(sentTypes(welcomed)).toEqual(["welcome", "log.policy.notify"]);
+    expect(sentTypes(pending)).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(backplane.publish).toHaveBeenCalledWith(
+      expect.objectContaining({ serverId: "srv-1", protocol: "v2" }),
+    );
   });
 
   it("delivers a remote v2 push only to welcomed local sessions", async () => {

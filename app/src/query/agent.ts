@@ -204,7 +204,7 @@ export async function updateAgentHeartbeat(
 }
 
 export interface AgentWsSessionStart {
-  /** Connection identity for v1 disconnect clearing and PTY relay routing. */
+  /** Unique identity for v1 telemetry/PTY routing and display. */
   connectedAt: Date;
   /** Fence for every durable write made by this session (v1 and v2). */
   sessionId: string;
@@ -239,6 +239,16 @@ export interface AgentWsV2SessionStart extends AgentWsSessionStart {
 }
 
 /**
+ * A handshake timestamp is the v1 telemetry and PTY routing identity. Advance
+ * the stored value by at least 1 ms so two handshakes in one millisecond never
+ * share it; the session id remains the disconnect fence.
+ */
+function nextConnectedAt(connectedAt: Date) {
+  const value = connectedAt.toISOString();
+  return sql<Date>`GREATEST(${value}::timestamp, COALESCE(${server.wsConnectedAt}, ${value}::timestamp) + interval '1 millisecond')`;
+}
+
+/**
  * Starts a WebSocket session and makes it the server's current one in a
  * single UPDATE. A newer handshake therefore replaces an older session's
  * marker atomically; the older session's later writes match nothing.
@@ -249,12 +259,12 @@ export async function startAgentWsSession(
 ): Promise<AgentWsSessionStart> {
   const connectedAt = new Date();
   const sessionId = randomUUID();
-  await database
+  const rows = await database
     .update(server)
     .set({
-      lastSeenAt: connectedAt,
+      lastSeenAt: nextConnectedAt(connectedAt),
       transportMode: "ws",
-      wsConnectedAt: connectedAt,
+      wsConnectedAt: nextConnectedAt(connectedAt),
       wsSessionId: sessionId,
       wsCredentialKind: "static",
       wsCredentialIdentityId: null,
@@ -265,8 +275,9 @@ export async function startAgentWsSession(
       wsPendingGeneration: null,
       wsPendingExpiresAt: null,
     })
-    .where(eq(server.id, serverId));
-  return { connectedAt, sessionId };
+    .where(eq(server.id, serverId))
+    .returning({ connectedAt: server.wsConnectedAt });
+  return { connectedAt: rows[0]?.connectedAt ?? connectedAt, sessionId };
 }
 
 /**
@@ -352,9 +363,9 @@ function oauthSessionColumns(
   credential: Extract<AgentSessionCredential, { kind: "oauth" }>,
 ) {
   return {
-    lastSeenAt: connectedAt,
+    lastSeenAt: nextConnectedAt(connectedAt),
     transportMode: "ws" as const,
-    wsConnectedAt: connectedAt,
+    wsConnectedAt: nextConnectedAt(connectedAt),
     wsSessionId: sessionId,
     wsCredentialKind: "oauth" as const,
     wsCredentialIdentityId: credential.identityId,
@@ -385,9 +396,9 @@ export async function startAgentV2WsSession(
     const rows = await database
       .update(server)
       .set({
-        lastSeenAt: connectedAt,
+        lastSeenAt: nextConnectedAt(connectedAt),
         transportMode: "ws",
-        wsConnectedAt: connectedAt,
+        wsConnectedAt: nextConnectedAt(connectedAt),
         wsSessionId: sessionId,
         wsCredentialKind: "static",
         wsCredentialIdentityId: null,
@@ -405,10 +416,11 @@ export async function startAgentV2WsSession(
           eq(server.enabled, true),
         ),
       )
-      .returning({ id: server.id });
-    return rows.length > 0
+      .returning({ connectedAt: server.wsConnectedAt });
+    const row = rows[0];
+    return row
       ? {
-          connectedAt,
+          connectedAt: row.connectedAt ?? connectedAt,
           sessionId,
           pending: false,
           expiresAt: null,
@@ -490,10 +502,11 @@ export async function startAgentV2WsSession(
         usableOauthIdentitySql(serverId, credential, ["active"]),
       ),
     )
-    .returning({ id: server.id });
-  return rows.length > 0
+    .returning({ connectedAt: server.wsConnectedAt });
+  const row = rows[0];
+  return row
     ? {
-        connectedAt,
+        connectedAt: row.connectedAt ?? connectedAt,
         sessionId,
         pending: false,
         expiresAt: credential.expiresAt,

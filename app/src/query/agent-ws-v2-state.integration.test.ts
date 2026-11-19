@@ -57,10 +57,12 @@ import type { AgentWsV2StatusPayload } from "@blossom/contracts/agent-ws-v2";
 import {
   cacheAgentDesiredRevision,
   invalidateDesiredConfigRevisions,
+  isAgentWsSessionCurrent,
   loadCurrentAgentServer,
   recordAgentV2ConfigAck,
   recordAgentV2Hello,
   recordAgentV2Status,
+  recordAgentV2UpdateStatus,
   rotateAgentCredential,
   startAgentV2WsSession,
   startAgentWsSession,
@@ -165,6 +167,44 @@ describe.skipIf(!pgUrl).each(drivers)(
         applied_revision: REV(8, "b"),
         applied_revision_seq: 8,
         config_state: "applied",
+      });
+    });
+
+    it("records update status only for the current v2 session", async () => {
+      const first = await startAgentWsSession("srv1", database);
+      const second = await startAgentWsSession("srv1", database);
+
+      await expect(
+        recordAgentV2UpdateStatus(
+          "srv1",
+          first.sessionId,
+          { agent: { state: "checking" } },
+          database,
+        ),
+      ).resolves.toBe(false);
+      await expect(
+        recordAgentV2UpdateStatus(
+          "srv1",
+          second.sessionId,
+          { agent: { state: "applying", targetVersion: "0.4.1" } },
+          database,
+        ),
+      ).resolves.toBe(true);
+      await expect(
+        isAgentWsSessionCurrent("srv1", first.sessionId, database),
+      ).resolves.toBe(false);
+      await expect(
+        isAgentWsSessionCurrent("srv1", second.sessionId, database),
+      ).resolves.toBe(true);
+
+      const { rows } = await admin.query(
+        `select agent_update_state, agent_update_target, ws_session_id
+           from server where id = 'srv1'`,
+      );
+      expect(rows[0]).toMatchObject({
+        agent_update_state: "applying",
+        agent_update_target: "0.4.1",
+        ws_session_id: second.sessionId,
       });
     });
 

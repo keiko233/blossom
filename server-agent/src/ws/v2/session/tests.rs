@@ -15,12 +15,15 @@ use super::{
     ApplyOutcome, ApplyResult, Command, CorePorts, CoreStatus, HelloIdentity, SessionEnd,
     SessionTiming, TrafficOutcome, TrafficPorts, TrafficRequest, Wire, channels, run,
 };
+use crate::logs::{LogStore, RingLimits};
 use crate::ws::codec::{AgentWsFrame, UpdateStatePayload, UpdateStatusPayload, frame_type};
 use crate::ws::ports::{WsCommand, WsError};
 use crate::ws::v2::codec::{
-    AckStage, ConfigIdentifier, ConfigState, RuntimeState, TrafficEntry, TrafficReport,
-    UpdatePolicy,
+    AckStage, ConfigIdentifier, ConfigState, LogLevel, LogPolicyAck, LogPolicyDesired,
+    LogPolicySource, RuntimeState, TelemetryEnvironment, TelemetryInterface, TelemetryListener,
+    TelemetryProtocol, TelemetryUsage, TrafficEntry, TrafficReport, UpdatePolicy,
 };
+use crate::ws::v2::telemetry::{HostSampler, Inspection, Measurement};
 
 const D7: &str = "7:sha256:48a9e1aa59f365863b57348ccd1701026c39652cfb74b8e2b039811611802ec6";
 const D8: &str = "8:sha256:2e8ae9a0be2819b1d63bef33ca897ea498557c1677a201bb59fb80fc01104422";
@@ -31,6 +34,7 @@ const D9: &str = "9:sha256:11111111111111111111111111111111111111111111111111111
 struct ScriptedWire {
     inbound: mpsc::UnboundedReceiver<Result<String, WsError>>,
     outbound: mpsc::UnboundedSender<String>,
+    refresh_deadline: Option<tokio::time::Instant>,
 }
 
 impl Wire for ScriptedWire {
@@ -50,6 +54,10 @@ impl Wire for ScriptedWire {
     }
 
     async fn close(&mut self) {}
+
+    fn refresh_deadline(&self) -> Option<tokio::time::Instant> {
+        self.refresh_deadline
+    }
 }
 
 struct Harness {
@@ -90,26 +98,78 @@ fn identity() -> HelloIdentity {
     }
 }
 
+struct TestSampler;
+
+impl HostSampler for TestSampler {
+    fn measure(&mut self) -> Measurement {
+        Measurement {
+            sampled_at: chrono::Utc::now(),
+            cpu_percent: Some(12.5),
+            memory: Some(TelemetryUsage {
+                used: 512,
+                total: 1024,
+            }),
+            disk: None,
+            environment: TelemetryEnvironment::Systemd,
+            cgroup_version: None,
+            cpu_limit: None,
+            memory_limit: None,
+            scope_key: "systemd|-|-|-|eth0".to_string(),
+            network: None,
+        }
+    }
+
+    fn inspect(&self) -> Inspection {
+        Inspection {
+            partial: false,
+            listeners: vec![TelemetryListener {
+                protocol: TelemetryProtocol::Tcp,
+                address: "127.0.0.1".to_string(),
+                port: 8080,
+            }],
+            interfaces: vec![TelemetryInterface {
+                name: "eth0".to_string(),
+                address: "192.0.2.10".to_string(),
+            }],
+        }
+    }
+}
+
 fn start(applied: Option<&str>) -> Harness {
+    start_with_token_deadline(applied, None)
+}
+
+fn start_with_token_deadline(
+    applied: Option<&str>,
+    refresh_deadline: Option<tokio::time::Instant>,
+) -> Harness {
     let (mut session_ports, core, traffic) = channels(
         status_with(applied),
         UpdatePolicy {
             desired_agent_version: None,
             desired_sing_box_version: None,
         },
+        Vec::new(),
     );
     let (peer, inbound) = mpsc::unbounded_channel();
     let (outbound, sent) = mpsc::unbounded_channel();
     let cancel = CancellationToken::new();
     let task_cancel = cancel.clone();
+    let store = LogStore::new(RingLimits::default());
     let task = tokio::spawn(async move {
-        let mut wire = ScriptedWire { inbound, outbound };
+        let mut wire = ScriptedWire {
+            inbound,
+            outbound,
+            refresh_deadline,
+        };
         run(
             &mut wire,
             &mut session_ports,
             &identity(),
             &SessionTiming::default(),
+            Some(Box::new(TestSampler)),
             &task_cancel,
+            &store,
         )
         .await
     });
@@ -133,6 +193,15 @@ fn identifier(revision: &str) -> Value {
 }
 
 fn welcome(revision: &str, interval: u64, reconnect_before: Option<u64>) -> String {
+    welcome_with_log(revision, interval, reconnect_before, None)
+}
+
+fn welcome_with_log(
+    revision: &str,
+    interval: u64,
+    reconnect_before: Option<u64>,
+    log_policy_revision: Option<u64>,
+) -> String {
     let mut payload = json!({
         "sessionId": "9f1d2c3a-0000-4000-8000-000000000001",
         "serverId": "server-1",
@@ -145,7 +214,53 @@ fn welcome(revision: &str, interval: u64, reconnect_before: Option<u64>) -> Stri
     if let Some(seconds) = reconnect_before {
         payload["reconnectBeforeSeconds"] = json!(seconds);
     }
+    if let Some(revision) = log_policy_revision {
+        payload["logPolicyRevision"] = json!(revision);
+    }
     peer_frame("welcome", payload)
+}
+
+fn log_snapshot(request_id: &str, revision: u64) -> String {
+    peer_frame(
+        "log.policy.snapshot",
+        json!({
+            "requestId": request_id,
+            "revision": revision,
+            "sources": [
+                {
+                    "source": "agent",
+                    "revision": revision,
+                    "baseline": "info",
+                    "level": "debug",
+                    "deadline": "2099-01-01T00:00:00Z",
+                },
+                {
+                    "source": "sing-box",
+                    "revision": revision,
+                    "baseline": "info",
+                    "level": "info",
+                    "deadline": null,
+                },
+            ],
+        }),
+    )
+}
+
+fn log_ack(revision: u64) -> LogPolicyAck {
+    LogPolicyAck {
+        source: LogPolicySource::Agent,
+        source_revision: revision,
+        requested: LogLevel::Debug,
+        baseline: LogLevel::Info,
+        effective: LogLevel::Info,
+        deadline: Some(
+            chrono::DateTime::parse_from_rfc3339("2099-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        ),
+        error: None,
+        pending: true,
+    }
 }
 
 /// Sends a complete one-chunk snapshot for `request_id`.
@@ -203,6 +318,69 @@ async fn expect_type(harness: &mut Harness, kind: &str) -> Value {
     }
 }
 
+#[tokio::test(start_paused = true)]
+async fn log_requests_are_answered_over_the_session() {
+    let mut harness = start(Some(D7));
+    assert_eq!(
+        expect_type(&mut harness, "hello").await["agentVersion"],
+        "1.3.0"
+    );
+    harness.peer.send(Ok(welcome(D7, 30, None))).unwrap();
+    harness
+        .peer
+        .send(Ok(peer_frame(
+            "logs.subscribe",
+            json!({
+                "subscriptionId": "tail-1",
+                "filter": {},
+                "resume": null,
+                "limit": 10,
+            }),
+        )))
+        .unwrap();
+    let batch = expect_type(&mut harness, "logs.batch").await;
+    assert_eq!(batch["subscriptionId"], "tail-1", "{batch}");
+    assert!(batch["records"].as_array().unwrap().is_empty(), "{batch}");
+    let generation = batch["next"]["generation"].clone();
+
+    harness
+        .peer
+        .send(Ok(peer_frame(
+            "logs.search",
+            json!({
+                "requestId": "search-1",
+                "query": {},
+                "cursor": null,
+                "limit": 10,
+            }),
+        )))
+        .unwrap();
+    let result = expect_type(&mut harness, "logs.search.result").await;
+    assert_eq!(result["requestId"], "search-1", "{result}");
+    assert!(result["matches"].as_array().unwrap().is_empty(), "{result}");
+    assert!(result["next"].is_null(), "{result}");
+
+    harness
+        .peer
+        .send(Ok(peer_frame(
+            "logs.context",
+            json!({
+                "requestId": "ctx-1",
+                "generation": generation,
+                "seq": 1,
+                "before": 0,
+                "after": 0,
+            }),
+        )))
+        .unwrap();
+    let error = expect_type(&mut harness, "logs.error").await;
+    assert_eq!(error["requestId"], "ctx-1", "{error}");
+    assert_eq!(error["code"], "not_found", "{error}");
+
+    harness.cancel.cancel();
+    let _ = harness.task.await;
+}
+
 async fn expect_silence(harness: &mut Harness) {
     let result = tokio::time::timeout(Duration::from_millis(200), harness.sent.recv()).await;
     assert!(result.is_err(), "unexpected frame: {result:?}");
@@ -253,6 +431,102 @@ async fn an_applied_identifier_that_matches_the_welcome_requests_nothing() {
     expect_type(&mut harness, "hello").await;
     harness.peer.send(Ok(welcome(D7, 30, None))).unwrap();
     expect_silence(&mut harness).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_welcome_with_a_newer_log_policy_revision_fetches_and_acknowledges_it() {
+    let mut harness = start(Some(D7));
+    expect_type(&mut harness, "hello").await;
+    harness
+        .peer
+        .send(Ok(welcome_with_log(D7, 30, None, Some(3))))
+        .unwrap();
+
+    let get = expect_type(&mut harness, "log.policy.get").await;
+    let request_id = get["requestId"].as_str().unwrap().to_string();
+    harness.peer.send(Ok(log_snapshot(&request_id, 3))).unwrap();
+    let job = harness.core.log_jobs.recv().await.expect("a policy job");
+    assert_eq!(job.revision, 3);
+    assert_eq!(
+        job.sources,
+        vec![
+            LogPolicyDesired {
+                source: LogPolicySource::Agent,
+                revision: 3,
+                baseline: LogLevel::Info,
+                level: LogLevel::Debug,
+                deadline: Some(
+                    chrono::DateTime::parse_from_rfc3339("2099-01-01T00:00:00Z")
+                        .unwrap()
+                        .with_timezone(&chrono::Utc),
+                ),
+            },
+            LogPolicyDesired {
+                source: LogPolicySource::SingBox,
+                revision: 3,
+                baseline: LogLevel::Info,
+                level: LogLevel::Info,
+                deadline: None,
+            },
+        ]
+    );
+
+    harness.core.log_acks.send_replace(vec![log_ack(3)]);
+    let ack = expect_type(&mut harness, "log.policy.ack").await;
+    assert_eq!(ack["source"], "agent");
+    assert_eq!(ack["sourceRevision"], 3);
+    assert_eq!(ack["requested"], "debug");
+    assert_eq!(ack["effective"], "info");
+
+    // The same status is not sent twice.
+    harness.core.log_acks.send_replace(vec![log_ack(3)]);
+    expect_silence(&mut harness).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_status_ack_recovers_a_missed_log_policy_notification() {
+    let mut harness = start(Some(D7));
+    expect_type(&mut harness, "hello").await;
+    harness
+        .peer
+        .send(Ok(welcome_with_log(D7, 30, None, Some(3))))
+        .unwrap();
+    let get = expect_type(&mut harness, "log.policy.get").await;
+    let request_id = get["requestId"].as_str().unwrap().to_string();
+    harness.peer.send(Ok(log_snapshot(&request_id, 3))).unwrap();
+    let _job = harness.core.log_jobs.recv().await.expect("a policy job");
+
+    harness
+        .peer
+        .send(Ok(peer_frame(
+            "agent.status.ack",
+            json!({
+                "desired": identifier(D7),
+                "updatePolicy": {"desiredAgentVersion": null, "desiredSingBoxVersion": null},
+                "logPolicyRevision": 4,
+            }),
+        )))
+        .unwrap();
+    let get = expect_type(&mut harness, "log.policy.get").await;
+    assert!(get["requestId"].as_str().unwrap().starts_with("log-get-"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stale_log_policy_snapshot_changes_nothing() {
+    let mut harness = start(Some(D7));
+    expect_type(&mut harness, "hello").await;
+    harness
+        .peer
+        .send(Ok(welcome_with_log(D7, 30, None, Some(3))))
+        .unwrap();
+    let get = expect_type(&mut harness, "log.policy.get").await;
+    let request_id = get["requestId"].as_str().unwrap().to_string();
+    harness.peer.send(Ok(log_snapshot(&request_id, 3))).unwrap();
+    let _job = harness.core.log_jobs.recv().await.expect("a policy job");
+
+    harness.peer.send(Ok(log_snapshot("stale", 2))).unwrap();
+    expect_silence(&mut harness).await;
+    assert!(harness.core.log_jobs.try_recv().is_err());
 }
 
 #[tokio::test(start_paused = true)]
@@ -405,6 +679,7 @@ async fn a_replaced_session_and_a_disabled_server_end_the_connection() {
         )))
         .unwrap();
     assert_eq!(harness.task.await.unwrap(), SessionEnd::ServerDisabled);
+    assert_eq!(harness.core.disabled.recv().await, Some(()));
 }
 
 #[tokio::test(start_paused = true)]
@@ -616,6 +891,17 @@ async fn an_early_reconnect_deadline_from_welcome_ends_the_session() {
     let mut harness = start(Some(D7));
     expect_type(&mut harness, "hello").await;
     harness.peer.send(Ok(welcome(D7, 30, Some(10)))).unwrap();
+    let end = harness.task.await.unwrap();
+    assert_eq!(end, SessionEnd::Deadline);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_token_refresh_deadline_reconnects_before_the_welcome_hint() {
+    let token_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut harness = start_with_token_deadline(Some(D7), Some(token_deadline));
+    expect_type(&mut harness, "hello").await;
+    // The serverless hint is much later, so the token lease must win.
+    harness.peer.send(Ok(welcome(D7, 30, Some(60)))).unwrap();
     let end = harness.task.await.unwrap();
     assert_eq!(end, SessionEnd::Deadline);
 }
@@ -893,4 +1179,57 @@ fn report(report_id: &str) -> TrafficReport {
             downlink_bytes: 4096,
         }],
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_live_subscription_is_sampled_and_unsubscribe_stops_it() {
+    let mut harness = start(Some(D7));
+    expect_type(&mut harness, "hello").await;
+    harness.peer.send(Ok(welcome(D7, 30, None))).unwrap();
+    harness
+        .peer
+        .send(Ok(peer_frame(
+            "telemetry.subscribe",
+            json!({
+                "subscriptionId": "live-srv-1",
+                "purpose": "live",
+                "intervalMs": 1000,
+            }),
+        )))
+        .unwrap();
+
+    let sample = expect_type(&mut harness, "telemetry.sample").await;
+    assert_eq!(sample["subscriptionId"], "live-srv-1");
+    assert_eq!(sample["purpose"], "live");
+    assert_eq!(sample["scopeKey"], "systemd|-|-|-|eth0");
+    assert_eq!(sample["cpuPercent"], 12.5);
+
+    harness
+        .peer
+        .send(Ok(peer_frame(
+            "telemetry.unsubscribe",
+            json!({"subscriptionId": "live-srv-1"}),
+        )))
+        .unwrap();
+    expect_silence(&mut harness).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn inspection_answers_with_the_existing_snapshot_payload() {
+    let mut harness = start(Some(D7));
+    expect_type(&mut harness, "hello").await;
+    harness.peer.send(Ok(welcome(D7, 30, None))).unwrap();
+    harness
+        .peer
+        .send(Ok(peer_frame(
+            "telemetry.inspect",
+            json!({"requestId": "inspect-1"}),
+        )))
+        .unwrap();
+
+    let snapshot = expect_type(&mut harness, "telemetry.snapshot").await;
+    assert_eq!(snapshot["requestId"], "inspect-1");
+    assert_eq!(snapshot["partial"], false);
+    assert_eq!(snapshot["listeners"][0]["port"], 8080);
+    assert_eq!(snapshot["interfaces"][0]["name"], "eth0");
 }

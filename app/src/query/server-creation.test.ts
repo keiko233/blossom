@@ -61,19 +61,32 @@ describe("server creation credentials", () => {
     holder.inserted = [];
   });
 
-  it("creates an OAuth-only server without a static token by default", async () => {
+  it("keeps the standalone static-token default when the flag is omitted", async () => {
     const result = await createServer({ data: base });
+    const inserted = holder.inserted[0]!;
+
+    expect(result.token).toMatch(/^agt_/);
+    expect(inserted.agentTokenHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(inserted.agentTokenPrefix).toMatch(/^agt_/);
+    expect("enableBackupToken" in inserted).toBe(false);
+    expect(result.server.backupTokenEnabled).toBe(true);
+    expect(Object.hasOwn(result.server, "agentTokenHash")).toBe(false);
+  });
+
+  it("creates an OAuth-only server when the form opts out", async () => {
+    const result = await createServer({
+      data: { ...base, enableBackupToken: false },
+    });
     const inserted = holder.inserted[0]!;
 
     expect(result.token).toBeNull();
     expect(inserted.agentTokenHash).toBeNull();
     expect(inserted.agentTokenPrefix).toBeNull();
-    expect("enableBackupToken" in inserted).toBe(false);
     expect(result.server.backupTokenEnabled).toBe(false);
     expect(Object.hasOwn(result.server, "agentTokenHash")).toBe(false);
   });
 
-  it("creates a static backup only when explicitly requested", async () => {
+  it("creates a static backup when explicitly requested", async () => {
     const result = await createServer({
       data: { ...base, enableBackupToken: true },
     });
@@ -83,6 +96,5 @@ describe("server creation credentials", () => {
     expect(inserted.agentTokenHash).toMatch(/^[0-9a-f]{64}$/);
     expect(inserted.agentTokenPrefix).toMatch(/^agt_/);
     expect(result.server.backupTokenEnabled).toBe(true);
-    expect(Object.hasOwn(result.server, "agentTokenHash")).toBe(false);
   });
 });

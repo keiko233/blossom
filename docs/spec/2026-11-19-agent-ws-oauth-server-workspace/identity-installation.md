@@ -10,6 +10,10 @@ Each server has an OAuth machine identity. Administrators use their Better Auth 
 - Before token expiry, obtain a fresh token through the same grant and reconnect over WSS. Use a planned reconnect in the first release and show the remaining connection time in the terminal. The session deadline is the earliest of the lease deadline, platform limit, and token expiry. Send revocation or access changes through the hub and check the authoritative state every 30 seconds as a fallback. Close the connection if revalidation fails. Durable writes still check the current identity and session. On authentication failure, keep the local proxy running and surface the need to reauthorize.
 - Validate static tokens with the existing hash lookup. Place them in the backup credentials area on the Connection tab. Existing servers continue using their token until migrated. After switching to OAuth, administrators can disable, rotate, or reauthorize the backup token. The installer defaults to OAuth, and the agent uses the explicitly configured authentication mode even when OAuth is rejected.
 
+### Retained-log redaction handoff
+
+The agent's retained log buffer registers known credentials before capture. OAuth integration must complete the same handoff: add a dedicated machine-credential scope, register the client secret and current access token (and any refresh token) before the first token request or authenticated call, and replace that set on every refresh or rotation so the previous value stays redacted while old connections drain. The static-token scope does not rotate and is not a substitute. A registration that exceeds the registry bound makes capture fail closed by storing `[REDACTED]` for later lines; it must not stop the proxy or leave credentials in the buffer. Local host logging remains unchanged.
+
 ## Per-server installer
 
 | Operation | Proposed interface and authorization |

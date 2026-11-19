@@ -7,17 +7,14 @@ import { toastManager } from "@/components/ui/toast";
 import { m } from "@/paraglide/messages";
 import {
   deleteServer,
-  regenerateServerToken,
   SERVERS_QUERY_KEY,
   type ServerListItem,
 } from "@/query/servers";
 
-import { TokenRevealDialog } from "./token-reveal-dialog";
-
 /**
- * Credential and lifecycle actions for the selected server: copy the agent
- * connection details, reset the agent token, and delete the server. Every
- * action calls the same audited server function as before the workspace.
+ * Lifecycle actions for the selected server: copy the agent connection details
+ * and delete the server. Credential changes go through the Connection tab so
+ * every enable/reset/disable keeps its confirmation and one-time reveal.
  */
 export function useServerActions(server: ServerListItem) {
   const queryClient = useQueryClient();
@@ -51,24 +48,6 @@ export function useServerActions(server: ServerListItem) {
     },
   });
 
-  const regenMutation = useMutation({
-    mutationFn: () => regenerateServerToken({ data: { id: server.id } }),
-    onSuccess: async (result) => {
-      await invalidate();
-      toastManager.add({
-        type: "success",
-        title: m.admin_proxies_servers_toast_token_reset(),
-      });
-      await TokenRevealDialog.call({ token: result.token });
-    },
-    onError: () => {
-      toastManager.add({
-        type: "error",
-        title: m.admin_proxies_servers_toast_error(),
-      });
-    },
-  });
-
   const requestDelete = async () => {
     if (server.nodeCount > 0) {
       toastManager.add({
@@ -94,9 +73,7 @@ export function useServerActions(server: ServerListItem) {
       {
         serverId: server.id,
         address: server.address,
-        ...(server.agentTokenPrefix
-          ? { tokenPrefix: server.agentTokenPrefix }
-          : {}),
+        tokenPrefix: server.agentTokenPrefix,
       },
       null,
       2,
@@ -112,12 +89,11 @@ export function useServerActions(server: ServerListItem) {
     }
   };
 
-  const isBusy = copying || deleteMutation.isPending || regenMutation.isPending;
+  const isBusy = copying || deleteMutation.isPending;
 
   return {
     isBusy,
     copyAgentInfo,
-    resetToken: () => regenMutation.mutate(),
     requestDelete,
   };
 }

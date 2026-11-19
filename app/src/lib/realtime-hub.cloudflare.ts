@@ -11,11 +11,13 @@ import {
   createAgentWsV2Frame,
   encodeAgentWsV2Frame,
 } from "@blossom/contracts/agent-ws-v2";
+import type { LogPolicyNotifyPayload } from "@blossom/contracts/log-policy";
 import { env } from "cloudflare:workers";
 
 import type { Server } from "@/db/proxy-schema";
 import type { AgentSessionCredential } from "@/query/agent";
 import {
+  type AgentWsSessionStart,
   markAgentWsConnected,
   markAgentWsDisconnected,
   endAgentWsSession,
@@ -23,8 +25,18 @@ import {
 
 import type { TelemetryKind, TelemetryResult } from "./agent-telemetry";
 import { createAgentWsV2Store } from "./agent-ws-store";
-import { encodeAgentWsV2ConfigNotify } from "./agent-ws-v2-session";
 import {
+  encodeAgentWsV2ConfigNotify,
+  encodeAgentWsV2LogPolicyNotify,
+} from "./agent-ws-v2-session";
+import type { AdminLogsAcceptContext } from "./logs-relay-types";
+import {
+  AGENT_LOGS_INTERNAL_ACTOR,
+  AGENT_LOGS_INTERNAL_AUTH_SESSION_ID,
+  AGENT_LOGS_INTERNAL_RELAY_ID,
+  AGENT_LOGS_INTERNAL_SERVER_ID,
+  AGENT_LOGS_INTERNAL_SESSION_ID,
+  AGENT_LOGS_INTERNAL_STARTED_AT,
   AGENT_WS_INTERNAL_CONNECTED_AT,
   AGENT_WS_INTERNAL_CREDENTIAL_KIND,
   AGENT_WS_INTERNAL_IDENTITY_GENERATION,
@@ -56,12 +68,12 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     server: Server,
     welcome: AgentWsWelcomePayload,
   ): Promise<Response> {
-    let connectedAt = new Date();
-    let sessionId: string | null = null;
+    let started: AgentWsSessionStart = {
+      connectedAt: new Date(),
+      sessionId: crypto.randomUUID(),
+    };
     try {
-      const started = await markAgentWsConnected(server.id);
-      connectedAt = started.connectedAt;
-      sessionId = started.sessionId;
+      started = await markAgentWsConnected(server.id);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`agent websocket connect metadata failed: ${message}`);
@@ -71,10 +83,11 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     headers.delete("authorization");
     headers.delete("cookie");
     headers.set(AGENT_WS_INTERNAL_SERVER_ID, server.id);
-    headers.set(AGENT_WS_INTERNAL_CONNECTED_AT, connectedAt.toISOString());
-    if (sessionId) {
-      headers.set(AGENT_WS_INTERNAL_SESSION_ID, sessionId);
-    }
+    headers.set(
+      AGENT_WS_INTERNAL_CONNECTED_AT,
+      started.connectedAt.toISOString(),
+    );
+    headers.set(AGENT_WS_INTERNAL_SESSION_ID, started.sessionId);
     headers.set(
       AGENT_WS_INTERNAL_WELCOME,
       encodeURIComponent(JSON.stringify(welcome)),
@@ -88,17 +101,15 @@ export class CloudflareRealtimeHub implements RealtimeHub {
         }),
       );
       if (response.status !== 101) {
-        if (sessionId) {
-          await markAgentWsDisconnected(server.id, sessionId).catch(
-            () => {},
-          );
-        }
+        await markAgentWsDisconnected(server.id, started.sessionId).catch(
+          () => {},
+        );
       }
       return response;
     } catch (error) {
-      if (sessionId) {
-        await markAgentWsDisconnected(server.id, sessionId).catch(() => {});
-      }
+      await markAgentWsDisconnected(server.id, started.sessionId).catch(
+        () => {},
+      );
       throw error;
     }
   }
@@ -161,6 +172,33 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     }
   }
 
+  async acceptAdminLogs(
+    request: Request,
+    context: AdminLogsAcceptContext,
+  ): Promise<Response> {
+    const headers = new Headers(request.headers);
+    headers.delete("authorization");
+    headers.delete("cookie");
+    headers.set(AGENT_LOGS_INTERNAL_SERVER_ID, context.serverId);
+    headers.set(AGENT_LOGS_INTERNAL_SESSION_ID, context.agentSessionId);
+    headers.set(AGENT_LOGS_INTERNAL_AUTH_SESSION_ID, context.authSessionId);
+    headers.set(AGENT_LOGS_INTERNAL_RELAY_ID, context.relayId);
+    headers.set(
+      AGENT_LOGS_INTERNAL_STARTED_AT,
+      context.startedAt.toISOString(),
+    );
+    headers.set(
+      AGENT_LOGS_INTERNAL_ACTOR,
+      encodeURIComponent(JSON.stringify(context.actor)),
+    );
+    return durableObjectStub(context.serverId).fetch(
+      new Request(new URL("/internal/logs/connect", request.url), {
+        method: "GET",
+        headers,
+      }),
+    );
+  }
+
   async requestTelemetry(
     serverId: string,
     kind: TelemetryKind,
@@ -179,6 +217,19 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     } catch {
       return null;
     }
+  }
+
+  async inspectTelemetry(
+    serverId: string,
+    connectedAt: string,
+    sessionId: string | null,
+  ): Promise<TelemetryResult | null> {
+    if (sessionId) {
+      // The Durable Object serves v2 inspection to the admin metric socket it
+      // already holds; there is no stateless route into that request context.
+      return null;
+    }
+    return this.requestTelemetry(serverId, "snapshot", connectedAt);
   }
 
   async notifyConfigChanged(
@@ -243,6 +294,17 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     await this.sendFrame(
       serverId,
       encodeAgentWsV2Frame(createAgentWsV2Frame("acme.dns_ack", payload)),
+      "v2",
+    );
+  }
+
+  async notifyLogPolicy(
+    serverId: string,
+    payload: LogPolicyNotifyPayload,
+  ): Promise<void> {
+    await this.sendFrame(
+      serverId,
+      encodeAgentWsV2LogPolicyNotify(payload),
       "v2",
     );
   }

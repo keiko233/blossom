@@ -27,11 +27,14 @@ use tracing::{debug, info, warn};
 use super::adapter::V2Connection;
 use super::codec::{
     self, AckOutcome, AckStage, ConfigAck, ConfigGet, ConfigIdentifier, ConfigNotify, ConfigState,
-    DecodeError, ErrorCode, ErrorFrame, GetReason, Hello, Limits, MAX_FRAME_BYTES, Message,
-    RuntimeState, Sender, StatusError, StatusReason, StatusReport, TrafficReport, TrafficResult,
-    UpdatePolicy,
+    DecodeError, ErrorCode, ErrorFrame, GetReason, Hello, Limits, LogPolicyAck, LogPolicyDesired,
+    LogPolicyGet, LogPolicyNotify, MAX_FRAME_BYTES, Message, RuntimeState, Sender, StatusError,
+    StatusReason, StatusReport, TelemetrySubscribe, TrafficReport, TrafficResult, UpdatePolicy,
 };
+use super::logs;
 use super::snapshot::{SnapshotAssembler, SnapshotError, SnapshotLimits, VerifiedSnapshot};
+use super::telemetry::{self, Command as TelemetryCommand, HostSampler, Output as TelemetryOutput};
+use crate::logs::LogStore;
 use crate::ws::codec::{
     AcmeDnsAckPayload, AcmeIssuePayload, AgentWsFrame, CertificateDeployment, ReservedFrame,
     UpdateStatusPayload, UpdateTriggerPayload, frame_type,
@@ -45,6 +48,11 @@ pub trait Wire: Send {
     fn send_text(&mut self, text: String) -> impl Future<Output = Result<(), WsError>> + Send;
     fn ping(&mut self) -> impl Future<Output = Result<(), WsError>> + Send;
     fn close(&mut self) -> impl Future<Output = ()> + Send;
+    /// When the token used for this upgrade should be refreshed. The session
+    /// reconnects first, so the next handshake presents a fresh token.
+    fn refresh_deadline(&self) -> Option<Instant> {
+        None
+    }
 }
 
 impl Wire for V2Connection {
@@ -62,6 +70,10 @@ impl Wire for V2Connection {
 
     async fn close(&mut self) {
         V2Connection::close(self).await;
+    }
+
+    fn refresh_deadline(&self) -> Option<Instant> {
+        V2Connection::refresh_deadline(self)
     }
 }
 
@@ -95,6 +107,14 @@ pub struct ApplyResult {
     pub request_id: String,
     pub desired: ConfigIdentifier,
     pub outcome: ApplyOutcome,
+}
+
+/// One verified log-policy snapshot the core must apply. The session never
+/// interprets the levels itself; the core owns the local policy and sing-box.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogPolicyJob {
+    pub revision: u64,
+    pub sources: Vec<LogPolicyDesired>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,12 +186,15 @@ pub struct SessionPorts {
     status: watch::Receiver<CoreStatus>,
     apply: mpsc::Sender<ApplyJob>,
     results: mpsc::Receiver<ApplyResult>,
+    log_jobs: mpsc::Sender<LogPolicyJob>,
+    log_acks: watch::Receiver<Vec<LogPolicyAck>>,
     policy: watch::Sender<UpdatePolicy>,
     refusals: mpsc::Sender<SnapshotRefusal>,
     traffic: mpsc::Receiver<TrafficRequest>,
     commands: mpsc::Sender<Command>,
     outbound: mpsc::Receiver<WsCommand>,
     online: watch::Sender<bool>,
+    pub(super) disabled: mpsc::Sender<()>,
     failed: FailedApply,
 }
 
@@ -180,11 +203,15 @@ pub struct CorePorts {
     pub status: watch::Sender<CoreStatus>,
     pub apply: mpsc::Receiver<ApplyJob>,
     pub results: mpsc::Sender<ApplyResult>,
+    pub log_jobs: mpsc::Receiver<LogPolicyJob>,
+    pub log_acks: watch::Sender<Vec<LogPolicyAck>>,
     pub policy: watch::Receiver<UpdatePolicy>,
     pub refusals: mpsc::Receiver<SnapshotRefusal>,
     pub commands: mpsc::Receiver<Command>,
     pub outbound: Arc<dyn AgentCommandSink>,
     pub online: watch::Receiver<bool>,
+    /// A positive disablement from the upgrade or an open session.
+    pub disabled: mpsc::Receiver<()>,
 }
 
 /// The traffic task's end: it submits reports and watches whether a session
@@ -198,39 +225,49 @@ pub struct TrafficPorts {
 pub fn channels(
     initial_status: CoreStatus,
     initial_policy: UpdatePolicy,
+    initial_log_acks: Vec<LogPolicyAck>,
 ) -> (SessionPorts, CorePorts, TrafficPorts) {
     let (status_tx, status_rx) = watch::channel(initial_status);
     let (apply_tx, apply_rx) = mpsc::channel(1);
     let (results_tx, results_rx) = mpsc::channel(8);
+    let (log_jobs_tx, log_jobs_rx) = mpsc::channel(1);
+    let (log_acks_tx, log_acks_rx) = watch::channel(initial_log_acks);
     let (policy_tx, policy_rx) = watch::channel(initial_policy);
     let (refusals_tx, refusals_rx) = mpsc::channel(8);
     let (traffic_tx, traffic_rx) = mpsc::channel(1);
     let (commands_tx, commands_rx) = mpsc::channel(16);
     let (outbound_sink, outbound_rx) = crate::ws::ports::command_channel(64);
     let (online_tx, online_rx) = watch::channel(false);
+    let (disabled_tx, disabled_rx) = mpsc::channel(1);
     let core_online = online_tx.subscribe();
     (
         SessionPorts {
             status: status_rx,
             apply: apply_tx,
             results: results_rx,
+            log_jobs: log_jobs_tx,
+            log_acks: log_acks_rx,
             policy: policy_tx,
             refusals: refusals_tx,
             traffic: traffic_rx,
             commands: commands_tx,
             outbound: outbound_rx,
             online: online_tx,
+            disabled: disabled_tx,
             failed: FailedApply::default(),
         },
         CorePorts {
             status: status_tx,
             apply: apply_rx,
             results: results_tx,
+            log_jobs: log_jobs_rx,
+            log_acks: log_acks_tx,
             policy: policy_rx,
             refusals: refusals_rx,
             commands: commands_rx,
             outbound: Arc::new(outbound_sink),
             online: core_online,
+            disabled: disabled_rx,
         },
         TrafficPorts {
             requests: traffic_tx,
@@ -325,6 +362,82 @@ struct State {
     proactive_deadline: Option<Instant>,
     snapshot_timeout: Duration,
     failed_hold: Duration,
+    token_deadline: Option<Instant>,
+    known_log_policy_revision: Option<u64>,
+    log_get_seq: u64,
+    sent_log_acks: Vec<LogPolicyAck>,
+}
+
+/// The per-session telemetry task and its bounded queues. Creating a new
+/// session creates a new engine, so subscriptions never cross a replacement.
+struct SessionTelemetry {
+    commands: Option<mpsc::Sender<TelemetryCommand>>,
+    outputs: Option<mpsc::Receiver<TelemetryOutput>>,
+    engine: Option<tokio::task::JoinHandle<()>>,
+    cancel: CancellationToken,
+}
+
+impl SessionTelemetry {
+    fn new(sampler: Option<Box<dyn HostSampler>>, session_cancel: &CancellationToken) -> Self {
+        let cancel = session_cancel.child_token();
+        let Some(sampler) = sampler else {
+            return Self {
+                commands: None,
+                outputs: None,
+                engine: None,
+                cancel,
+            };
+        };
+        let (commands, receiver) = mpsc::channel(8);
+        let (outputs, output_receiver) = mpsc::channel(16);
+        let engine_cancel = cancel.clone();
+        let engine = tokio::spawn(telemetry::run(sampler, receiver, outputs, engine_cancel));
+        Self {
+            commands: Some(commands),
+            outputs: Some(output_receiver),
+            engine: Some(engine),
+            cancel,
+        }
+    }
+
+    fn subscribe(&self, subscription: TelemetrySubscribe) {
+        self.send(TelemetryCommand::Subscribe(subscription));
+    }
+
+    fn unsubscribe(&self, subscription_id: String) {
+        self.send(TelemetryCommand::Unsubscribe(subscription_id));
+    }
+
+    fn inspect(&self, request_id: String) {
+        self.send(TelemetryCommand::Inspect(request_id));
+    }
+
+    fn send(&self, command: TelemetryCommand) {
+        let Some(commands) = self.commands.as_ref() else {
+            return;
+        };
+        if commands.try_send(command).is_err() {
+            debug!("dropping a telemetry command because the session queue is full");
+        }
+    }
+
+    async fn stop(&mut self) {
+        self.cancel.cancel();
+        if let Some(engine) = self.engine.take() {
+            let _ = engine.await;
+        }
+        self.commands = None;
+        self.outputs = None;
+    }
+}
+
+async fn next_telemetry_output(
+    outputs: &mut Option<mpsc::Receiver<TelemetryOutput>>,
+) -> Option<TelemetryOutput> {
+    match outputs {
+        Some(outputs) => outputs.recv().await,
+        None => std::future::pending().await,
+    }
 }
 
 /// Runs one connection to completion. It returns when the connection ends, the
@@ -334,9 +447,25 @@ pub async fn run<W: Wire>(
     ports: &mut SessionPorts,
     identity: &HelloIdentity,
     timing: &SessionTiming,
+    sampler: Option<Box<dyn HostSampler>>,
     cancel: &CancellationToken,
+    store: &LogStore,
 ) -> SessionEnd {
-    let end = run_connection(wire, ports, identity, timing, cancel).await;
+    let mut logs = logs::Session::start(store.clone(), cancel.child_token());
+    let mut telemetry = SessionTelemetry::new(sampler, cancel);
+    let end = run_connection(
+        wire,
+        ports,
+        identity,
+        timing,
+        &mut telemetry,
+        cancel,
+        &mut logs,
+    )
+    .await;
+    telemetry.stop().await;
+    // The connection owns every tail and request; none may reach the next one.
+    logs.shutdown().await;
     // The session is over, so the traffic reports awaiting acknowledgement and
     // any queued apply belong to this connection and are dropped with it.
     let _ = ports.online.send(false);
@@ -349,8 +478,11 @@ async fn run_connection<W: Wire>(
     ports: &mut SessionPorts,
     identity: &HelloIdentity,
     timing: &SessionTiming,
+    telemetry: &mut SessionTelemetry,
     cancel: &CancellationToken,
+    logs: &mut logs::Session,
 ) -> SessionEnd {
+    let log_handle = logs.handle();
     let hello = build_hello(identity, &ports.status.borrow());
     if let Err(reason) = send(wire, "hello", &hello, None).await {
         return SessionEnd::Lost {
@@ -360,6 +492,7 @@ async fn run_connection<W: Wire>(
     }
 
     let now = Instant::now();
+    let token_deadline = wire.refresh_deadline();
     let mut state = State {
         welcomed: false,
         assembler: SnapshotAssembler::new(SnapshotLimits::negotiated(&default_limits())),
@@ -374,16 +507,23 @@ async fn run_connection<W: Wire>(
         proactive_deadline: None,
         snapshot_timeout: timing.snapshot,
         failed_hold: timing.failed_apply_hold,
+        token_deadline,
+        known_log_policy_revision: None,
+        log_get_seq: 0,
+        sent_log_acks: Vec::new(),
     };
     let mut frame_limit = MAX_FRAME_BYTES;
     let mut ping_tick = tokio::time::interval(timing.ping);
     ping_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     ping_tick.tick().await;
+    let mut telemetry_outputs = telemetry.outputs.take();
 
     let SessionPorts {
         status,
         apply,
         results,
+        log_jobs,
+        log_acks,
         policy,
         refusals,
         traffic,
@@ -391,6 +531,7 @@ async fn run_connection<W: Wire>(
         outbound,
         online,
         failed,
+        disabled,
     } = ports;
 
     loop {
@@ -440,6 +581,14 @@ async fn run_connection<W: Wire>(
                     return SessionEnd::Lost { reason, welcomed: true };
                 }
             }
+            reply = logs.recv() => {
+                let Some(text) = reply else {
+                    return SessionEnd::Cancelled;
+                };
+                if let Err(reason) = send_raw(wire, text).await {
+                    return SessionEnd::Lost { reason, welcomed: state.welcomed };
+                }
+            }
             changed = status.changed(), if state.welcomed => {
                 if changed.is_err() {
                     return SessionEnd::Cancelled;
@@ -458,6 +607,15 @@ async fn run_connection<W: Wire>(
                 }
                 failed.note(&result.desired, &result.outcome);
                 if let Err(reason) = send_ack(wire, &result).await {
+                    return SessionEnd::Lost { reason, welcomed: true };
+                }
+            }
+            changed = log_acks.changed(), if state.welcomed => {
+                if changed.is_err() {
+                    return SessionEnd::Cancelled;
+                }
+                let acks = log_acks.borrow_and_update().clone();
+                if let Err(reason) = send_log_acks(wire, &acks, &mut state).await {
                     return SessionEnd::Lost { reason, welcomed: true };
                 }
             }
@@ -495,6 +653,22 @@ async fn run_connection<W: Wire>(
                     return SessionEnd::Lost { reason, welcomed: true };
                 }
             }
+            output = next_telemetry_output(&mut telemetry_outputs), if telemetry_outputs.is_some() => {
+                let Some(output) = output else {
+                    return SessionEnd::Cancelled;
+                };
+                let sent = match output {
+                    TelemetryOutput::Sample(sample) => {
+                        send_with_limit(wire, "telemetry.sample", &sample, None, frame_limit).await
+                    }
+                    TelemetryOutput::Snapshot(snapshot) => {
+                        send_with_limit(wire, "telemetry.snapshot", &snapshot, None, frame_limit).await
+                    }
+                };
+                if let Err(reason) = sent {
+                    return SessionEnd::Lost { reason, welcomed: state.welcomed };
+                }
+            }
             received = wire.recv_text() => {
                 let text = match received {
                     Ok(text) => text,
@@ -519,6 +693,7 @@ async fn run_connection<W: Wire>(
                         continue;
                     }
                 };
+                let current_log_acks = log_acks.borrow().clone();
                 let flow = handle(
                     decoded.message,
                     &mut state,
@@ -529,8 +704,13 @@ async fn run_connection<W: Wire>(
                         refusals,
                         commands,
                         online,
+                        disabled,
+                        log_jobs,
+                        log_acks: &current_log_acks,
+                        telemetry,
                         frame_limit: &mut frame_limit,
                         failed: &mut *failed,
+                        logs: &log_handle,
                     },
                 )
                 .await;
@@ -555,9 +735,14 @@ struct Context<'a, W: Wire> {
     policy: &'a mut watch::Sender<UpdatePolicy>,
     refusals: &'a mut mpsc::Sender<SnapshotRefusal>,
     commands: &'a mut mpsc::Sender<Command>,
+    log_jobs: &'a mpsc::Sender<LogPolicyJob>,
+    log_acks: &'a [LogPolicyAck],
     online: &'a mut watch::Sender<bool>,
+    disabled: &'a mpsc::Sender<()>,
+    telemetry: &'a SessionTelemetry,
     frame_limit: &'a mut usize,
     failed: &'a mut FailedApply,
+    logs: &'a logs::Handle,
 }
 
 async fn handle<W: Wire>(
@@ -571,11 +756,36 @@ async fn handle<W: Wire>(
         policy,
         refusals,
         commands,
+        disabled,
+        log_jobs,
+        log_acks,
         online,
+        telemetry,
         frame_limit,
         failed,
+        logs,
     } = context;
     match message {
+        Message::LogsSubscribe(request) => {
+            require_welcome(state, wire, "logs.subscribe").await?;
+            admit(wire, logs, logs::Command::Subscribe(request)).await?;
+        }
+        Message::LogsUnsubscribe(request) => {
+            require_welcome(state, wire, "logs.unsubscribe").await?;
+            admit(wire, logs, logs::Command::Unsubscribe(request)).await?;
+        }
+        Message::LogsSearch(request) => {
+            require_welcome(state, wire, "logs.search").await?;
+            admit(wire, logs, logs::Command::Search(request)).await?;
+        }
+        Message::LogsSearchCancel(request) => {
+            require_welcome(state, wire, "logs.search.cancel").await?;
+            admit(wire, logs, logs::Command::CancelSearch(request.request_id)).await?;
+        }
+        Message::LogsContext(request) => {
+            require_welcome(state, wire, "logs.context").await?;
+            admit(wire, logs, logs::Command::Context(request)).await?;
+        }
         Message::Welcome(welcome) => {
             if state.welcomed {
                 send_error(
@@ -595,6 +805,7 @@ async fn handle<W: Wire>(
             state.proactive_deadline = welcome
                 .reconnect_before_seconds
                 .map(|seconds| Instant::now() + Duration::from_secs(seconds).mul_f64(0.9));
+            state.proactive_deadline = earliest(state.proactive_deadline, state.token_deadline);
             let _ = policy.send_replace(welcome.update_policy);
             let _ = online.send(true);
             info!(
@@ -608,6 +819,8 @@ async fn handle<W: Wire>(
             } else {
                 GetReason::Mismatch
             };
+            send_log_acks(wire, log_acks, state).await?;
+            request_log_policy_if_needed(welcome.log_policy_revision, state, wire).await?;
             request_if_needed(
                 &welcome.desired,
                 applied.as_ref(),
@@ -621,6 +834,7 @@ async fn handle<W: Wire>(
         Message::StatusAck(ack) => {
             require_welcome(state, wire, "agent.status.ack").await?;
             let _ = policy.send_replace(ack.update_policy);
+            request_log_policy_if_needed(ack.log_policy_revision, state, wire).await?;
             let applied = status.borrow().applied.clone();
             request_if_needed(
                 &ack.desired,
@@ -644,6 +858,36 @@ async fn handle<W: Wire>(
                 wire,
             )
             .await?;
+        }
+        Message::LogPolicyNotify(LogPolicyNotify { revision, .. }) => {
+            require_welcome(state, wire, "log.policy.notify").await?;
+            request_log_policy_if_needed(Some(revision), state, wire).await?;
+        }
+        Message::LogPolicySnapshot(snapshot) => {
+            require_welcome(state, wire, "log.policy.snapshot").await?;
+            if state
+                .known_log_policy_revision
+                .is_some_and(|known| snapshot.revision < known)
+            {
+                debug!("ignoring a stale log policy snapshot");
+                return Ok(Flow::Continue);
+            }
+            if state.known_log_policy_revision == Some(snapshot.revision) {
+                return Ok(Flow::Continue);
+            }
+            let job = LogPolicyJob {
+                revision: snapshot.revision,
+                sources: snapshot.sources,
+            };
+            match log_jobs.try_send(job) {
+                Ok(()) => state.known_log_policy_revision = Some(snapshot.revision),
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    debug!("log policy is already being applied; awaiting reconciliation");
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    return Err("log policy core stopped".to_string());
+                }
+            }
         }
         Message::SnapshotBegin(begin) => {
             if !is_current(state, &begin.request_id) {
@@ -737,9 +981,24 @@ async fn handle<W: Wire>(
             require_welcome(state, wire, "pty.close").await?;
             forward_pty(commands, frame_type::PTY_CLOSE, close)?;
         }
+        Message::TelemetrySubscribe(subscription) => {
+            require_welcome(state, wire, "telemetry.subscribe").await?;
+            telemetry.subscribe(subscription);
+        }
+        Message::TelemetryUnsubscribe(unsubscribe) => {
+            require_welcome(state, wire, "telemetry.unsubscribe").await?;
+            telemetry.unsubscribe(unsubscribe.subscription_id);
+        }
+        Message::TelemetryInspect(inspect) => {
+            require_welcome(state, wire, "telemetry.inspect").await?;
+            telemetry.inspect(inspect.request_id);
+        }
         Message::Error(frame) => match frame.code {
             ErrorCode::SessionReplaced => return Ok(Flow::End(SessionEnd::Replaced)),
-            ErrorCode::ServerDisabled => return Ok(Flow::End(SessionEnd::ServerDisabled)),
+            ErrorCode::ServerDisabled => {
+                let _ = disabled.try_send(());
+                return Ok(Flow::End(SessionEnd::ServerDisabled));
+            }
             // The error names no report id. Reports are sent one at a time, so
             // every waiter is the report that was refused.
             ErrorCode::InvalidPayload if frame.r#type.as_deref() == Some("traffic.report") => {
@@ -762,6 +1021,15 @@ async fn handle<W: Wire>(
         | Message::AcmeResult(_)
         | Message::PtyStarted(_)
         | Message::PtyExit(_)
+        | Message::LogPolicyGet(_)
+        | Message::LogPolicyAck(_)
+        | Message::LogsBatch(_)
+        | Message::LogsGap(_)
+        | Message::LogsSearchResult(_)
+        | Message::LogsContextResult(_)
+        | Message::LogsError(_)
+        | Message::TelemetrySample(_)
+        | Message::TelemetrySnapshot(_)
         | Message::Unknown(_) => {}
     }
     Ok(Flow::Continue)
@@ -795,6 +1063,65 @@ fn v2_outbound(frame: &AgentWsFrame) -> Option<(&'static str, serde_json::Value)
         _ => return None,
     };
     Some((msg_type, frame.payload.clone()))
+}
+
+/// Requests a log-policy snapshot when the control plane's server-wide
+/// revision is newer than the last snapshot this session accepted. Only a
+/// snapshot advances the known revision, so a lost snapshot is retried by the
+/// next status exchange.
+async fn request_log_policy_if_needed<W: Wire>(
+    remote: Option<u64>,
+    state: &mut State,
+    wire: &mut W,
+) -> Result<(), String> {
+    let Some(remote) = remote else {
+        return Ok(());
+    };
+    if state
+        .known_log_policy_revision
+        .is_some_and(|known| remote <= known)
+    {
+        return Ok(());
+    }
+    state.log_get_seq += 1;
+    let request_id = format!("log-get-{}", state.log_get_seq);
+    send(
+        wire,
+        "log.policy.get",
+        &LogPolicyGet {
+            request_id: request_id.clone(),
+        },
+        Some(&request_id),
+    )
+    .await
+}
+
+/// Sends only sources whose status changed since the last acknowledgement.
+/// The core republishes after every apply, expiry and retry.
+async fn send_log_acks<W: Wire>(
+    wire: &mut W,
+    acks: &[LogPolicyAck],
+    state: &mut State,
+) -> Result<(), String> {
+    for ack in acks {
+        let previous = state
+            .sent_log_acks
+            .iter()
+            .find(|sent| sent.source == ack.source);
+        if previous == Some(ack) {
+            continue;
+        }
+        send(wire, "log.policy.ack", ack, None).await?;
+        match state
+            .sent_log_acks
+            .iter_mut()
+            .find(|sent| sent.source == ack.source)
+        {
+            Some(slot) => *slot = ack.clone(),
+            None => state.sent_log_acks.push(ack.clone()),
+        }
+    }
+    Ok(())
 }
 
 /// Hands a verified body to the core. A job the core has not taken yet is
@@ -856,6 +1183,17 @@ async fn require_welcome<W: Wire>(
     )
     .await;
     Err(format!("{message_type} arrived before welcome"))
+}
+
+async fn admit<W: Wire>(
+    wire: &mut W,
+    logs: &logs::Handle,
+    command: logs::Command,
+) -> Result<(), String> {
+    if let Err(error) = logs.admit(command) {
+        send(wire, "logs.error", &error, None).await?;
+    }
+    Ok(())
 }
 
 /// Requests a snapshot when `desired` differs from the applied identifier. A
@@ -929,6 +1267,33 @@ async fn send<W: Wire, P: Serialize>(
     id: Option<&str>,
 ) -> Result<(), String> {
     let text = codec::encode(message_type, payload, id).map_err(|error| error.to_string())?;
+    send_raw(wire, text).await
+}
+
+async fn send_raw<W: Wire>(wire: &mut W, text: String) -> Result<(), String> {
+    wire.send_text(text).await.map_err(|error| error.describe())
+}
+
+/// Sends a frame only when its encoded size fits the negotiated limit. A
+/// telemetry snapshot with an unexpectedly large payload is dropped rather
+/// than tearing down the session.
+async fn send_with_limit<W: Wire, P: Serialize>(
+    wire: &mut W,
+    message_type: &str,
+    payload: &P,
+    id: Option<&str>,
+    max_frame_bytes: usize,
+) -> Result<(), String> {
+    let text = codec::encode(message_type, payload, id).map_err(|error| error.to_string())?;
+    if text.len() > max_frame_bytes {
+        warn!(
+            message_type,
+            bytes = text.len(),
+            max = max_frame_bytes,
+            "dropping an oversized outbound telemetry frame"
+        );
+        return Ok(());
+    }
     wire.send_text(text).await.map_err(|error| error.describe())
 }
 
@@ -998,6 +1363,15 @@ async fn wait_for(deadline: Option<Instant>) {
     match deadline {
         Some(deadline) => tokio::time::sleep_until(deadline).await,
         None => std::future::pending().await,
+    }
+}
+
+/// The earlier of two optional deadlines, treating an absent one as absent.
+fn earliest(left: Option<Instant>, right: Option<Instant>) -> Option<Instant> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+        (None, None) => None,
     }
 }
 

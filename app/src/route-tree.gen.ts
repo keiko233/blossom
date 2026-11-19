@@ -36,6 +36,7 @@ import { Route as userDashboardIndexRouteImport } from './routes/(user)/dashboar
 import { Route as userWelcomeIndexRouteImport } from './routes/(user)/welcome/index'
 import { Route as ApiAgentWsRouteImport } from './routes/api/agent/ws'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiMaintenanceServerMetricsRouteImport } from './routes/api/maintenance/server-metrics'
 import { Route as ApiRpcSplatRouteImport } from './routes/api/rpc/$'
 import { Route as ApiSubTokenRouteImport } from './routes/api/sub/$token'
 import { Route as adminAdminAnnouncementsIndexRouteImport } from './routes/(admin)/admin/announcements/index'
@@ -72,10 +73,14 @@ import { Route as adminAdminProxiesServersServerIdRouteRouteImport } from './rou
 import { Route as adminAdminProxiesServersNewRouteImport } from './routes/(admin)/admin/proxies/servers/new'
 import { Route as ApiAdminServersIdStreamRouteImport } from './routes/api/admin/servers/$id/stream'
 import { Route as adminAdminProxiesServersServerIdIndexRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId/index'
+import { Route as adminAdminProxiesServersServerIdConnectionRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId/connection'
+import { Route as adminAdminProxiesServersServerIdLogsRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId/logs'
 import { Route as adminAdminProxiesServersServerIdNodesRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId/nodes'
 import { Route as adminAdminProxiesServersServerIdSettingsRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId/settings'
 import { Route as adminAdminProxiesServersServerIdTerminalRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId/terminal'
 import { Route as ApiAdminCertificatesCertificateIdExportPartRouteImport } from './routes/api/admin/certificates/$certificateId/export/$part'
+import { Route as ApiAdminServersIdLogsWsRouteImport } from './routes/api/admin/servers/$id/logs/ws'
+import { Route as ApiAdminServersIdMetricsWsRouteImport } from './routes/api/admin/servers/$id/metrics/ws'
 import { Route as ApiAdminServersIdPtyStatusRouteImport } from './routes/api/admin/servers/$id/pty/status'
 import { Route as ApiAdminServersIdPtyWsRouteImport } from './routes/api/admin/servers/$id/pty/ws'
 import { Route as ApiAdminServersIdInstallationScriptGrantIdRouteImport } from './routes/api/admin/servers/$id/installation/script/$grantId'
@@ -225,6 +230,12 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiMaintenanceServerMetricsRoute =
+  ApiMaintenanceServerMetricsRouteImport.update({
+    id: '/api/maintenance/server-metrics',
+    path: '/api/maintenance/server-metrics',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiRpcSplatRoute = ApiRpcSplatRouteImport.update({
   id: '/api/rpc/$',
   path: '/api/rpc/$',
@@ -427,6 +438,18 @@ const adminAdminProxiesServersServerIdIndexRoute =
     path: '/',
     getParentRoute: () => adminAdminProxiesServersServerIdRouteRoute,
   } as any)
+const adminAdminProxiesServersServerIdConnectionRoute =
+  adminAdminProxiesServersServerIdConnectionRouteImport.update({
+    id: '/connection',
+    path: '/connection',
+    getParentRoute: () => adminAdminProxiesServersServerIdRouteRoute,
+  } as any)
+const adminAdminProxiesServersServerIdLogsRoute =
+  adminAdminProxiesServersServerIdLogsRouteImport.update({
+    id: '/logs',
+    path: '/logs',
+    getParentRoute: () => adminAdminProxiesServersServerIdRouteRoute,
+  } as any)
 const adminAdminProxiesServersServerIdNodesRoute =
   adminAdminProxiesServersServerIdNodesRouteImport.update({
     id: '/nodes',
@@ -449,6 +472,17 @@ const ApiAdminCertificatesCertificateIdExportPartRoute =
   ApiAdminCertificatesCertificateIdExportPartRouteImport.update({
     id: '/api/admin/certificates/$certificateId/export/$part',
     path: '/api/admin/certificates/$certificateId/export/$part',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiAdminServersIdLogsWsRoute = ApiAdminServersIdLogsWsRouteImport.update({
+  id: '/api/admin/servers/$id/logs/ws',
+  path: '/api/admin/servers/$id/logs/ws',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminServersIdMetricsWsRoute =
+  ApiAdminServersIdMetricsWsRouteImport.update({
+    id: '/api/admin/servers/$id/metrics/ws',
+    path: '/api/admin/servers/$id/metrics/ws',
     getParentRoute: () => rootRouteImport,
   } as any)
 const ApiAdminServersIdPtyStatusRoute =
@@ -493,6 +527,7 @@ export interface FileRoutesByFullPath {
   '/auth/signup': typeof authAuthSignupRoute
   '/api/agent/ws': typeof ApiAgentWsRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/maintenance/server-metrics': typeof ApiMaintenanceServerMetricsRoute
   '/api/rpc/$': typeof ApiRpcSplatRoute
   '/api/sub/$token': typeof ApiSubTokenRoute
   '/admin/': typeof adminAdminIndexRoute
@@ -531,10 +566,14 @@ export interface FileRoutesByFullPath {
   '/admin/proxies/nodes/': typeof adminAdminProxiesNodesIndexRoute
   '/admin/proxies/rules/': typeof adminAdminProxiesRulesIndexRoute
   '/admin/proxies/servers/': typeof adminAdminProxiesServersIndexRoute
+  '/admin/proxies/servers/$serverId/connection': typeof adminAdminProxiesServersServerIdConnectionRoute
+  '/admin/proxies/servers/$serverId/logs': typeof adminAdminProxiesServersServerIdLogsRoute
   '/admin/proxies/servers/$serverId/nodes': typeof adminAdminProxiesServersServerIdNodesRoute
   '/admin/proxies/servers/$serverId/settings': typeof adminAdminProxiesServersServerIdSettingsRoute
   '/admin/proxies/servers/$serverId/terminal': typeof adminAdminProxiesServersServerIdTerminalRoute
   '/api/admin/certificates/$certificateId/export/$part': typeof ApiAdminCertificatesCertificateIdExportPartRoute
+  '/api/admin/servers/$id/logs/ws': typeof ApiAdminServersIdLogsWsRoute
+  '/api/admin/servers/$id/metrics/ws': typeof ApiAdminServersIdMetricsWsRoute
   '/api/admin/servers/$id/pty/status': typeof ApiAdminServersIdPtyStatusRoute
   '/api/admin/servers/$id/pty/ws': typeof ApiAdminServersIdPtyWsRoute
   '/admin/proxies/servers/$serverId/': typeof adminAdminProxiesServersServerIdIndexRoute
@@ -555,6 +594,7 @@ export interface FileRoutesByTo {
   '/auth/signup': typeof authAuthSignupRoute
   '/api/agent/ws': typeof ApiAgentWsRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/maintenance/server-metrics': typeof ApiMaintenanceServerMetricsRoute
   '/api/rpc/$': typeof ApiRpcSplatRoute
   '/api/sub/$token': typeof ApiSubTokenRoute
   '/admin': typeof adminAdminIndexRoute
@@ -588,10 +628,14 @@ export interface FileRoutesByTo {
   '/admin/proxies/nodes': typeof adminAdminProxiesNodesIndexRoute
   '/admin/proxies/rules': typeof adminAdminProxiesRulesIndexRoute
   '/admin/proxies/servers': typeof adminAdminProxiesServersIndexRoute
+  '/admin/proxies/servers/$serverId/connection': typeof adminAdminProxiesServersServerIdConnectionRoute
+  '/admin/proxies/servers/$serverId/logs': typeof adminAdminProxiesServersServerIdLogsRoute
   '/admin/proxies/servers/$serverId/nodes': typeof adminAdminProxiesServersServerIdNodesRoute
   '/admin/proxies/servers/$serverId/settings': typeof adminAdminProxiesServersServerIdSettingsRoute
   '/admin/proxies/servers/$serverId/terminal': typeof adminAdminProxiesServersServerIdTerminalRoute
   '/api/admin/certificates/$certificateId/export/$part': typeof ApiAdminCertificatesCertificateIdExportPartRoute
+  '/api/admin/servers/$id/logs/ws': typeof ApiAdminServersIdLogsWsRoute
+  '/api/admin/servers/$id/metrics/ws': typeof ApiAdminServersIdMetricsWsRoute
   '/api/admin/servers/$id/pty/status': typeof ApiAdminServersIdPtyStatusRoute
   '/api/admin/servers/$id/pty/ws': typeof ApiAdminServersIdPtyWsRoute
   '/admin/proxies/servers/$serverId': typeof adminAdminProxiesServersServerIdIndexRoute
@@ -625,6 +669,7 @@ export interface FileRoutesById {
   '/(auth)/auth/signup': typeof authAuthSignupRoute
   '/api/agent/ws': typeof ApiAgentWsRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/maintenance/server-metrics': typeof ApiMaintenanceServerMetricsRoute
   '/api/rpc/$': typeof ApiRpcSplatRoute
   '/api/sub/$token': typeof ApiSubTokenRoute
   '/(admin)/admin/': typeof adminAdminIndexRoute
@@ -663,10 +708,14 @@ export interface FileRoutesById {
   '/(admin)/admin/proxies/nodes/': typeof adminAdminProxiesNodesIndexRoute
   '/(admin)/admin/proxies/rules/': typeof adminAdminProxiesRulesIndexRoute
   '/(admin)/admin/proxies/servers/': typeof adminAdminProxiesServersIndexRoute
+  '/(admin)/admin/proxies/servers/$serverId/connection': typeof adminAdminProxiesServersServerIdConnectionRoute
+  '/(admin)/admin/proxies/servers/$serverId/logs': typeof adminAdminProxiesServersServerIdLogsRoute
   '/(admin)/admin/proxies/servers/$serverId/nodes': typeof adminAdminProxiesServersServerIdNodesRoute
   '/(admin)/admin/proxies/servers/$serverId/settings': typeof adminAdminProxiesServersServerIdSettingsRoute
   '/(admin)/admin/proxies/servers/$serverId/terminal': typeof adminAdminProxiesServersServerIdTerminalRoute
   '/api/admin/certificates/$certificateId/export/$part': typeof ApiAdminCertificatesCertificateIdExportPartRoute
+  '/api/admin/servers/$id/logs/ws': typeof ApiAdminServersIdLogsWsRoute
+  '/api/admin/servers/$id/metrics/ws': typeof ApiAdminServersIdMetricsWsRoute
   '/api/admin/servers/$id/pty/status': typeof ApiAdminServersIdPtyStatusRoute
   '/api/admin/servers/$id/pty/ws': typeof ApiAdminServersIdPtyWsRoute
   '/(admin)/admin/proxies/servers/$serverId/': typeof adminAdminProxiesServersServerIdIndexRoute
@@ -698,6 +747,7 @@ export interface FileRouteTypes {
     | '/auth/signup'
     | '/api/agent/ws'
     | '/api/auth/$'
+    | '/api/maintenance/server-metrics'
     | '/api/rpc/$'
     | '/api/sub/$token'
     | '/admin/'
@@ -736,10 +786,14 @@ export interface FileRouteTypes {
     | '/admin/proxies/nodes/'
     | '/admin/proxies/rules/'
     | '/admin/proxies/servers/'
+    | '/admin/proxies/servers/$serverId/connection'
+    | '/admin/proxies/servers/$serverId/logs'
     | '/admin/proxies/servers/$serverId/nodes'
     | '/admin/proxies/servers/$serverId/settings'
     | '/admin/proxies/servers/$serverId/terminal'
     | '/api/admin/certificates/$certificateId/export/$part'
+    | '/api/admin/servers/$id/logs/ws'
+    | '/api/admin/servers/$id/metrics/ws'
     | '/api/admin/servers/$id/pty/status'
     | '/api/admin/servers/$id/pty/ws'
     | '/admin/proxies/servers/$serverId/'
@@ -760,6 +814,7 @@ export interface FileRouteTypes {
     | '/auth/signup'
     | '/api/agent/ws'
     | '/api/auth/$'
+    | '/api/maintenance/server-metrics'
     | '/api/rpc/$'
     | '/api/sub/$token'
     | '/admin'
@@ -793,10 +848,14 @@ export interface FileRouteTypes {
     | '/admin/proxies/nodes'
     | '/admin/proxies/rules'
     | '/admin/proxies/servers'
+    | '/admin/proxies/servers/$serverId/connection'
+    | '/admin/proxies/servers/$serverId/logs'
     | '/admin/proxies/servers/$serverId/nodes'
     | '/admin/proxies/servers/$serverId/settings'
     | '/admin/proxies/servers/$serverId/terminal'
     | '/api/admin/certificates/$certificateId/export/$part'
+    | '/api/admin/servers/$id/logs/ws'
+    | '/api/admin/servers/$id/metrics/ws'
     | '/api/admin/servers/$id/pty/status'
     | '/api/admin/servers/$id/pty/ws'
     | '/admin/proxies/servers/$serverId'
@@ -829,6 +888,7 @@ export interface FileRouteTypes {
     | '/(auth)/auth/signup'
     | '/api/agent/ws'
     | '/api/auth/$'
+    | '/api/maintenance/server-metrics'
     | '/api/rpc/$'
     | '/api/sub/$token'
     | '/(admin)/admin/'
@@ -867,10 +927,14 @@ export interface FileRouteTypes {
     | '/(admin)/admin/proxies/nodes/'
     | '/(admin)/admin/proxies/rules/'
     | '/(admin)/admin/proxies/servers/'
+    | '/(admin)/admin/proxies/servers/$serverId/connection'
+    | '/(admin)/admin/proxies/servers/$serverId/logs'
     | '/(admin)/admin/proxies/servers/$serverId/nodes'
     | '/(admin)/admin/proxies/servers/$serverId/settings'
     | '/(admin)/admin/proxies/servers/$serverId/terminal'
     | '/api/admin/certificates/$certificateId/export/$part'
+    | '/api/admin/servers/$id/logs/ws'
+    | '/api/admin/servers/$id/metrics/ws'
     | '/api/admin/servers/$id/pty/status'
     | '/api/admin/servers/$id/pty/ws'
     | '/(admin)/admin/proxies/servers/$serverId/'
@@ -889,11 +953,14 @@ export interface RootRouteChildren {
   staticIndexRoute: typeof staticIndexRoute
   ApiAgentWsRoute: typeof ApiAgentWsRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiMaintenanceServerMetricsRoute: typeof ApiMaintenanceServerMetricsRoute
   ApiRpcSplatRoute: typeof ApiRpcSplatRoute
   ApiSubTokenRoute: typeof ApiSubTokenRoute
   ApiAgentEnrollmentRedeemRoute: typeof ApiAgentEnrollmentRedeemRoute
   ApiAdminServersIdStreamRoute: typeof ApiAdminServersIdStreamRoute
   ApiAdminCertificatesCertificateIdExportPartRoute: typeof ApiAdminCertificatesCertificateIdExportPartRoute
+  ApiAdminServersIdLogsWsRoute: typeof ApiAdminServersIdLogsWsRoute
+  ApiAdminServersIdMetricsWsRoute: typeof ApiAdminServersIdMetricsWsRoute
   ApiAdminServersIdPtyStatusRoute: typeof ApiAdminServersIdPtyStatusRoute
   ApiAdminServersIdPtyWsRoute: typeof ApiAdminServersIdPtyWsRoute
   ApiAdminServersIdInstallationScriptGrantIdRoute: typeof ApiAdminServersIdInstallationScriptGrantIdRoute
@@ -1102,6 +1169,13 @@ declare module '@tanstack/react-router' {
       path: '/api/auth/$'
       fullPath: '/api/auth/$'
       preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/maintenance/server-metrics': {
+      id: '/api/maintenance/server-metrics'
+      path: '/api/maintenance/server-metrics'
+      fullPath: '/api/maintenance/server-metrics'
+      preLoaderRoute: typeof ApiMaintenanceServerMetricsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/rpc/$': {
@@ -1356,6 +1430,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof adminAdminProxiesServersServerIdIndexRouteImport
       parentRoute: typeof adminAdminProxiesServersServerIdRouteRoute
     }
+    '/(admin)/admin/proxies/servers/$serverId/connection': {
+      id: '/(admin)/admin/proxies/servers/$serverId/connection'
+      path: '/connection'
+      fullPath: '/admin/proxies/servers/$serverId/connection'
+      preLoaderRoute: typeof adminAdminProxiesServersServerIdConnectionRouteImport
+      parentRoute: typeof adminAdminProxiesServersServerIdRouteRoute
+    }
+    '/(admin)/admin/proxies/servers/$serverId/logs': {
+      id: '/(admin)/admin/proxies/servers/$serverId/logs'
+      path: '/logs'
+      fullPath: '/admin/proxies/servers/$serverId/logs'
+      preLoaderRoute: typeof adminAdminProxiesServersServerIdLogsRouteImport
+      parentRoute: typeof adminAdminProxiesServersServerIdRouteRoute
+    }
     '/(admin)/admin/proxies/servers/$serverId/nodes': {
       id: '/(admin)/admin/proxies/servers/$serverId/nodes'
       path: '/nodes'
@@ -1382,6 +1470,20 @@ declare module '@tanstack/react-router' {
       path: '/api/admin/certificates/$certificateId/export/$part'
       fullPath: '/api/admin/certificates/$certificateId/export/$part'
       preLoaderRoute: typeof ApiAdminCertificatesCertificateIdExportPartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/servers/$id/logs/ws': {
+      id: '/api/admin/servers/$id/logs/ws'
+      path: '/api/admin/servers/$id/logs/ws'
+      fullPath: '/api/admin/servers/$id/logs/ws'
+      preLoaderRoute: typeof ApiAdminServersIdLogsWsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/servers/$id/metrics/ws': {
+      id: '/api/admin/servers/$id/metrics/ws'
+      path: '/api/admin/servers/$id/metrics/ws'
+      fullPath: '/api/admin/servers/$id/metrics/ws'
+      preLoaderRoute: typeof ApiAdminServersIdMetricsWsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/admin/servers/$id/pty/status': {
@@ -1497,6 +1599,8 @@ const adminAdminProxiesNodesRouteRouteWithChildren =
   )
 
 interface adminAdminProxiesServersServerIdRouteRouteChildren {
+  adminAdminProxiesServersServerIdConnectionRoute: typeof adminAdminProxiesServersServerIdConnectionRoute
+  adminAdminProxiesServersServerIdLogsRoute: typeof adminAdminProxiesServersServerIdLogsRoute
   adminAdminProxiesServersServerIdNodesRoute: typeof adminAdminProxiesServersServerIdNodesRoute
   adminAdminProxiesServersServerIdSettingsRoute: typeof adminAdminProxiesServersServerIdSettingsRoute
   adminAdminProxiesServersServerIdTerminalRoute: typeof adminAdminProxiesServersServerIdTerminalRoute
@@ -1505,6 +1609,10 @@ interface adminAdminProxiesServersServerIdRouteRouteChildren {
 
 const adminAdminProxiesServersServerIdRouteRouteChildren: adminAdminProxiesServersServerIdRouteRouteChildren =
   {
+    adminAdminProxiesServersServerIdConnectionRoute:
+      adminAdminProxiesServersServerIdConnectionRoute,
+    adminAdminProxiesServersServerIdLogsRoute:
+      adminAdminProxiesServersServerIdLogsRoute,
     adminAdminProxiesServersServerIdNodesRoute:
       adminAdminProxiesServersServerIdNodesRoute,
     adminAdminProxiesServersServerIdSettingsRoute:
@@ -1757,12 +1865,15 @@ const rootRouteChildren: RootRouteChildren = {
   staticIndexRoute: staticIndexRoute,
   ApiAgentWsRoute: ApiAgentWsRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiMaintenanceServerMetricsRoute: ApiMaintenanceServerMetricsRoute,
   ApiRpcSplatRoute: ApiRpcSplatRoute,
   ApiSubTokenRoute: ApiSubTokenRoute,
   ApiAgentEnrollmentRedeemRoute: ApiAgentEnrollmentRedeemRoute,
   ApiAdminServersIdStreamRoute: ApiAdminServersIdStreamRoute,
   ApiAdminCertificatesCertificateIdExportPartRoute:
     ApiAdminCertificatesCertificateIdExportPartRoute,
+  ApiAdminServersIdLogsWsRoute: ApiAdminServersIdLogsWsRoute,
+  ApiAdminServersIdMetricsWsRoute: ApiAdminServersIdMetricsWsRoute,
   ApiAdminServersIdPtyStatusRoute: ApiAdminServersIdPtyStatusRoute,
   ApiAdminServersIdPtyWsRoute: ApiAdminServersIdPtyWsRoute,
   ApiAdminServersIdInstallationScriptGrantIdRoute:

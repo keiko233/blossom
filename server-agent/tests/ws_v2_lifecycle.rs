@@ -1,8 +1,11 @@
-//! Process-level lifecycle test for protocol v2.
+//! Process-level lifecycle test for the default protocol v2 path.
 //!
 //! The real agent binary runs against a local WebSocket control plane and a
 //! fake sing-box. The control plane never serves the old HTTP agent API; any
-//! such request is recorded and failed. The test covers a cold snapshot apply,
+//! such request is recorded and failed. The agent is started without
+//! `--ws-protocol` (and with any inherited `AGENT_WS_PROTOCOL` removed), so
+//! this is the same entry point an installed static backup uses. The test
+//! covers a cold snapshot apply,
 //! a traffic acknowledgement lost with the socket and replayed under the same
 //! report id, a missed-notification recovery through `agent.status.ack`, a
 //! failed candidate that rolls back to the last-known-good config, and an
@@ -68,6 +71,13 @@ struct Harness {
 }
 
 impl Harness {
+    fn state_file(&self) -> Value {
+        serde_json::from_slice(&fs::read(self.state_dir.join("state.json")).unwrap_or_default())
+            .unwrap_or(Value::Null)
+    }
+}
+
+impl Harness {
     fn new() -> Self {
         let dir = TestDir::new();
         let state_dir = dir.path().join("state");
@@ -94,13 +104,14 @@ impl Harness {
             .open(&self.agent_log)
             .unwrap();
         let mut command = Command::new(env!("CARGO_BIN_EXE_server-agent"));
+        // Exercise the shipped default: a static backup token with no
+        // `--ws-protocol` flag and no `AGENT_WS_PROTOCOL` override.
         command
+            .env_remove("AGENT_WS_PROTOCOL")
             .arg("--url")
             .arg(url)
             .arg("--token")
             .arg("test-agent-token")
-            .arg("--ws-protocol")
-            .arg("v2")
             .arg("--state-dir")
             .arg(&self.state_dir)
             .arg("--sing-box-path")
@@ -131,6 +142,11 @@ impl Harness {
         fs::read_to_string(self.state_dir.join("active.json")).unwrap_or_default()
     }
 
+    fn running_config(&self) -> Value {
+        let path = format!("{}.config", self.fake_log.display());
+        serde_json::from_slice(&fs::read(path).unwrap_or_default()).unwrap_or(Value::Null)
+    }
+
     fn agent_output(&self) -> String {
         fs::read_to_string(&self.agent_log).unwrap_or_default()
     }
@@ -150,6 +166,10 @@ case "$1" in
     ;;
   run)
     echo "run $3" >> "$FAKE_SINGBOX_LOG"
+    cp "$3" "${FAKE_SINGBOX_LOG}.config"
+    echo "synthetic-alpha INFO agent ready"
+    echo "synthetic-warn WARN dial tcp refused" >&2
+    echo "synthetic-secret ERROR authorization=Bearer topsecret-value" >&2
     if grep -q "node-runtime-fail" "$3"; then
       echo "ERROR the failing test inbound cannot start" >&2
       exit 1
@@ -267,6 +287,68 @@ fn status_ack(revision: &str) -> Value {
                 "desiredAgentVersion": null,
                 "desiredSingBoxVersion": null,
             },
+        },
+    })
+}
+
+fn status_ack_with_log(revision: &str, log_policy_revision: u64) -> Value {
+    json!({
+        "v": 2,
+        "type": "agent.status.ack",
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "payload": {
+            "desired": identifier(revision),
+            "updatePolicy": {
+                "desiredAgentVersion": null,
+                "desiredSingBoxVersion": null,
+            },
+            "logPolicyRevision": log_policy_revision,
+        },
+    })
+}
+
+fn log_policy_notify(revision: u64) -> Value {
+    json!({
+        "v": 2,
+        "type": "log.policy.notify",
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "payload": {
+            "revision": revision,
+            "source": "agent",
+            "reason": "administrator changed the level",
+        },
+    })
+}
+
+fn log_policy_snapshot(
+    request_id: &str,
+    revision: u64,
+    agent_level: &str,
+    sing_box_level: &str,
+) -> Value {
+    json!({
+        "v": 2,
+        "type": "log.policy.snapshot",
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "payload": {
+            "requestId": request_id,
+            "revision": revision,
+            "sources": [
+                {
+                    "source": "agent",
+                    "revision": revision,
+                    "baseline": agent_level,
+                    "level": agent_level,
+                    "deadline": null,
+                },
+                {
+                    "source": "sing-box",
+                    "revision": revision,
+                    "baseline": sing_box_level,
+                    "level": sing_box_level,
+                    "deadline": null,
+                },
+            ],
         },
     })
 }
@@ -450,6 +532,14 @@ async fn session_one(stream: TcpStream) -> Value {
         "first session: {hello}"
     );
     assert!(
+        hello["payload"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "log-policy-v1"),
+        "the v2 agent advertises log policy: {hello}"
+    );
+    assert!(
         hello["payload"]["applied"].is_null(),
         "a cold start reports an empty cache: {hello}"
     );
@@ -473,10 +563,122 @@ async fn session_two(stream: TcpStream, first_traffic: Value) {
     let _ = socket.close(None).await;
 }
 
+async fn session_disabled_live(stream: TcpStream) -> Value {
+    let mut socket = upgrade(stream).await;
+    let hello = receive(&mut socket).await;
+    assert_eq!(hello["type"], "hello", "first session: {hello}");
+    send(&mut socket, &welcome(D1)).await;
+    loop {
+        let Some(frame) = next_session_frame(&mut socket).await else {
+            panic!("the disabled session ended before reaching applied");
+        };
+        match frame["type"].as_str().unwrap_or_default() {
+            "config.get" => {
+                let request_id = frame["payload"]["requestId"].as_str().unwrap();
+                send_snapshot(&mut socket, request_id, D1, &document(D1, false)).await;
+            }
+            "config.ack" => {
+                assert_eq!(frame["payload"]["outcome"], "applied", "{frame}");
+                let _ = send(
+                    &mut socket,
+                    &json!({
+                        "v": 2,
+                        "type": "error",
+                        "ts": chrono::Utc::now().to_rfc3339(),
+                        "payload": {"code": "server_disabled", "message": "server is disabled"}
+                    }),
+                )
+                .await;
+                let _ = socket.close(None).await;
+                return frame;
+            }
+            "traffic.report" => {
+                let report_id = frame["payload"]["reportId"].as_str().unwrap();
+                send(&mut socket, &traffic_ack(report_id)).await;
+            }
+            "agent.status" => {
+                assert!(
+                    frame["payload"]["activeNodeIds"]
+                        .as_array()
+                        .is_some_and(|ids| ids.iter().any(|id| id == "node-test")),
+                    "the proxy must be reported as applied before the disable: {frame}"
+                );
+            }
+            "log.policy.ack" => {}
+            "telemetry.sample" => {}
+            other => panic!("unexpected frame before disable: {other}: {frame}"),
+        }
+    }
+}
+
+async fn session_reenabled_live(stream: TcpStream) {
+    let mut socket = upgrade(stream).await;
+    let hello = receive(&mut socket).await;
+    assert_eq!(hello["type"], "hello", "re-enabled session: {hello}");
+    // The teardown has no applied identifier, so a disabled restart may send
+    // `null`. Either way, only the fresh authoritative revision may commit.
+    send(&mut socket, &welcome(D2)).await;
+    loop {
+        let Some(frame) = next_session_frame(&mut socket).await else {
+            panic!("the enabled session ended before acknowledging its snapshot");
+        };
+        match frame["type"].as_str().unwrap_or_default() {
+            "config.get" => {
+                let request_id = frame["payload"]["requestId"].as_str().unwrap();
+                send_snapshot(&mut socket, request_id, D2, &document(D2, false)).await;
+            }
+            "config.ack" => {
+                assert_eq!(frame["payload"]["outcome"], "applied", "{frame}");
+                let _ = socket.close(None).await;
+                return;
+            }
+            "agent.status" | "traffic.report" | "log.policy.ack" | "telemetry.sample" => {}
+            other => panic!("unexpected frame in the re-enabled session: {other}: {frame}"),
+        }
+    }
+}
+
+async fn next_session_frame(socket: &mut WebSocket) -> Option<Value> {
+    loop {
+        let Some(Ok(item)) = timeout(Duration::from_secs(20), socket.next())
+            .await
+            .ok()
+            .flatten()
+        else {
+            return None;
+        };
+        match item {
+            Message::Text(text) => return Some(serde_json::from_str(text.as_str()).unwrap()),
+            Message::Ping(payload) => {
+                socket.send(Message::Pong(payload)).await.unwrap();
+            }
+            Message::Pong(_) | Message::Frame(_) => {}
+            Message::Binary(_) => panic!("v2 carries text frames only"),
+            Message::Close(_) => return None,
+        }
+    }
+}
+
 async fn run_first_session(socket: &mut WebSocket) -> Value {
     let mut config_acked = false;
     let mut traffic = None;
-    while !config_acked || traffic.is_none() {
+    let mut history_seen = false;
+    let mut live_seen = false;
+    let mut snapshot_seen = false;
+    let mut committed = false;
+    let has_interfaces = has_non_loopback_interface();
+    send(
+        socket,
+        &telemetry_subscribe("history-session-1", "history", 60_000),
+    )
+    .await;
+    while !config_acked
+        || traffic.is_none()
+        || !history_seen
+        || !live_seen
+        || !snapshot_seen
+        || !committed
+    {
         let frame = receive(socket).await;
         match frame["type"].as_str().unwrap() {
             "config.get" => {
@@ -490,13 +692,271 @@ async fn run_first_session(socket: &mut WebSocket) -> Value {
                 config_acked = true;
             }
             "traffic.report" => traffic = Some(frame["payload"].clone()),
-            "agent.status" => {}
+            "telemetry.sample" => {
+                let payload = &frame["payload"];
+                let purpose = payload["purpose"].as_str().unwrap();
+                assert!(!payload["scopeKey"].as_str().unwrap().contains(' '));
+                assert!(
+                    payload["sampledAt"].as_str().unwrap().contains('T'),
+                    "{frame}"
+                );
+                if purpose == "history" {
+                    assert_eq!(payload["subscriptionId"], "history-session-1");
+                    assert!(!history_seen, "one history sample before any live view");
+                    history_seen = true;
+                    send(
+                        socket,
+                        &telemetry_subscribe("live-session-1", "live", 1_000),
+                    )
+                    .await;
+                } else {
+                    assert_eq!(purpose, "live", "{frame}");
+                    assert_eq!(payload["subscriptionId"], "live-session-1");
+                    if has_interfaces {
+                        let network = &payload["network"];
+                        assert!(
+                            network.is_object(),
+                            "a second observation with interfaces must yield rates: {frame}"
+                        );
+                        assert!(network["windowMs"].as_u64().unwrap() >= 1);
+                        assert!(network["txBytesPerSecond"].is_number(), "{frame}");
+                        assert!(network["rxBytesPerSecond"].is_number(), "{frame}");
+                    }
+                    live_seen = true;
+                    send(
+                        socket,
+                        &json!({
+                            "v": 2,
+                            "type": "telemetry.inspect",
+                            "ts": chrono::Utc::now().to_rfc3339(),
+                            "payload": {"requestId": "inspect-1"},
+                        }),
+                    )
+                    .await;
+                }
+            }
+            "telemetry.snapshot" => {
+                assert_eq!(frame["payload"]["requestId"], "inspect-1");
+                assert_eq!(frame["payload"]["partial"], false);
+                assert!(frame["payload"]["listeners"].is_array());
+                snapshot_seen = true;
+                send(
+                    socket,
+                    &json!({
+                        "v": 2,
+                        "type": "telemetry.unsubscribe",
+                        "ts": chrono::Utc::now().to_rfc3339(),
+                        "payload": {"subscriptionId": "live-session-1"},
+                    }),
+                )
+                .await;
+                send(
+                    socket,
+                    &json!({
+                        "v": 2,
+                        "type": "telemetry.unsubscribe",
+                        "ts": chrono::Utc::now().to_rfc3339(),
+                        "payload": {"subscriptionId": "history-session-1"},
+                    }),
+                )
+                .await;
+            }
+            "agent.status" => {
+                if frame["payload"]["activeNodeIds"]
+                    .as_array()
+                    .is_some_and(|ids| ids.iter().any(|id| id == "node-test"))
+                    && frame["payload"]["configState"] == "applied"
+                {
+                    committed = true;
+                }
+            }
+            "log.policy.ack" => {}
             other => panic!("unexpected frame in the first session: {other}: {frame}"),
         }
     }
+    // Let the core publish the durable commit before the reconnect follows.
+    // The status above is the transition; the next status confirms it.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while tokio::time::Instant::now() < deadline {
+        match timeout(Duration::from_millis(100), socket.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                let frame: Value = serde_json::from_str(text.as_str()).unwrap();
+                match frame["type"].as_str().unwrap_or_default() {
+                    "agent.status" => break,
+                    "config.get" => {
+                        let request_id = frame["payload"]["requestId"].as_str().unwrap();
+                        send_snapshot(socket, request_id, D1, &document(D1, false)).await;
+                    }
+                    "traffic.report" => {}
+                    "log.policy.ack" => {}
+                    _ => {}
+                }
+            }
+            Ok(Some(Ok(Message::Ping(payload)))) => {
+                socket.send(Message::Pong(payload)).await.unwrap();
+            }
+            Ok(Some(Ok(Message::Close(_)))) | Ok(None) => break,
+            Ok(Some(Ok(_))) => {}
+            Ok(Some(Err(_))) => break,
+            Err(_) => break,
+        }
+    }
+    send(socket, &log_policy_notify(1)).await;
+    let get = loop {
+        let frame = receive(socket).await;
+        match frame["type"].as_str().unwrap() {
+            "log.policy.get" => break frame,
+            "agent.status" => {}
+            "log.policy.ack" => {}
+            other => panic!("unexpected frame before log.policy.get: {other}: {frame}"),
+        }
+    };
+    let request_id = get["payload"]["requestId"].as_str().unwrap();
+    send(socket, &log_policy_snapshot(request_id, 1, "info", "info")).await;
+    let mut agent_acked = false;
+    let mut sing_box_acked = false;
+    while !agent_acked || !sing_box_acked {
+        let frame = receive(socket).await;
+        match frame["type"].as_str().unwrap() {
+            "log.policy.ack" => {
+                if frame["payload"]["sourceRevision"] != 1 {
+                    continue;
+                }
+                assert_eq!(frame["payload"]["error"], Value::Null, "{frame}");
+                assert_eq!(frame["payload"]["pending"], false, "{frame}");
+                match frame["payload"]["source"].as_str().unwrap() {
+                    "agent" => {
+                        assert_eq!(frame["payload"]["sourceRevision"], 1, "{frame}");
+                        assert_eq!(frame["payload"]["requested"], "info", "{frame}");
+                        assert_eq!(frame["payload"]["baseline"], "info", "{frame}");
+                        assert_eq!(frame["payload"]["effective"], "info", "{frame}");
+                        agent_acked = true;
+                    }
+                    "sing-box" => {
+                        assert_eq!(frame["payload"]["sourceRevision"], 1, "{frame}");
+                        assert_eq!(frame["payload"]["effective"], "info", "{frame}");
+                        sing_box_acked = true;
+                    }
+                    other => panic!("unknown log policy source {other}: {frame}"),
+                }
+            }
+            "agent.status" => {}
+            other => panic!("unexpected frame while log policy applied: {other}: {frame}"),
+        }
+    }
+
+    // A lost notification is recovered from the status acknowledgement.
+    send(socket, &status_ack_with_log(D1, 2)).await;
+    let get = loop {
+        let frame = receive(socket).await;
+        match frame["type"].as_str().unwrap() {
+            "log.policy.get" => break frame,
+            "agent.status" => {}
+            "log.policy.ack" => {}
+            other => panic!("unexpected frame before log policy reconciliation: {other}: {frame}"),
+        }
+    };
+    let request_id = get["payload"]["requestId"].as_str().unwrap();
+    send(socket, &log_policy_snapshot(request_id, 2, "warn", "info")).await;
+    loop {
+        let frame = receive(socket).await;
+        match frame["type"].as_str().unwrap() {
+            "log.policy.ack" => {
+                if frame["payload"]["source"] == "agent" && frame["payload"]["sourceRevision"] == 2
+                {
+                    assert_eq!(frame["payload"]["sourceRevision"], 2, "{frame}");
+                    assert_eq!(frame["payload"]["requested"], "warn", "{frame}");
+                    assert_eq!(frame["payload"]["baseline"], "warn", "{frame}");
+                    assert_eq!(frame["payload"]["effective"], "warn", "{frame}");
+                    break;
+                }
+            }
+            "agent.status" | "config.get" => {}
+            other => panic!("unexpected frame while log policy reconciled: {other}: {frame}"),
+        }
+    }
+    check_tail(socket).await;
     // Close without acknowledging the report: the durable queue must resend it
     // under the same id on the next session.
     traffic.unwrap()
+}
+
+async fn check_tail(socket: &mut WebSocket) {
+    send(
+        socket,
+        &json!({
+            "v": 2,
+            "type": "logs.subscribe",
+            "ts": chrono::Utc::now().to_rfc3339(),
+            "payload": {
+                "subscriptionId": "tail-1",
+                "filter": {"source": "sing-box", "minLevel": "info"},
+                "resume": null,
+                "limit": 50,
+            },
+        }),
+    )
+    .await;
+    loop {
+        let frame = receive(socket).await;
+        match frame["type"].as_str().unwrap() {
+            "logs.batch" => {
+                assert_eq!(frame["payload"]["subscriptionId"], "tail-1", "{frame}");
+                let records = frame["payload"]["records"].as_array().unwrap();
+                let texts: Vec<_> = records
+                    .iter()
+                    .map(|record| record["text"].as_str().unwrap())
+                    .collect();
+                assert!(
+                    texts.iter().any(|text| text.contains("synthetic-alpha")),
+                    "the tail did not return the retained sing-box output: {frame}"
+                );
+                assert!(
+                    texts.iter().any(|text| text.contains("dial tcp refused")),
+                    "the tail did not return the warning line: {frame}"
+                );
+                assert!(
+                    texts.iter().any(|text| text.contains("[REDACTED]")),
+                    "the retained secret was not redacted: {frame}"
+                );
+                assert!(
+                    texts.iter().all(|text| !text.contains("topsecret-value")),
+                    "the retained secret reached the wire: {frame}"
+                );
+                assert!(
+                    records.iter().all(|record| record["source"] == "sing-box"),
+                    "the tail filter leaked another source: {frame}"
+                );
+                return;
+            }
+            "agent.status" | "traffic.report" | "config.get" | "log.policy.ack" => {}
+            other => panic!("unexpected frame while tailing logs: {other}: {frame}"),
+        }
+    }
+}
+
+fn telemetry_subscribe(subscription_id: &str, purpose: &str, interval_ms: u64) -> Value {
+    json!({
+        "v": 2,
+        "type": "telemetry.subscribe",
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "payload": {
+            "subscriptionId": subscription_id,
+            "purpose": purpose,
+            "intervalMs": interval_ms,
+        },
+    })
+}
+
+fn has_non_loopback_interface() -> bool {
+    std::fs::read_to_string("/proc/net/dev")
+        .map(|input| {
+            input.lines().skip(2).any(|line| {
+                line.split_once(':')
+                    .is_some_and(|(name, _)| !name.trim().is_empty() && name.trim() != "lo")
+            })
+        })
+        .unwrap_or(false)
 }
 
 async fn run_second_session(socket: &mut WebSocket, first_traffic: Value) {
@@ -513,6 +973,7 @@ async fn run_second_session(socket: &mut WebSocket, first_traffic: Value) {
                 break;
             }
             "agent.status" => {}
+            "log.policy.ack" => {}
             other => panic!("unexpected frame before the traffic replay: {other}: {frame}"),
         }
     }
@@ -525,6 +986,7 @@ async fn run_second_session(socket: &mut WebSocket, first_traffic: Value) {
         match frame["type"].as_str().unwrap() {
             "config.get" => break frame,
             "agent.status" => {}
+            "log.policy.ack" => {}
             other => panic!("unexpected frame before config.get: {other}: {frame}"),
         }
     };
@@ -542,6 +1004,7 @@ async fn run_second_session(socket: &mut WebSocket, first_traffic: Value) {
                 break;
             }
             "agent.status" => {}
+            "log.policy.ack" => {}
             other => panic!("unexpected frame while the candidate failed: {other}: {frame}"),
         }
     }
@@ -568,6 +1031,149 @@ async fn run_second_session(socket: &mut WebSocket, first_traffic: Value) {
             Err(_) => {}
         }
     }
+
+    // The reconnect must not inherit the first session's tail subscription.
+    let quiet = tokio::time::Instant::now() + Duration::from_secs(1);
+    while tokio::time::Instant::now() < quiet {
+        match timeout(Duration::from_millis(200), socket.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                let frame: Value = serde_json::from_str(text.as_str()).unwrap();
+                assert!(
+                    !frame["type"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .starts_with("logs."),
+                    "a log subscription survived the reconnect: {frame}"
+                );
+            }
+            Ok(Some(Ok(Message::Ping(payload)))) => {
+                socket.send(Message::Pong(payload)).await.unwrap();
+            }
+            Ok(Some(Ok(_))) => {}
+            Ok(Some(Err(error))) => panic!("websocket error: {error}"),
+            Ok(None) => break,
+            Err(_) => {}
+        }
+    }
+    check_search_and_context(socket).await;
+}
+
+fn logs_frame(kind: &str, payload: Value) -> Value {
+    json!({
+        "v": 2,
+        "type": kind,
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "payload": payload,
+    })
+}
+
+async fn search_result(
+    socket: &mut WebSocket,
+    request_id: &str,
+    query: Value,
+    cursor: Value,
+) -> Value {
+    send(
+        socket,
+        &logs_frame(
+            "logs.search",
+            json!({
+                "requestId": request_id,
+                "query": query,
+                "cursor": cursor,
+                "limit": 1,
+            }),
+        ),
+    )
+    .await;
+    loop {
+        let frame = receive(socket).await;
+        match frame["type"].as_str().unwrap() {
+            "logs.search.result" => {
+                assert_eq!(
+                    frame["payload"]["requestId"], request_id,
+                    "a search reply must echo its request id: {frame}"
+                );
+                return frame;
+            }
+            "logs.error" => panic!("the agent refused a search: {frame}"),
+            "agent.status" | "agent.status.ack" | "config.get" | "logs.batch" | "logs.gap" => {}
+            other => panic!("unexpected frame while searching: {other}: {frame}"),
+        }
+    }
+}
+
+async fn check_search_and_context(socket: &mut WebSocket) {
+    let query = json!({
+        "text": "synthetic",
+        "source": "sing-box",
+        "minLevel": "info",
+    });
+    let first = search_result(socket, "search-1", query.clone(), Value::Null).await;
+    let payload = &first["payload"];
+    assert_eq!(
+        payload["matches"].as_array().unwrap().len(),
+        1,
+        "the page must honor its limit: {first}"
+    );
+    assert!(
+        payload["coverage"]["gap"].is_null(),
+        "the search lost coverage: {first}"
+    );
+    assert!(
+        payload["coverage"]["searchableFrom"].is_string(),
+        "the search did not report its range: {first}"
+    );
+    let continuation = payload["next"].clone();
+    assert!(
+        continuation.is_object(),
+        "a further match must offer a continuation: {first}"
+    );
+
+    let second = search_result(socket, "search-2", query, continuation).await;
+    assert_eq!(
+        second["payload"]["matches"].as_array().unwrap().len(),
+        1,
+        "the continuation must return the next match: {second}"
+    );
+    assert_ne!(
+        first["payload"]["matches"][0]["seq"], second["payload"]["matches"][0]["seq"],
+        "pagination must not repeat a record"
+    );
+
+    let target = &second["payload"]["matches"][0];
+    let generation = second["payload"]["generation"].clone();
+    send(
+        socket,
+        &logs_frame(
+            "logs.context",
+            json!({
+                "requestId": "ctx-1",
+                "generation": generation,
+                "seq": target["seq"],
+                "before": 2,
+                "after": 2,
+            }),
+        ),
+    )
+    .await;
+    loop {
+        let frame = receive(socket).await;
+        match frame["type"].as_str().unwrap() {
+            "logs.context.result" => {
+                assert_eq!(frame["payload"]["requestId"], "ctx-1", "{frame}");
+                assert_eq!(frame["payload"]["target"]["seq"], target["seq"], "{frame}");
+                assert_eq!(
+                    frame["payload"]["target"]["text"], target["text"],
+                    "{frame}"
+                );
+                return;
+            }
+            "logs.error" => panic!("the agent refused the context lookup: {frame}"),
+            "agent.status" | "logs.batch" | "logs.gap" => {}
+            other => panic!("unexpected frame while loading context: {other}: {frame}"),
+        }
+    }
 }
 
 async fn stop_agent(child: &mut Child) {
@@ -588,8 +1194,24 @@ async fn stop_agent(child: &mut Child) {
     }
 }
 
+async fn wait_for_state(harness: &Harness, condition: impl Fn(&Value) -> bool) -> Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let state = harness.state_file();
+        if condition(&state) {
+            return state;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "state did not converge:\n{}",
+            serde_json::to_string_pretty(&state).unwrap_or_default()
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 #[tokio::test]
-async fn the_v2_agent_completes_its_lifecycle_without_the_http_agent_api() {
+async fn the_default_agent_completes_its_lifecycle_without_the_http_agent_api() {
     let harness = Harness::new();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -663,5 +1285,93 @@ async fn the_v2_agent_completes_its_lifecycle_without_the_http_agent_api() {
         harness.http_requests.lock().unwrap().is_empty(),
         "the offline v2 agent called the HTTP agent API: {:?}",
         harness.http_requests.lock().unwrap()
+    );
+}
+
+#[tokio::test]
+async fn a_live_disable_tears_down_and_a_later_enabled_config_reapplies() {
+    let harness = Harness::new();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        for session in 0..2 {
+            let stream = listener.accept().await.expect("accept").0;
+            if peek_is_websocket(&stream).await {
+                if session == 0 {
+                    session_disabled_live(stream).await;
+                } else {
+                    session_reenabled_live(stream).await;
+                    break;
+                }
+            }
+        }
+    });
+
+    let url = format!("http://{address}/api");
+    let mut agent = harness.spawn_agent(&url);
+    let state = wait_for_state(&harness, |state| state["disabled"] == true).await;
+    assert_eq!(state["disabled"], true, "{state}");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while harness.running_config()["inbounds"] != json!([])
+        && tokio::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        harness.running_config()["inbounds"],
+        json!([]),
+        "the applied proxy config must stop serving"
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while harness.active_config().contains("\"node-test\"")
+        && tokio::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        !harness.active_config().contains("\"node-test\""),
+        "active config still serves the old inbound:\n{}",
+        harness.active_config()
+    );
+    // Restart the agent: the persisted disabled state must not restore the
+    // old proxy inbound, and the next enabled welcome must apply before serving.
+    stop_agent(&mut agent).await;
+    let runs = harness.runs();
+    let mut restarted = harness.spawn_agent(&url);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while harness.runs() <= runs && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        harness.runs() > runs,
+        "the disabled restart did not launch its teardown"
+    );
+    assert_eq!(harness.running_config()["inbounds"], json!([]));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while harness.state_file()["disabled"] != false && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        harness.state_file()["disabled"],
+        false,
+        "a fresh enabled snapshot must clear the disable marker:\n{}",
+        serde_json::to_string_pretty(&harness.state_file()).unwrap_or_default()
+    );
+    assert_eq!(
+        harness.state_file()["applied_revision"],
+        D2,
+        "the fresh enabled revision must commit"
+    );
+    assert_eq!(
+        harness.running_config()["inbounds"][0]["tag"],
+        "node-test",
+        "the re-enabled proxy must serve the fresh inbound"
+    );
+    stop_agent(&mut restarted).await;
+    let _ = timeout(Duration::from_secs(1), server).await;
+    assert!(
+        harness.active_config().contains("node-test"),
+        "the enabled config must replace the persisted teardown:\n{}",
+        harness.active_config()
     );
 }
