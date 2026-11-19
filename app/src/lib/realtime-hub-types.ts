@@ -5,6 +5,7 @@ import type {
   AgentWsUpdateTriggerPayload,
   AgentWsWelcomePayload,
 } from "@blossom/contracts/agent-ws";
+import type { LogPolicyNotifyPayload } from "@blossom/contracts/log-policy";
 
 import type { Server } from "@/db/proxy-schema";
 import type { AgentSessionCredential } from "@/query/agent";
@@ -50,6 +51,11 @@ export interface RealtimeHub {
   notifyAcmeDnsAck(
     serverId: string,
     payload: AgentWsAcmeDnsAckPayload,
+  ): Promise<void>;
+  /** v2-only push. A v1 session never receives log policy frames. */
+  notifyLogPolicy(
+    serverId: string,
+    payload: LogPolicyNotifyPayload,
   ): Promise<void>;
 }
 

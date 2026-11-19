@@ -11,6 +11,7 @@ import {
   createAgentWsV2Frame,
   encodeAgentWsV2Frame,
 } from "@blossom/contracts/agent-ws-v2";
+import type { LogPolicyNotifyPayload } from "@blossom/contracts/log-policy";
 import { env } from "cloudflare:workers";
 
 import type { Server } from "@/db/proxy-schema";
@@ -23,7 +24,10 @@ import {
 
 import type { TelemetryKind, TelemetryResult } from "./agent-telemetry";
 import { createAgentWsV2Store } from "./agent-ws-store";
-import { encodeAgentWsV2ConfigNotify } from "./agent-ws-v2-session";
+import {
+  encodeAgentWsV2ConfigNotify,
+  encodeAgentWsV2LogPolicyNotify,
+} from "./agent-ws-v2-session";
 import {
   AGENT_WS_INTERNAL_CONNECTED_AT,
   AGENT_WS_INTERNAL_CREDENTIAL_KIND,
@@ -245,6 +249,17 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     await this.sendFrame(
       serverId,
       encodeAgentWsV2Frame(createAgentWsV2Frame("acme.dns_ack", payload)),
+      "v2",
+    );
+  }
+
+  async notifyLogPolicy(
+    serverId: string,
+    payload: LogPolicyNotifyPayload,
+  ): Promise<void> {
+    await this.sendFrame(
+      serverId,
+      encodeAgentWsV2LogPolicyNotify(payload),
       "v2",
     );
   }

@@ -16,6 +16,12 @@ import {
   agentWsUpdateTriggerPayloadSchema,
   certificateDeploymentSchema,
 } from "./agent-ws";
+import {
+  logPolicyAckPayloadSchema,
+  logPolicyGetPayloadSchema,
+  logPolicyNotifyPayloadSchema,
+  logPolicySnapshotPayloadSchema,
+} from "./log-policy";
 
 /**
  * Agent WebSocket protocol v2: WebSocket-first desired-state sync, status, and
@@ -103,6 +109,8 @@ export const AGENT_WS_V2_AGENT_MESSAGE_TYPES = [
   "pty.started",
   "pty.data",
   "pty.exit",
+  "log.policy.get",
+  "log.policy.ack",
 ] as const;
 
 export const AGENT_WS_V2_CONTROL_MESSAGE_TYPES = [
@@ -114,6 +122,8 @@ export const AGENT_WS_V2_CONTROL_MESSAGE_TYPES = [
   "config.snapshot.end",
   "config.snapshot.error",
   "traffic.ack",
+  "log.policy.notify",
+  "log.policy.snapshot",
   "error",
   "update.trigger",
   "acme.issue",
@@ -218,6 +228,11 @@ export const agentWsV2WelcomePayloadSchema = z.object({
   updatePolicy: agentWsV2UpdatePolicySchema,
   statusIntervalSeconds: z.number().int().min(1).max(3_600),
   reconnectBeforeSeconds: z.number().int().min(1).max(800).optional(),
+  /**
+   * Server-wide log-policy revision. Present only when the agent advertised
+   * `log-policy-v1`; a mismatch means the agent must send `log.policy.get`.
+   */
+  logPolicyRevision: z.number().int().min(0).optional(),
   /** Advertised so the agent enforces the control plane's current bounds. */
   limits: z.object({
     maxFrameBytes: z.number().int().min(1),
@@ -270,6 +285,7 @@ export type AgentWsV2StatusPayload = z.infer<
 export const agentWsV2StatusAckPayloadSchema = z.object({
   desired: agentWsV2ConfigIdentifierSchema,
   updatePolicy: agentWsV2UpdatePolicySchema,
+  logPolicyRevision: z.number().int().min(0).optional(),
 });
 
 export type AgentWsV2StatusAckPayload = z.infer<
@@ -473,6 +489,10 @@ export const agentWsV2PayloadSchemas = {
   "pty.exit": agentWsPtyExitPayloadSchema,
   welcome: agentWsV2WelcomePayloadSchema,
   "agent.status.ack": agentWsV2StatusAckPayloadSchema,
+  "log.policy.get": logPolicyGetPayloadSchema,
+  "log.policy.ack": logPolicyAckPayloadSchema,
+  "log.policy.notify": logPolicyNotifyPayloadSchema,
+  "log.policy.snapshot": logPolicySnapshotPayloadSchema,
   "config.notify": agentWsV2ConfigNotifyPayloadSchema,
   "config.snapshot.begin": agentWsV2SnapshotBeginPayloadSchema,
   "config.snapshot.chunk": agentWsV2SnapshotChunkPayloadSchema,

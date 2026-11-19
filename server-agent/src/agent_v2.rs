@@ -14,6 +14,7 @@
 //! update targets arrive as `updatePolicy` in `welcome` and in
 //! `agent.status.ack`, so v2 applies them without `update.trigger`.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,7 +27,7 @@ use tracing::{error, info, warn};
 
 use crate::acme::solver_dns01::DnsAck;
 use crate::config::{AgentPolicy, ConfigError, ConfigManager};
-use crate::log_policy::LogPolicy;
+use crate::log_policy::{LogPolicy, PolicyAction, PolicyRequest, SOURCES, Source as PolicySource};
 use crate::logs::{LogStore, SecretScope};
 use crate::oauth::OAuthTokenProvider;
 use crate::process::{ProcessState, SingBoxManager, resolve_binary, singbox_version};
@@ -38,11 +39,12 @@ use crate::ws::codec::{AgentWsFrame, frame_type};
 use crate::ws::ports::WsCommand;
 use crate::ws::v2::adapter::V2Connector;
 use crate::ws::v2::codec::{
-    AckStage, ConfigIdentifier, ConfigState, RuntimeState, StatusError, UpdatePolicy,
+    AckStage, ConfigIdentifier, ConfigState, LogPolicyAck, RuntimeState, StatusError, UpdatePolicy,
 };
 use crate::ws::v2::link::{self, LinkOptions};
 use crate::ws::v2::session::{
-    self, ApplyJob, ApplyOutcome, ApplyResult, Command, CoreStatus, HelloIdentity, SnapshotRefusal,
+    self, ApplyJob, ApplyOutcome, ApplyResult, Command, CoreStatus, HelloIdentity, LogPolicyJob,
+    SnapshotRefusal,
 };
 use crate::ws::v2::traffic::run_reporter;
 use crate::{
@@ -61,6 +63,7 @@ const V2_CAPABILITIES: &[&str] = &[
     "atomic-config-rollback",
     "connection-stream-traffic",
     "acme-v1",
+    "log-policy-v1",
     "ws-v2",
     "traffic-v2",
 ];
@@ -148,12 +151,15 @@ pub async fn run(
         sing_box_version.as_deref(),
         &updates,
     );
+    let mut log_policy_errors = BTreeMap::new();
+    let initial_log_acks = log_policy_acks(&log_policy, &log_policy_errors);
     let (mut session_ports, mut core, traffic_ports) = session::channels(
         initial.clone(),
         UpdatePolicy {
             desired_agent_version: None,
             desired_sing_box_version: None,
         },
+        initial_log_acks.clone(),
     );
     let mut published = Some(initial);
     let (pty_event_sender, mut pty_events) = tokio::sync::mpsc::channel(64);
@@ -171,6 +177,7 @@ pub async fn run(
         }));
     }
     let acme = new_acme_manager(args, core.outbound.clone());
+    let mut published_log = Some(initial_log_acks);
 
     let cancel = CancellationToken::new();
     let options = LinkOptions::new(HelloIdentity {
@@ -227,6 +234,21 @@ pub async fn run(
                 if core.results.send(result).await.is_err() {
                     break;
                 }
+            }
+            job = core.log_jobs.recv() => {
+                let Some(job) = job else {
+                    break;
+                };
+                apply_log_policy_job(
+                    &log_policy,
+                    &mut config,
+                    &mut manager,
+                    &bin,
+                    probation,
+                    job,
+                    &mut log_policy_errors,
+                )
+                .await;
             }
             changed = core.policy.changed() => {
                 if changed.is_err() {
@@ -357,6 +379,12 @@ pub async fn run(
                 &updates,
             ),
         );
+        publish_log_acks(
+            &core.log_acks,
+            &mut published_log,
+            &log_policy,
+            &log_policy_errors,
+        );
     }
 
     cancel.cancel();
@@ -371,6 +399,96 @@ pub async fn run(
     }
     info!("agent stopped (websocket protocol v2)");
     Ok(())
+}
+
+/// Applies the desired levels from one control-plane snapshot through the
+/// existing local policy API. The core loop owns this work, so it is serialized
+/// with configuration reconciliation and sing-box probation.
+async fn apply_log_policy_job(
+    policy: &LogPolicy,
+    config: &mut ConfigManager,
+    manager: &mut Option<SingBoxManager>,
+    bin: &Path,
+    probation: Duration,
+    job: LogPolicyJob,
+    errors: &mut BTreeMap<PolicySource, String>,
+) {
+    for desired in job.sources {
+        let source: PolicySource = desired.source.into();
+        let mut request = PolicyRequest::new(source, desired.revision, desired.level.into());
+        request.baseline = desired.baseline.into();
+        request.deadline = desired.deadline;
+        match policy.request_snapshot(request, Utc::now()) {
+            Ok(decision) => {
+                errors.remove(&source);
+                let Some(action) = decision.action else {
+                    continue;
+                };
+                match action {
+                    PolicyAction::Agent(level) => {
+                        policy.apply_agent(level, Utc::now());
+                    }
+                    PolicyAction::SingBox(overlay) => {
+                        if !config.has_active_config() {
+                            // The request stays pending and the maintenance
+                            // tick retries once a validated config exists.
+                            continue;
+                        }
+                        let result = crate::apply_singbox_log_overlay(
+                            config, manager, bin, overlay, probation,
+                        )
+                        .await;
+                        policy.record(PolicySource::SingBox, overlay.effective, result, Utc::now());
+                    }
+                }
+            }
+            Err(error) => {
+                errors.insert(
+                    source,
+                    error.to_string().chars().take(512).collect::<String>(),
+                );
+            }
+        }
+    }
+}
+
+/// The status the core publishes to the session for both sources. Errors are
+/// bounded and never include log lines or configuration bodies.
+fn log_policy_acks(
+    policy: &LogPolicy,
+    errors: &BTreeMap<PolicySource, String>,
+) -> Vec<LogPolicyAck> {
+    let now = Utc::now();
+    SOURCES
+        .iter()
+        .map(|source| {
+            let status = policy.status(*source, now);
+            LogPolicyAck {
+                source: (*source).into(),
+                source_revision: status.revision,
+                requested: status.requested.into(),
+                baseline: status.baseline.into(),
+                effective: status.effective.into(),
+                deadline: status.deadline,
+                error: errors.get(source).cloned().or(status.error),
+                pending: status.pending || errors.contains_key(source),
+            }
+        })
+        .collect()
+}
+
+fn publish_log_acks(
+    sender: &watch::Sender<Vec<LogPolicyAck>>,
+    last: &mut Option<Vec<LogPolicyAck>>,
+    policy: &LogPolicy,
+    errors: &BTreeMap<PolicySource, String>,
+) {
+    let next = log_policy_acks(policy, errors);
+    if last.as_ref() == Some(&next) {
+        return;
+    }
+    sender.send_replace(next.clone());
+    *last = Some(next);
 }
 
 /// Applies one verified snapshot with the same safety invariants as the HTTP
@@ -585,6 +703,7 @@ mod tests {
         assert!(V2_CAPABILITIES.contains(&"acme-v1"));
         assert!(!v2_capabilities(false).contains(&"pty-v2".to_string()));
         assert!(v2_capabilities(true).contains(&"pty-v2".to_string()));
+        assert!(V2_CAPABILITIES.contains(&"log-policy-v1"));
     }
 
     #[test]

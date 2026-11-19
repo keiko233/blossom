@@ -179,6 +179,7 @@
           },
           "statusIntervalSeconds": 30,
           "reconnectBeforeSeconds": 240,
+          "logPolicyRevision": 2,
           "limits": {
             "maxFrameBytes": 4194304,
             "snapshotChunkBytes": 65536,
@@ -203,7 +204,85 @@
           "updatePolicy": {
             "desiredAgentVersion": null,
             "desiredSingBoxVersion": "1.13.0"
-          }
+          },
+          "logPolicyRevision": 2
+        }
+      }
+    },
+    {
+      "name": "control log policy notification",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "log.policy.notify",
+        "ts": "2026-11-19T00:02:10.000Z",
+        "payload": {
+          "revision": 3,
+          "source": "agent",
+          "reason": "administrator changed the level"
+        }
+      }
+    },
+    {
+      "name": "agent log policy snapshot request",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "id": "log-get-1",
+        "type": "log.policy.get",
+        "ts": "2026-11-19T00:02:10.100Z",
+        "payload": { "requestId": "log-get-1" }
+      }
+    },
+    {
+      "name": "control log policy snapshot with a temporary sing-box override",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "log.policy.snapshot",
+        "ts": "2026-11-19T00:02:10.200Z",
+        "payload": {
+          "requestId": "log-get-1",
+          "revision": 3,
+          "sources": [
+            {
+              "source": "agent",
+              "revision": 2,
+              "baseline": "warn",
+              "level": "warn",
+              "deadline": null
+            },
+            {
+              "source": "sing-box",
+              "revision": 3,
+              "baseline": "info",
+              "level": "debug",
+              "deadline": "2026-11-19T00:15:00.000Z"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "agent log policy acknowledgement with a bounded apply error",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "log.policy.ack",
+        "ts": "2026-11-19T00:02:10.500Z",
+        "payload": {
+          "source": "sing-box",
+          "sourceRevision": 3,
+          "requested": "debug",
+          "baseline": "info",
+          "effective": "info",
+          "deadline": "2026-11-19T00:15:00.000Z",
+          "error": "candidate rejected",
+          "pending": true
         }
       }
     },
@@ -640,6 +719,90 @@
         "type": "acme.issue",
         "ts": "2026-11-19T00:05:01.000Z",
         "payload": {}
+      }
+    },
+    {
+      "name": "reject: log policy notification sent by the agent",
+      "sender": "agent",
+      "expect": "invalid-direction",
+      "frame": {
+        "v": 2,
+        "type": "log.policy.notify",
+        "ts": "2026-11-19T00:02:10.000Z",
+        "payload": { "revision": 3 }
+      }
+    },
+    {
+      "name": "reject: temporary log level without a deadline",
+      "sender": "control-plane",
+      "expect": "invalid-payload",
+      "frame": {
+        "v": 2,
+        "type": "log.policy.snapshot",
+        "ts": "2026-11-19T00:02:10.200Z",
+        "payload": {
+          "requestId": "log-get-1",
+          "revision": 3,
+          "sources": [
+            {
+              "source": "agent",
+              "revision": 2,
+              "baseline": "info",
+              "level": "trace",
+              "deadline": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "reject: log policy snapshot repeating a source",
+      "sender": "control-plane",
+      "expect": "invalid-payload",
+      "frame": {
+        "v": 2,
+        "type": "log.policy.snapshot",
+        "ts": "2026-11-19T00:02:10.200Z",
+        "payload": {
+          "requestId": "log-get-1",
+          "revision": 3,
+          "sources": [
+            {
+              "source": "agent",
+              "revision": 2,
+              "baseline": "info",
+              "level": "info",
+              "deadline": null
+            },
+            {
+              "source": "agent",
+              "revision": 3,
+              "baseline": "warn",
+              "level": "warn",
+              "deadline": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "reject: baseline log policy acknowledgement with a deadline",
+      "sender": "agent",
+      "expect": "invalid-payload",
+      "frame": {
+        "v": 2,
+        "type": "log.policy.ack",
+        "ts": "2026-11-19T00:02:10.500Z",
+        "payload": {
+          "source": "agent",
+          "sourceRevision": 2,
+          "requested": "warn",
+          "baseline": "info",
+          "effective": "info",
+          "deadline": "2026-11-19T00:15:00.000Z",
+          "error": "x",
+          "pending": true
+        }
       }
     }
   ]

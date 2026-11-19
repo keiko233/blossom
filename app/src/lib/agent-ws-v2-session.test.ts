@@ -10,6 +10,7 @@ import {
   type AgentWsV2StatusPayload,
   type AgentWsV2TrafficReportPayload,
 } from "@blossom/contracts/agent-ws-v2";
+import type { LogPolicyAckPayload } from "@blossom/contracts/log-policy";
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
@@ -52,6 +53,8 @@ function server(overrides: Partial<Server> = {}): Server {
     configPollIntervalSeconds: 60,
     desiredAgentVersion: null,
     desiredSingBoxVersion: "1.13.0",
+    agentCapabilities: [],
+    logPolicyRevision: 0,
     ...overrides,
   } as Server;
 }
@@ -75,6 +78,26 @@ function makeStore(overrides: Partial<AgentWsV2Store> = {}) {
     handleAcmeDnsPresent: vi.fn(async () => true),
     handleAcmeDnsCleanup: vi.fn(async () => true),
     handleAcmeResult: vi.fn(async () => true),
+    loadLogPolicy: vi.fn(async () => ({
+      revision: 0,
+      sources: [
+        {
+          source: "agent" as const,
+          revision: 0,
+          baseline: "default" as const,
+          level: "default" as const,
+          deadline: null,
+        },
+        {
+          source: "sing-box" as const,
+          revision: 0,
+          baseline: "default" as const,
+          level: "default" as const,
+          deadline: null,
+        },
+      ],
+    })),
+    recordLogPolicyAck: vi.fn(async () => "recorded" as const),
     compile: vi.fn(async () => ({
       desiredRevision: REVISION,
       document: { apiVersion: 3, desiredRevision: REVISION },
@@ -242,6 +265,39 @@ describe("agent WebSocket v2 session handshake", () => {
     });
   });
 
+  it("advertises the log-policy revision only to a capable agent", async () => {
+    const store = makeStore({
+      recordHello: vi.fn(async () =>
+        server({
+          agentCapabilities: ["log-policy-v1"],
+          logPolicyRevision: 3,
+        }),
+      ),
+    });
+    const peer = makePeer();
+    await open(store, peer).handleText(
+      agentFrame("hello", {
+        ...CURRENT_HELLO,
+        capabilities: ["log-policy-v1"],
+      }),
+    );
+    expect(received(peer)[0]).toMatchObject({
+      kind: "welcome",
+      payload: { logPolicyRevision: 3 },
+    });
+
+    const legacy = makeStore();
+    const legacyPeer = makePeer();
+    await open(legacy, legacyPeer).handleText(
+      agentFrame("hello", CURRENT_HELLO),
+    );
+    const legacyWelcome = received(legacyPeer)[0];
+    expect(legacyWelcome?.kind).toBe("welcome");
+    if (legacyWelcome?.kind === "welcome") {
+      expect(legacyWelcome.payload).not.toHaveProperty("logPolicyRevision");
+    }
+  });
+
   it("ignores a stale cache whose sequence no longer matches", async () => {
     const store = makeStore({
       recordHello: vi.fn(async () =>
@@ -306,6 +362,109 @@ describe("agent WebSocket v2 session handshake", () => {
     await session.handleText(agentFrame("hello", CURRENT_HELLO));
     await session.handleText(agentFrame("hello", CURRENT_HELLO));
     expect(store.recordHello).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("agent WebSocket v2 log policy", () => {
+  it("answers a snapshot request from the fenced store", async () => {
+    const store = makeStore({
+      recordHello: vi.fn(async () =>
+        server({ agentCapabilities: ["log-policy-v1"], logPolicyRevision: 3 }),
+      ),
+      loadLogPolicy: vi.fn(async () => ({
+        revision: 3,
+        sources: [
+          {
+            source: "agent" as const,
+            revision: 2,
+            baseline: "warn" as const,
+            level: "warn" as const,
+            deadline: null,
+          },
+          {
+            source: "sing-box" as const,
+            revision: 3,
+            baseline: "info" as const,
+            level: "debug" as const,
+            deadline: "2026-11-19T00:15:00.000Z",
+          },
+        ],
+      })),
+    });
+    const peer = makePeer();
+    const session = open(store, peer);
+    await session.handleText(
+      agentFrame("hello", {
+        ...CURRENT_HELLO,
+        capabilities: ["log-policy-v1"],
+      }),
+    );
+    await session.handleText(
+      agentFrame("log.policy.get", { requestId: "log-get-1" }, "log-get-1"),
+    );
+
+    expect(store.loadLogPolicy).toHaveBeenCalledWith(SERVER_ID, SESSION_ID);
+    expect(received(peer).at(-1)).toEqual({
+      kind: "log.policy.snapshot",
+      payload: {
+        requestId: "log-get-1",
+        revision: 3,
+        sources: [
+          {
+            source: "agent",
+            revision: 2,
+            baseline: "warn",
+            level: "warn",
+            deadline: null,
+          },
+          {
+            source: "sing-box",
+            revision: 3,
+            baseline: "info",
+            level: "debug",
+            deadline: "2026-11-19T00:15:00.000Z",
+          },
+        ],
+      },
+    });
+  });
+
+  it("records an acknowledgement and stops a replaced session", async () => {
+    const ack: LogPolicyAckPayload = {
+      source: "agent",
+      sourceRevision: 2,
+      requested: "warn",
+      baseline: "info",
+      effective: "warn",
+      deadline: null,
+      error: null,
+      pending: false,
+    };
+    const store = makeStore({
+      recordLogPolicyAck: vi.fn(async () => "recorded" as const),
+    });
+    const peer = makePeer();
+    const session = open(store, peer);
+    await session.handleText(agentFrame("hello", CURRENT_HELLO));
+    await session.handleText(agentFrame("log.policy.ack", ack));
+    expect(store.recordLogPolicyAck).toHaveBeenCalledWith(
+      SERVER_ID,
+      SESSION_ID,
+      ack,
+    );
+
+    const replaced = makeStore({
+      recordLogPolicyAck: vi.fn(async () => "replaced" as const),
+    });
+    const replacedPeer = makePeer();
+    const replacedSession = open(replaced, replacedPeer);
+    await replacedSession.handleText(agentFrame("hello", CURRENT_HELLO));
+    await replacedSession.handleText(agentFrame("log.policy.ack", ack));
+    expect(received(replacedPeer).at(-1)).toMatchObject({
+      kind: "error",
+      payload: { code: "session_replaced" },
+    });
+    expect(replacedPeer.close).toHaveBeenCalledWith(4000, "session_replaced");
   });
 });
 

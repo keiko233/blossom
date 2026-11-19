@@ -196,6 +196,12 @@ describe.skipIf(!pgUrl).each(drivers)(
         serverId: "srv1",
         sessionId: started.sessionId,
         credential: { kind: "static", tokenHash: TOKEN_HASH },
+      const started = await store.startSession("srv1", TOKEN_HASH);
+      if (!started) throw new Error("session did not start");
+      const peer = makePeer();
+      const session = openAgentWsV2Session({
+        serverId: "srv1",
+        sessionId: started.sessionId,
         peer,
         store,
       });

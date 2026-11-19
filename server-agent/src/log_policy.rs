@@ -12,17 +12,6 @@
 //! levels are written as a local overlay on the compiled configuration and
 //! travel through the ordinary validated reload path.
 //!
-//! The request/status API has no remote caller until the WebSocket
-//! `log-policy-v1` binding lands; the lint is suppressed only for non-test
-//! builds so the local execution and its tests stay compiled.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "local policy API is consumed by the WebSocket log binding in a follow-up change"
-    )
-)]
-
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io::Write as _;
@@ -41,6 +30,8 @@ pub(crate) const MAX_TEMPORARY: Duration = Duration::minutes(60);
 pub(crate) const RETRY_INTERVAL: Duration = Duration::seconds(30);
 /// Bound on a persisted error message.
 const MAX_ERROR_CHARS: usize = 512;
+/// Every locally controlled source, in a stable order.
+pub(crate) const SOURCES: [Source; 2] = [Source::Agent, Source::SingBox];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -123,6 +114,8 @@ impl FromStr for Level {
 pub(crate) struct PolicyRequest {
     pub(crate) source: Source,
     pub(crate) revision: u64,
+    /// The configured baseline that expiry and Restore now return to.
+    pub(crate) baseline: Level,
     pub(crate) level: Level,
     pub(crate) deadline: Option<DateTime<Utc>>,
 }
@@ -132,6 +125,7 @@ impl PolicyRequest {
         Self {
             source,
             revision,
+            baseline: Level::Default,
             level,
             deadline: None,
         }
@@ -237,7 +231,10 @@ pub(crate) trait AgentFilter: Send + Sync {
 struct SourceState {
     revision: u64,
     requested: Level,
-    baseline: Level,
+    /// The installed or generated level. `configured_baseline` overrides it
+    /// until the control plane explicitly restores the default.
+    local_baseline: Level,
+    configured_baseline: Option<Level>,
     effective: Level,
     deadline: Option<DateTime<Utc>>,
     error: Option<String>,
@@ -245,24 +242,29 @@ struct SourceState {
 }
 
 impl SourceState {
-    fn new(baseline: Level) -> Self {
+    fn new(local_baseline: Level) -> Self {
         Self {
             revision: 0,
             requested: Level::Default,
-            baseline,
-            effective: baseline,
+            local_baseline,
+            configured_baseline: None,
+            effective: local_baseline,
             deadline: None,
             error: None,
             retry_at: None,
         }
     }
 
+    fn baseline(&self) -> Level {
+        self.configured_baseline.unwrap_or(self.local_baseline)
+    }
+
     fn target(&self, now: DateTime<Utc>) -> Level {
         if self.deadline.is_some_and(|deadline| deadline <= now) {
-            return self.baseline;
+            return self.baseline();
         }
         match self.requested {
-            Level::Default => self.baseline,
+            Level::Default => self.baseline(),
             level => level,
         }
     }
@@ -273,7 +275,7 @@ impl SourceState {
             source,
             revision: self.revision,
             requested: self.requested,
-            baseline: self.baseline,
+            baseline: self.baseline(),
             effective: self.effective,
             deadline: self.deadline,
             error: self.error.clone(),
@@ -302,8 +304,10 @@ struct PersistedSource {
     revision: u64,
     #[serde(default = "default_level")]
     requested: Level,
-    #[serde(default = "default_level")]
-    baseline: Level,
+    #[serde(default = "default_level", alias = "baseline")]
+    local_baseline: Level,
+    #[serde(default)]
+    configured_baseline: Option<Level>,
     #[serde(default = "default_level")]
     effective: Level,
     #[serde(default)]
@@ -477,9 +481,10 @@ impl LogPolicy {
             .unwrap_or(Level::Default)
     }
 
-    /// Updates the sing-box baseline from a freshly compiled desired config.
-    /// Only the compiled document may set this baseline; a request cannot turn
-    /// `debug` or `trace` into a permanent baseline.
+    /// Updates the installed/generated sing-box baseline from a freshly
+    /// compiled desired config. An explicit remote baseline still wins until
+    /// the control plane clears it, so a configuration recompile cannot
+    /// silently replace an administrator's baseline.
     pub(crate) fn set_singbox_baseline(
         &self,
         baseline: Level,
@@ -490,8 +495,8 @@ impl LogPolicy {
             .sources
             .entry(Source::SingBox)
             .or_insert_with(|| SourceState::new(Level::Default));
-        if state.baseline != baseline {
-            state.baseline = baseline;
+        if state.local_baseline != baseline {
+            state.local_baseline = baseline;
         }
         if state.deadline.is_some_and(|deadline| deadline <= now)
             && state.requested == Level::Default
@@ -513,6 +518,9 @@ impl LogPolicy {
         if !request.level.is_requestable_baseline() && !request.level.is_temporary() {
             return Err(PolicyError::UnsupportedLevel(request.level.to_string()));
         }
+        if !request.baseline.is_requestable_baseline() {
+            return Err(PolicyError::UnsupportedLevel(request.baseline.to_string()));
+        }
         if request.level.is_temporary() && request.deadline.is_some_and(|d| d <= now) {
             return Err(PolicyError::ExpiredDeadline);
         }
@@ -531,6 +539,10 @@ impl LogPolicy {
             .sources
             .entry(request.source)
             .or_insert_with(|| SourceState::new(Level::Default));
+        let configured_baseline = match request.baseline {
+            Level::Default => None,
+            baseline => Some(baseline),
+        };
         if request.revision < state.revision {
             return Err(PolicyError::StaleRevision {
                 source: request.source,
@@ -539,10 +551,18 @@ impl LogPolicy {
             });
         }
         if request.revision == state.revision {
-            if state.requested == request.level
+            let exact_replay = state.requested == request.level
                 && state.deadline == deadline
-                && state.error.is_none()
-            {
+                && state.configured_baseline == configured_baseline;
+            // The control plane normalizes an expired override to a baseline
+            // request at the same revision. If the local deadline already
+            // passed, that is the same target as the persisted temporary
+            // request, not a conflicting edit.
+            let expired_replay = request.level == Level::Default
+                && deadline.is_none()
+                && state.configured_baseline == configured_baseline
+                && state.target(now) == state.baseline();
+            if (exact_replay || expired_replay) && state.error.is_none() {
                 return Ok(PolicyDecision {
                     status: state.status(request.source, now),
                     action: None,
@@ -556,6 +576,7 @@ impl LogPolicy {
         }
         state.revision = request.revision;
         state.requested = request.level;
+        state.configured_baseline = configured_baseline;
         state.deadline = deadline;
         state.error = None;
         state.retry_at = Some(now);
@@ -577,6 +598,28 @@ impl LogPolicy {
             action,
             reason: DecisionReason::Requested,
         })
+    }
+
+    /// Applies a control-plane snapshot entry. An expired temporary request
+    /// becomes a baseline request at the same source revision, so a reconnect
+    /// cannot revive an override whose deadline already passed.
+    pub(crate) fn request_snapshot(
+        &self,
+        request: PolicyRequest,
+        now: DateTime<Utc>,
+    ) -> Result<PolicyDecision, PolicyError> {
+        if request.level.is_temporary() && request.deadline.is_some_and(|deadline| deadline <= now)
+        {
+            return self.request(
+                PolicyRequest {
+                    level: Level::Default,
+                    deadline: None,
+                    ..request
+                },
+                now,
+            );
+        }
+        self.request(request, now)
     }
 
     /// Applies an agent filter change synchronously and records the outcome.
@@ -731,7 +774,8 @@ impl LogPolicy {
                     source: *source,
                     revision: state.revision,
                     requested: state.requested,
-                    baseline: state.baseline,
+                    local_baseline: state.local_baseline,
+                    configured_baseline: state.configured_baseline,
                     effective: state.effective,
                     deadline: state.deadline,
                     error: state.error.clone(),
@@ -775,7 +819,7 @@ fn overlay_from(inner: &Inner, now: DateTime<Utc>) -> LogOverlay {
         .unwrap_or_else(|| SourceState::new(Level::Default));
     LogOverlay {
         requested: state.requested,
-        baseline: state.baseline,
+        baseline: state.baseline(),
         effective: state.target(now),
     }
 }
@@ -813,10 +857,22 @@ fn merge_persisted(
         state.revision = stored.revision;
         state.requested = requested;
         if stored.source == Source::SingBox {
-            state.baseline = stored.baseline;
+            state.local_baseline = stored.local_baseline;
+        }
+        if stored
+            .configured_baseline
+            .is_some_and(|baseline| !baseline.is_requestable_baseline())
+        {
+            warnings.push(format!(
+                "persisted {} baseline is not a baseline level; restoring the installed default",
+                stored.source
+            ));
+            state.configured_baseline = None;
+        } else {
+            state.configured_baseline = stored.configured_baseline;
         }
         state.effective = if requested == Level::Default {
-            stored.baseline
+            state.baseline()
         } else {
             stored.effective
         };
@@ -1035,6 +1091,181 @@ mod tests {
             .unwrap();
         assert_eq!(singbox.requested, Level::Default);
         assert_eq!(singbox.deadline, None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_warn_baseline_survives_local_expiry_and_reconnect() {
+        let dir = test_dir("baseline-expiry");
+        let filter = RecordingFilter::new();
+        let policy = load(&dir, filter.clone());
+        let now = Utc::now();
+
+        let mut baseline = PolicyRequest::new(Source::Agent, 1, Level::Warn);
+        baseline.baseline = Level::Warn;
+        let decision = policy.request_snapshot(baseline, now).unwrap();
+        assert_eq!(decision.status.baseline, Level::Warn);
+        assert_eq!(decision.action, Some(PolicyAction::Agent(Level::Warn)));
+        policy
+            .record(Source::Agent, Level::Warn, Ok(()), now)
+            .unwrap();
+
+        let mut override_request = PolicyRequest::new(Source::Agent, 2, Level::Debug);
+        override_request.baseline = Level::Warn;
+        let decision = policy.request_snapshot(override_request, now).unwrap();
+        assert_eq!(decision.status.baseline, Level::Warn);
+        assert_eq!(decision.action, Some(PolicyAction::Agent(Level::Debug)));
+        policy
+            .record(Source::Agent, Level::Debug, Ok(()), now)
+            .unwrap();
+
+        let expired = policy.expire(now + DEFAULT_TEMPORARY);
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].status.requested, Level::Default);
+        assert_eq!(expired[0].status.baseline, Level::Warn);
+        assert_eq!(expired[0].status.effective, Level::Debug);
+        assert_eq!(expired[0].action, Some(PolicyAction::Agent(Level::Warn)));
+        policy
+            .record(Source::Agent, Level::Warn, Ok(()), now + DEFAULT_TEMPORARY)
+            .unwrap();
+
+        // The control plane serializes an expired override as `default` with
+        // the configured baseline at the same revision. Reapplying it is
+        // idempotent and does not revive the override or conflict.
+        let replay = PolicyRequest {
+            source: Source::Agent,
+            revision: 2,
+            baseline: Level::Warn,
+            level: Level::Default,
+            deadline: None,
+        };
+        let decision = policy
+            .request_snapshot(replay, now + DEFAULT_TEMPORARY)
+            .unwrap();
+        assert_eq!(decision.action, None);
+        assert_eq!(decision.status.requested, Level::Default);
+        assert_eq!(decision.status.baseline, Level::Warn);
+        assert_eq!(decision.status.effective, Level::Warn);
+        assert!(
+            policy
+                .request_snapshot(replay, now + DEFAULT_TEMPORARY)
+                .is_ok()
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn restore_now_keeps_the_baseline_and_restore_default_clears_it() {
+        let dir = test_dir("restore");
+        let filter = RecordingFilter::new();
+        let policy = load(&dir, filter);
+        let now = Utc::now();
+
+        let mut baseline = PolicyRequest::new(Source::Agent, 1, Level::Warn);
+        baseline.baseline = Level::Warn;
+        policy.request(baseline, now).unwrap();
+        policy
+            .record(Source::Agent, Level::Warn, Ok(()), now)
+            .unwrap();
+
+        let mut override_request = PolicyRequest::new(Source::Agent, 2, Level::Debug);
+        override_request.baseline = Level::Warn;
+        policy.request(override_request, now).unwrap();
+        policy
+            .record(Source::Agent, Level::Debug, Ok(()), now)
+            .unwrap();
+
+        // Restore now clears only the override.
+        let mut restore_now = PolicyRequest::new(Source::Agent, 3, Level::Default);
+        restore_now.baseline = Level::Warn;
+        let decision = policy.request(restore_now, now).unwrap();
+        assert_eq!(decision.status.baseline, Level::Warn);
+        assert_eq!(decision.action, Some(PolicyAction::Agent(Level::Warn)));
+        policy
+            .record(Source::Agent, Level::Warn, Ok(()), now)
+            .unwrap();
+
+        // Restoring the installed default clears the configured baseline.
+        let restore_default = PolicyRequest::new(Source::Agent, 4, Level::Default);
+        let decision = policy.request(restore_default, now).unwrap();
+        assert_eq!(decision.status.baseline, Level::Info);
+        assert_eq!(decision.action, Some(PolicyAction::Agent(Level::Info)));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_fresh_agent_recovers_a_remote_baseline() {
+        let dir = test_dir("fresh");
+        let filter = RecordingFilter::new();
+        let policy = load(&dir, filter);
+        let now = Utc::now();
+
+        let mut snapshot = PolicyRequest::new(Source::Agent, 1, Level::Default);
+        snapshot.baseline = Level::Warn;
+        let decision = policy.request_snapshot(snapshot, now).unwrap();
+        assert_eq!(decision.status.requested, Level::Default);
+        assert_eq!(decision.status.baseline, Level::Warn);
+        assert_eq!(decision.action, Some(PolicyAction::Agent(Level::Warn)));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn configured_baselines_are_independent_per_source() {
+        let dir = test_dir("independent");
+        let filter = RecordingFilter::new();
+        let policy = load(&dir, filter);
+        let now = Utc::now();
+
+        let mut agent = PolicyRequest::new(Source::Agent, 1, Level::Warn);
+        agent.baseline = Level::Warn;
+        policy.request(agent, now).unwrap();
+        let mut sing_box = PolicyRequest::new(Source::SingBox, 2, Level::Error);
+        sing_box.baseline = Level::Error;
+        policy.request(sing_box, now).unwrap();
+        let mut agent_override = PolicyRequest::new(Source::Agent, 3, Level::Debug);
+        agent_override.baseline = Level::Warn;
+        policy.request(agent_override, now).unwrap();
+
+        let agent_status = policy.status(Source::Agent, now);
+        assert_eq!(agent_status.requested, Level::Debug);
+        assert_eq!(agent_status.baseline, Level::Warn);
+        let sing_box_status = policy.status(Source::SingBox, now);
+        assert_eq!(sing_box_status.revision, 2);
+        assert_eq!(sing_box_status.requested, Level::Error);
+        assert_eq!(sing_box_status.baseline, Level::Error);
+        assert_eq!(policy.overlay(now).baseline, Level::Error);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_configured_baseline_persists_across_a_restart_after_expiry() {
+        let dir = test_dir("baseline-restart");
+        let filter = RecordingFilter::new();
+        let policy = load(&dir, filter.clone());
+        let now = Utc::now();
+
+        let mut baseline = PolicyRequest::new(Source::Agent, 1, Level::Warn);
+        baseline.baseline = Level::Warn;
+        policy.request(baseline, now).unwrap();
+        policy
+            .record(Source::Agent, Level::Warn, Ok(()), now)
+            .unwrap();
+        let mut override_request = PolicyRequest::new(Source::Agent, 2, Level::Trace);
+        override_request.baseline = Level::Warn;
+        policy.request(override_request, now).unwrap();
+        policy
+            .record(Source::Agent, Level::Trace, Ok(()), now)
+            .unwrap();
+        drop(policy);
+
+        let (restarted, warnings) =
+            LogPolicy::load(&dir, Level::Info, filter.clone(), now + DEFAULT_TEMPORARY);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let status = restarted.status(Source::Agent, now + DEFAULT_TEMPORARY);
+        assert_eq!(status.requested, Level::Default);
+        assert_eq!(status.baseline, Level::Warn);
+        assert_eq!(status.effective, Level::Warn);
+        assert_eq!(filter.levels().last(), Some(&Level::Warn));
         let _ = std::fs::remove_dir_all(dir);
     }
 

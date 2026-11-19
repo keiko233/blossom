@@ -148,6 +148,7 @@ async fn drive(plans: Vec<Plan>, jitter: f64, run_for: Duration) -> Vec<Duration
             desired_agent_version: None,
             desired_sing_box_version: None,
         },
+        Vec::new(),
     );
     let cancel = CancellationToken::new();
     let task_cancel = cancel.clone();
@@ -257,6 +258,7 @@ async fn cancellation_stops_the_loop_during_a_backoff() {
             desired_agent_version: None,
             desired_sing_box_version: None,
         },
+        Vec::new(),
     );
     let cancel = CancellationToken::new();
     let task_cancel = cancel.clone();

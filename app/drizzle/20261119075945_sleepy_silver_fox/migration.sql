@@ -1,0 +1,1 @@
+ALTER TABLE "server_log_policy" ADD COLUMN "desired_baseline" text DEFAULT 'default' NOT NULL;
