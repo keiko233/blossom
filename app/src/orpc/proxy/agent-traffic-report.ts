@@ -1,5 +1,6 @@
 import type { z } from "zod";
 
+import type { Database } from "@/db";
 import {
   computeTrafficReportHash,
   listServerNodeIds,
@@ -26,7 +27,7 @@ export type AgentTrafficReportInput = z.infer<typeof trafficReportSchema>;
 export async function applyAgentTrafficReport(
   serverId: string,
   input: AgentTrafficReportInput,
-  options: { sessionId?: string } = {},
+  options: { sessionId?: string; database?: Database } = {},
 ): Promise<RecordTrafficResult | { accepted: 0; dropped: 0 }> {
   const eligible = input.entries.filter(
     (entry) => entry.uplinkBytes + entry.downlinkBytes > 0,
@@ -37,7 +38,9 @@ export async function applyAgentTrafficReport(
 
   // Resolve the calling server's node ids once; used for verifying coded node
   // ids and for legacy single-node attribution.
-  const serverNodeIds = new Set(await listServerNodeIds(serverId));
+  const serverNodeIds = new Set(
+    await listServerNodeIds(serverId, options.database),
+  );
 
   const entries = eligible.map((entry) => {
     const resolved = resolveReportedTrafficUser(
@@ -62,6 +65,7 @@ export async function applyAgentTrafficReport(
     ...(options.sessionId === undefined
       ? {}
       : { sessionId: options.sessionId }),
+    ...(options.database === undefined ? {} : { database: options.database }),
     windowStartedAt: input.windowStartedAt
       ? new Date(input.windowStartedAt)
       : null,

@@ -1,6 +1,7 @@
 import type { AgentWsWelcomePayload } from "@blossom/contracts/agent-ws";
 import { formatDesiredRevision } from "@blossom/domain/config-revision";
 
+import type { Database } from "@/db";
 import type { Server } from "@/db/proxy-schema";
 import { toSingboxRouteRules } from "@/lib/routing-rules";
 import { listEnabledServerNodes } from "@/query/agent";
@@ -27,14 +28,18 @@ export interface AgentDesiredState {
   desiredRevision: string;
 }
 
-async function compileAgentServerConfig(serverId: string, enabled: boolean) {
+async function compileAgentServerConfig(
+  serverId: string,
+  enabled: boolean,
+  database?: Database,
+) {
   const [nodes, rules] = await Promise.all([
-    enabled ? listEnabledServerNodes(serverId) : [],
-    listEnabledRules(),
+    enabled ? listEnabledServerNodes(serverId, database) : [],
+    listEnabledRules(database),
   ]);
   const perNodeUsers = await Promise.all(
     nodes.map(async (node) => {
-      const subscriptions = await getNodeActiveSubscriptions(node.id);
+      const subscriptions = await getNodeActiveSubscriptions(node.id, database);
       return subscriptions
         .map((subscription) => buildInboundUser(node, subscription))
         .filter((user): user is NonNullable<typeof user> => user !== null);
@@ -62,15 +67,30 @@ async function compileAgentServerConfig(serverId: string, enabled: boolean) {
  * publish-gate sequence and content retain the ordering documented on
  * `getAgentConfigV3`.
  */
+export interface AgentDesiredStateOptions {
+  /** Connection for the reads; defaults to the shared database facade. */
+  database?: Database;
+  /**
+   * Whether compiling also advances the global certificate issuer. The HTTP
+   * poll and the connection upgrade do; a Durable Object message cannot, since
+   * the issuer uses the shared facade, so it passes `false` there.
+   */
+  advanceCertificates?: boolean;
+}
+
 export async function buildAgentDesiredState(
   server: Pick<Server, "id" | "enabled" | "desiredRevisionSeq">,
+  options: AgentDesiredStateOptions = {},
 ): Promise<AgentDesiredState> {
   const [
     { config, materializedNodes, materializedNodeIds },
     certificateContext,
   ] = await Promise.all([
-    compileAgentServerConfig(server.id, server.enabled),
-    getCertificateAgentContext(server.id),
+    compileAgentServerConfig(server.id, server.enabled, options.database),
+    getCertificateAgentContext(server.id, {
+      database: options.database,
+      advanceIssuance: options.advanceCertificates ?? true,
+    }),
   ]);
 
   const generationByCertificateId =

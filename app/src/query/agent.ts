@@ -80,8 +80,11 @@ export async function findAgentServerByTokenHash(
   return row ?? null;
 }
 
-export async function listEnabledServerNodes(serverId: string) {
-  return db
+export async function listEnabledServerNodes(
+  serverId: string,
+  database: DbHandle = db,
+) {
+  return database
     .select()
     .from(node)
     .where(and(eq(node.serverId, serverId), eq(node.enabled, true)))
@@ -360,8 +363,11 @@ export async function recordAgentUpdateStatus(
     .where(eq(server.id, serverId));
 }
 
-export async function listServerNodeIds(serverId: string): Promise<string[]> {
-  const rows = await db
+export async function listServerNodeIds(
+  serverId: string,
+  database: DbHandle = db,
+): Promise<string[]> {
+  const rows = await database
     .select({ id: node.id })
     .from(node)
     .where(eq(node.serverId, serverId));
@@ -622,6 +628,8 @@ export interface RecordTrafficReport {
   reportId?: string;
   /** Required with `reportId`; see {@link computeTrafficReportHash}. */
   contentHash?: string;
+  /** Connection to write through; defaults to the shared database facade. */
+  database?: DbHandle;
   /**
    * WebSocket v2 session fence. When set, the report is applied only if this
    * session is still the server's current one; otherwise
@@ -720,6 +728,7 @@ export function computeTrafficReportHash(report: {
 export async function recordAgentTraffic(
   report: RecordTrafficReport,
 ): Promise<RecordTrafficResult> {
+  const database = report.database ?? db;
   const { serverId, reportId, sessionId } = report;
   if (reportId !== undefined && !report.contentHash) {
     throw new Error("contentHash is required with reportId");
@@ -812,7 +821,7 @@ export async function recordAgentTraffic(
   // A pruned ledger row can vanish between the conflict and the lookup below;
   // one more attempt then applies the report as a fresh delivery.
   for (let attempt = 0; attempt < 2; attempt++) {
-    const [outcome] = await db.execute<{
+    const [outcome] = await database.execute<{
       claimed: number;
       fenced: number;
       accepted: number;
@@ -826,7 +835,7 @@ export async function recordAgentTraffic(
     }
     if (Number(outcome.claimed) > 0) {
       if (reportId !== undefined) {
-        await pruneTrafficReports(serverId);
+        await pruneTrafficReports(serverId, database);
       }
       return {
         accepted: Number(outcome.accepted),
@@ -835,7 +844,7 @@ export async function recordAgentTraffic(
       };
     }
 
-    const [existing] = await db
+    const [existing] = await database
       .select()
       .from(trafficReport)
       .where(
@@ -858,12 +867,15 @@ export async function recordAgentTraffic(
 }
 
 /** Best-effort retention pruning; never fails the report it piggybacks on. */
-async function pruneTrafficReports(serverId: string): Promise<void> {
+async function pruneTrafficReports(
+  serverId: string,
+  database: DbHandle,
+): Promise<void> {
   const cutoff = new Date(
     Date.now() - TRAFFIC_REPORT_RETENTION_DAYS * 24 * 60 * 60 * 1000,
   ).toISOString();
   try {
-    await db.execute(
+    await database.execute(
       sql`
       DELETE FROM traffic_report WHERE id IN (
         SELECT id FROM traffic_report
