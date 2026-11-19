@@ -170,7 +170,7 @@ jobs:
           app-id: ${{ secrets.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 
-      - name: Create tags and releases
+      - name: Create app release and server-agent tag
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           TARGET: ${{ inputs.target }}
@@ -185,9 +185,8 @@ jobs:
               --generate-notes
           fi
           if [[ "$TARGET" == "server-agent" || "$TARGET" == "both" ]]; then
-            gh release create "server-agent-v${VERSION}" \
-              --target "$COMMIT_SHA" \
-              --title "server-agent v${VERSION}" \
-              --latest=false \
-              --generate-notes
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/server-agent-v${VERSION}" \
+              -f sha="$COMMIT_SHA"
+            echo "::notice::Pushed server-agent-v${VERSION}; its release workflow will publish the binaries."
           fi
