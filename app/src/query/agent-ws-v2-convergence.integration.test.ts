@@ -186,12 +186,16 @@ describe.skipIf(!pgUrl).each(drivers)(
     /** Opens a v2 session the way the hub does: start, then the frame loop. */
     async function openSession() {
       const store = createAgentWsV2Store(database);
-      const started = await store.startSession("srv1", TOKEN_HASH);
+      const started = await store.startSession("srv1", {
+        kind: "static",
+        tokenHash: TOKEN_HASH,
+      });
       if (!started) throw new Error("session did not start");
       const peer = makePeer();
       const session = openAgentWsV2Session({
         serverId: "srv1",
         sessionId: started.sessionId,
+        credential: { kind: "static", tokenHash: TOKEN_HASH },
         peer,
         store,
       });

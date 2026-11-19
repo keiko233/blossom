@@ -28,7 +28,10 @@ import {
 import { parseRevisionSeq } from "@blossom/domain/config-revision";
 
 import type { Server } from "@/db/proxy-schema";
-import type { CachedDesiredRevision } from "@/query/agent";
+import type {
+  AgentSessionCredential,
+  CachedDesiredRevision,
+} from "@/query/agent";
 
 import { encodeConfigSnapshot } from "./agent-ws-v2-snapshot";
 
@@ -38,6 +41,9 @@ export interface AgentWsV2Peer {
 }
 
 export type AgentWsV2AckOutcome = "applied" | "failed" | "stale" | "replaced";
+
+/** Result of an authoritative lease check for one session. */
+export type AgentWsV2Lease = "ok" | "replaced" | "disabled";
 
 export type AgentWsV2TrafficOutcome =
   | { status: "applied" | "duplicate"; accepted: number; dropped: number }
@@ -85,6 +91,16 @@ export interface AgentWsV2Store {
     sessionId: string,
     updates: AgentWsUpdateStatuses,
   ): Promise<boolean>;
+  /**
+   * Completes a pending OAuth proof after `hello`, promoting the identity and
+   * taking the server fence. Returns `null` if the credential is no longer
+   * usable.
+   */
+  promoteSession(
+    serverId: string,
+    sessionId: string,
+    credential: AgentSessionCredential,
+  ): Promise<Server | null>;
   cacheDesiredRevision(
     serverId: string,
     sessionId: string,
@@ -92,8 +108,19 @@ export interface AgentWsV2Store {
   ): Promise<void>;
   applyCertificateDeployments(
     serverId: string,
+    sessionId: string,
     deployments: AgentWsCertificateDeployment[],
   ): Promise<void>;
+  /**
+   * Re-reads the server and credential state. `pending` sessions are checked
+   * against the still-pending identity rather than the server's session fence.
+   */
+  revalidateSession(
+    serverId: string,
+    sessionId: string,
+    credential: AgentSessionCredential,
+    pending: boolean,
+  ): Promise<AgentWsV2Lease>;
   applyTraffic(
     serverId: string,
     sessionId: string,
@@ -130,6 +157,13 @@ export interface OpenAgentWsV2SessionOptions {
   serverId: string;
   /** The session id the upgrade handler already made current. */
   sessionId: string;
+  /** The credential that authenticated the upgrade. Never raw token material. */
+  credential: AgentSessionCredential;
+  /**
+   * A pending OAuth identity gets a proof-only session. Its `hello` promotes
+   * the identity and takes the server fence; before that it owns no fence.
+   */
+  pending?: boolean;
   peer: AgentWsV2Peer;
   store: AgentWsV2Store;
   /**
@@ -151,6 +185,10 @@ export interface OpenAgentWsV2SessionOptions {
 export interface AgentWsV2Session {
   /** True once `welcome` has been sent. Pushes are withheld until then. */
   readonly welcomed: boolean;
+  /** True while a pending identity still needs its `hello` promotion. */
+  readonly pending: boolean;
+  /** Re-checks the authoritative lease; closes the session when it fails. */
+  revalidate(): Promise<void>;
   handleText(text: string): Promise<void>;
   close(): Promise<void>;
 }
@@ -193,8 +231,9 @@ function updatePolicyOf(server: Server): AgentWsV2UpdatePolicy {
 export function openAgentWsV2Session(
   options: OpenAgentWsV2SessionOptions,
 ): AgentWsV2Session {
-  const { serverId, sessionId, peer, store } = options;
+  const { serverId, sessionId, peer, store, credential } = options;
   let welcomed = options.welcomed ?? false;
+  let pending = options.pending ?? false;
   let closed = false;
   let snapshotGeneration = 0;
 
@@ -230,6 +269,29 @@ export function openAgentWsV2Session(
     closed = true;
     reject(code, message);
     peer.close(4000, code);
+  }
+
+  async function revalidate(): Promise<void> {
+    if (closed) {
+      return;
+    }
+    let lease: AgentWsV2Lease;
+    try {
+      lease = await store.revalidateSession(
+        serverId,
+        sessionId,
+        credential,
+        pending,
+      );
+    } catch (error) {
+      logFailure("lease revalidation", error);
+      return;
+    }
+    if (lease === "replaced") {
+      stop("session_replaced", "session is no longer current");
+    } else if (lease === "disabled") {
+      stop("server_disabled", "server is disabled");
+    }
   }
 
   /**
@@ -292,6 +354,18 @@ export function openAgentWsV2Session(
       reject("invalid_payload", "hello was already received", "hello");
       return;
     }
+    if (pending) {
+      const promoted = await store.promoteSession(
+        serverId,
+        sessionId,
+        credential,
+      );
+      if (!promoted) {
+        stop("session_replaced", "the pending credential is no longer current");
+        return;
+      }
+      pending = false;
+    }
     const server = await store.recordHello(serverId, sessionId, hello);
     if (!server) {
       stop("session_replaced", "a newer session is active");
@@ -305,6 +379,7 @@ export function openAgentWsV2Session(
       await safely("certificate deployments", () =>
         store.applyCertificateDeployments(
           serverId,
+          sessionId,
           hello.certificateDeployments,
         ),
       );
@@ -351,6 +426,7 @@ export function openAgentWsV2Session(
       await safely("certificate deployments", () =>
         store.applyCertificateDeployments(
           serverId,
+          sessionId,
           status.certificateDeployments,
         ),
       );
@@ -494,7 +570,17 @@ export function openAgentWsV2Session(
       return welcomed;
     },
 
+    get pending() {
+      return pending;
+    },
+
+    revalidate,
+
     async handleText(text) {
+      if (closed) {
+        return;
+      }
+      await revalidate();
       if (closed) {
         return;
       }

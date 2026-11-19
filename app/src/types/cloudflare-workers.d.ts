@@ -20,6 +20,7 @@ interface DurableObjectNamespace {
 interface DurableObjectStorage {
   getAlarm(): Promise<number | null>;
   setAlarm(scheduledTime: number | Date): Promise<void>;
+  deleteAlarm(): Promise<void>;
 }
 
 interface DurableObjectState {

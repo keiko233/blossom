@@ -14,6 +14,7 @@ import {
 import { env } from "cloudflare:workers";
 
 import type { Server } from "@/db/proxy-schema";
+import type { AgentSessionCredential } from "@/query/agent";
 import {
   markAgentWsConnected,
   markAgentWsDisconnected,
@@ -25,9 +26,14 @@ import { createAgentWsV2Store } from "./agent-ws-store";
 import { encodeAgentWsV2ConfigNotify } from "./agent-ws-v2-session";
 import {
   AGENT_WS_INTERNAL_CONNECTED_AT,
+  AGENT_WS_INTERNAL_CREDENTIAL_KIND,
+  AGENT_WS_INTERNAL_IDENTITY_GENERATION,
+  AGENT_WS_INTERNAL_IDENTITY_ID,
   AGENT_WS_INTERNAL_PROTOCOL,
   AGENT_WS_INTERNAL_SERVER_ID,
+  AGENT_WS_INTERNAL_SESSION_EXPIRES_AT,
   AGENT_WS_INTERNAL_SESSION_ID,
+  AGENT_WS_INTERNAL_SESSION_PENDING,
   AGENT_WS_INTERNAL_WELCOME,
   type RealtimeHub,
 } from "./realtime-hub-types";
@@ -99,10 +105,14 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     }
   }
 
-  async acceptAgentV2(request: Request, server: Server): Promise<Response> {
+  async acceptAgentV2(
+    request: Request,
+    server: Server,
+    credential: AgentSessionCredential,
+  ): Promise<Response> {
     const started = await createAgentWsV2Store().startSession(
       server.id,
-      server.agentTokenHash,
+      credential,
     );
     if (!started) {
       // The credential changed after the upgrade was authenticated.
@@ -122,6 +132,19 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     );
     headers.set(AGENT_WS_INTERNAL_PROTOCOL, "v2");
     headers.set(AGENT_WS_INTERNAL_SESSION_ID, started.sessionId);
+    headers.set(AGENT_WS_INTERNAL_CREDENTIAL_KIND, credential.kind);
+    headers.set(AGENT_WS_INTERNAL_SESSION_PENDING, started.pending ? "1" : "0");
+    if (credential.kind === "oauth") {
+      headers.set(AGENT_WS_INTERNAL_IDENTITY_ID, credential.identityId);
+      headers.set(
+        AGENT_WS_INTERNAL_IDENTITY_GENERATION,
+        String(credential.generation),
+      );
+      headers.set(
+        AGENT_WS_INTERNAL_SESSION_EXPIRES_AT,
+        String(credential.expiresAt),
+      );
+    }
 
     try {
       const response = await durableObjectStub(server.id).fetch(

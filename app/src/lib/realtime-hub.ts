@@ -18,6 +18,7 @@ import Redis from "ioredis";
 
 import type { Server } from "@/db/proxy-schema";
 import { getServerEnv } from "@/lib/env";
+import type { AgentSessionCredential } from "@/query/agent";
 
 import {
   telemetryReply,
@@ -161,6 +162,8 @@ type LocalV2Connection = {
   /** Set once `startSession` makes this connection the current v2 session. */
   sessionId: string | null;
   connectedAt: string;
+  /** Periodic authoritative lease check, including the token deadline. */
+  leaseTimer?: ReturnType<typeof setTimeout>;
 };
 
 export type PtyRelayEvent =
@@ -250,18 +253,25 @@ export class NitroRealtimeHub implements RealtimeHub {
     );
   }
 
-  async acceptAgentV2(request: Request, server: Server): Promise<Response> {
+  async acceptAgentV2(
+    request: Request,
+    server: Server,
+    credential: AgentSessionCredential,
+  ): Promise<Response> {
     return attachCrosswsHooks(
       new Response(null, {
         status: 426,
         headers: { Connection: "Upgrade", Upgrade: "websocket" },
       }),
       request,
-      this.createV2Hooks(server.id, server.agentTokenHash),
+      this.createV2Hooks(server.id, credential),
     );
   }
 
-  private createV2Hooks(serverId: string, tokenHash: string): CrosswsHooks {
+  private createV2Hooks(
+    serverId: string,
+    credential: AgentSessionCredential,
+  ): CrosswsHooks {
     return {
       upgrade: () => ({ protocol: AGENT_WS_V2_SUBPROTOCOL }),
       open: async (peer) => {
@@ -272,13 +282,15 @@ export class NitroRealtimeHub implements RealtimeHub {
           connectedAt: "",
         };
         const session = (async () => {
-          const started = await this.v2Store.startSession(serverId, tokenHash);
+          const started = await this.v2Store.startSession(serverId, credential);
           if (!started) {
             return null;
           }
           const opened = openAgentWsV2Session({
             serverId,
             sessionId: started.sessionId,
+            credential,
+            pending: started.pending,
             peer,
             store: this.v2Store,
             reconnectBeforeSeconds: reconnectBeforeSecondsForRuntime(),
@@ -299,10 +311,15 @@ export class NitroRealtimeHub implements RealtimeHub {
         peers.add(connection);
         this.startBackplane();
         try {
-          if (!(await session)) {
+          const opened = await session;
+          if (!opened) {
             this.removeV2Connection(serverId, peer);
             peer.close(1008, "credential changed");
+            return;
           }
+          const startedExpiresAt =
+            credential.kind === "oauth" ? credential.expiresAt : null;
+          this.scheduleV2Lease(serverId, connection, startedExpiresAt);
         } catch (error) {
           this.removeV2Connection(serverId, peer);
           const message =
@@ -373,6 +390,10 @@ export class NitroRealtimeHub implements RealtimeHub {
     const peers = this.v2Connections.get(serverId);
     const connection = this.findV2Connection(serverId, peer);
     if (connection) {
+      if (connection.leaseTimer) {
+        clearTimeout(connection.leaseTimer);
+        connection.leaseTimer = undefined;
+      }
       peers?.delete(connection);
       if (peers?.size === 0) {
         this.v2Connections.delete(serverId);
@@ -382,6 +403,41 @@ export class NitroRealtimeHub implements RealtimeHub {
       }
     }
     return connection;
+  }
+
+  /**
+   * Re-checks the authoritative session and credential every 30 seconds (or at
+   * the machine token deadline). The check closes an idle socket after
+   * revocation, rotation, disablement, or token expiry even when no frames
+   * arrive.
+   */
+  private scheduleV2Lease(
+    serverId: string,
+    connection: LocalV2Connection,
+    expiresAt: number | null,
+  ): void {
+    if (connection.leaseTimer) {
+      clearTimeout(connection.leaseTimer);
+    }
+    const untilExpiry =
+      expiresAt === null
+        ? Number.POSITIVE_INFINITY
+        : expiresAt * 1000 - Date.now();
+    const delay = Math.max(1_000, Math.min(30_000, untilExpiry));
+    connection.leaseTimer = setTimeout(() => {
+      connection.leaseTimer = undefined;
+      void (async () => {
+        const session = await connection.session.catch(() => null);
+        if (!session) {
+          return;
+        }
+        await session.revalidate();
+        if (this.findV2Connection(serverId, connection.peer) === connection) {
+          this.scheduleV2Lease(serverId, connection, expiresAt);
+        }
+      })();
+    }, delay);
+    connection.leaseTimer.unref?.();
   }
 
   /**

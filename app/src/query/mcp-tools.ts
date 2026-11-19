@@ -1,11 +1,12 @@
-import { count, desc, eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 
-import { db } from "@/db";
+import { db, getDatabaseDriver } from "@/db";
 import { user } from "@/db/auth-schema";
 import { session } from "@/db/auth-schema";
 import { plan, type Subscription, subscription } from "@/db/plan-schema";
 import { type Node, node, type Server, server } from "@/db/proxy-schema";
 import { notifyAgentConfigChanged } from "@/lib/agent-notifications";
+import { supportsInteractiveTransactions } from "@/lib/env-schema";
 import {
   isNodeConfigChange,
   snapshotNodeForGate,
@@ -17,6 +18,7 @@ import {
   listServerIdsForUserId,
   recordConfigChange,
 } from "@/query/config-change";
+import { deleteServerRecord } from "@/query/server-deletion";
 import type { ServerDTO } from "@/query/servers";
 
 const DEFAULT_LIMIT = 50;
@@ -535,21 +537,9 @@ export async function deleteServerMCP(
   serverId: string,
 ): Promise<{ id: string }> {
   await requireActorAdmin(actorUserId);
-
-  const [countRow] = await db
-    .select({ count: count() })
-    .from(node)
-    .where(eq(node.serverId, serverId));
-  if ((countRow?.count ?? 0) > 0) {
-    throw new Error(
-      "Server still has nodes; move or delete them before removing it.",
-    );
-  }
-
-  const [row] = await db
-    .delete(server)
-    .where(eq(server.id, serverId))
-    .returning();
+  const row = await deleteServerRecord(serverId, {
+    interactive: supportsInteractiveTransactions(getDatabaseDriver()),
+  });
   if (!row) throw new Error("Not found");
   return { id: row.id };
 }

@@ -58,6 +58,7 @@ import { Route as adminAdminUsersUserIdRouteImport } from './routes/(admin)/admi
 import { Route as userDashboardSubscriptionsIndexRouteImport } from './routes/(user)/dashboard/subscriptions/index'
 import { Route as DotwellKnownOauthAuthorizationServerApiAuthRouteImport } from './routes/[.]well-known.oauth-authorization-server.api.auth'
 import { Route as DotwellKnownOauthProtectedResourceApiMcpRouteImport } from './routes/[.]well-known.oauth-protected-resource.api.mcp'
+import { Route as ApiAgentEnrollmentRedeemRouteImport } from './routes/api/agent/enrollment/redeem'
 import { Route as adminAdminProxiesCertificatesIndexRouteImport } from './routes/(admin)/admin/proxies/certificates/index'
 import { Route as adminAdminProxiesGroupsIndexRouteImport } from './routes/(admin)/admin/proxies/groups/index'
 import { Route as adminAdminProxiesGroupsGroupIdRouteImport } from './routes/(admin)/admin/proxies/groups/$groupId'
@@ -338,6 +339,12 @@ const DotwellKnownOauthProtectedResourceApiMcpRoute =
     path: '/api/mcp',
     getParentRoute: () => DotwellKnownOauthProtectedResourceRoute,
   } as any)
+const ApiAgentEnrollmentRedeemRoute =
+  ApiAgentEnrollmentRedeemRouteImport.update({
+    id: '/api/agent/enrollment/redeem',
+    path: '/api/agent/enrollment/redeem',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const adminAdminProxiesCertificatesIndexRoute =
   adminAdminProxiesCertificatesIndexRouteImport.update({
     id: '/',
@@ -466,6 +473,7 @@ export interface FileRoutesByFullPath {
   '/admin/users/$userId': typeof adminAdminUsersUserIdRoute
   '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
   '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
+  '/api/agent/enrollment/redeem': typeof ApiAgentEnrollmentRedeemRoute
   '/admin/announcements/': typeof adminAdminAnnouncementsIndexRoute
   '/admin/audit/': typeof adminAdminAuditIndexRoute
   '/admin/mcp/': typeof adminAdminMcpIndexRoute
@@ -518,6 +526,7 @@ export interface FileRoutesByTo {
   '/admin/users/$userId': typeof adminAdminUsersUserIdRoute
   '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
   '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
+  '/api/agent/enrollment/redeem': typeof ApiAgentEnrollmentRedeemRoute
   '/admin/announcements': typeof adminAdminAnnouncementsIndexRoute
   '/admin/audit': typeof adminAdminAuditIndexRoute
   '/admin/mcp': typeof adminAdminMcpIndexRoute
@@ -587,6 +596,7 @@ export interface FileRoutesById {
   '/(admin)/admin/users/$userId': typeof adminAdminUsersUserIdRoute
   '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
   '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
+  '/api/agent/enrollment/redeem': typeof ApiAgentEnrollmentRedeemRoute
   '/(admin)/admin/announcements/': typeof adminAdminAnnouncementsIndexRoute
   '/(admin)/admin/audit/': typeof adminAdminAuditIndexRoute
   '/(admin)/admin/mcp/': typeof adminAdminMcpIndexRoute
@@ -654,6 +664,7 @@ export interface FileRouteTypes {
     | '/admin/users/$userId'
     | '/.well-known/oauth-authorization-server/api/auth'
     | '/.well-known/oauth-protected-resource/api/mcp'
+    | '/api/agent/enrollment/redeem'
     | '/admin/announcements/'
     | '/admin/audit/'
     | '/admin/mcp/'
@@ -706,6 +717,7 @@ export interface FileRouteTypes {
     | '/admin/users/$userId'
     | '/.well-known/oauth-authorization-server/api/auth'
     | '/.well-known/oauth-protected-resource/api/mcp'
+    | '/api/agent/enrollment/redeem'
     | '/admin/announcements'
     | '/admin/audit'
     | '/admin/mcp'
@@ -774,6 +786,7 @@ export interface FileRouteTypes {
     | '/(admin)/admin/users/$userId'
     | '/.well-known/oauth-authorization-server/api/auth'
     | '/.well-known/oauth-protected-resource/api/mcp'
+    | '/api/agent/enrollment/redeem'
     | '/(admin)/admin/announcements/'
     | '/(admin)/admin/audit/'
     | '/(admin)/admin/mcp/'
@@ -815,6 +828,7 @@ export interface RootRouteChildren {
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiRpcSplatRoute: typeof ApiRpcSplatRoute
   ApiSubTokenRoute: typeof ApiSubTokenRoute
+  ApiAgentEnrollmentRedeemRoute: typeof ApiAgentEnrollmentRedeemRoute
   ApiAdminServersIdStreamRoute: typeof ApiAdminServersIdStreamRoute
   ApiAdminCertificatesCertificateIdExportPartRoute: typeof ApiAdminCertificatesCertificateIdExportPartRoute
   ApiAdminServersIdPtyStatusRoute: typeof ApiAdminServersIdPtyStatusRoute
@@ -1179,6 +1193,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/.well-known/oauth-protected-resource/api/mcp'
       preLoaderRoute: typeof DotwellKnownOauthProtectedResourceApiMcpRouteImport
       parentRoute: typeof DotwellKnownOauthProtectedResourceRoute
+    }
+    '/api/agent/enrollment/redeem': {
+      id: '/api/agent/enrollment/redeem'
+      path: '/api/agent/enrollment/redeem'
+      fullPath: '/api/agent/enrollment/redeem'
+      preLoaderRoute: typeof ApiAgentEnrollmentRedeemRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/(admin)/admin/proxies/certificates/': {
       id: '/(admin)/admin/proxies/certificates/'
@@ -1615,6 +1636,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiRpcSplatRoute: ApiRpcSplatRoute,
   ApiSubTokenRoute: ApiSubTokenRoute,
+  ApiAgentEnrollmentRedeemRoute: ApiAgentEnrollmentRedeemRoute,
   ApiAdminServersIdStreamRoute: ApiAdminServersIdStreamRoute,
   ApiAdminCertificatesCertificateIdExportPartRoute:
     ApiAdminCertificatesCertificateIdExportPartRoute,
