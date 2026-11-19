@@ -68,14 +68,14 @@ export function useServerLogPolicy(serverId: string) {
         return 10_000;
       }
       const now = Date.now();
-      const deadlineSoon = sources.some((source) => {
-        if (!source.desiredDeadline) {
-          return false;
-        }
-        const deadline = new Date(source.desiredDeadline).getTime();
-        return deadline > now && deadline - now <= 60_000;
-      });
-      return deadlineSoon ? 10_000 : false;
+      // Refresh when the next override expires, even if the view stays idle.
+      const deadlines = sources
+        .filter((source) => source.desiredDeadline !== null)
+        .map((source) => new Date(source.desiredDeadline!).getTime())
+        .filter((deadline) => deadline > now);
+      return deadlines.length
+        ? Math.max(1_000, Math.min(...deadlines) - now)
+        : false;
     },
     refetchIntervalInBackground: false,
   });
