@@ -21,10 +21,12 @@ import {
 import { applyAgentTrafficReport } from "@/orpc/proxy/agent-traffic-report";
 import {
   AgentSessionReplacedError,
+  type AgentWsSessionStart,
   cacheAgentDesiredRevision,
   endAgentWsSession,
   loadAgentServer,
   markAgentWsConnected,
+  startAgentWsSession,
   markAgentWsDisconnected,
   recordAgentConfigAck,
   recordAgentHello,
@@ -63,12 +65,20 @@ export function createAgentWsStore(database: Database = db): AgentWsStore {
   };
 }
 
+/** The v2 port plus the handshake that makes a new session current. */
+export type AgentWsV2HubStore = AgentWsV2Store & {
+  startSession(serverId: string): Promise<AgentWsSessionStart>;
+};
+
 /**
  * Binds the v2 session port to the fenced queries. Every write names the
  * session, so a replaced connection's writes match no row.
  */
-export function createAgentWsV2Store(database: Database = db): AgentWsV2Store {
+export function createAgentWsV2Store(
+  database: Database = db,
+): AgentWsV2HubStore {
   return {
+    startSession: (serverId) => startAgentWsSession(serverId, database),
     loadServer: (serverId) => loadAgentServer(serverId, database),
     recordHello: (serverId, sessionId, hello) =>
       recordAgentV2Hello(serverId, sessionId, hello, database),
@@ -84,6 +94,7 @@ export function createAgentWsV2Store(database: Database = db): AgentWsV2Store {
       try {
         const result = await applyAgentTrafficReport(serverId, report, {
           sessionId,
+          database,
         });
         return {
           status:
@@ -102,7 +113,10 @@ export function createAgentWsV2Store(database: Database = db): AgentWsV2Store {
       }
     },
     compile: async (server) => {
-      const desired = await buildAgentDesiredState(server);
+      const desired = await buildAgentDesiredState(server, {
+        database,
+        advanceCertificates: false,
+      });
       return {
         desiredRevision: desired.desiredRevision,
         document: buildAgentConfigV3Output(server, desired),

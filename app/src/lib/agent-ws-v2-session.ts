@@ -85,16 +85,28 @@ export interface OpenAgentWsV2SessionOptions {
   sessionId: string;
   peer: AgentWsV2Peer;
   store: AgentWsV2Store;
+  /**
+   * Whether `welcome` was already sent on this session. A Durable Object
+   * rebuilds the session for each message, so it restores this from the socket
+   * attachment; a Nitro connection starts false.
+   */
+  welcomed?: boolean;
   /** Advertised early reconnect deadline (Vercel function lifetime). */
   reconnectBeforeSeconds?: number;
 }
 
 export interface AgentWsV2Session {
-  /** True after `welcome` has been sent; pushes are withheld before that. */
+  /** True once `welcome` has been sent. Pushes are withheld until then. */
   readonly welcomed: boolean;
   handleText(text: string): Promise<void>;
-  notifyConfigChanged(payload: AgentWsV2ConfigNotifyPayload): void;
   close(): Promise<void>;
+}
+
+/** Encodes a `config.notify` frame for welcomed v2 sessions. */
+export function encodeAgentWsV2ConfigNotify(
+  payload: AgentWsV2ConfigNotifyPayload,
+): string {
+  return encodeAgentWsV2Frame(createAgentWsV2Frame("config.notify", payload));
 }
 
 function logFailure(operation: string, error: unknown): void {
@@ -129,7 +141,7 @@ export function openAgentWsV2Session(
   options: OpenAgentWsV2SessionOptions,
 ): AgentWsV2Session {
   const { serverId, sessionId, peer, store } = options;
-  let welcomed = false;
+  let welcomed = options.welcomed ?? false;
   let closed = false;
   let snapshotGeneration = 0;
 
@@ -408,17 +420,6 @@ export function openAgentWsV2Session(
         }
       } catch (error) {
         logFailure(message.kind, error);
-      }
-    },
-
-    notifyConfigChanged(payload) {
-      if (!welcomed || closed) {
-        return;
-      }
-      try {
-        send("config.notify", payload);
-      } catch (error) {
-        logFailure("config.notify", error);
       }
     },
 

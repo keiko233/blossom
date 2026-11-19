@@ -16,6 +16,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Server } from "@/db/proxy-schema";
 
 import {
+  encodeAgentWsV2ConfigNotify,
   openAgentWsV2Session,
   type AgentWsV2Peer,
   type AgentWsV2Store,
@@ -605,23 +606,38 @@ describe("agent WebSocket v2 acknowledgements and traffic", () => {
 });
 
 describe("agent WebSocket v2 pushes and teardown", () => {
-  it("pushes config.notify only to a welcomed session", async () => {
+  it("restores welcomed state for a rebuilt session without re-welcoming", async () => {
     const store = makeStore();
     const peer = makePeer();
-    const session = open(store, peer);
+    const session = openAgentWsV2Session({
+      serverId: SERVER_ID,
+      sessionId: SESSION_ID,
+      peer,
+      store,
+      welcomed: true,
+    });
+
+    expect(session.welcomed).toBe(true);
+    await session.handleText(
+      agentFrame("config.get", { requestId: "snap-1", reason: "notify" }),
+    );
+    expect(received(peer)[0]).toMatchObject({
+      kind: "config.snapshot.begin",
+    });
+  });
+
+  it("encodes a config.notify frame that the agent can decode", () => {
     const notify = {
       desired: { desiredRevisionSeq: 8, desiredRevision: NEXT_REVISION },
       reason: "node updated",
     };
-
-    session.notifyConfigChanged(notify);
-    expect(peer.sent).toEqual([]);
-
-    await session.handleText(agentFrame("hello", CURRENT_HELLO));
-    session.notifyConfigChanged(notify);
-    expect(received(peer).at(-1)).toEqual({
-      kind: "config.notify",
-      payload: notify,
+    const parsed = parseAgentWsV2Frame(
+      encodeAgentWsV2ConfigNotify(notify),
+      "control-plane",
+    );
+    expect(parsed).toMatchObject({
+      ok: true,
+      message: { kind: "config.notify", payload: notify },
     });
   });
 
