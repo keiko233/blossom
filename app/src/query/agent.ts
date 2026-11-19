@@ -185,6 +185,36 @@ export async function updateAgentHeartbeat(
   }
 }
 
+export interface AgentWsSessionStart {
+  /** Connection identity for v1 disconnect clearing and PTY relay routing. */
+  connectedAt: Date;
+  /** Fence for every durable write made by this session (v1 and v2). */
+  sessionId: string;
+}
+
+/**
+ * Starts a WebSocket session and makes it the server's current one in a
+ * single UPDATE. A newer handshake therefore replaces an older session's
+ * marker atomically; the older session's later writes match nothing.
+ */
+export async function startAgentWsSession(
+  serverId: string,
+  database: DbHandle = db,
+): Promise<AgentWsSessionStart> {
+  const connectedAt = new Date();
+  const sessionId = randomUUID();
+  await database
+    .update(server)
+    .set({
+      lastSeenAt: connectedAt,
+      transportMode: "ws",
+      wsConnectedAt: connectedAt,
+      wsSessionId: sessionId,
+    })
+    .where(eq(server.id, serverId));
+  return { connectedAt, sessionId };
+}
+
 /**
  * Records a completed WebSocket handshake without touching agent-reported
  * status columns. The returned timestamp is the connection identity used to
@@ -194,16 +224,7 @@ export async function markAgentWsConnected(
   serverId: string,
   database: DbHandle = db,
 ): Promise<Date> {
-  const connectedAt = new Date();
-  await database
-    .update(server)
-    .set({
-      lastSeenAt: connectedAt,
-      transportMode: "ws",
-      wsConnectedAt: connectedAt,
-    })
-    .where(eq(server.id, serverId));
-  return connectedAt;
+  return (await startAgentWsSession(serverId, database)).connectedAt;
 }
 
 /** Clears only the handshake that is still current; a reconnect wins races. */
@@ -214,8 +235,23 @@ export async function markAgentWsDisconnected(
 ): Promise<void> {
   await database
     .update(server)
-    .set({ transportMode: "http", wsConnectedAt: null })
+    .set({ transportMode: "http", wsConnectedAt: null, wsSessionId: null })
     .where(and(eq(server.id, serverId), eq(server.wsConnectedAt, connectedAt)));
+}
+
+/**
+ * Ends a v2 session by its fence. A session that was already replaced matches
+ * no row and leaves the newer session's marker untouched.
+ */
+export async function endAgentWsSession(
+  serverId: string,
+  sessionId: string,
+  database: DbHandle = db,
+): Promise<void> {
+  await database
+    .update(server)
+    .set({ transportMode: "http", wsConnectedAt: null, wsSessionId: null })
+    .where(and(eq(server.id, serverId), eq(server.wsSessionId, sessionId)));
 }
 
 /**

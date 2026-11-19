@@ -1,0 +1,68 @@
+{
+  "type": "diff",
+  "version": "9",
+  "dialect": "postgres",
+  "id": "b65c4af3-44e0-4098-87ea-459fc2597bf5",
+  "prevIds": ["3af0345d-2533-485e-9389-6c9da503019b"],
+  "footprints": [
+    {
+      "statementType": "add_column",
+      "statementTarget": ["column", "public", "server", "ws_session_id"],
+      "writes": [
+        "s|col|public.server.ws_session_id",
+        "n|col|public.server.ws_session_id",
+        "e|col|public.server.ws_session_id"
+      ],
+      "reads": ["n|tbl|public.server", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "server",
+        "desired_config_revision"
+      ],
+      "writes": [
+        "s|col|public.server.desired_config_revision",
+        "n|col|public.server.desired_config_revision",
+        "e|col|public.server.desired_config_revision"
+      ],
+      "reads": ["n|tbl|public.server", "n|sch|public"]
+    }
+  ],
+  "deltas": [
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server",
+        "name": "ws_session_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "server",
+        "name": "desired_config_revision",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    }
+  ]
+}
