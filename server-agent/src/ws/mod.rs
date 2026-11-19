@@ -14,6 +14,10 @@
 pub mod adapters;
 pub mod codec;
 pub mod ports;
+// The v2 runtime that calls this module lands in a later change; until then
+// its codec, snapshot and session code is exercised only by its tests.
+#[expect(dead_code, reason = "v2 callers are wired in a later change")]
+pub mod v2;
 
 use std::time::Duration;
 
