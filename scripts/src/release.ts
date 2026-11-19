@@ -3,21 +3,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export type ReleaseTarget = "app" | "server-agent" | "both";
-export type ReleaseVersionType =
-  | "major"
-  | "minor"
-  | "patch"
-  | "premajor"
-  | "preminor"
-  | "prepatch"
-  | "prerelease";
-export type ReleasePreid = "beta" | "rc";
+export type ReleaseVersionType = "major" | "minor" | "patch";
 
 export type ReleaseOptions = {
   repositoryRoot?: string;
   target: ReleaseTarget;
   bump: ReleaseVersionType;
-  preid: ReleasePreid;
   dryRun: boolean;
 };
 
@@ -40,27 +31,17 @@ function resolveRepositoryRoot(root?: string): string {
 }
 
 function parseTarget(value: string | undefined): ReleaseTarget {
-  if (value === "app" || value === "server-agent" || value === "both") return value;
+  if (value === "app" || value === "server-agent" || value === "both")
+    return value;
   throw new Error(`invalid --target: ${value ?? "(missing)"}`);
 }
 
 function parseVersionType(value: string | undefined): ReleaseVersionType {
-  const versionType = [
-    "major",
-    "minor",
-    "patch",
-    "premajor",
-    "preminor",
-    "prepatch",
-    "prerelease",
-  ].find((candidate) => candidate === value);
+  const versionType = ["major", "minor", "patch"].find(
+    (candidate) => candidate === value,
+  );
   if (!versionType) throw new Error(`invalid --bump: ${value ?? "(missing)"}`);
   return versionType as ReleaseVersionType;
-}
-
-function parsePreid(value: string | undefined): ReleasePreid {
-  if (value === "beta" || value === "rc") return value;
-  throw new Error(`invalid --preid: ${value ?? "(missing)"}`);
 }
 
 type ParsedVersion = {
@@ -84,24 +65,24 @@ function parseVersion(value: string): ParsedVersion {
   };
 }
 
-function validatePrerelease(prerelease: string[]): void {
-  if (prerelease.length === 0) return;
-  if (prerelease[0] !== "beta" && prerelease[0] !== "rc") {
-    throw new Error(`unsupported prerelease identifier: ${prerelease[0]}`);
-  }
-  if (prerelease.length !== 2 || !/^(0|[1-9]\d*)$/.test(prerelease[1])) {
-    throw new Error(`unsupported prerelease: ${prerelease.join(".")}`);
-  }
-}
-
 function serializeVersion(version: ParsedVersion): string {
   const base = `${version.major}.${version.minor}.${version.patch}`;
-  return version.prerelease.length ? `${base}-${version.prerelease.join(".")}` : base;
+  return version.prerelease.length
+    ? `${base}-${version.prerelease.join(".")}`
+    : base;
+}
+
+function assertStableVersion(version: ParsedVersion, label: string): void {
+  if (version.prerelease.length > 0) {
+    throw new Error(
+      `${label} must not be a prerelease: ${serializeVersion(version)}`,
+    );
+  }
 }
 
 function nextStableVersion(
   current: ParsedVersion,
-  versionType: Exclude<ReleaseVersionType, "prerelease">,
+  versionType: ReleaseVersionType,
 ): ParsedVersion {
   const next = {
     major: current.major,
@@ -109,11 +90,11 @@ function nextStableVersion(
     patch: current.patch,
     prerelease: [],
   };
-  if (versionType === "major" || versionType === "premajor") {
+  if (versionType === "major") {
     next.major += 1;
     next.minor = 0;
     next.patch = 0;
-  } else if (versionType === "minor" || versionType === "preminor") {
+  } else if (versionType === "minor") {
     next.minor += 1;
     next.patch = 0;
   } else {
@@ -125,61 +106,61 @@ function nextStableVersion(
 export function nextVersion(
   currentVersion: string,
   versionType: ReleaseVersionType,
-  preid: ReleasePreid,
 ): string {
   const current = parseVersion(currentVersion);
-  validatePrerelease(current.prerelease);
-  if (versionType === "prerelease") {
-    if (current.prerelease.length === 0) {
-      throw new Error("--bump prerelease requires a prerelease version");
-    }
-    const number = Number(current.prerelease[1]);
-    if (preid !== current.prerelease[0] && number === 0) {
-      throw new Error(`invalid prerelease transition: ${currentVersion} to ${preid}`);
-    }
-    return serializeVersion({ ...current, prerelease: [preid, String(number + 1)] });
-  }
-  const next = nextStableVersion(current, versionType);
-  next.prerelease = versionType.startsWith("pre") ? [preid, "1"] : [];
-  return serializeVersion(next);
+  assertStableVersion(current, "current version");
+  return serializeVersion(nextStableVersion(current, versionType));
 }
 
 async function readJson(
   root: string,
   relativePath: string,
 ): Promise<Record<string, unknown>> {
-  return JSON.parse(await readFile(path.join(root, relativePath), "utf8")) as Record<
-    string,
-    unknown
-  >;
+  return JSON.parse(
+    await readFile(path.join(root, relativePath), "utf8"),
+  ) as Record<string, unknown>;
 }
 
 export async function readAppVersion(repositoryRoot?: string): Promise<string> {
   const root = resolveRepositoryRoot(repositoryRoot);
   const rootManifest = await readJson(root, "package.json");
-  const rootVersion =
-    typeof rootManifest.version === "string" ? rootManifest.version : "0.0.0";
-  validatePrerelease(parseVersion(rootVersion).prerelease);
+  const rootVersion = rootManifest.version;
+  if (typeof rootVersion !== "string") {
+    throw new Error("package.json is missing a version");
+  }
+  assertStableVersion(parseVersion(rootVersion), "package.json version");
   const appManifest = await readJson(root, "app/package.json");
-  if (
-    typeof appManifest.version === "string" &&
-    appManifest.version !== rootVersion
-  ) {
+  if (typeof appManifest.version !== "string") {
+    throw new Error("app/package.json is missing a version");
+  }
+  if (appManifest.version !== rootVersion) {
     throw new Error(
       `version mismatch between package.json (${rootVersion}) and app/package.json (${appManifest.version})`,
     );
   }
+  assertStableVersion(
+    parseVersion(appManifest.version),
+    "app/package.json version",
+  );
   return rootVersion;
 }
 
-export async function readServerAgentVersion(repositoryRoot?: string): Promise<string> {
+export async function readServerAgentVersion(
+  repositoryRoot?: string,
+): Promise<string> {
   const root = resolveRepositoryRoot(repositoryRoot);
-  const manifest = await readFile(path.join(root, "server-agent/Cargo.toml"), "utf8");
+  const manifest = await readFile(
+    path.join(root, "server-agent/Cargo.toml"),
+    "utf8",
+  );
   const match =
     /^\[package\]\nname = "server-agent"\nversion = "([^"]+)"/m.exec(manifest);
   if (!match) throw new Error("server-agent package version not found");
-  validatePrerelease(parseVersion(match[1]).prerelease);
-  const lock = await readFile(path.join(root, "server-agent/Cargo.lock"), "utf8");
+  assertStableVersion(parseVersion(match[1]), "server-agent version");
+  const lock = await readFile(
+    path.join(root, "server-agent/Cargo.lock"),
+    "utf8",
+  );
   const lockMatch =
     /\[\[package\]\]\nname = "server-agent"\nversion = "([^"]+)"/.exec(lock);
   if (!lockMatch) throw new Error("server-agent lock version not found");
@@ -212,26 +193,42 @@ async function updateJsonVersion(
   await writeFile(filePath, `${JSON.stringify(manifest, null, 2)}${ending}`);
 }
 
-async function updateCargoVersion(root: string, version: string): Promise<void> {
+async function updateCargoVersion(
+  root: string,
+  version: string,
+): Promise<void> {
   const manifestPath = path.join(root, "server-agent/Cargo.toml");
   const manifestSource = await readFile(manifestPath, "utf8");
   const manifestMatch =
-    /^\[package\]\nname = "server-agent"\nversion = "[^"]+"/.exec(manifestSource);
+    /^\[package\]\nname = "server-agent"\nversion = "[^"]+"/.exec(
+      manifestSource,
+    );
   if (!manifestMatch) throw new Error("server-agent package version not found");
-  const manifestStart = manifestMatch[0].replace(/version = "[^"]+"$/, `version = "${version}"`);
-  await writeFile(manifestPath, replaceOnce(manifestSource, manifestMatch, manifestStart));
+  const manifestStart = manifestMatch[0].replace(
+    /version = "[^"]+"$/,
+    `version = "${version}"`,
+  );
+  await writeFile(
+    manifestPath,
+    replaceOnce(manifestSource, manifestMatch, manifestStart),
+  );
 
   const lockPath = path.join(root, "server-agent/Cargo.lock");
   const lockSource = await readFile(lockPath, "utf8");
   const lockMatch =
-    /\[\[package\]\]\nname = "server-agent"\nversion = "[^"]+"/.exec(lockSource);
+    /\[\[package\]\]\nname = "server-agent"\nversion = "[^"]+"/.exec(
+      lockSource,
+    );
   if (!lockMatch) throw new Error("server-agent lock version not found");
-  const lockStart = lockMatch[0].replace(/version = "[^"]+"$/, `version = "${version}"`);
+  const lockStart = lockMatch[0].replace(
+    /version = "[^"]+"$/,
+    `version = "${version}"`,
+  );
   await writeFile(lockPath, replaceOnce(lockSource, lockMatch, lockStart));
 }
 
 export function tagsFor(target: ReleaseTarget, version: string): string[] {
-  parseVersion(version);
+  assertStableVersion(parseVersion(version), "release version");
   if (target === "app") return [`v${version}`];
   if (target === "server-agent") return [`server-agent-v${version}`];
   return [`v${version}`, `server-agent-v${version}`];
@@ -245,7 +242,9 @@ function filesFor(target: ReleaseTarget): string[] {
   return [...appFiles, ...agentFiles];
 }
 
-export async function createPlan(options: ReleaseOptions): Promise<ReleasePlan> {
+export async function createPlan(
+  options: ReleaseOptions,
+): Promise<ReleasePlan> {
   const [appVersion, serverAgentVersion] = await Promise.all([
     readAppVersion(options.repositoryRoot),
     readServerAgentVersion(options.repositoryRoot),
@@ -253,7 +252,6 @@ export async function createPlan(options: ReleaseOptions): Promise<ReleasePlan> 
   const version = nextVersion(
     options.target === "server-agent" ? serverAgentVersion : appVersion,
     options.bump,
-    options.preid,
   );
   return {
     target: options.target,
@@ -271,7 +269,7 @@ export async function applyVersion(
   repositoryRoot?: string,
 ): Promise<void> {
   const root = resolveRepositoryRoot(repositoryRoot);
-  parseVersion(version);
+  assertStableVersion(parseVersion(version), "release version");
   if (target === "app" || target === "both") {
     await updateJsonVersion(root, "package.json", version);
     await updateJsonVersion(root, "app/package.json", version);
@@ -284,13 +282,13 @@ export async function applyVersion(
 export async function release(argv: string[]): Promise<ReleasePlan> {
   let target: ReleaseTarget | undefined;
   let bump: ReleaseVersionType | undefined;
-  let preid: ReleasePreid | undefined;
   let dryRun = false;
   for (let index = 0; index < argv.length; index += 2) {
     const name = argv[index];
     const value = argv[index + 1];
     if (name === "--dry-run") {
-      if (value !== undefined) throw new Error("--dry-run does not accept a value");
+      if (value !== undefined)
+        throw new Error("--dry-run does not accept a value");
       dryRun = true;
       index -= 1;
       continue;
@@ -298,7 +296,6 @@ export async function release(argv: string[]): Promise<ReleasePlan> {
     if (value === undefined) throw new Error(`missing value for ${name}`);
     if (name === "--target") target = parseTarget(value);
     else if (name === "--bump") bump = parseVersionType(value);
-    else if (name === "--preid") preid = parsePreid(value);
     else throw new Error(`unknown option: ${name}`);
   }
   if (!target || !bump) throw new Error("--target and --bump are required");
@@ -306,7 +303,6 @@ export async function release(argv: string[]): Promise<ReleasePlan> {
     repositoryRoot: defaultRepositoryRoot,
     target,
     bump,
-    preid: preid ?? "beta",
     dryRun,
   });
   if (dryRun) {

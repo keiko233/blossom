@@ -19,17 +19,6 @@ on:
           - major
           - minor
           - patch
-          - premajor
-          - preminor
-          - prepatch
-          - prerelease
-      preid:
-        description: Prerelease identifier
-        required: false
-        type: choice
-        options:
-          - beta
-          - rc
 
 permissions:
   contents: write
@@ -69,13 +58,11 @@ jobs:
         env:
           TARGET: ${{ inputs.target }}
           VERSION_TYPE: ${{ inputs.version_type }}
-          PREID: ${{ inputs.preid }}
         run: |
           set -euo pipefail
           node scripts/src/release.ts \
             --target "$TARGET" \
             --bump "$VERSION_TYPE" \
-            --preid "${PREID:-beta}" \
             --dry-run > release-plan.json
           version="$(node -p "JSON.parse(require('node:fs').readFileSync('release-plan.json', 'utf8')).version")"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
@@ -85,13 +72,11 @@ jobs:
         env:
           TARGET: ${{ inputs.target }}
           VERSION_TYPE: ${{ inputs.version_type }}
-          PREID: ${{ inputs.preid }}
         run: |
           set -euo pipefail
           node scripts/src/release.ts \
             --target "$TARGET" \
-            --bump "$VERSION_TYPE" \
-            --preid "${PREID:-beta}"
+            --bump "$VERSION_TYPE"
 
       - name: Update changelogs
         env:
