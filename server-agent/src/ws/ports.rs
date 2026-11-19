@@ -32,6 +32,9 @@ pub enum WsError {
     /// subprotocol, so it does not speak it (an older control plane, or a
     /// proxy that strips the header).
     SubprotocolMismatch,
+    /// A machine access token could not be obtained. The agent keeps its
+    /// last-known-good configuration and retries with bounded backoff.
+    Auth(String),
 }
 
 impl WsError {
@@ -55,6 +58,7 @@ impl WsError {
             Self::SubprotocolMismatch => {
                 "control plane did not accept the required websocket subprotocol".to_string()
             }
+            Self::Auth(message) => format!("agent authentication unavailable: {message}"),
         }
     }
 }

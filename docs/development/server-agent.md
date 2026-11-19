@@ -34,9 +34,12 @@ shell commands.
 | `src/acme/instant_backend.rs` | `instant-acme` adapter for Let's Encrypt/ZeroSSL, EAB decoding, order/finalize/certificate flow, and cleanup on every exit path.                           |
 | `src/acme/solver_http01.rs` | Ephemeral bounded HTTP-01 responder that serves only exact registered challenge tokens.                                                                   |
 | `src/acme/solver_dns01.rs` | DNS-01 relay over the agent WebSocket with exact TXT-value acknowledgement matching and cleanup tracking.                                                |
+| `src/oauth/`       | Protected `0600` credential files, the one-shot `enroll` redemption CLI, same-origin validation, and the Better Auth `client_credentials` token cache/refresh loop. |
 | `src/pty/`         | Opt-in interactive PTY sessions: `launch.rs` (explicit shell, controlled environment), `session.rs` (`portable-pty` adapter, bounded reader/writer queues, session-wide cleanup), `sys.rs` (Linux account and session lookups), session cap, idle/hard lifetime limits, and incremental UTF-8 output chunks. |
 | `src/certificate.rs` | Validated, generation-addressed certificate store under `<state_dir>/certificates/<id>/generation-<n>/`.                                                      |
-| `src/process.rs`   | Supervises the sing-box child (`processkit`): log forwarding, restart with backoff, graceful replacement, `sing-box check` preflight.                            |
+| `src/process.rs`   | Supervises the sing-box child (`processkit`): stdout/stderr capture into the log buffer and tracing, restart with backoff, graceful replacement, `sing-box check` preflight. |
+| `src/logs/`        | Bounded in-memory log buffer: tracing capture (`layer.rs`), byte/line/age budgets (`ring.rs`, `model.rs`), known-secret redaction and normalization (`text.rs`), retained search (`search.rs`), and the locked facade (`store.rs`). |
+| `src/log_policy.rs` | Bounded local log-level policy: per-source revisions, persisted baseline/deadline, agent tracing-filter reloads, sing-box `log.level` overlays, expiry restoration and retry status. |
 | `src/stats.rs`     | Hand-written tonic/prost client for sing-box's built-in `api` service (`StartedService.SubscribeConnections`; no `.proto` files, no `tonic-build`).              |
 | `src/accountant.rs` | Pure per-connection accounting state machine that turns connection events into per-user deltas.                                                                 |
 | `src/traffic.rs`   | Runs the connection stream in the background, accumulates per-user deltas, maps them to subscription/node ids and reports them.                                  |
@@ -94,6 +97,31 @@ with per-job EAB). It never accepts an arbitrary CA directory URL.
   error phase. Private keys and EAB HMAC values use redacting/zeroizing wrappers
   and never appear in logs. A duplicate job id replays the cached result until
   the bounded in-memory expiry; a different job id is a separate order.
+
+### OAuth machine identity
+
+`server-agent enroll --url ... --grant-file ... --credentials-file ...` reads a
+one-line `egr_...` grant from a regular file owned by the effective user with
+mode `0600`, makes exactly one same-origin
+`POST /api/enrollment/redeem`, validates the bounded response, and writes it
+verbatim through an atomic `0600` replace. There is no retry and no output that
+contains the grant or the client secret.
+
+At service start, `--credentials-file` selects protocol v2 automatically. The
+provider checks the file's owner and mode again, enforces the configured
+origin for `tokenEndpoint`, `issuer` and `resource`, and requests
+`client_credentials` tokens with the credential's `resource` and
+`blossom:agent:connect`. A token is refreshed before its advertised lifetime
+ends; the session reconnects at that deadline and the retry ladder is bounded.
+A still-valid cached token covers a transient token-endpoint failure, while the
+last-known-good sing-box process keeps running. A content change in the
+credential file rotates the identity on the next refresh.
+
+`--token` is an explicit static-token mode. It defaults to v1, may opt into v2
+with `--ws-protocol v2`, and is refused together with `--credentials-file`.
+OAuth mode never downgrades to a static token or the HTTP agent API. The client
+secret and current access token are registered in the `OAuth` log-redaction
+scope before use; replaced secrets stay masked.
 ### Interactive terminal (opt-in)
 
 The admin terminal is disabled unless the agent starts with `--pty-enabled` / `AGENT_PTY_ENABLED=true`; only then does `hello` advertise `pty-v1`. The agent refuses to enable it while running as root, because the shell would then be root. The control plane sends `pty.open`, `pty.data`, `pty.resize` and `pty.close` over the same authenticated socket. The agent answers `pty.open` with `pty.started` (shell path and account) once the shell exists, or with `pty.exit` carrying a typed reason and a sanitized `detail`, then streams bounded `pty.data` chunks.
@@ -107,6 +135,19 @@ The admin terminal is disabled unless the agent starts with `--pty-enabled` / `A
 - Reader, waiter and writer work runs on dedicated OS threads, never on Tokio workers. Reader output is bounded by a 64-frame queue; writer input by a 64-write queue of 16 KiB chunks. A full writer queue closes the session with `input_backpressure`; a full outbound WebSocket queue closes it with `output_backpressure` instead of growing memory.
 - PTY output is decoded incrementally, so a UTF-8 character split across reads is not corrupted. A shell exit, idle timeout, protocol error or WebSocket drop kills the child and emits `pty.exit` when the socket is still available.
 
+### Local log-level policy
+
+This branch implements the local half of the [log-level controls](../spec/2026-11-19-agent-ws-oauth-server-workspace/server-workspace.md#log-level-controls). It is not reachable from the control plane yet: no WebSocket frame, admin mutation, UI or `log-policy-v1` capability is added here.
+
+- `src/log_policy.rs` persists one record per source (`agent`, `sing-box`) in `<state_dir>/log-policy.json` (mode `0600`). Each record carries a revision scoped to that source, the requested level, the generated or local baseline, the effective level, an optional deadline and the last error.
+- Requests accept `error`, `warn`, `info` and `default` as baselines. `debug` and `trace` are temporary only: the default lifetime is 15 minutes and the local maximum is 60 minutes, regardless of a longer control-plane deadline. A baseline request carrying a deadline and a stale revision are rejected.
+- Agent levels change a `tracing_subscriber::reload` layer shared by local formatting and the retained `CaptureLayer`, so the buffer, its quotas and its redaction state are never rebuilt. A filter reload failure leaves the previous level effective and records the error.
+- Sing-box levels are a local overlay on `log.level` in the compiled candidate. The overlay is applied after certificate bindings and the agent `api` service, and the desired revision and digest are untouched. A log-only change writes a candidate, runs `sing-box check`, promotes and restarts the process, waits through probation and commits to last-known-good; any failure rolls back to the working configuration. The applied revision, node set and publish sequencing do not change.
+- Every desired-config compile re-reads the generated `log.level` as the new baseline and reapplies the current overlay, so refreshes, retries and a malformed `log` object converge on the same combined config. Newly received node credentials are registered for retained-log redaction before validation errors can be captured.
+- Supervisors call policy maintenance on a local timer even when the control plane is offline. Expired overrides restore the baseline through the same reload path, and a failed restoration keeps the working configuration, reports the requested/effective/error status and retries with a 30-second bound. At startup the persisted state is loaded and the committed and last-known-good configs are rewritten before `start_last_known_good`, so an override never outlives a restart.
+
+Handoff for the later policy contract: map an authenticated `log-policy-v1` revision to `PolicyRequest`, call `LogPolicy::request`, then execute the returned `PolicyAction`. An agent action calls `LogPolicy::apply_agent`; a sing-box action stages the overlay through the validated reload path and calls `LogPolicy::record` with the outcome. Publish `PolicyStatus` as the requested/effective/error view. The local API is unit-tested with recording filters and a fake sing-box process; the wire contract must add the capability and tests when it lands.
+
 ## Safety invariants
 
 These are the behaviours the code and its comments establish. Preserve them when editing; each has unit tests worth extending.
@@ -117,6 +158,8 @@ These are the behaviours the code and its comments establish. Preserve them when
 - **Report honestly.** `installed` is reported once material is staged and validated; `inUse` only after the candidate has been committed.
 - **Self-heal.** An equal `desiredRevision` is skipped only while the active config still parses and every referenced generation still validates.
 - **Secrets stay out of logs.** The token header is marked sensitive; keep tokens, keys and full config bodies out of `tracing` output.
+- **Retained logs are bounded and redacted.** The in-memory log buffer (`src/logs/`) redacts registered agent credentials (the agent token, the GitHub token and the per-run stats secret), `Bearer` tokens, whole PEM private-key blocks and the credential fields of every inbound `users` entry before insertion, then applies byte, line and age budgets. The current stats secret and both active and staged-candidate node credentials are registered on startup, fetch, promotion and rollback, and replaced sets stay redacted until the fixed registry bound retires them. A registration that would exceed the bound makes capture fail closed: every later line is stored as `[REDACTED]` rather than left exposed, while the proxy keeps running. Local host logging is unchanged; only the retained buffer is redacted.
+- **OAuth credentials need their own registration handoff.** When OAuth machine identity lands, add a dedicated `SecretScope` and register the client secret plus the current access token (and any refresh token) before the first token request or authenticated call, then replace that set on every refresh and rotation. The static-token `Agent` scope is not enough, because its set never rotates. Until then, only the configured static agent token is covered.
 - **ACME secrets stay bounded.** The agent accepts only the built-in ACME providers, validates every job/domain/challenge value, never logs or persists the generated private key, and returns it only over the authenticated WebSocket for control-plane encryption.
 - **The terminal is opt-in and bounded.** It is off by default, advertises `pty-v1` only when enabled, never opens a listening port, caps concurrent sessions, and kills every session when the process or WebSocket goes away. Terminal bytes are never written to logs, the database or audit rows.
 - **The shell is non-root and environment-scoped.** A root agent keeps PTY disabled even when opted in. The shell never inherits the agent's tokens or unrelated variables, and the identity it runs as is reported to the browser in `pty.started`.
@@ -182,3 +225,13 @@ Static binaries are published by `.github/workflows/server-agent-release.yml`, w
 3. The workflow runs `cargo test --locked`, `cargo fmt --check` and `cargo clippy -D warnings`, then builds fully static musl binaries per architecture (amd64 on `ubuntu-latest`, arm64 on `ubuntu-24.04-arm`, both inside a `rust:alpine` container like `Dockerfile.test`'s build stage) and publishes a GitHub Release with `server-agent-linux-amd64`, `server-agent-linux-arm64` and a `SHA256SUMS` covering them. Asset names carry no version so `releases/download/<tag>/...` URLs stay stable (`releases/latest/download/...` does not point at these releases); releases are published with `make_latest: false`, and consumers must resolve releases via the `server-agent-v` tag prefix (GitHub API `GET /repos/{owner}/{repo}/releases` filtered by `tag_name`), since this repo also publishes app image `v*` tags that share the `latest` feed.
 
 `workflow_dispatch` runs only build and check; a release is created only from a `server-agent-v*` tag.
+
+The systemd installer does not resolve GitHub releases at runtime. After
+reviewing a published release's `SHA256SUMS`, add its exact version, both
+architecture asset URLs and SHA-256 digests to
+`app/src/lib/agent-installer-releases.ts`. The entry must declare
+`installerContract: 1` and the `oauth-enrollment-cli-v1`,
+`credentials-file-v1` and `oauth-ws-v1` capabilities; the installer gate
+refuses an unapproved or incompatible release. Host-facing setup and the exact
+Rust `enroll`/`--credentials-file` contract are in
+[Installing and running the server agent](../operations/server-agent.md#systemd-installation-oauth-enrollment).

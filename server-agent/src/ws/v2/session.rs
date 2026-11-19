@@ -45,6 +45,11 @@ pub trait Wire: Send {
     fn send_text(&mut self, text: String) -> impl Future<Output = Result<(), WsError>> + Send;
     fn ping(&mut self) -> impl Future<Output = Result<(), WsError>> + Send;
     fn close(&mut self) -> impl Future<Output = ()> + Send;
+    /// When the token used for this upgrade should be refreshed. The session
+    /// reconnects first, so the next handshake presents a fresh token.
+    fn refresh_deadline(&self) -> Option<Instant> {
+        None
+    }
 }
 
 impl Wire for V2Connection {
@@ -62,6 +67,10 @@ impl Wire for V2Connection {
 
     async fn close(&mut self) {
         V2Connection::close(self).await;
+    }
+
+    fn refresh_deadline(&self) -> Option<Instant> {
+        V2Connection::refresh_deadline(self)
     }
 }
 
@@ -325,6 +334,7 @@ struct State {
     proactive_deadline: Option<Instant>,
     snapshot_timeout: Duration,
     failed_hold: Duration,
+    token_deadline: Option<Instant>,
 }
 
 /// Runs one connection to completion. It returns when the connection ends, the
@@ -360,6 +370,7 @@ async fn run_connection<W: Wire>(
     }
 
     let now = Instant::now();
+    let token_deadline = wire.refresh_deadline();
     let mut state = State {
         welcomed: false,
         assembler: SnapshotAssembler::new(SnapshotLimits::negotiated(&default_limits())),
@@ -374,6 +385,7 @@ async fn run_connection<W: Wire>(
         proactive_deadline: None,
         snapshot_timeout: timing.snapshot,
         failed_hold: timing.failed_apply_hold,
+        token_deadline,
     };
     let mut frame_limit = MAX_FRAME_BYTES;
     let mut ping_tick = tokio::time::interval(timing.ping);
@@ -595,6 +607,7 @@ async fn handle<W: Wire>(
             state.proactive_deadline = welcome
                 .reconnect_before_seconds
                 .map(|seconds| Instant::now() + Duration::from_secs(seconds).mul_f64(0.9));
+            state.proactive_deadline = earliest(state.proactive_deadline, state.token_deadline);
             let _ = policy.send_replace(welcome.update_policy);
             let _ = online.send(true);
             info!(
@@ -998,6 +1011,15 @@ async fn wait_for(deadline: Option<Instant>) {
     match deadline {
         Some(deadline) => tokio::time::sleep_until(deadline).await,
         None => std::future::pending().await,
+    }
+}
+
+/// The earlier of two optional deadlines, treating an absent one as absent.
+fn earliest(left: Option<Instant>, right: Option<Instant>) -> Option<Instant> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+        (None, None) => None,
     }
 }
 

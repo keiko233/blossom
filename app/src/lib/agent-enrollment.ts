@@ -78,6 +78,12 @@ export const createEnrollmentGrantInputSchema = z
       .default([]),
     release: z.string().trim().min(1).max(64).nullable().default(null),
     confirmReplace: z.boolean().optional(),
+    /**
+     * `inline` returns a complete one-time script from the audited create
+     * action. `stdin` returns the grant once and a script that reads it from
+     * protected stdin.
+     */
+    delivery: z.enum(["inline", "stdin"]).default("stdin"),
   })
   .superRefine((input, ctx) => {
     if (input.mode === "replace" && input.confirmReplace !== true) {

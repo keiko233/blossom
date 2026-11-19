@@ -81,6 +81,28 @@ describe("admin grant input", () => {
     ).toBe(true);
   });
 
+  it("defaults to protected-stdin delivery and accepts only two modes", () => {
+    const parsed = createEnrollmentGrantInputSchema.parse({
+      serverId: "srv-a",
+      mode: "enroll",
+    });
+    expect(parsed.delivery).toBe("stdin");
+    expect(
+      createEnrollmentGrantInputSchema.safeParse({
+        serverId: "srv-a",
+        mode: "enroll",
+        delivery: "inline",
+      }).success,
+    ).toBe(true);
+    expect(
+      createEnrollmentGrantInputSchema.safeParse({
+        serverId: "srv-a",
+        mode: "enroll",
+        delivery: "url",
+      }).success,
+    ).toBe(false);
+  });
+
   it("keeps capability names and release labels to a safe shape", () => {
     const parse = (input: object) =>
       createEnrollmentGrantInputSchema.safeParse({

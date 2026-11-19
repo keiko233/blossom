@@ -74,6 +74,7 @@ import { Route as ApiAdminServersIdStreamRouteImport } from './routes/api/admin/
 import { Route as ApiAdminCertificatesCertificateIdExportPartRouteImport } from './routes/api/admin/certificates/$certificateId/export/$part'
 import { Route as ApiAdminServersIdPtyStatusRouteImport } from './routes/api/admin/servers/$id/pty/status'
 import { Route as ApiAdminServersIdPtyWsRouteImport } from './routes/api/admin/servers/$id/pty/ws'
+import { Route as ApiAdminServersIdInstallationScriptGrantIdRouteImport } from './routes/api/admin/servers/$id/installation/script/$grantId'
 
 const adminRouteRoute = adminRouteRouteImport.update({
   id: '/(admin)',
@@ -433,6 +434,12 @@ const ApiAdminServersIdPtyWsRoute = ApiAdminServersIdPtyWsRouteImport.update({
   path: '/api/admin/servers/$id/pty/ws',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAdminServersIdInstallationScriptGrantIdRoute =
+  ApiAdminServersIdInstallationScriptGrantIdRouteImport.update({
+    id: '/api/admin/servers/$id/installation/script/$grantId',
+    path: '/api/admin/servers/$id/installation/script/$grantId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof staticIndexRoute
@@ -499,6 +506,7 @@ export interface FileRoutesByFullPath {
   '/api/admin/certificates/$certificateId/export/$part': typeof ApiAdminCertificatesCertificateIdExportPartRoute
   '/api/admin/servers/$id/pty/status': typeof ApiAdminServersIdPtyStatusRoute
   '/api/admin/servers/$id/pty/ws': typeof ApiAdminServersIdPtyWsRoute
+  '/api/admin/servers/$id/installation/script/$grantId': typeof ApiAdminServersIdInstallationScriptGrantIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof staticIndexRoute
@@ -552,6 +560,7 @@ export interface FileRoutesByTo {
   '/api/admin/certificates/$certificateId/export/$part': typeof ApiAdminCertificatesCertificateIdExportPartRoute
   '/api/admin/servers/$id/pty/status': typeof ApiAdminServersIdPtyStatusRoute
   '/api/admin/servers/$id/pty/ws': typeof ApiAdminServersIdPtyWsRoute
+  '/api/admin/servers/$id/installation/script/$grantId': typeof ApiAdminServersIdInstallationScriptGrantIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -622,6 +631,7 @@ export interface FileRoutesById {
   '/api/admin/certificates/$certificateId/export/$part': typeof ApiAdminCertificatesCertificateIdExportPartRoute
   '/api/admin/servers/$id/pty/status': typeof ApiAdminServersIdPtyStatusRoute
   '/api/admin/servers/$id/pty/ws': typeof ApiAdminServersIdPtyWsRoute
+  '/api/admin/servers/$id/installation/script/$grantId': typeof ApiAdminServersIdInstallationScriptGrantIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -690,6 +700,7 @@ export interface FileRouteTypes {
     | '/api/admin/certificates/$certificateId/export/$part'
     | '/api/admin/servers/$id/pty/status'
     | '/api/admin/servers/$id/pty/ws'
+    | '/api/admin/servers/$id/installation/script/$grantId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -743,6 +754,7 @@ export interface FileRouteTypes {
     | '/api/admin/certificates/$certificateId/export/$part'
     | '/api/admin/servers/$id/pty/status'
     | '/api/admin/servers/$id/pty/ws'
+    | '/api/admin/servers/$id/installation/script/$grantId'
   id:
     | '__root__'
     | '/(admin)'
@@ -812,6 +824,7 @@ export interface FileRouteTypes {
     | '/api/admin/certificates/$certificateId/export/$part'
     | '/api/admin/servers/$id/pty/status'
     | '/api/admin/servers/$id/pty/ws'
+    | '/api/admin/servers/$id/installation/script/$grantId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -833,6 +846,7 @@ export interface RootRouteChildren {
   ApiAdminCertificatesCertificateIdExportPartRoute: typeof ApiAdminCertificatesCertificateIdExportPartRoute
   ApiAdminServersIdPtyStatusRoute: typeof ApiAdminServersIdPtyStatusRoute
   ApiAdminServersIdPtyWsRoute: typeof ApiAdminServersIdPtyWsRoute
+  ApiAdminServersIdInstallationScriptGrantIdRoute: typeof ApiAdminServersIdInstallationScriptGrantIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -1306,6 +1320,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminServersIdPtyWsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/servers/$id/installation/script/$grantId': {
+      id: '/api/admin/servers/$id/installation/script/$grantId'
+      path: '/api/admin/servers/$id/installation/script/$grantId'
+      fullPath: '/api/admin/servers/$id/installation/script/$grantId'
+      preLoaderRoute: typeof ApiAdminServersIdInstallationScriptGrantIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -1642,6 +1663,8 @@ const rootRouteChildren: RootRouteChildren = {
     ApiAdminCertificatesCertificateIdExportPartRoute,
   ApiAdminServersIdPtyStatusRoute: ApiAdminServersIdPtyStatusRoute,
   ApiAdminServersIdPtyWsRoute: ApiAdminServersIdPtyWsRoute,
+  ApiAdminServersIdInstallationScriptGrantIdRoute:
+    ApiAdminServersIdInstallationScriptGrantIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
