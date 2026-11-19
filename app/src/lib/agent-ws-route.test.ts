@@ -39,11 +39,21 @@ function makeHub() {
           headers: { Upgrade: "websocket" },
         }),
     ),
+    acceptAgentV2: vi.fn(
+      async () =>
+        new Response(null, {
+          status: 426,
+          headers: { Upgrade: "websocket" },
+        }),
+    ),
     notifyConfigChanged: vi.fn(async () => undefined),
     notifyUpdateTrigger: vi.fn(async () => undefined),
   } satisfies Pick<
     RealtimeHub,
-    "acceptAgent" | "notifyConfigChanged" | "notifyUpdateTrigger"
+    | "acceptAgent"
+    | "acceptAgentV2"
+    | "notifyConfigChanged"
+    | "notifyUpdateTrigger"
   >;
 }
 
@@ -76,6 +86,7 @@ describe("agent WebSocket route", () => {
       {
         authenticate: async () => null,
         buildWelcome: async () => welcome,
+        wakeCertificateIssuance: async () => undefined,
         hub,
       },
     );
@@ -97,6 +108,7 @@ describe("agent WebSocket route", () => {
     const response = await handleAgentWsRequest(upgradeRequest, {
       authenticate: async () => server,
       buildWelcome,
+      wakeCertificateIssuance: async () => undefined,
       hub,
     });
 
@@ -114,6 +126,7 @@ describe("agent WebSocket route", () => {
     const plain = await handleAgentWsRequest(request(), {
       authenticate: async () => server,
       buildWelcome: async () => welcome,
+      wakeCertificateIssuance: async () => undefined,
       hub,
     });
     expect(plain.status).toBe(426);
@@ -125,9 +138,69 @@ describe("agent WebSocket route", () => {
       {
         authenticate: async () => server,
         buildWelcome: async () => welcome,
+        wakeCertificateIssuance: async () => undefined,
         hub,
       },
     );
     expect(failed.status).toBe(503);
+  });
+
+  it("keeps clients that offer no subprotocol on the v1 handshake", async () => {
+    const hub = makeHub();
+    const buildWelcome = vi.fn(async () => welcome);
+    const upgradeRequest = request({ upgrade: "websocket" });
+
+    await handleAgentWsRequest(upgradeRequest, {
+      authenticate: async () => server,
+      buildWelcome,
+      wakeCertificateIssuance: async () => undefined,
+      hub,
+    });
+
+    expect(buildWelcome).toHaveBeenCalledWith(server);
+    expect(hub.acceptAgentV2).not.toHaveBeenCalled();
+  });
+
+  it("hands a v2 upgrade to the v2 hub without building a v1 welcome", async () => {
+    const hub = makeHub();
+    const buildWelcome = vi.fn(async () => welcome);
+    const upgradeRequest = request({
+      upgrade: "websocket",
+      "sec-websocket-protocol": "blossom-agent.v2",
+    });
+
+    await handleAgentWsRequest(upgradeRequest, {
+      authenticate: async () => server,
+      buildWelcome,
+      wakeCertificateIssuance: async () => undefined,
+      hub,
+    });
+
+    expect(hub.acceptAgentV2).toHaveBeenCalledWith(upgradeRequest, server);
+    expect(buildWelcome).not.toHaveBeenCalled();
+    expect(hub.acceptAgent).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown subprotocol before the upgrade", async () => {
+    const hub = makeHub();
+    const response = await handleAgentWsRequest(
+      request({
+        upgrade: "websocket",
+        "sec-websocket-protocol": "blossom-agent.v9",
+      }),
+      {
+        authenticate: async () => server,
+        buildWelcome: async () => welcome,
+        wakeCertificateIssuance: async () => undefined,
+        hub,
+      },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe(
+      "Unsupported agent WebSocket subprotocol",
+    );
+    expect(hub.acceptAgent).not.toHaveBeenCalled();
+    expect(hub.acceptAgentV2).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,6 @@
 import { and, asc, eq, gt, inArray, isNull, lt, or } from "drizzle-orm";
 
-import { db } from "@/db";
+import { type Database, db } from "@/db";
 import { user } from "@/db/auth-schema";
 import { planGroup, subscription } from "@/db/plan-schema";
 import type { Subscription } from "@/db/plan-schema";
@@ -272,9 +272,10 @@ export async function getUserAccessibleNodes(
  */
 export async function getNodeActiveSubscriptions(
   nodeId: string,
+  database: Database = db,
 ): Promise<Subscription[]> {
   const now = new Date();
-  const rows = await db
+  const rows = await database
     .select({ subscription })
     .from(nodeGroup)
     .innerJoin(planGroup, eq(planGroup.groupId, nodeGroup.groupId))

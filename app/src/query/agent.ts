@@ -3,8 +3,13 @@ import type {
   AgentWsHelloPayload,
   AgentWsUpdateStatuses,
 } from "@blossom/contracts/agent-ws";
+import type {
+  AgentWsV2ConfigAckPayload,
+  AgentWsV2HelloPayload,
+  AgentWsV2StatusPayload,
+} from "@blossom/contracts/agent-ws-v2";
 import { parseRevisionSeq } from "@blossom/domain/config-revision";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { createHash, randomUUID } from "node:crypto";
 import type { z } from "zod";
 
@@ -75,8 +80,11 @@ export async function findAgentServerByTokenHash(
   return row ?? null;
 }
 
-export async function listEnabledServerNodes(serverId: string) {
-  return db
+export async function listEnabledServerNodes(
+  serverId: string,
+  database: DbHandle = db,
+) {
+  return database
     .select()
     .from(node)
     .where(and(eq(node.serverId, serverId), eq(node.enabled, true)))
@@ -185,6 +193,67 @@ export async function updateAgentHeartbeat(
   }
 }
 
+export interface AgentWsSessionStart {
+  /** Connection identity for v1 disconnect clearing and PTY relay routing. */
+  connectedAt: Date;
+  /** Fence for every durable write made by this session (v1 and v2). */
+  sessionId: string;
+}
+
+/**
+ * Starts a WebSocket session and makes it the server's current one in a
+ * single UPDATE. A newer handshake therefore replaces an older session's
+ * marker atomically; the older session's later writes match nothing.
+ */
+export async function startAgentWsSession(
+  serverId: string,
+  database: DbHandle = db,
+): Promise<AgentWsSessionStart> {
+  const connectedAt = new Date();
+  const sessionId = randomUUID();
+  await database
+    .update(server)
+    .set({
+      lastSeenAt: connectedAt,
+      transportMode: "ws",
+      wsConnectedAt: connectedAt,
+      wsSessionId: sessionId,
+    })
+    .where(eq(server.id, serverId));
+  return { connectedAt, sessionId };
+}
+
+/**
+ * Starts a v2 session only if the credential that authenticated the upgrade is
+ * still the server's. The upgrade is checked before the socket is accepted, so
+ * a rotation in between must refuse the session here, in the same statement
+ * that makes it current. Returns `null` when the credential no longer matches.
+ */
+export async function startAgentV2WsSession(
+  serverId: string,
+  expectedTokenHash: string,
+  database: DbHandle = db,
+): Promise<AgentWsSessionStart | null> {
+  const connectedAt = new Date();
+  const sessionId = randomUUID();
+  const rows = await database
+    .update(server)
+    .set({
+      lastSeenAt: connectedAt,
+      transportMode: "ws",
+      wsConnectedAt: connectedAt,
+      wsSessionId: sessionId,
+    })
+    .where(
+      and(
+        eq(server.id, serverId),
+        eq(server.agentTokenHash, expectedTokenHash),
+      ),
+    )
+    .returning({ id: server.id });
+  return rows.length > 0 ? { connectedAt, sessionId } : null;
+}
+
 /**
  * Records a completed WebSocket handshake without touching agent-reported
  * status columns. The returned timestamp is the connection identity used to
@@ -194,16 +263,7 @@ export async function markAgentWsConnected(
   serverId: string,
   database: DbHandle = db,
 ): Promise<Date> {
-  const connectedAt = new Date();
-  await database
-    .update(server)
-    .set({
-      lastSeenAt: connectedAt,
-      transportMode: "ws",
-      wsConnectedAt: connectedAt,
-    })
-    .where(eq(server.id, serverId));
-  return connectedAt;
+  return (await startAgentWsSession(serverId, database)).connectedAt;
 }
 
 /** Clears only the handshake that is still current; a reconnect wins races. */
@@ -214,8 +274,23 @@ export async function markAgentWsDisconnected(
 ): Promise<void> {
   await database
     .update(server)
-    .set({ transportMode: "http", wsConnectedAt: null })
+    .set({ transportMode: "http", wsConnectedAt: null, wsSessionId: null })
     .where(and(eq(server.id, serverId), eq(server.wsConnectedAt, connectedAt)));
+}
+
+/**
+ * Ends a v2 session by its fence. A session that was already replaced matches
+ * no row and leaves the newer session's marker untouched.
+ */
+export async function endAgentWsSession(
+  serverId: string,
+  sessionId: string,
+  database: DbHandle = db,
+): Promise<void> {
+  await database
+    .update(server)
+    .set({ transportMode: "http", wsConnectedAt: null, wsSessionId: null })
+    .where(and(eq(server.id, serverId), eq(server.wsSessionId, sessionId)));
 }
 
 /**
@@ -319,12 +394,314 @@ export async function recordAgentUpdateStatus(
     .where(eq(server.id, serverId));
 }
 
-export async function listServerNodeIds(serverId: string): Promise<string[]> {
-  const rows = await db
+export async function listServerNodeIds(
+  serverId: string,
+  database: DbHandle = db,
+): Promise<string[]> {
+  const rows = await database
     .select({ id: node.id })
     .from(node)
     .where(eq(node.serverId, serverId));
   return rows.map((row) => row.id);
+}
+
+/**
+ * Loads the server row for a v2 session, but only while that session is still
+ * current. A replaced session, or one whose credential was rotated (which
+ * clears the marker), gets `null` and must not read or send configuration.
+ */
+export async function loadCurrentAgentServer(
+  serverId: string,
+  sessionId: string,
+  database: DbHandle = db,
+): Promise<Server | null> {
+  const [row] = await database
+    .select()
+    .from(server)
+    .where(currentSession(serverId, sessionId));
+  return row ?? null;
+}
+
+/** The predicate every v2 session write carries: this session is current. */
+function currentSession(serverId: string, sessionId: string) {
+  return and(eq(server.id, serverId), eq(server.wsSessionId, sessionId));
+}
+
+/**
+ * The applied-revision columns for a revision the agent reports. The string
+ * follows the sequence: it changes only when the report is at least as new as
+ * what is already recorded, so an older report never rewinds the gate.
+ */
+function appliedRevisionColumns(revision: string, seq: number) {
+  return {
+    appliedRevision: sql<string>`CASE WHEN ${server.appliedRevisionSeq} <= ${seq}::integer THEN ${revision}::text ELSE ${server.appliedRevision} END`,
+    appliedRevisionSeq: sql<number>`GREATEST(${server.appliedRevisionSeq}, ${seq}::integer)`,
+  };
+}
+
+/**
+ * Records a v2 `hello` for the current session. Returns the server row, or
+ * `null` when the session has been replaced so the caller must stop.
+ */
+export async function recordAgentV2Hello(
+  serverId: string,
+  sessionId: string,
+  hello: AgentWsV2HelloPayload,
+  database: DbHandle = db,
+): Promise<Server | null> {
+  const now = new Date();
+  const applied = hello.applied;
+  const [row] = await database
+    .update(server)
+    .set({
+      lastSeenAt: now,
+      agentVersion: hello.agentVersion,
+      agentBuildId: hello.agentBuildId,
+      agentCapabilities: hello.capabilities,
+      ...(applied
+        ? appliedRevisionColumns(
+            applied.desiredRevision,
+            applied.desiredRevisionSeq,
+          )
+        : {}),
+      ...(hello.updates
+        ? { ...updateStatusColumns(hello.updates), statusReportedAt: now }
+        : {}),
+    })
+    .where(currentSession(serverId, sessionId))
+    .returning();
+  if (row && applied) {
+    await pruneAppliedConfigChanges(
+      serverId,
+      applied.desiredRevisionSeq,
+      database,
+    );
+  }
+  return row ?? null;
+}
+
+/**
+ * Records a v2 `agent.status` for the current session. Only fields the agent
+ * sent change; `error: null` clears the last error. Returns the updated row
+ * (carrying the authoritative identifiers), or `null` when the session is
+ * no longer current.
+ */
+export async function recordAgentV2Status(
+  serverId: string,
+  sessionId: string,
+  status: AgentWsV2StatusPayload,
+  database: DbHandle = db,
+): Promise<Server | null> {
+  const now = new Date();
+  const error = status.error;
+  const [row] = await database
+    .update(server)
+    .set({
+      lastSeenAt: now,
+      statusReportedAt: now,
+      ...(status.runtimeState ? { runtimeState: status.runtimeState } : {}),
+      ...(status.configState ? { configState: status.configState } : {}),
+      ...(status.singBoxVersion
+        ? { singBoxVersion: status.singBoxVersion }
+        : {}),
+      ...(status.activeNodeIds ? { activeNodeIds: status.activeNodeIds } : {}),
+      ...(status.updates ? updateStatusColumns(status.updates) : {}),
+      ...(error === undefined
+        ? {}
+        : error === null
+          ? {
+              lastErrorPhase: null,
+              lastErrorCode: null,
+              lastErrorMessage: null,
+              lastErrorNodeId: null,
+              lastErrorAt: null,
+            }
+          : {
+              lastErrorPhase: error.phase,
+              lastErrorCode: error.code,
+              lastErrorMessage: sanitizeAgentMessage(error.message),
+              lastErrorNodeId: error.nodeId ?? null,
+              lastErrorAt: error.occurredAt ? new Date(error.occurredAt) : now,
+            }),
+    })
+    .where(currentSession(serverId, sessionId))
+    .returning();
+  return row ?? null;
+}
+
+/**
+ * Records a v2 `config.ack`. A success advances the applied revision in the
+ * same statement that checks the session fence, and only when the acknowledged
+ * sequence is not older than the recorded one. A stale or replayed success
+ * therefore cannot reopen or rewind the publish gate. A failure records the
+ * failed stage and leaves the applied revision untouched.
+ */
+export async function recordAgentV2ConfigAck(
+  serverId: string,
+  sessionId: string,
+  ack: AgentWsV2ConfigAckPayload,
+  database: DbHandle = db,
+): Promise<"replaced" | "applied" | "failed" | "stale"> {
+  const now = new Date();
+  if (ack.outcome === "failed") {
+    const rows = await database
+      .update(server)
+      .set({
+        lastSeenAt: now,
+        statusReportedAt: now,
+        configState: "apply_failed",
+        lastErrorPhase: "config",
+        lastErrorCode: `config_${ack.stage ?? "unknown"}`,
+        lastErrorMessage: sanitizeAgentMessage(ack.error ?? "config failed"),
+        lastErrorNodeId: null,
+        lastErrorAt: now,
+      })
+      .where(currentSession(serverId, sessionId))
+      .returning({ id: server.id });
+    return rows.length > 0 ? "failed" : "replaced";
+  }
+
+  const seq = ack.desired.desiredRevisionSeq;
+  const [outcome] = await database.execute<{ fenced: number; applied: number }>(
+    sql`
+      WITH fenced AS (
+        SELECT 1 FROM server
+        WHERE id = ${serverId}::text AND ws_session_id = ${sessionId}::text
+        FOR SHARE
+      ),
+      advanced AS (
+        UPDATE server SET
+          applied_revision = ${ack.desired.desiredRevision}::text,
+          applied_revision_seq = ${seq}::integer,
+          config_state = 'applied',
+          last_applied_at = timezone('utc', now()),
+          last_seen_at = timezone('utc', now()),
+          status_reported_at = timezone('utc', now())
+        WHERE id = ${serverId}::text
+          AND EXISTS (SELECT 1 FROM fenced)
+          AND applied_revision_seq <= ${seq}::integer
+          AND desired_revision_seq >= ${seq}::integer
+        RETURNING id
+      )
+      SELECT (SELECT count(*) FROM fenced)::int AS fenced,
+             (SELECT count(*) FROM advanced)::int AS applied
+    `,
+    "objects",
+  );
+  if (!outcome || Number(outcome.fenced) === 0) {
+    return "replaced";
+  }
+  if (Number(outcome.applied) === 0) {
+    return "stale";
+  }
+  await pruneAppliedConfigChanges(serverId, seq, database);
+  return "applied";
+}
+
+/**
+ * A configuration identifier compiled from the state read before the compile.
+ * `desiredInputsVersion` is the version the server row carried at that read.
+ */
+export interface CachedDesiredRevision {
+  desiredRevisionSeq: number;
+  desiredInputsVersion: number;
+  desiredRevision: string;
+  /** The identifier may be trusted without recompiling only until this. */
+  validUntil: Date;
+}
+
+/**
+ * Stores the identifier compiled for the current session. The write names the
+ * sequence and inputs version it was compiled from and matches only while both
+ * are unchanged. A compile that raced a publish-gate change or an invalidation,
+ * including one on another instance, therefore cannot cache a stale identifier.
+ */
+export async function cacheAgentDesiredRevision(
+  serverId: string,
+  sessionId: string,
+  cache: CachedDesiredRevision,
+  database: DbHandle = db,
+): Promise<void> {
+  await database
+    .update(server)
+    .set({
+      desiredConfigRevision: cache.desiredRevision,
+      desiredConfigValidUntil: cache.validUntil,
+    })
+    .where(
+      and(
+        currentSession(serverId, sessionId),
+        eq(server.desiredRevisionSeq, cache.desiredRevisionSeq),
+        eq(server.desiredInputsVersion, cache.desiredInputsVersion),
+      ),
+    );
+}
+
+/**
+ * Discards cached configuration identifiers and bumps their inputs version, so
+ * the next v2 status, hello or snapshot recompiles, and a compile that began
+ * before this call cannot store its identifier. Call it after any mutation of
+ * compiled inputs that no publish-gate record covers (routing rules,
+ * certificates, traffic quota), and after a change notification, which may not
+ * be delivered. Omit `serverIds` to invalidate every server.
+ */
+export async function invalidateDesiredConfigRevisions(
+  serverIds?: readonly string[],
+  database: DbHandle = db,
+): Promise<void> {
+  if (serverIds && serverIds.length === 0) {
+    return;
+  }
+  await database
+    .update(server)
+    .set({
+      desiredConfigRevision: null,
+      desiredConfigValidUntil: null,
+      desiredInputsVersion: sql`${server.desiredInputsVersion} + 1`,
+    })
+    .where(serverIds ? inArray(server.id, [...serverIds]) : undefined);
+}
+
+/**
+ * Invalidates after a mutation has already committed, so a failure here cannot
+ * fail the caller's operation. A missed invalidation is still bounded by the
+ * cached identifier's deadline.
+ */
+export async function invalidateDesiredConfigRevisionsAfterCommit(
+  serverIds?: readonly string[],
+  database: DbHandle = db,
+): Promise<void> {
+  try {
+    await invalidateDesiredConfigRevisions(serverIds, database);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`agent desired configuration invalidation failed: ${message}`);
+  }
+}
+
+/**
+ * Replaces a server's static agent credential and ends its current v2 session
+ * in the same statement. The old session's fenced writes then match no row and
+ * its configuration reads fail, so it stops at its next frame, and a reconnect
+ * with the old credential is refused at the upgrade.
+ */
+export async function rotateAgentCredential(
+  serverId: string,
+  credential: { hash: string; prefix: string },
+  database: DbHandle = db,
+): Promise<{ id: string } | null> {
+  const [row] = await database
+    .update(server)
+    .set({
+      agentTokenHash: credential.hash,
+      agentTokenPrefix: credential.prefix,
+      transportMode: "http",
+      wsConnectedAt: null,
+      wsSessionId: null,
+    })
+    .where(eq(server.id, serverId))
+    .returning({ id: server.id });
+  return row ?? null;
 }
 
 /**
@@ -350,6 +727,15 @@ export interface RecordTrafficReport {
   reportId?: string;
   /** Required with `reportId`; see {@link computeTrafficReportHash}. */
   contentHash?: string;
+  /** Connection to write through; defaults to the shared database facade. */
+  database?: DbHandle;
+  /**
+   * WebSocket v2 session fence. When set, the report is applied only if this
+   * session is still the server's current one; otherwise
+   * {@link AgentSessionReplacedError} is thrown and nothing is written.
+   * Requires `reportId`, because a fenced report is replayed on the next session.
+   */
+  sessionId?: string;
   windowStartedAt: Date | null;
   windowEndedAt: Date | null;
   entries: TrafficReportRow[];
@@ -360,6 +746,18 @@ export interface RecordTrafficResult {
   dropped: number;
   /** The report id had already been applied; nothing was written. */
   duplicate: boolean;
+}
+
+/**
+ * The WebSocket session that submitted a report is no longer the server's
+ * current session. Nothing was written; the agent resends the report on its
+ * current session, where the ledger deduplicates it.
+ */
+export class AgentSessionReplacedError extends Error {
+  constructor() {
+    super("agent websocket session was replaced");
+    this.name = "AgentSessionReplacedError";
+  }
 }
 
 /** The report id was already used by this server for different content. */
@@ -429,9 +827,13 @@ export function computeTrafficReportHash(report: {
 export async function recordAgentTraffic(
   report: RecordTrafficReport,
 ): Promise<RecordTrafficResult> {
-  const { serverId, reportId } = report;
+  const database = report.database ?? db;
+  const { serverId, reportId, sessionId } = report;
   if (reportId !== undefined && !report.contentHash) {
     throw new Error("contentHash is required with reportId");
+  }
+  if (sessionId !== undefined && reportId === undefined) {
+    throw new Error("sessionId requires reportId");
   }
   const rows = JSON.stringify(
     report.entries.map((e) => ({
@@ -445,6 +847,19 @@ export async function recordAgentTraffic(
   const windowStartedAt = report.windowStartedAt?.toISOString() ?? null;
   const windowEndedAt = report.windowEndedAt?.toISOString() ?? null;
 
+  // The fence row is locked FOR SHARE, so a session replacement (which updates
+  // the same row) waits until this statement commits. A write therefore either
+  // lands before the replacement or is rejected by it, never in between.
+  const fenceCte =
+    sessionId === undefined
+      ? sql``
+      : sql`fence AS (
+          SELECT 1 FROM server
+          WHERE id = ${serverId}::text AND ws_session_id = ${sessionId}::text
+          FOR SHARE
+        ),`;
+  const fenceGuard =
+    sessionId === undefined ? sql`` : sql`WHERE EXISTS (SELECT 1 FROM fence)`;
   const claimCte =
     reportId === undefined
       ? sql``
@@ -454,6 +869,7 @@ export async function recordAgentTraffic(
                  (SELECT count(*) FROM resolved)::int,
                  ((SELECT count(*) FROM incoming) - (SELECT count(*) FROM resolved))::int,
                  timezone('utc', now())
+          ${fenceGuard}
           ON CONFLICT (server_id, report_id) DO NOTHING
           RETURNING id
         ),`;
@@ -461,6 +877,8 @@ export async function recordAgentTraffic(
     reportId === undefined ? sql`TRUE` : sql`EXISTS (SELECT 1 FROM claim)`;
   const claimedColumn =
     reportId === undefined ? sql`1` : sql`(SELECT count(*) FROM claim)::int`;
+  const fencedColumn =
+    sessionId === undefined ? sql`1` : sql`(SELECT count(*) FROM fence)::int`;
 
   const statement = sql`
     WITH incoming AS (
@@ -471,6 +889,7 @@ export async function recordAgentTraffic(
       SELECT i.id, i.subscription_id, s.user_id, i.node_id, i.uplink_bytes, i.downlink_bytes
       FROM incoming i JOIN subscription s ON s.id = i.subscription_id
     ),
+    ${fenceCte}
     ${claimCte}
     history AS (
       INSERT INTO traffic_record (id, subscription_id, user_id, node_id, server_id, uplink_bytes, downlink_bytes, window_started_at, window_ended_at)
@@ -492,6 +911,7 @@ export async function recordAgentTraffic(
       RETURNING s.id
     )
     SELECT ${claimedColumn} AS claimed,
+           ${fencedColumn} AS fenced,
            (SELECT count(*) FROM history)::int AS accepted,
            ((SELECT count(*) FROM incoming) - (SELECT count(*) FROM resolved))::int AS dropped,
            (SELECT count(*) FROM usage)::int AS usage_rows
@@ -500,17 +920,21 @@ export async function recordAgentTraffic(
   // A pruned ledger row can vanish between the conflict and the lookup below;
   // one more attempt then applies the report as a fresh delivery.
   for (let attempt = 0; attempt < 2; attempt++) {
-    const [outcome] = await db.execute<{
+    const [outcome] = await database.execute<{
       claimed: number;
+      fenced: number;
       accepted: number;
       dropped: number;
     }>(statement, "objects");
     if (!outcome) {
       throw new Error("traffic statement returned no row");
     }
+    if (sessionId !== undefined && Number(outcome.fenced) === 0) {
+      throw new AgentSessionReplacedError();
+    }
     if (Number(outcome.claimed) > 0) {
       if (reportId !== undefined) {
-        await pruneTrafficReports(serverId);
+        await pruneTrafficReports(serverId, database);
       }
       return {
         accepted: Number(outcome.accepted),
@@ -519,7 +943,7 @@ export async function recordAgentTraffic(
       };
     }
 
-    const [existing] = await db
+    const [existing] = await database
       .select()
       .from(trafficReport)
       .where(
@@ -542,12 +966,15 @@ export async function recordAgentTraffic(
 }
 
 /** Best-effort retention pruning; never fails the report it piggybacks on. */
-async function pruneTrafficReports(serverId: string): Promise<void> {
+async function pruneTrafficReports(
+  serverId: string,
+  database: DbHandle,
+): Promise<void> {
   const cutoff = new Date(
     Date.now() - TRAFFIC_REPORT_RETENTION_DAYS * 24 * 60 * 60 * 1000,
   ).toISOString();
   try {
-    await db.execute(
+    await database.execute(
       sql`
       DELETE FROM traffic_report WHERE id IN (
         SELECT id FROM traffic_report
