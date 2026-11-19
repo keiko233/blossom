@@ -26,6 +26,10 @@ import {
   sendPasswordResetEmail,
 } from "./email";
 import { getServerEnv } from "./env";
+import {
+  createOAuthProviderOptions,
+  getOAuthResourceIdentifiers,
+} from "./oauth-provider-config";
 
 const buildSocialProviders = createServerOnlyFn(() => {
   const env = getServerEnv();
@@ -39,7 +43,7 @@ const buildSocialProviders = createServerOnlyFn(() => {
 const buildAuth = createServerOnlyFn(() => {
   const env = getServerEnv();
 
-  const mcpResourceUrl = `${env.BETTER_AUTH_URL.replace(/\/$/, "")}/api/mcp`;
+  const oauthResources = getOAuthResourceIdentifiers(env.BETTER_AUTH_URL);
 
   const registrationHooks = createRegistrationHooks({
     getRegistration: async () => (await getSettings()).registration,
@@ -100,27 +104,7 @@ const buildAuth = createServerOnlyFn(() => {
           expirationTime: "15m",
         },
       }),
-      oauthProvider({
-        loginPage: "/auth/login",
-        consentPage: "/auth/mcp-consent",
-        silenceWarnings: {
-          oauthAuthServerConfig: true,
-        },
-        scopes: ["blossom:mcp:read", "blossom:mcp:write", "offline_access"],
-        allowDynamicClientRegistration: true,
-        allowUnauthenticatedClientRegistration: true,
-        clientRegistrationDefaultScopes: ["blossom:mcp:read"],
-        clientRegistrationAllowedScopes: [
-          "blossom:mcp:write",
-          "offline_access",
-        ],
-        accessTokenExpiresIn: 60 * 60 * 24,
-        refreshTokenExpiresIn: 60 * 60 * 24 * 30,
-        codeExpiresIn: 600,
-        grantTypes: ["authorization_code", "refresh_token"],
-        disableJwtPlugin: false,
-        validAudiences: [mcpResourceUrl],
-      }),
+      oauthProvider(createOAuthProviderOptions(oauthResources)),
       tanstackStartCookies(),
     ],
   });

@@ -59,10 +59,12 @@ function makeStore(overrides: Partial<AgentWsV2Store> = {}) {
   const store = {
     loadCurrentServer: vi.fn(async () => server()),
     recordHello: vi.fn(async () => server()),
+    promoteSession: vi.fn(async () => server()),
     recordStatus: vi.fn(async () => server()),
     recordConfigAck: vi.fn(async () => "applied" as const),
     cacheDesiredRevision: vi.fn(async () => undefined),
     applyCertificateDeployments: vi.fn(async () => undefined),
+    revalidateSession: vi.fn(async () => "ok" as const),
     applyTraffic: vi.fn(async () => ({
       status: "applied" as const,
       accepted: 1,
@@ -121,6 +123,7 @@ function open(
   return openAgentWsV2Session({
     serverId: SERVER_ID,
     sessionId,
+    credential: { kind: "static", tokenHash: "hash-1" },
     peer,
     store,
   });
@@ -163,6 +166,51 @@ describe("agent WebSocket v2 session handshake", () => {
       },
     ]);
     expect(JSON.parse(peer.sent[0]!).id).toBe("hello-1");
+  });
+
+  it("promotes a pending identity on hello before recording it", async () => {
+    const store = makeStore();
+    const peer = makePeer();
+    const credential = {
+      kind: "oauth" as const,
+      identityId: "identity-1",
+      generation: 2,
+      clientId: "agent_test",
+      expiresAt: Math.floor(Date.now() / 1000) + 900,
+      identityStatus: "pending" as const,
+    };
+    const session = openAgentWsV2Session({
+      serverId: SERVER_ID,
+      sessionId: SESSION_ID,
+      credential,
+      pending: true,
+      peer,
+      store,
+    });
+
+    await session.handleText(agentFrame("hello", CURRENT_HELLO));
+
+    expect(store.promoteSession).toHaveBeenCalledWith(
+      SERVER_ID,
+      SESSION_ID,
+      credential,
+    );
+    expect(store.recordHello).toHaveBeenCalled();
+    expect(session.pending).toBe(false);
+    expect(received(peer)[0]).toMatchObject({ kind: "welcome" });
+  });
+
+  it("stops an idle lease whose credential is no longer current", async () => {
+    const store = makeStore({
+      revalidateSession: vi.fn(async () => "replaced" as const),
+    });
+    const peer = makePeer();
+    const session = open(store, peer);
+
+    await session.revalidate();
+
+    expect(peer.close).toHaveBeenCalledWith(4000, "session_replaced");
+    expect(received(peer).at(-1)).toMatchObject({ kind: "error" });
   });
 
   it("compiles and caches the identifier when the cache is empty", async () => {
@@ -782,6 +830,7 @@ describe("agent WebSocket v2 pushes and teardown", () => {
     const session = openAgentWsV2Session({
       serverId: SERVER_ID,
       sessionId: SESSION_ID,
+      credential: { kind: "static", tokenHash: "hash-1" },
       peer,
       store,
       welcomed: true,

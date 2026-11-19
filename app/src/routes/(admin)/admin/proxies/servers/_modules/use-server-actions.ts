@@ -94,7 +94,9 @@ export function useServerActions(server: ServerListItem) {
       {
         serverId: server.id,
         address: server.address,
-        tokenPrefix: server.agentTokenPrefix,
+        ...(server.agentTokenPrefix
+          ? { tokenPrefix: server.agentTokenPrefix }
+          : {}),
       },
       null,
       2,

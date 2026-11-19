@@ -19,12 +19,22 @@ import { createAgentWsStore, createAgentWsV2Store } from "@/lib/agent-ws-store";
 import { openAgentWsV2Session } from "@/lib/agent-ws-v2-session";
 import {
   AGENT_WS_INTERNAL_CONNECTED_AT,
+  AGENT_WS_INTERNAL_CREDENTIAL_KIND,
+  AGENT_WS_INTERNAL_IDENTITY_GENERATION,
+  AGENT_WS_INTERNAL_IDENTITY_ID,
   AGENT_WS_INTERNAL_PROTOCOL,
   AGENT_WS_INTERNAL_SERVER_ID,
+  AGENT_WS_INTERNAL_SESSION_EXPIRES_AT,
   AGENT_WS_INTERNAL_SESSION_ID,
+  AGENT_WS_INTERNAL_SESSION_PENDING,
   AGENT_WS_INTERNAL_WELCOME,
 } from "@/lib/realtime-hub-types";
-import { endAgentWsSession } from "@/query/agent";
+import {
+  endAgentWsSession,
+  loadCurrentAgentServer,
+  revalidatePendingAgentV2Session,
+  type AgentSessionCredential,
+} from "@/query/agent";
 import { recordPtySessionClose } from "@/query/pty-audit";
 
 import {
@@ -58,6 +68,12 @@ interface V2AgentSessionAttachment extends AgentSessionAttachmentBase {
   protocol: "v2";
   sessionId: string;
   welcomed: boolean;
+  pending: boolean;
+  credentialKind: AgentSessionCredential["kind"];
+  identityId?: string;
+  identityGeneration?: number;
+  /** Machine-token expiry in epoch seconds. Never the token itself. */
+  expiresAt: number | null;
 }
 
 type AgentSessionAttachment =
@@ -91,6 +107,16 @@ function readAttachment(ws: WebSocket): AgentSessionAttachment | null {
       connectedAt: candidate.connectedAt,
       sessionId: candidate.sessionId,
       welcomed: candidate.welcomed === true,
+      pending: candidate.pending === true,
+      credentialKind: candidate.credentialKind === "oauth" ? "oauth" : "static",
+      ...(typeof candidate.identityId === "string"
+        ? { identityId: candidate.identityId }
+        : {}),
+      ...(typeof candidate.identityGeneration === "number"
+        ? { identityGeneration: candidate.identityGeneration }
+        : {}),
+      expiresAt:
+        typeof candidate.expiresAt === "number" ? candidate.expiresAt : null,
     };
   }
   const welcome = agentWsWelcomePayloadSchema.safeParse(candidate.welcome);
@@ -283,6 +309,28 @@ export class AgentSessionDO extends DurableObject {
     if (!serverId || !connectedAt || !sessionId) {
       return new Response("Bad Request", { status: 400 });
     }
+    const credentialKind =
+      request.headers.get(AGENT_WS_INTERNAL_CREDENTIAL_KIND) === "oauth"
+        ? "oauth"
+        : "static";
+    const identityId = request.headers.get(AGENT_WS_INTERNAL_IDENTITY_ID);
+    const identityGeneration = Number(
+      request.headers.get(AGENT_WS_INTERNAL_IDENTITY_GENERATION),
+    );
+    const expiresAtRaw = request.headers.get(
+      AGENT_WS_INTERNAL_SESSION_EXPIRES_AT,
+    );
+    const expiresAt = expiresAtRaw === null ? null : Number(expiresAtRaw);
+    if (
+      credentialKind === "oauth" &&
+      (!identityId ||
+        !Number.isInteger(identityGeneration) ||
+        identityGeneration <= 0 ||
+        expiresAt === null ||
+        !Number.isFinite(expiresAt))
+    ) {
+      return new Response("Bad Request", { status: 400 });
+    }
 
     const pair = new WebSocketPair();
     const client = pair[0];
@@ -294,13 +342,124 @@ export class AgentSessionDO extends DurableObject {
       connectedAt,
       sessionId,
       welcomed: false,
+      pending: request.headers.get(AGENT_WS_INTERNAL_SESSION_PENDING) === "1",
+      credentialKind,
+      ...(identityId ? { identityId } : {}),
+      ...(credentialKind === "oauth"
+        ? { identityGeneration, expiresAt }
+        : { expiresAt: null }),
     } satisfies V2AgentSessionAttachment);
+    this.scheduleV2Alarm();
 
     return new Response(null, {
       status: 101,
       webSocket: client,
       headers: { "Sec-WebSocket-Protocol": AGENT_WS_V2_SUBPROTOCOL },
     } as ResponseInit & { webSocket: WebSocket });
+  }
+
+  /** Reconstructs the non-secret credential descriptor from the attachment. */
+  private credentialOf(
+    attachment: V2AgentSessionAttachment,
+  ): AgentSessionCredential {
+    if (attachment.credentialKind === "oauth" && attachment.identityId) {
+      return {
+        kind: "oauth",
+        identityId: attachment.identityId,
+        generation: attachment.identityGeneration ?? 0,
+        clientId: "",
+        expiresAt: attachment.expiresAt ?? 0,
+        identityStatus: attachment.pending ? "pending" : "active",
+      };
+    }
+    // The static token hash is not kept in the attachment; the session fence
+    // already stores its rotation state in the server row.
+    return { kind: "static", tokenHash: "" };
+  }
+
+  /**
+   * Wakes the object at least every 30 seconds (or at the earliest token
+   * expiry) so revocation, replacement and expiry close idle sockets without
+   * waiting for the next frame.
+   */
+  private scheduleV2Alarm(): void {
+    const storage = this.ctx.storage;
+    if (!storage?.setAlarm) {
+      return;
+    }
+    const now = Date.now();
+    const deadlines = this.ctx
+      .getWebSockets()
+      .map(readAttachment)
+      .filter(
+        (attachment): attachment is V2AgentSessionAttachment =>
+          attachment?.protocol === "v2",
+      )
+      .map((attachment) =>
+        attachment.expiresAt === null
+          ? now + 30_000
+          : attachment.expiresAt * 1000,
+      );
+    if (deadlines.length === 0) {
+      void storage.deleteAlarm().catch(() => undefined);
+      return;
+    }
+    const next = Math.max(now + 1_000, Math.min(now + 30_000, ...deadlines));
+    void storage.setAlarm(next).catch(() => undefined);
+  }
+
+  async alarm(): Promise<void> {
+    await revalidatePtySockets(this.ctx, this.recordPtyClose, (attachment) =>
+      this.withDatabase((database) =>
+        isPtySessionAuthorized(database, attachment),
+      ),
+    );
+    const now = Date.now();
+    for (const ws of this.ctx.getWebSockets()) {
+      const attachment = readAttachment(ws);
+      if (attachment?.protocol !== "v2") {
+        continue;
+      }
+      if (attachment.expiresAt !== null && attachment.expiresAt * 1000 <= now) {
+        ws.close(4000, "session_replaced");
+        continue;
+      }
+      const credential = this.credentialOf(attachment);
+      try {
+        if (attachment.pending) {
+          const usable = await this.withDatabase((database) =>
+            revalidatePendingAgentV2Session(
+              attachment.serverId,
+              attachment.sessionId,
+              credential,
+              database,
+            ),
+          );
+          if (!usable) {
+            ws.close(4000, "session_replaced");
+          }
+          continue;
+        }
+        const row = await this.withDatabase((database) =>
+          loadCurrentAgentServer(
+            attachment.serverId,
+            attachment.sessionId,
+            database,
+          ),
+        );
+        if (!row) {
+          ws.close(4000, "session_replaced");
+        } else if (!row.enabled) {
+          ws.close(4000, "server_disabled");
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `agent durable object lease check failed for ${attachment.serverId}: ${message}`,
+        );
+      }
+    }
+    this.scheduleV2Alarm();
   }
 
   private session(
@@ -313,15 +472,6 @@ export class AgentSessionDO extends DurableObject {
       connectedAt: new Date(attachment.connectedAt),
       store,
     });
-  }
-
-  /** Storage alarm: re-checks every open shell, which also wakes a hibernated object. */
-  async alarm(): Promise<void> {
-    await revalidatePtySockets(this.ctx, this.recordPtyClose, (attachment) =>
-      this.withDatabase((database) =>
-        isPtySessionAuthorized(database, attachment),
-      ),
-    );
   }
 
   async webSocketMessage(
@@ -397,6 +547,7 @@ export class AgentSessionDO extends DurableObject {
       await this.withDatabase((database) =>
         endAgentWsSession(attachment.serverId, attachment.sessionId, database),
       );
+      this.scheduleV2Alarm();
       return;
     }
     await this.withDatabase(async (database) => {
@@ -423,17 +574,24 @@ export class AgentSessionDO extends DurableObject {
       const session = openAgentWsV2Session({
         serverId: attachment.serverId,
         sessionId: attachment.sessionId,
+        credential: this.credentialOf(attachment),
+        pending: attachment.pending,
         peer: ws,
         store: createAgentWsV2Store(database),
         welcomed: attachment.welcomed,
       });
       await session.handleText(raw);
-      if (session.welcomed !== attachment.welcomed) {
+      if (
+        session.welcomed !== attachment.welcomed ||
+        session.pending !== attachment.pending
+      ) {
         ws.serializeAttachment({
           ...attachment,
           welcomed: session.welcomed,
+          pending: session.pending,
         } satisfies V2AgentSessionAttachment);
       }
+      this.scheduleV2Alarm();
     });
   }
 

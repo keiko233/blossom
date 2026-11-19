@@ -12,3 +12,4 @@ export * from "./settings-schema.ts";
 export * from "./traffic-schema.ts";
 export * from "./user-note-schema.ts";
 export * from "./redeem-schema.ts";
+export * from "./agent-identity-schema.ts";
