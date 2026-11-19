@@ -59,6 +59,13 @@ export function ServerWorkspaceTabs({
       >
         {m.admin_proxies_servers_workspace_tab_terminal()}
       </Link>
+      <Link
+        to="/admin/proxies/servers/$serverId/logs"
+        params={{ serverId }}
+        className={serverTabVariants()}
+      >
+        {m.admin_proxies_servers_workspace_tab_logs()}
+      </Link>
     </nav>
   );
 }
