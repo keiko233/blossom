@@ -125,7 +125,7 @@ export class AgentSessionDO extends DurableObject {
   async fetch(request: Request): Promise<Response> {
     const pathname = new URL(request.url).pathname;
     if (pathname === "/internal/pty/connect") {
-      return handlePtyConnect(this.ctx, request);
+      return handlePtyConnect(this.ctx, request, this.recordPtyClose);
     }
     if (pathname === "/internal/telemetry" && request.method === "POST") {
       const params = new URL(request.url).searchParams;

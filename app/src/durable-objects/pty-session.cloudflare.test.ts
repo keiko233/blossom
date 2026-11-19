@@ -374,7 +374,55 @@ describe("PTY storage alarm", () => {
   });
 });
 
+/** Node has neither a 101 `Response` nor `WebSocketPair`; workerd provides both. */
+class SwitchingProtocolsResponse extends Response {
+  constructor(
+    body: BodyInit | null,
+    init?: ResponseInit & { webSocket?: unknown },
+  ) {
+    if (init?.status !== 101) {
+      super(body, init);
+      return;
+    }
+    super(body, { status: 200 });
+    Object.defineProperty(this, "status", { value: 101 });
+    Object.defineProperty(this, "webSocket", { value: init.webSocket });
+  }
+}
+
 describe("PTY connect", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "WebSocketPair",
+      class {
+        constructor() {
+          return [new FakeSocket(), new FakeSocket()];
+        }
+      },
+    );
+    vi.stubGlobal("Response", SwitchingProtocolsResponse);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const connectRequest = (overrides: Record<string, string> = {}): Request =>
+    new Request("https://example.com/internal/pty/connect?serverId=srv-1", {
+      headers: {
+        upgrade: "websocket",
+        "x-blossom-pty-session": "pty-1",
+        "x-blossom-pty-connected-at": CONNECTED_AT,
+        "x-blossom-pty-started-at": "2026-11-19T00:30:00.000Z",
+        "x-blossom-pty-auth-session": "auth-session-1",
+        "x-blossom-pty-actor": encodeURIComponent(
+          JSON.stringify({ id: "admin-1", email: "admin@example.com" }),
+        ),
+        "x-blossom-pty-cols": "100",
+        "x-blossom-pty-rows": "30",
+        ...overrides,
+      },
+    });
+
   it("rejects a connect without the session row id before accepting a socket", async () => {
     const ctx = fakeCtx();
     const actor = encodeURIComponent(
@@ -391,6 +439,7 @@ describe("PTY connect", () => {
           "x-blossom-pty-actor": actor,
         },
       }),
+      recorder(),
     );
 
     expect(response.status).toBe(400);
@@ -399,6 +448,84 @@ describe("PTY connect", () => {
     });
     expect(ctx.sockets).toEqual([]);
     expect(ctx.setAlarm).not.toHaveBeenCalled();
+  });
+
+  it("opens the shell on the agent with the clamped geometry, after the browser socket is registered", async () => {
+    const agent = agentSocket();
+    const ctx = fakeCtx([agent]);
+    const socketsAtSend: number[] = [];
+    agent.send = (frame: string) => {
+      socketsAtSend.push(ctx.sockets.length);
+      agent.sent.push(frame);
+    };
+    const recordClose = recorder();
+
+    const response = await handlePtyConnect(ctx, connectRequest(), recordClose);
+
+    expect(response.status).toBe(101);
+    expect(socketsAtSend).toEqual([2]);
+    expect(agent.frames().map((frame) => frame.type)).toEqual(["pty.open"]);
+    expect(agent.frames()[0]?.payload).toEqual({
+      sessionId: "pty-1",
+      cols: 100,
+      rows: 30,
+    });
+    const shell = ctx.sockets[1] as unknown as FakeSocket;
+    expect(shell.tags).toEqual(["pty:srv-1"]);
+    expect(shell.sent).toEqual([]);
+    expect(shell.closed).toEqual([]);
+    expect(recordClose).not.toHaveBeenCalled();
+  });
+
+  it("closes the browser as agent_disconnected and audits it when the agent refuses pty.open", async () => {
+    const agent = agentSocket();
+    agent.send = () => {
+      throw new Error("agent socket is closing");
+    };
+    const ctx = fakeCtx([agent]);
+    const recordClose = recorder();
+
+    const response = await handlePtyConnect(ctx, connectRequest(), recordClose);
+
+    expect(response.status).toBe(101);
+    expect(agent.sent).toEqual([]);
+    const shell = ctx.sockets[1] as unknown as FakeSocket;
+    expect(shell.frames().map((frame) => frame.type)).toEqual(["pty.exit"]);
+    expect(shell.frames()[0]?.payload).toMatchObject({
+      sessionId: "pty-1",
+      reason: "agent_disconnected",
+    });
+    expect(shell.closed).toEqual([
+      { code: 1011, reason: "agent_disconnected" },
+    ]);
+    expect(recordClose).toHaveBeenCalledTimes(1);
+    const [closed, reason] = recordClose.mock.calls[0] as unknown as [
+      PtySocketAttachment,
+      string,
+    ];
+    expect(reason).toBe("agent_disconnected");
+    expect(closed.closeAudited).toBe(true);
+  });
+
+  it("closes the browser when the agent disappears while the alarm is armed", async () => {
+    const agent = agentSocket();
+    const ctx = fakeCtx([agent]);
+    ctx.setAlarm.mockImplementationOnce(async (time: number) => {
+      ctx.alarm = time;
+      ctx.sockets.splice(ctx.sockets.indexOf(agent), 1);
+    });
+    const recordClose = recorder();
+
+    const response = await handlePtyConnect(ctx, connectRequest(), recordClose);
+
+    expect(response.status).toBe(101);
+    expect(agent.sent).toEqual([]);
+    expect(recordClose).toHaveBeenCalledTimes(1);
+    const [, reason] = recordClose.mock.calls[0] as unknown as [
+      PtySocketAttachment,
+      string,
+    ];
+    expect(reason).toBe("agent_disconnected");
   });
 });
 

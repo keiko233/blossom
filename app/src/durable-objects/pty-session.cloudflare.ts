@@ -20,6 +20,7 @@ import {
   PTY_MAX_SESSIONS_PER_SERVER,
   ptyCloseFrame,
   ptyExitFrame,
+  ptyOpenFrame,
 } from "@/lib/pty-protocol";
 import type { AdminPtyActor } from "@/query/pty-audit";
 
@@ -168,9 +169,15 @@ function parseActor(value: string): AdminPtyActor | null {
   }
 }
 
+/**
+ * Accepts the browser socket and opens the shell on the agent. The Node relay
+ * does the same: it registers the relay, then sends `pty.open`, and a failed
+ * send closes the browser with `agent_disconnected` after the close audit.
+ */
 export async function handlePtyConnect(
   ctx: PtyDoContext,
   request: Request,
+  recordClose: RecordPtyClose,
 ): Promise<Response> {
   if (!isUpgrade(request)) {
     return new Response("WebSocket upgrade required", { status: 426 });
@@ -216,7 +223,7 @@ export async function handlePtyConnect(
   const client = pair[0];
   const server = pair[1];
   ctx.acceptWebSocket(server, [`pty:${serverId}`]);
-  server.serializeAttachment({
+  const attachment: PtySocketAttachment = {
     kind: "pty",
     serverId,
     connectedAt,
@@ -226,7 +233,43 @@ export async function handlePtyConnect(
     startedAt,
     cols: dimensions.cols,
     rows: dimensions.rows,
-  } satisfies PtySocketAttachment);
+  };
+  server.serializeAttachment(attachment);
+
+  // The agent is looked up again here: it may have gone during the alarm
+  // write above. Nothing awaits between registering the browser socket and
+  // sending `pty.open`, so the agent's `pty.started` or `pty.data` always
+  // finds this relay.
+  let opened = false;
+  try {
+    const agent = findAgentSocket(ctx, serverId, connectedAt);
+    if (agent) {
+      agent.send(
+        encodePtyFrame(
+          ptyOpenFrame(sessionId, {
+            cols: dimensions.cols,
+            rows: dimensions.rows,
+          }),
+        ),
+      );
+      opened = true;
+    }
+  } catch {
+    // The agent socket is closing; the browser is closed below.
+  }
+  if (!opened) {
+    // No `pty.open` reached the agent, so no shell exists to orphan.
+    await closePtySocket(
+      server,
+      attachment,
+      "agent_disconnected",
+      recordClose,
+      {
+        closeCode: 1011,
+        sendExit: true,
+      },
+    );
+  }
   return new Response(null, {
     status: 101,
     webSocket: client,
