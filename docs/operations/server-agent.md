@@ -159,6 +159,13 @@ refuses to combine `--token` with `--credentials-file`, and OAuth refuses
 legacy mode. Protocol v2 failures never fall back to a static token or the HTTP
 agent API.
 
+An older static-token installation that still sets `--ws-enabled=false` or
+`AGENT_WS_ENABLED=false` (and no protocol) continues to start in legacy
+HTTP-only mode, but the agent logs a deprecation warning. Make the choice
+explicit with `--ws-protocol legacy` or `AGENT_WS_PROTOCOL=legacy`, or remove
+the disable and use the default v2 transport. An explicit `--ws-protocol v2`
+with the WebSocket disabled is rejected.
+
 Upgrading an existing static-token container or systemd installation keeps its
 credential and state directory. With no protocol flag it moves to v2 on the
 next restart. If the control plane at `AGENT_URL` is older than the v2
