@@ -26,13 +26,13 @@ import {
 } from "@/lib/agent-ws-session";
 import { createAgentWsStore, createAgentWsV2Store } from "@/lib/agent-ws-store";
 import { openAgentWsV2Session } from "@/lib/agent-ws-v2-session";
-import { revalidateLogRelay } from "@/lib/logs-authority";
 import {
   LIVE_METRIC_INTERVAL_MS,
   liveSampleFromV1,
   liveSampleFromV2,
   type LiveMetricSample,
 } from "@/lib/live-metrics";
+import { revalidateLogRelay } from "@/lib/logs-authority";
 import {
   AGENT_WS_INTERNAL_CONNECTED_AT,
   AGENT_WS_INTERNAL_CREDENTIAL_KIND,
@@ -555,6 +555,14 @@ export class AgentSessionDO extends DurableObject {
   }
 
   async alarm(): Promise<void> {
+    await revalidatePtySockets(this.ctx, this.recordPtyClose, (attachment) =>
+      this.withDatabase((database) =>
+        isPtySessionAuthorized(database, attachment),
+      ),
+    );
+    await this.withDatabase((database) =>
+      revalidateLogSockets(this.ctx, this.logDependencies(database)),
+    );
     const now = Date.now();
     for (const ws of this.ctx.getWebSockets()) {
       const attachment = readAttachment(ws);
@@ -600,6 +608,8 @@ export class AgentSessionDO extends DurableObject {
       }
     }
     this.scheduleV2Alarm();
+  }
+
   private connectMetricsAdmin(request: Request): Response {
     if (!isWebSocketUpgrade(request)) {
       return new Response("WebSocket upgrade required", {
@@ -873,15 +883,6 @@ export class AgentSessionDO extends DurableObject {
     });
   }
 
-  /** Storage alarm: re-checks every open shell, which also wakes a hibernated object. */
-  async alarm(): Promise<void> {
-    await revalidatePtySockets(this.ctx, this.recordPtyClose, (attachment) =>
-      this.withDatabase((database) =>
-        isPtySessionAuthorized(database, attachment),
-      ),
-    );
-  }
-
   async webSocketMessage(
     ws: WebSocket,
     message: string | ArrayBuffer,
@@ -1125,17 +1126,6 @@ export class AgentSessionDO extends DurableObject {
     if (!finish) return;
     this.pendingMetricsSnapshots.delete(requestId);
     finish(snapshot);
-  }
-
-  /**
-   * Hibernation drops timers but keeps the storage alarm. One alarm serves all
-   * log relays of this server: it expires request deadlines and re-checks the
-   * admin, the server and the current v2 session fence.
-   */
-  async alarm(): Promise<void> {
-    await this.withDatabase((database) =>
-      revalidateLogSockets(this.ctx, this.logDependencies(database)),
-    );
   }
 
   /**

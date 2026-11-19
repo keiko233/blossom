@@ -11,8 +11,8 @@ import type { Server } from "@/db/proxy-schema";
 import type { AgentSessionCredential } from "@/query/agent";
 
 import type { TelemetryKind, TelemetryResult } from "./agent-telemetry";
-import type { AdminLogsAcceptContext } from "./logs-relay-types";
 import type { LiveMetricSample } from "./live-metrics";
+import type { AdminLogsAcceptContext } from "./logs-relay-types";
 
 export interface RealtimeHub {
   /**
@@ -41,7 +41,6 @@ export interface RealtimeHub {
   acceptAdminLogs(
     request: Request,
     context: AdminLogsAcceptContext,
-  ): Promise<Response>;
   ): Promise<Response>;
   requestTelemetry(
     serverId: string,

@@ -408,8 +408,8 @@ describe("NitroRealtimeHub v2 sessions", () => {
     const hooks = await acceptV2(hub);
     const welcomed = makePeer("welcomed");
     const pending = makePeer("pending");
-    await hooks.open(welcomed);
     await hooks.open(pending);
+    await hooks.open(welcomed);
     await hooks.message(
       welcomed,
       agentFrame("hello", {

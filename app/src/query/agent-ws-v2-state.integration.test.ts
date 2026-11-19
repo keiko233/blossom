@@ -58,7 +58,6 @@ import {
   cacheAgentDesiredRevision,
   invalidateDesiredConfigRevisions,
   isAgentWsSessionCurrent,
-  loadAgentServer,
   loadCurrentAgentServer,
   recordAgentV2ConfigAck,
   recordAgentV2Hello,
@@ -581,63 +580,6 @@ describe.skipIf(!pgUrl).each(drivers)(
           { kind: "static", tokenHash: "srv1-rotated-hash" },
           database,
         ),
-      expect(await loadAgentServer("missing", database)).toBeNull();
-        "srv1-hash",
-        database,
-      );
-      expect(session).not.toBeNull();
-
-      expect(
-        await rotateAgentCredential(
-          "srv1",
-          { hash: "srv1-rotated-hash", prefix: "srv1-new" },
-          database,
-        ),
-      ).toEqual({ id: "srv1" });
-      expect(await row("srv1")).toMatchObject({ ws_session_id: null });
-
-      // Every fenced read and write of the old session now matches nothing.
-      const sessionId = session!.sessionId;
-      expect(
-        await loadCurrentAgentServer("srv1", sessionId, database),
-      ).toBeNull();
-      expect(
-        await recordAgentV2Status("srv1", sessionId, STATUS, database),
-      ).toBeNull();
-      expect(
-        await recordAgentV2ConfigAck(
-          "srv1",
-          sessionId,
-          {
-            desired: { desiredRevisionSeq: 8, desiredRevision: REV(8, "b") },
-            outcome: "applied",
-          },
-          database,
-        ),
-      ).toBe("replaced");
-      await cacheAgentDesiredRevision(
-        "srv1",
-        sessionId,
-        cache(8, 0, REV(8, "b")),
-        database,
-      );
-      expect((await row("srv1")).desired_config_revision).toBeNull();
-      expect((await row("srv1")).applied_revision_seq).toBe(6);
-    });
-
-    it("refuses a session under a credential that rotated after the upgrade authenticated", async () => {
-      await rotateAgentCredential(
-        "srv1",
-        { hash: "srv1-rotated-hash", prefix: "srv1-new" },
-        database,
-      );
-
-      expect(
-        await startAgentV2WsSession("srv1", "srv1-hash", database),
-      ).toBeNull();
-      expect((await row("srv1")).ws_session_id).toBeNull();
-      expect(
-        await startAgentV2WsSession("srv1", "srv1-rotated-hash", database),
       ).not.toBeNull();
     });
   },

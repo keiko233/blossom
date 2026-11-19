@@ -29,6 +29,7 @@ import {
   type AgentWsV2UpdatePolicy,
   type AgentWsV2ControlMessageType,
 } from "@blossom/contracts/agent-ws-v2";
+import { AGENT_WS_V2_LOGS_AGENT_MESSAGE_TYPES } from "@blossom/contracts/agent-ws-v2-logs";
 import {
   LOG_POLICY_CAPABILITY,
   type LogPolicyAckPayload,
@@ -36,7 +37,6 @@ import {
   type LogPolicyNotifyPayload,
   type LogPolicySnapshotPayload,
 } from "@blossom/contracts/log-policy";
-import { AGENT_WS_V2_LOGS_AGENT_MESSAGE_TYPES } from "@blossom/contracts/agent-ws-v2-logs";
 import { parseRevisionSeq } from "@blossom/domain/config-revision";
 
 import type { Server } from "@/db/proxy-schema";

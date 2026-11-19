@@ -734,6 +734,7 @@ describe("agent WebSocket v2 telemetry", () => {
     const session = openAgentWsV2Session({
       serverId: SERVER_ID,
       sessionId: SESSION_ID,
+      credential: { kind: "static", tokenHash: "hash-1" },
       peer,
       store,
       onSample,
@@ -775,6 +776,7 @@ async function welcomed(
   const session = openAgentWsV2Session({
     serverId: SERVER_ID,
     sessionId: SESSION_ID,
+    credential: { kind: "static", tokenHash: "hash-1" },
     peer,
     store,
     ...options,

@@ -25,7 +25,10 @@ const welcome: AgentWsWelcomePayload = {
 
 function store(): AgentWsStore {
   return {
-    markConnected: vi.fn(async () => new Date(connectedAt)),
+    markConnected: vi.fn(async () => ({
+      connectedAt: new Date(connectedAt),
+      sessionId: "v1-session",
+    })),
     markDisconnected: vi.fn(async () => undefined),
     recordHello: vi.fn(async () => undefined),
     recordConfigAck: vi.fn(async () => undefined),

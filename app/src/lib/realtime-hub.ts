@@ -53,6 +53,12 @@ import {
   openAgentWsV2Session,
   type AgentWsV2Session,
 } from "./agent-ws-v2-session";
+import {
+  LIVE_METRIC_INTERVAL_MS,
+  liveSampleFromV1,
+  liveSampleFromV2,
+  type LiveMetricSample,
+} from "./live-metrics";
 import type { LogAuthorityStore } from "./logs-authority";
 import type { LogRelayAuditRecord } from "./logs-relay";
 import type {
@@ -60,12 +66,6 @@ import type {
   AgentLogRelayHandler,
 } from "./logs-relay-types";
 import { NitroAdminLogRelay } from "./logs-relay.nitro";
-import {
-  LIVE_METRIC_INTERVAL_MS,
-  liveSampleFromV1,
-  liveSampleFromV2,
-  type LiveMetricSample,
-} from "./live-metrics";
 import {
   REALTIME_BACKPLANE_CHANNEL,
   type AgentPtyTarget,
@@ -182,6 +182,8 @@ type LocalV2Connection = {
   /** Set once `startSession` makes this connection the current v2 session. */
   sessionId: string | null;
   connectedAt: string;
+  /** Set when the agent session reports that `welcome` was delivered. */
+  welcomed: boolean;
   /** Periodic authoritative lease check, including the token deadline. */
   leaseTimer?: ReturnType<typeof setTimeout>;
 };
@@ -333,7 +335,6 @@ export class NitroRealtimeHub implements RealtimeHub {
     );
   }
 
-  private createV2Hooks(
   async acceptAdminLogs(
     request: Request,
     context: AdminLogsAcceptContext,
@@ -417,6 +418,7 @@ export class NitroRealtimeHub implements RealtimeHub {
           session: Promise.resolve(null),
           sessionId: null,
           connectedAt: "",
+          welcomed: false,
         };
         const session = (async () => {
           const started = await this.v2Store.startSession(serverId, credential);
@@ -444,8 +446,10 @@ export class NitroRealtimeHub implements RealtimeHub {
                 started.sessionId,
                 snapshot,
               ),
-            onWelcome: () =>
-              this.resubscribeLiveMetrics(serverId, started.sessionId),
+            onWelcome: () => {
+              connection.welcomed = true;
+              this.resubscribeLiveMetrics(serverId, started.sessionId);
+            },
           });
           connection.sessionId = started.sessionId;
           connection.connectedAt = started.connectedAt.toISOString();
@@ -484,7 +488,7 @@ export class NitroRealtimeHub implements RealtimeHub {
           return;
         }
         const session = await connection.session;
-        await session?.session.handleText(message.text());
+        await session?.handleText(message.text());
       },
       close: async (peer) => {
         const connection = this.removeV2Connection(serverId, peer);
@@ -526,7 +530,7 @@ export class NitroRealtimeHub implements RealtimeHub {
           }));
         }
         const session = await connection.session.catch(() => undefined);
-        await session?.session.close();
+        await session?.close();
       },
       error: (peer, error) => {
         const message = error instanceof Error ? error.message : String(error);
@@ -1263,7 +1267,7 @@ export class NitroRealtimeHub implements RealtimeHub {
       (candidate) => candidate.sessionId === sessionId,
     );
     if (connection) {
-      if (!connection.session.welcomed) {
+      if (!connection.welcomed) {
         return false;
       }
       try {
@@ -1411,7 +1415,7 @@ export class NitroRealtimeHub implements RealtimeHub {
     const connection = [...(this.v2Connections.get(serverId) ?? [])].find(
       (candidate) => candidate.sessionId === sessionId,
     );
-    if (!connection?.session.welcomed) {
+    if (!connection?.welcomed) {
       return;
     }
     try {

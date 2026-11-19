@@ -21,7 +21,13 @@ import type {
 const FIRST_SESSION = "11111111-1111-4111-8111-111111111111";
 const SECOND_SESSION = "22222222-2222-4222-8222-222222222222";
 
-const server = { id: "srv-1", name: "edge", enabled: true } as Server;
+const server = {
+  id: "srv-1",
+  name: "edge",
+  enabled: true,
+  agentCapabilities: [],
+  logPolicyRevision: 0,
+} as unknown as Server;
 
 interface FakePeer {
   id: string;
@@ -65,11 +71,15 @@ function agentFrame<T extends AgentWsV2AgentMessageType>(
 function fakeV2Store(): AgentWsV2HubStore {
   let session = 0;
   return {
-    startSession: vi.fn(async () => ({
+    startSession: vi.fn(async (_serverId: string, credential) => ({
       sessionId: session++ === 0 ? FIRST_SESSION : SECOND_SESSION,
       connectedAt: new Date("2026-11-19T00:00:00.000Z"),
+      pending: false,
+      expiresAt: null,
+      credential,
     })),
-    loadServer: vi.fn(async () => null),
+    promoteSession: vi.fn(async () => server),
+    loadCurrentServer: vi.fn(async () => server),
     recordHello: vi.fn(
       async () =>
         ({
@@ -83,6 +93,8 @@ function fakeV2Store(): AgentWsV2HubStore {
     ),
     recordStatus: vi.fn(async () => null),
     recordConfigAck: vi.fn(async () => "applied" as const),
+    recordUpdateStatus: vi.fn(async () => true),
+    revalidateSession: vi.fn(async () => "ok" as const),
     cacheDesiredRevision: vi.fn(async () => undefined),
     applyCertificateDeployments: vi.fn(async () => undefined),
     applyTraffic: vi.fn(async () => ({
@@ -90,9 +102,19 @@ function fakeV2Store(): AgentWsV2HubStore {
       accepted: 0,
       dropped: 0,
     })),
+    loadLogPolicy: vi.fn(async () => ({
+      revision: 0,
+      sources: [],
+    })),
+    recordLogPolicyAck: vi.fn(async () => "recorded" as const),
+    recordMetricHistory: vi.fn(async () => "written" as const),
+    handleAcmeDnsPresent: vi.fn(async () => true),
+    handleAcmeDnsCleanup: vi.fn(async () => true),
+    handleAcmeResult: vi.fn(async () => true),
     compile: vi.fn(async () => ({
       desiredRevision: "1:sha256:rev",
       document: {},
+      validUntil: new Date("2099-01-01T00:00:00.000Z"),
     })),
     endSession: vi.fn(async () => undefined),
   } satisfies AgentWsV2Store & AgentWsV2HubStore;
@@ -100,7 +122,10 @@ function fakeV2Store(): AgentWsV2HubStore {
 
 function fakeV1Store(): AgentWsStore {
   return {
-    markConnected: vi.fn(async () => new Date()),
+    markConnected: vi.fn(async () => ({
+      connectedAt: new Date(),
+      sessionId: "v1-session",
+    })),
     markDisconnected: vi.fn(async () => undefined),
     recordHello: vi.fn(async () => undefined),
     recordConfigAck: vi.fn(async () => undefined),
@@ -148,6 +173,7 @@ async function acceptV2(hub: NitroRealtimeHub): Promise<Hooks> {
       headers: { upgrade: "websocket" },
     }),
     server,
+    { kind: "static", tokenHash: "hash-1" },
   );
   return (response as Response & { crossws: Hooks }).crossws;
 }

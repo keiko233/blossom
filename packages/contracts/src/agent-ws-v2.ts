@@ -18,16 +18,16 @@ import {
   certificateDeploymentSchema,
 } from "./agent-ws";
 import {
+  AGENT_WS_V2_LOGS_AGENT_MESSAGE_TYPES,
+  AGENT_WS_V2_LOGS_CONTROL_MESSAGE_TYPES,
+  agentWsV2LogsPayloadSchemas,
+} from "./agent-ws-v2-logs";
+import {
   logPolicyAckPayloadSchema,
   logPolicyGetPayloadSchema,
   logPolicyNotifyPayloadSchema,
   logPolicySnapshotPayloadSchema,
 } from "./log-policy";
-import {
-  AGENT_WS_V2_LOGS_AGENT_MESSAGE_TYPES,
-  AGENT_WS_V2_LOGS_CONTROL_MESSAGE_TYPES,
-  agentWsV2LogsPayloadSchemas,
-} from "./agent-ws-v2-logs";
 
 /**
  * Agent WebSocket protocol v2: WebSocket-first desired-state sync, status, and
