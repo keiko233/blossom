@@ -1,6 +1,25 @@
 # Changelog
 
 All notable changes to the Blossom app.
+## v1.4.0 - 2026-11-19
+
+### Added
+
+- Add server routing and PTY shell foundation (#173)
+
+- Add the WebSocket v2 control plane (#174)
+
+- Add agent identity enrollment and rotation (#175)
+
+- Run admin operations over the v2 lifecycle (#176)
+
+- Complete the agent operations workspace and v2 rollout (#177)
+
+
+### Maintenance
+
+- Update dependency filesize to v11.0.34 (#81)
+
 ## v1.3.0 - 2026-11-19
 
 ### Added
