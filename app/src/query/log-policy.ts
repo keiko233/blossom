@@ -260,9 +260,15 @@ function sourceView(
     row.effective_baseline === null ? null : toLevel(row.effective_baseline);
   const targetLevel =
     normalized.level === "default" ? desiredBaseline : normalized.level;
+  // `default` is the agent's installed/generated level, which the control
+  // plane cannot name. Once the agent acknowledges the revision, its reported
+  // effective level is that default; comparing it with the literal "default"
+  // would leave every restore-default permanently pending.
+  const targetReached =
+    targetLevel === "default" || targetLevel === effectiveLevel;
   const pending =
     desiredRevision > 0 &&
-    (effectiveRevision !== desiredRevision || targetLevel !== effectiveLevel);
+    (effectiveRevision !== desiredRevision || !targetReached);
   return {
     source,
     present: true,

@@ -403,10 +403,26 @@ describe.skipIf(!pgUrl).each(drivers)("server log policy on %s", (driver) => {
       desired_level: "default",
       desired_deadline: null,
     });
+    const session = await startAgentWsSession("srv1", database);
+    await expect(
+      recordAgentLogPolicyAck(
+        "srv1",
+        session.sessionId,
+        ack("sing-box", 4, {
+          requested: "default",
+          effective: "info",
+          baseline: "info",
+          pending: false,
+        }),
+        database,
+      ),
+    ).resolves.toBe("recorded");
     view = await readServerLogPolicy("srv1", database);
     expect(view?.sources["sing-box"]).toMatchObject({
       desiredBaseline: "default",
       targetLevel: "default",
+      effectiveLevel: "info",
+      pending: false,
     });
   });
 
