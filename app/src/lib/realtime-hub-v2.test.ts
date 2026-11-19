@@ -23,7 +23,12 @@ const SESSION_ID = "22222222-2222-4222-8222-222222222222";
 const REVISION = `7:sha256:${"a".repeat(64)}`;
 const NEXT = `8:sha256:${"b".repeat(64)}`;
 
-const server = { id: "srv-1", name: "edge", enabled: true } as Server;
+const server = {
+  id: "srv-1",
+  name: "edge",
+  enabled: true,
+  agentTokenHash: "hash-1",
+} as Server;
 
 type Hooks = {
   upgrade(request: Request): { protocol: string };
@@ -71,11 +76,16 @@ function sentTypes(peer: FakePeer): string[] {
 
 function fakeV2Store() {
   const store = {
-    startSession: vi.fn(async () => ({
-      sessionId: SESSION_ID,
-      connectedAt: new Date("2026-11-19T00:00:00.000Z"),
-    })),
-    loadServer: vi.fn(async () => null),
+    startSession: vi.fn(
+      async (
+        _serverId: string,
+        _expectedTokenHash: string,
+      ): Promise<{ sessionId: string; connectedAt: Date } | null> => ({
+        sessionId: SESSION_ID,
+        connectedAt: new Date("2026-11-19T00:00:00.000Z"),
+      }),
+    ),
+    loadCurrentServer: vi.fn(async () => null),
     recordHello: vi.fn(
       async () =>
         ({
@@ -96,7 +106,11 @@ function fakeV2Store() {
       accepted: 0,
       dropped: 0,
     })),
-    compile: vi.fn(async () => ({ desiredRevision: REVISION, document: {} })),
+    compile: vi.fn(async () => ({
+      desiredRevision: REVISION,
+      document: {},
+      validUntil: new Date("2099-01-01T00:00:00.000Z"),
+    })),
     endSession: vi.fn(async () => undefined),
   };
   return store satisfies AgentWsV2HubStore & AgentWsV2Store;
@@ -157,13 +171,36 @@ describe("NitroRealtimeHub v2 sessions", () => {
     );
   });
 
+  it("closes an upgrade whose credential changed before its session started", async () => {
+    const { hub, v2Store } = makeHub();
+    v2Store.startSession.mockResolvedValueOnce(null);
+    const hooks = await acceptV2(hub);
+    const peer = makePeer("p-rotated");
+
+    await hooks.open(peer);
+    await hooks.message(
+      peer,
+      agentFrame("hello", {
+        agentVersion: "0.4.0",
+        agentBuildId: "build-1",
+        capabilities: [],
+        applied: null,
+        certificateDeployments: [],
+      }),
+    );
+
+    expect(peer.close).toHaveBeenCalledWith(1008, "credential changed");
+    expect(peer.sent).toEqual([]);
+    expect(v2Store.recordHello).not.toHaveBeenCalled();
+  });
+
   it("starts a fenced session on open and welcomes it on hello", async () => {
     const { hub, v2Store } = makeHub();
     const hooks = await acceptV2(hub);
     const peer = makePeer("p1");
 
     await hooks.open(peer);
-    expect(v2Store.startSession).toHaveBeenCalledWith("srv-1");
+    expect(v2Store.startSession).toHaveBeenCalledWith("srv-1", "hash-1");
     expect(peer.sent).toEqual([]);
 
     await hooks.message(

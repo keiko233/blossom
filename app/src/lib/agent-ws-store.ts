@@ -24,9 +24,9 @@ import {
   type AgentWsSessionStart,
   cacheAgentDesiredRevision,
   endAgentWsSession,
-  loadAgentServer,
+  loadCurrentAgentServer,
   markAgentWsConnected,
-  startAgentWsSession,
+  startAgentV2WsSession,
   markAgentWsDisconnected,
   recordAgentConfigAck,
   recordAgentHello,
@@ -67,7 +67,15 @@ export function createAgentWsStore(database: Database = db): AgentWsStore {
 
 /** The v2 port plus the handshake that makes a new session current. */
 export type AgentWsV2HubStore = AgentWsV2Store & {
-  startSession(serverId: string): Promise<AgentWsSessionStart>;
+  /**
+   * Makes a session current only while `expectedTokenHash` is still the
+   * server's credential. `null` means the credential changed since the upgrade
+   * was authenticated, and the session must not start.
+   */
+  startSession(
+    serverId: string,
+    expectedTokenHash: string,
+  ): Promise<AgentWsSessionStart | null>;
 };
 
 /**
@@ -78,16 +86,18 @@ export function createAgentWsV2Store(
   database: Database = db,
 ): AgentWsV2HubStore {
   return {
-    startSession: (serverId) => startAgentWsSession(serverId, database),
-    loadServer: (serverId) => loadAgentServer(serverId, database),
+    startSession: (serverId, expectedTokenHash) =>
+      startAgentV2WsSession(serverId, expectedTokenHash, database),
+    loadCurrentServer: (serverId, sessionId) =>
+      loadCurrentAgentServer(serverId, sessionId, database),
     recordHello: (serverId, sessionId, hello) =>
       recordAgentV2Hello(serverId, sessionId, hello, database),
     recordStatus: (serverId, sessionId, status) =>
       recordAgentV2Status(serverId, sessionId, status, database),
     recordConfigAck: (serverId, sessionId, ack) =>
       recordAgentV2ConfigAck(serverId, sessionId, ack, database),
-    cacheDesiredRevision: (serverId, sessionId, seq, revision) =>
-      cacheAgentDesiredRevision(serverId, sessionId, seq, revision, database),
+    cacheDesiredRevision: (serverId, sessionId, cache) =>
+      cacheAgentDesiredRevision(serverId, sessionId, cache, database),
     applyCertificateDeployments: (serverId, deployments) =>
       applyAgentCertificateDeployments(serverId, deployments, database),
     applyTraffic: async (serverId, sessionId, report) => {
@@ -120,6 +130,7 @@ export function createAgentWsV2Store(
       return {
         desiredRevision: desired.desiredRevision,
         document: buildAgentConfigV3Output(server, desired),
+        validUntil: desired.validUntil,
       };
     },
     endSession: (serverId, sessionId) =>

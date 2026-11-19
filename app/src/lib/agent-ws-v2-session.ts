@@ -18,6 +18,7 @@ import {
 import { parseRevisionSeq } from "@blossom/domain/config-revision";
 
 import type { Server } from "@/db/proxy-schema";
+import type { CachedDesiredRevision } from "@/query/agent";
 
 import { encodeConfigSnapshot } from "./agent-ws-v2-snapshot";
 
@@ -40,7 +41,15 @@ export type AgentWsV2TrafficOutcome =
  * was superseded and must stop.
  */
 export interface AgentWsV2Store {
-  loadServer(serverId: string): Promise<Server | null>;
+  /**
+   * The server row, but only while this session is still current. Returns
+   * `null` once the session was replaced or its credential rotated, so no
+   * configuration is read or sent for it.
+   */
+  loadCurrentServer(
+    serverId: string,
+    sessionId: string,
+  ): Promise<Server | null>;
   recordHello(
     serverId: string,
     sessionId: string,
@@ -59,8 +68,7 @@ export interface AgentWsV2Store {
   cacheDesiredRevision(
     serverId: string,
     sessionId: string,
-    desiredRevisionSeq: number,
-    desiredRevision: string,
+    cache: CachedDesiredRevision,
   ): Promise<void>;
   applyCertificateDeployments(
     serverId: string,
@@ -71,10 +79,14 @@ export interface AgentWsV2Store {
     sessionId: string,
     report: AgentWsV2TrafficReportPayload,
   ): Promise<AgentWsV2TrafficOutcome>;
-  /** Compiles the same desired state the v3 HTTP response serves. */
+  /**
+   * Compiles the same desired state the v3 HTTP response serves. `validUntil`
+   * is the instant the identifier must be recompiled by, even with no change.
+   */
   compile(server: Server): Promise<{
     desiredRevision: string;
     document: unknown;
+    validUntil: Date;
   }>;
   endSession(serverId: string, sessionId: string): Promise<void>;
 }
@@ -179,11 +191,23 @@ export function openAgentWsV2Session(
     peer.close(4000, code);
   }
 
+  /**
+   * The identifier for `server`, the row just read. A cached identifier is
+   * reused only while its sequence matches, its deadline has not passed, and
+   * no invalidation has reset it; otherwise the configuration is compiled and
+   * the result cached against the row's sequence and inputs version.
+   */
   async function currentDesired(
     server: Server,
   ): Promise<AgentWsV2ConfigIdentifier> {
     const marker = server.desiredConfigRevision;
-    if (marker && parseRevisionSeq(marker) === server.desiredRevisionSeq) {
+    const validUntil = server.desiredConfigValidUntil;
+    if (
+      marker &&
+      validUntil &&
+      validUntil.getTime() > Date.now() &&
+      parseRevisionSeq(marker) === server.desiredRevisionSeq
+    ) {
       return {
         desiredRevisionSeq: server.desiredRevisionSeq,
         desiredRevision: marker,
@@ -191,17 +215,35 @@ export function openAgentWsV2Session(
     }
     const compiled = await store.compile(server);
     await safely("cache desired revision", () =>
-      store.cacheDesiredRevision(
-        serverId,
-        sessionId,
-        server.desiredRevisionSeq,
-        compiled.desiredRevision,
-      ),
+      store.cacheDesiredRevision(serverId, sessionId, {
+        desiredRevisionSeq: server.desiredRevisionSeq,
+        desiredInputsVersion: server.desiredInputsVersion,
+        desiredRevision: compiled.desiredRevision,
+        validUntil: compiled.validUntil,
+      }),
     );
     return {
       desiredRevisionSeq: server.desiredRevisionSeq,
       desiredRevision: compiled.desiredRevision,
     };
+  }
+
+  /**
+   * The server row for this session, or `null` after stopping the session when
+   * it is no longer current or the server is disabled. Every configuration
+   * read goes through here.
+   */
+  async function requireCurrentServer(): Promise<Server | null> {
+    const server = await store.loadCurrentServer(serverId, sessionId);
+    if (!server) {
+      stop("session_replaced", "a newer session is active");
+      return null;
+    }
+    if (!server.enabled) {
+      stop("server_disabled", "server is disabled");
+      return null;
+    }
+    return server;
   }
 
   async function onHello(hello: AgentWsV2HelloPayload, id?: string) {
@@ -286,17 +328,18 @@ export function openAgentWsV2Session(
     // A newer request supersedes an older compile that has not sent yet, so a
     // slow older snapshot can never reach the agent after a newer one.
     const generation = ++snapshotGeneration;
-    const server = await store.loadServer(serverId);
+    const server = await requireCurrentServer();
     if (!server) {
-      send("config.snapshot.error", {
-        requestId,
-        code: "unavailable",
-        message: "server not found",
-      });
       return;
     }
     const compiled = await store.compile(server);
     if (generation !== snapshotGeneration) {
+      return;
+    }
+    // The snapshot carries certificate private keys, so it is sent only if the
+    // session is still current after the compile: a rotation or a replacement
+    // that landed during the compile must not receive it.
+    if (!(await requireCurrentServer())) {
       return;
     }
 
@@ -328,12 +371,12 @@ export function openAgentWsV2Session(
     send("config.snapshot.end", { requestId });
 
     await safely("cache desired revision", () =>
-      store.cacheDesiredRevision(
-        serverId,
-        sessionId,
-        server.desiredRevisionSeq,
-        compiled.desiredRevision,
-      ),
+      store.cacheDesiredRevision(serverId, sessionId, {
+        desiredRevisionSeq: server.desiredRevisionSeq,
+        desiredInputsVersion: server.desiredInputsVersion,
+        desiredRevision: compiled.desiredRevision,
+        validUntil: compiled.validUntil,
+      }),
     );
   }
 
