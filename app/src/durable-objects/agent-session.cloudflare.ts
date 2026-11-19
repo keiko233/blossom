@@ -33,7 +33,9 @@ import {
   handlePtyBrowserClose,
   handlePtyBrowserMessage,
   handlePtyConnect,
+  isPtySessionAuthorized,
   readPtyAttachment,
+  revalidatePtySockets,
   type PtySocketAttachment,
   type RecordPtyClose,
 } from "./pty-session.cloudflare";
@@ -311,6 +313,15 @@ export class AgentSessionDO extends DurableObject {
       connectedAt: new Date(attachment.connectedAt),
       store,
     });
+  }
+
+  /** Storage alarm: re-checks every open shell, which also wakes a hibernated object. */
+  async alarm(): Promise<void> {
+    await revalidatePtySockets(this.ctx, this.recordPtyClose, (attachment) =>
+      this.withDatabase((database) =>
+        isPtySessionAuthorized(database, attachment),
+      ),
+    );
   }
 
   async webSocketMessage(
