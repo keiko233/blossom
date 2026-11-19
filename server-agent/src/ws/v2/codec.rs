@@ -596,13 +596,16 @@ impl From<PolicyLevel> for LogLevel {
 pub struct LogPolicyDesired {
     pub source: LogPolicySource,
     pub revision: u64,
+    pub baseline: LogLevel,
     pub level: LogLevel,
     pub deadline: Option<DateTime<Utc>>,
 }
 
 impl LogPolicyDesired {
     fn check(&self) -> bool {
-        if self.level.is_temporary() {
+        if self.baseline.is_temporary() {
+            false
+        } else if self.level.is_temporary() {
             self.deadline.is_some()
         } else {
             self.deadline.is_none()

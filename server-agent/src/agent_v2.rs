@@ -287,6 +287,7 @@ async fn apply_log_policy_job(
     for desired in job.sources {
         let source: PolicySource = desired.source.into();
         let mut request = PolicyRequest::new(source, desired.revision, desired.level.into());
+        request.baseline = desired.baseline.into();
         request.deadline = desired.deadline;
         match policy.request_snapshot(request, Utc::now()) {
             Ok(decision) => {

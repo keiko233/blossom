@@ -317,12 +317,14 @@ fn log_policy_snapshot(
                 {
                     "source": "agent",
                     "revision": revision,
+                    "baseline": agent_level,
                     "level": agent_level,
                     "deadline": null,
                 },
                 {
                     "source": "sing-box",
                     "revision": revision,
+                    "baseline": sing_box_level,
                     "level": sing_box_level,
                     "deadline": null,
                 },
@@ -590,6 +592,7 @@ async fn run_first_session(socket: &mut WebSocket) -> Value {
                     "agent" => {
                         assert_eq!(frame["payload"]["sourceRevision"], 1, "{frame}");
                         assert_eq!(frame["payload"]["requested"], "info", "{frame}");
+                        assert_eq!(frame["payload"]["baseline"], "info", "{frame}");
                         assert_eq!(frame["payload"]["effective"], "info", "{frame}");
                         agent_acked = true;
                     }
@@ -627,6 +630,7 @@ async fn run_first_session(socket: &mut WebSocket) -> Value {
                 {
                     assert_eq!(frame["payload"]["sourceRevision"], 2, "{frame}");
                     assert_eq!(frame["payload"]["requested"], "warn", "{frame}");
+                    assert_eq!(frame["payload"]["baseline"], "warn", "{frame}");
                     assert_eq!(frame["payload"]["effective"], "warn", "{frame}");
                     break;
                 }

@@ -65,10 +65,10 @@ Discard a partial snapshot on disconnect and request a new one after reconnect. 
 
 - `log.policy.notify` `{revision, source?, reason?}` tells a capable agent that the server-wide policy revision changed.
 - `log.policy.get` `{requestId}` asks for the desired snapshot.
-- `log.policy.snapshot` `{requestId, revision, sources}` carries one entry per source: source-local revision, level, and an absolute deadline for `debug`/`trace`. A baseline level has no deadline.
+- `log.policy.snapshot` `{requestId, revision, sources}` carries one entry per source: source-local revision, configured baseline, requested level, and an absolute deadline for `debug`/`trace`. A baseline level has no deadline; an expired override is sent as `default` with the configured baseline.
 - `log.policy.ack` `{source, sourceRevision, requested, baseline, effective, deadline, error, pending}` reports requested and effective status only. It never carries log entries. The control plane accepts it only for the current session and current desired source revision.
 - `welcome` and `agent.status.ack` carry `logPolicyRevision` only when the agent advertised `log-policy-v1`. The first accepted snapshot advances the agent's known revision; a lost push or snapshot is retried by the next status exchange.
-- Local expiry is authoritative even while disconnected. An expired override returns to the generated or local baseline, and the next session acknowledges that effective status. A logging-only edit never moves the configuration identifier or the publish gate. See [Remote log-level policy](log-policy.md).
+- Local expiry is authoritative even while disconnected. An expired override returns to the configured baseline (or the installed/generated default when none is configured), and the next session acknowledges that effective status. Restore now keeps the configured baseline; restore-default clears it. A logging-only edit never moves the configuration identifier or the publish gate. See [Remote log-level policy](log-policy.md).
 
 ## Traffic
 

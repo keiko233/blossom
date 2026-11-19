@@ -171,12 +171,14 @@ fn log_snapshot(request_id: &str, revision: u64) -> String {
                 {
                     "source": "agent",
                     "revision": revision,
+                    "baseline": "info",
                     "level": "debug",
                     "deadline": "2099-01-01T00:00:00Z",
                 },
                 {
                     "source": "sing-box",
                     "revision": revision,
+                    "baseline": "info",
                     "level": "info",
                     "deadline": null,
                 },
@@ -329,6 +331,7 @@ async fn a_welcome_with_a_newer_log_policy_revision_fetches_and_acknowledges_it(
             LogPolicyDesired {
                 source: LogPolicySource::Agent,
                 revision: 3,
+                baseline: LogLevel::Info,
                 level: LogLevel::Debug,
                 deadline: Some(
                     chrono::DateTime::parse_from_rfc3339("2099-01-01T00:00:00Z")
@@ -339,6 +342,7 @@ async fn a_welcome_with_a_newer_log_policy_revision_fetches_and_acknowledges_it(
             LogPolicyDesired {
                 source: LogPolicySource::SingBox,
                 revision: 3,
+                baseline: LogLevel::Info,
                 level: LogLevel::Info,
                 deadline: None,
             },
