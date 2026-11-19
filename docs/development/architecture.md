@@ -70,9 +70,10 @@ API.
   port or command. Nitro keeps the relay in process (or on the Redis
   backplane), while Cloudflare forwards the browser upgrade into the same
   `AgentSessionDO` that holds the agent socket. The agent advertises `pty-v1`
-  only when started with `AGENT_PTY_ENABLED=true`. Session open and close are
-  written to `admin_audit_log` as metadata only; terminal bytes are never
-  stored.
+  only when started with `AGENT_PTY_ENABLED=true` and not running as root. The
+  browser shows the terminal as connected only after `pty.started`. Session open
+  and close are written to `admin_audit_log` as metadata only; terminal bytes are
+  never stored.
 
 ### Agent-executed ACME
 
