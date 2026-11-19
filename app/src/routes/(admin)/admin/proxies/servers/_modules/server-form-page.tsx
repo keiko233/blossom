@@ -7,44 +7,37 @@ import {
   PageHeaderTitle,
 } from "@/components/app-shell/page-header";
 import { Button } from "@/components/ui/button";
-import { Field, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  NumberField,
-  NumberFieldDecrement,
-  NumberFieldGroup,
-  NumberFieldIncrement,
-  NumberFieldInput,
-} from "@/components/ui/number-field";
-import { Switch } from "@/components/ui/switch";
 import { m } from "@/paraglide/messages";
-import type { ServerDTO } from "@/query/servers";
 
+import { ServerFormFields } from "./server-form-fields";
 import { TokenRevealDialog } from "./token-reveal-dialog";
 import { useServerFormController } from "./use-server-form";
 
 const SERVERS_LIST = "/admin/proxies/servers" as const;
 
-export interface ServerFormPageProps {
-  /** Present when editing; absent for the create page. */
-  server?: ServerDTO;
-}
-
-export function ServerFormPage({
-  server,
-}: ServerFormPageProps): React.ReactElement {
+/**
+ * Create page for a new server, rendered in the workspace's right-hand outlet.
+ * Editing an existing server happens on its Settings tab instead.
+ */
+export function ServerFormPage(): React.ReactElement {
   const navigate = useNavigate();
-  const isEdit = Boolean(server);
 
   const goToList = () => void navigate({ to: SERVERS_LIST });
 
   const { form } = useServerFormController({
-    server,
-    onSuccess: async ({ token }) => {
-      // On create, reveal the one-time token before returning to the list.
+    onSuccess: async ({ token, serverId }) => {
+      // Reveal the one-time token before leaving the create page.
       if (token) {
         await TokenRevealDialog.call({ token });
+      }
+      // OAuth-only creates have no token to show; send the operator to the
+      // Connection tab in both cases so installation starts from one place.
+      if (serverId) {
+        void navigate({
+          to: "/admin/proxies/servers/$serverId/connection",
+          params: { serverId },
+        });
+        return;
       }
       goToList();
     },
@@ -63,9 +56,7 @@ export function ServerFormPage({
             <ArrowLeftIcon />
           </Button>
           <PageHeaderTitle>
-            {isEdit
-              ? m.admin_proxies_servers_form_edit_title()
-              : m.admin_proxies_servers_form_create_title()}
+            {m.admin_proxies_servers_form_create_title()}
           </PageHeaderTitle>
         </div>
         <div className="flex items-center gap-2">
@@ -92,145 +83,8 @@ export function ServerFormPage({
         }}
       >
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4">
-          <div className="flex flex-col gap-4 rounded-xl border bg-card p-4 shadow-xs">
-            <form.Field name="name">
-              {(field) => (
-                <Field>
-                  <FieldLabel>
-                    {m.admin_proxies_servers_field_name()}
-                  </FieldLabel>
-                  <Input
-                    value={field.state.value}
-                    onValueChange={(v) => field.handleChange(v)}
-                    onBlur={field.handleBlur}
-                    placeholder="us-west-server-01"
-                  />
-                </Field>
-              )}
-            </form.Field>
-
-            <form.Field name="remark">
-              {(field) => (
-                <Field>
-                  <FieldLabel>
-                    {m.admin_proxies_servers_field_remark()}
-                  </FieldLabel>
-                  <Input
-                    value={field.state.value}
-                    onValueChange={(v) => field.handleChange(v)}
-                    onBlur={field.handleBlur}
-                  />
-                </Field>
-              )}
-            </form.Field>
-
-            <form.Field name="address">
-              {(field) => (
-                <Field>
-                  <FieldLabel>
-                    {m.admin_proxies_servers_field_address()}
-                  </FieldLabel>
-                  <Input
-                    value={field.state.value}
-                    onValueChange={(v) => field.handleChange(v)}
-                    onBlur={field.handleBlur}
-                    placeholder="example.com"
-                  />
-                </Field>
-              )}
-            </form.Field>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <form.Field name="desiredAgentVersion">
-                {(field) => (
-                  <Field>
-                    <FieldLabel>
-                      {m.admin_proxies_servers_field_desired_agent_version()}
-                    </FieldLabel>
-                    <Input
-                      value={field.state.value}
-                      onValueChange={(v) => field.handleChange(v)}
-                      onBlur={field.handleBlur}
-                      placeholder="latest / 0.3.0"
-                    />
-                  </Field>
-                )}
-              </form.Field>
-
-              <form.Field name="desiredSingBoxVersion">
-                {(field) => (
-                  <Field>
-                    <FieldLabel>
-                      {m.admin_proxies_servers_field_desired_sing_box_version()}
-                    </FieldLabel>
-                    <Input
-                      value={field.state.value}
-                      onValueChange={(v) => field.handleChange(v)}
-                      onBlur={field.handleBlur}
-                      placeholder="latest / 1.14.4"
-                    />
-                  </Field>
-                )}
-              </form.Field>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <form.Field name="configPollIntervalSeconds">
-                {(field) => (
-                  <Field>
-                    <FieldLabel>
-                      {m.admin_proxies_servers_field_config_interval()}
-                    </FieldLabel>
-                    <NumberField
-                      min={5}
-                      max={86_400}
-                      value={field.state.value}
-                      onValueChange={(value) => field.handleChange(value ?? 60)}
-                    >
-                      <NumberFieldGroup>
-                        <NumberFieldDecrement />
-                        <NumberFieldInput />
-                        <NumberFieldIncrement />
-                      </NumberFieldGroup>
-                    </NumberField>
-                  </Field>
-                )}
-              </form.Field>
-
-              <form.Field name="heartbeatIntervalSeconds">
-                {(field) => (
-                  <Field>
-                    <FieldLabel>
-                      {m.admin_proxies_servers_field_heartbeat_interval()}
-                    </FieldLabel>
-                    <NumberField
-                      min={5}
-                      max={300}
-                      value={field.state.value}
-                      onValueChange={(value) => field.handleChange(value ?? 30)}
-                    >
-                      <NumberFieldGroup>
-                        <NumberFieldDecrement />
-                        <NumberFieldInput />
-                        <NumberFieldIncrement />
-                      </NumberFieldGroup>
-                    </NumberField>
-                  </Field>
-                )}
-              </form.Field>
-            </div>
-
-            <form.Field name="enabled">
-              {(field) => (
-                <div className="flex items-center gap-3">
-                  <Switch
-                    checked={field.state.value}
-                    onCheckedChange={(v) => field.handleChange(v)}
-                  />
-                  <Label>{m.admin_proxies_servers_field_enabled()}</Label>
-                </div>
-              )}
-            </form.Field>
+          <div className="rounded-xl border bg-card p-4 shadow-xs">
+            <ServerFormFields form={form} showBackupToken />
           </div>
 
           <p className="text-sm text-muted-foreground">

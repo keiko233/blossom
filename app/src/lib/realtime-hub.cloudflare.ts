@@ -7,15 +7,45 @@ import {
   type AgentWsUpdateTriggerPayload,
   type AgentWsWelcomePayload,
 } from "@blossom/contracts/agent-ws";
+import {
+  createAgentWsV2Frame,
+  encodeAgentWsV2Frame,
+} from "@blossom/contracts/agent-ws-v2";
+import type { LogPolicyNotifyPayload } from "@blossom/contracts/log-policy";
 import { env } from "cloudflare:workers";
 
 import type { Server } from "@/db/proxy-schema";
-import { markAgentWsConnected, markAgentWsDisconnected } from "@/query/agent";
+import type { AgentSessionCredential } from "@/query/agent";
+import {
+  type AgentWsSessionStart,
+  markAgentWsConnected,
+  markAgentWsDisconnected,
+  endAgentWsSession,
+} from "@/query/agent";
 
 import type { TelemetryKind, TelemetryResult } from "./agent-telemetry";
+import { createAgentWsV2Store } from "./agent-ws-store";
 import {
+  encodeAgentWsV2ConfigNotify,
+  encodeAgentWsV2LogPolicyNotify,
+} from "./agent-ws-v2-session";
+import type { AdminLogsAcceptContext } from "./logs-relay-types";
+import {
+  AGENT_LOGS_INTERNAL_ACTOR,
+  AGENT_LOGS_INTERNAL_AUTH_SESSION_ID,
+  AGENT_LOGS_INTERNAL_RELAY_ID,
+  AGENT_LOGS_INTERNAL_SERVER_ID,
+  AGENT_LOGS_INTERNAL_SESSION_ID,
+  AGENT_LOGS_INTERNAL_STARTED_AT,
   AGENT_WS_INTERNAL_CONNECTED_AT,
+  AGENT_WS_INTERNAL_CREDENTIAL_KIND,
+  AGENT_WS_INTERNAL_IDENTITY_GENERATION,
+  AGENT_WS_INTERNAL_IDENTITY_ID,
+  AGENT_WS_INTERNAL_PROTOCOL,
   AGENT_WS_INTERNAL_SERVER_ID,
+  AGENT_WS_INTERNAL_SESSION_EXPIRES_AT,
+  AGENT_WS_INTERNAL_SESSION_ID,
+  AGENT_WS_INTERNAL_SESSION_PENDING,
   AGENT_WS_INTERNAL_WELCOME,
   type RealtimeHub,
 } from "./realtime-hub-types";
@@ -38,9 +68,12 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     server: Server,
     welcome: AgentWsWelcomePayload,
   ): Promise<Response> {
-    let connectedAt = new Date();
+    let started: AgentWsSessionStart = {
+      connectedAt: new Date(),
+      sessionId: crypto.randomUUID(),
+    };
     try {
-      connectedAt = await markAgentWsConnected(server.id);
+      started = await markAgentWsConnected(server.id);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`agent websocket connect metadata failed: ${message}`);
@@ -50,7 +83,11 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     headers.delete("authorization");
     headers.delete("cookie");
     headers.set(AGENT_WS_INTERNAL_SERVER_ID, server.id);
-    headers.set(AGENT_WS_INTERNAL_CONNECTED_AT, connectedAt.toISOString());
+    headers.set(
+      AGENT_WS_INTERNAL_CONNECTED_AT,
+      started.connectedAt.toISOString(),
+    );
+    headers.set(AGENT_WS_INTERNAL_SESSION_ID, started.sessionId);
     headers.set(
       AGENT_WS_INTERNAL_WELCOME,
       encodeURIComponent(JSON.stringify(welcome)),
@@ -64,13 +101,102 @@ export class CloudflareRealtimeHub implements RealtimeHub {
         }),
       );
       if (response.status !== 101) {
-        await markAgentWsDisconnected(server.id, connectedAt).catch(() => {});
+        await markAgentWsDisconnected(server.id, started.sessionId).catch(
+          () => {},
+        );
       }
       return response;
     } catch (error) {
-      await markAgentWsDisconnected(server.id, connectedAt).catch(() => {});
+      await markAgentWsDisconnected(server.id, started.sessionId).catch(
+        () => {},
+      );
       throw error;
     }
+  }
+
+  async acceptAgentV2(
+    request: Request,
+    server: Server,
+    credential: AgentSessionCredential,
+  ): Promise<Response> {
+    const started = await createAgentWsV2Store().startSession(
+      server.id,
+      credential,
+    );
+    if (!started) {
+      // The credential changed after the upgrade was authenticated.
+      return new Response("Unauthorized", {
+        status: 401,
+        headers: { "cache-control": "no-store" },
+      });
+    }
+
+    const headers = new Headers(request.headers);
+    headers.delete("authorization");
+    headers.delete("cookie");
+    headers.set(AGENT_WS_INTERNAL_SERVER_ID, server.id);
+    headers.set(
+      AGENT_WS_INTERNAL_CONNECTED_AT,
+      started.connectedAt.toISOString(),
+    );
+    headers.set(AGENT_WS_INTERNAL_PROTOCOL, "v2");
+    headers.set(AGENT_WS_INTERNAL_SESSION_ID, started.sessionId);
+    headers.set(AGENT_WS_INTERNAL_CREDENTIAL_KIND, credential.kind);
+    headers.set(AGENT_WS_INTERNAL_SESSION_PENDING, started.pending ? "1" : "0");
+    if (credential.kind === "oauth") {
+      headers.set(AGENT_WS_INTERNAL_IDENTITY_ID, credential.identityId);
+      headers.set(
+        AGENT_WS_INTERNAL_IDENTITY_GENERATION,
+        String(credential.generation),
+      );
+      headers.set(
+        AGENT_WS_INTERNAL_SESSION_EXPIRES_AT,
+        String(credential.expiresAt),
+      );
+    }
+
+    try {
+      const response = await durableObjectStub(server.id).fetch(
+        new Request(new URL("/internal/connect", request.url), {
+          method: "GET",
+          headers,
+        }),
+      );
+      if (response.status !== 101) {
+        await endAgentWsSession(server.id, started.sessionId).catch(() => {});
+      }
+      return response;
+    } catch (error) {
+      await endAgentWsSession(server.id, started.sessionId).catch(() => {});
+      throw error;
+    }
+  }
+
+  async acceptAdminLogs(
+    request: Request,
+    context: AdminLogsAcceptContext,
+  ): Promise<Response> {
+    const headers = new Headers(request.headers);
+    headers.delete("authorization");
+    headers.delete("cookie");
+    headers.set(AGENT_LOGS_INTERNAL_SERVER_ID, context.serverId);
+    headers.set(AGENT_LOGS_INTERNAL_SESSION_ID, context.agentSessionId);
+    headers.set(AGENT_LOGS_INTERNAL_AUTH_SESSION_ID, context.authSessionId);
+    headers.set(AGENT_LOGS_INTERNAL_RELAY_ID, context.relayId);
+    headers.set(
+      AGENT_LOGS_INTERNAL_STARTED_AT,
+      context.startedAt.toISOString(),
+    );
+    headers.set(
+      AGENT_LOGS_INTERNAL_ACTOR,
+      encodeURIComponent(JSON.stringify(context.actor)),
+    );
+    return durableObjectStub(context.serverId).fetch(
+      new Request(new URL("/internal/logs/connect", request.url), {
+        method: "GET",
+        headers,
+      }),
+    );
   }
 
   async requestTelemetry(
@@ -93,6 +219,19 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     }
   }
 
+  async inspectTelemetry(
+    serverId: string,
+    connectedAt: string,
+    sessionId: string | null,
+  ): Promise<TelemetryResult | null> {
+    if (sessionId) {
+      // The Durable Object serves v2 inspection to the admin metric socket it
+      // already holds; there is no stateless route into that request context.
+      return null;
+    }
+    return this.requestTelemetry(serverId, "snapshot", connectedAt);
+  }
+
   async notifyConfigChanged(
     serverId: string,
     payload: AgentWsConfigNotifyPayload,
@@ -100,6 +239,17 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     await this.sendFrame(
       serverId,
       encodeAgentWsFrame(createAgentWsFrame("config.notify", payload)),
+    );
+    await this.sendFrame(
+      serverId,
+      encodeAgentWsV2ConfigNotify({
+        desired: {
+          desiredRevisionSeq: payload.desiredRevisionSeq,
+          desiredRevision: payload.desiredRevision,
+        },
+        ...(payload.reason ? { reason: payload.reason } : {}),
+      }),
+      "v2",
     );
   }
 
@@ -111,6 +261,11 @@ export class CloudflareRealtimeHub implements RealtimeHub {
       serverId,
       encodeAgentWsFrame(createAgentWsFrame("update.trigger", payload)),
     );
+    await this.sendFrame(
+      serverId,
+      encodeAgentWsV2Frame(createAgentWsV2Frame("update.trigger", payload)),
+      "v2",
+    );
   }
 
   async notifyAcmeIssue(
@@ -120,6 +275,11 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     await this.sendFrame(
       serverId,
       encodeAgentWsFrame(createAgentWsFrame("acme.issue", payload)),
+    );
+    await this.sendFrame(
+      serverId,
+      encodeAgentWsV2Frame(createAgentWsV2Frame("acme.issue", payload)),
+      "v2",
     );
   }
 
@@ -131,15 +291,35 @@ export class CloudflareRealtimeHub implements RealtimeHub {
       serverId,
       encodeAgentWsFrame(createAgentWsFrame("acme.dns_ack", payload)),
     );
+    await this.sendFrame(
+      serverId,
+      encodeAgentWsV2Frame(createAgentWsV2Frame("acme.dns_ack", payload)),
+      "v2",
+    );
   }
 
-  private async sendFrame(serverId: string, frame: string): Promise<void> {
+  async notifyLogPolicy(
+    serverId: string,
+    payload: LogPolicyNotifyPayload,
+  ): Promise<void> {
+    await this.sendFrame(
+      serverId,
+      encodeAgentWsV2LogPolicyNotify(payload),
+      "v2",
+    );
+  }
+
+  private async sendFrame(
+    serverId: string,
+    frame: string,
+    protocol?: "v2",
+  ): Promise<void> {
     try {
       const response = await durableObjectStub(serverId).fetch(
         new Request("https://agent-session.internal/internal/notify", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ frame }),
+          body: JSON.stringify({ frame, ...(protocol ? { protocol } : {}) }),
         }),
       );
       if (!response.ok) {

@@ -4,6 +4,9 @@
   "type": "module",
   "exports": {
     "./agent-ws": "./src/agent-ws.ts",
+    "./agent-ws-v2": "./src/agent-ws-v2.ts",
+    "./log-policy": "./src/log-policy.ts",
+    "./agent-ws-v2-logs": "./src/agent-ws-v2-logs.ts",
     "./plan": "./src/plan.ts",
     "./user": "./src/user.ts"
   },

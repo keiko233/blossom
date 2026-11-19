@@ -1,0 +1,68 @@
+# Server Operations Workspace
+
+## Routes and layout
+
+Put the layout in the `/admin/proxies/servers` parent route. The searchable sidebar shows servers and their online, offline, disabled, or awaiting-installation status. Support keyboard navigation and collapse the sidebar on narrow screens. The `serverId` selects the right-hand outlet. Use linkable child routes or a route index for the top tabs. Server detail links open Overview by default. Reloading, browser history, and shared URLs restore the selected tab. The server list root can restore the last accessible server. With no selection, show a server list prompt or a creation action. Keep the existing creation entry point and reuse the server form and associated node list. [Server routes](../../../app/src/routes/(admin)/admin/proxies/servers) · [App conventions](../../development/app.md)
+
+| Tab | Initial content |
+| --- | --- |
+| Overview | Connection health, agent and sing-box versions, desired and applied configuration, and recent activity. Show live CPU, memory, disk, and network rates, plus historical charts. Provide on-demand inspection of interfaces, listeners, and conflicts with configured node ports. |
+| Nodes | Show associated nodes, enabled state, and configuration publication status, with links to edit nodes. |
+| Settings | Show existing server fields and enablement controls. Preserve validation, audit, and publish-gate behavior. |
+| Terminal | Show capability state, local execution identity, connect and disconnect actions, and a full-size xterm.js viewport. |
+| Logs | Follow and pause live output, search retained agent logs by text and time range, open matches in context, copy selected lines, and manage per-source log levels. Show gaps and the available history window. |
+| Connection | Show OAuth state, backup token controls, installation script and progress, rotation and revocation, update targets, and recent connection events. |
+
+Switching tabs preserves the selected server. Leaving Terminal or switching servers closes the PTY. Log and live metric subscriptions end when leaving their views and resume on return. Show specific states for disabled servers, legacy versions, missing capabilities, disconnects, and reconnects. Historical data, settings, and nodes remain accessible when the agent is offline. Reuse the project's UI primitives, chart components, and Paraglide messages in both locales.
+
+## Live and historical metrics
+
+- The browser subscribes to Overview data through a same-origin admin WebSocket. The agent reuses Linux telemetry collection and its network scope metadata. Start with a two-second sampling interval and share sampling across viewers of a server. Calculate network rates from counter deltas for stable interfaces within the same scope using monotonic elapsed time. Break the series at agent restarts and interface or scope changes. Label container and host measurements and show missing values when permissions or invalid samples prevent collection.
+- Collect history even without viewers. While connected, the agent sends a separate historical sample every 60 seconds. Bucket it using the control plane's UTC receipt minute. Add `server_metric_minute` keyed by server ID and minute. Store CPU utilization, memory and disk usage and capacity, network transmit and receive rates, sample scope, and receipt time. Check the current session fence and conditionally replace an existing bucket with a newer valid sample. The independent historical cadence yields about 1,440 rows per online server per day. Start with 30 days of retention, an expiry index, and batched cleanup through a scheduled maintenance entry point supported by each deployment.
+- Require admin authorization and a server ID for history queries. Bound the range, bucket width, and point count on the server. Proposed chart ranges are one hour, 24 hours, seven days, and 30 days, with aggregation to at most 600 points. Break the series at missing intervals and scope changes, including planned outages. Aggregate percentages from valid samples with matching scope. Host history starts accumulating at rollout.
+- Retrieve business traffic totals through the server index on `traffic_record` and the existing aggregation logic. Show upload and download byte counts. Label network interface rates and billable subscription traffic independently. Use bounded browser windows for live streams. Keep raw WebSocket logs, terminal bytes, and high-frequency live metrics within the session. [Traffic schema](../../../app/src/db/traffic-schema.ts) · [Existing live metrics panel](../../../app/src/routes/(admin)/admin/proxies/servers/_modules/server-live-panel.tsx)
+
+## Interactive terminal
+
+- Keep the admin PTY route and xterm.js. Offer `AGENT_PTY_ENABLED` at installation time. Existing deployments can enable it locally and restart the agent. An administrator explicitly selects Connect to start a session. Verify the prompt and command echo, keyboard input, input methods, paste, resize, Ctrl-C, and exit status through the UI.
+- Launch the shell in interactive mode using an absolute path from local agent configuration. Default to an executable `/bin/bash`, then `/bin/sh`. The browser supplies terminal dimensions and interactive input. Check that the shell exists and can run, verify PTY allocation, and return actionable errors to the UI. Set the working directory from local configuration, set TERM, and allowlist inherited environment variables. Mark the terminal connected after the shell starts.
+- Use the low-privilege local identity selected during installation. The first release can run the shell as the dedicated agent service account. State this identity in the UI and explain that the shell can access files readable by that account. Enable this mode for administrators authorized to manage the agent on the host. Deployments that require shell and credential isolation must configure a separate local shell identity and permission boundary before enabling the capability. The default installer uses a non-root terminal identity.
+- Bind each session to the same-origin admin session, current agent session, and PTY ID. Proposed defaults are one session per server, a five-minute idle timeout, and a 30-minute hard timeout bounded by the WSS lease. Stop I/O, close the PTY, and clean up the shell and child process group when the view closes, authorization is revoked, the agent session is replaced, or either socket disconnects. Audit the operator, server, lifecycle, and close reason. Keep terminal contents ephemeral. Connection diagnostics distinguish denied access, missing agent capability, relay timeout, and shell startup failure. [PTY relay route](../../../app/src/lib/admin-pty-route.ts) · [Rust PTY implementation](../../../server-agent/src/pty/session.rs)
+
+## Remote logs
+
+- Start with structured server-agent events and stdout and stderr from the supervised sing-box process. Reuse tracing and process output pipes to feed a bounded in-memory ring buffer while preserving local logging. Record timestamp, source, severity, process generation, and monotonically increasing line sequence. Filter known sensitive fields at the source, cap line length, and strip untrusted control characters. Evaluate file, journald, and custom command sources separately.
+- The same-origin admin log WebSocket binds `logs.subscribe`, `logs.batch`, `logs.gap`, and `logs.unsubscribe` to one server, agent session, and subscription ID. Retrieve the latest 200 lines on initial load and send new entries in small batches. Start with a ring buffer capped at 8 MiB, 10,000 lines, or 24 hours, whichever limit a line reaches first. Resume using the buffer generation and last line sequence. Insert a visible gap if the agent restarted or the buffer has overwritten the requested entries. Filter source and level at the agent.
+- Bound queues for slow consumers. On overflow, send a gap marker and advance to the available range. Close the stream on lost authorization, server switches, or unsubscribe, and clear the previous server's entries from the view. Audit log access with source, start and end times, and rate-limit outcomes. Keep raw logs ephemeral in the browser and control plane. The host's existing logging facilities retain persistent logs.
+- Load a fine-grained Shiki bundle on the Logs tab with the required grammars and themes. Use JSON token highlighting for structured fields and a log presentation for plain text. Tokenize in batches, virtualize the list, and cap the DOM window. Fall back to plain text if highlighting fails. Render React text nodes and controlled styles from tokens to keep log data out of raw HTML. [Shiki bundles](https://shiki.style/guide/bundles.html)
+
+Advertise `logs-search-v1` and `log-policy-v1` separately so the workspace can expose live tail, search, and level controls according to agent capabilities.
+
+### Delivery ordering
+
+The browser Logs tab depends on surfaces that other branches own, so it cannot
+land as an independent change. Required order:
+
+1. The server workspace routing and layout (PR #125).
+2. The agent WebSocket v2 relay, shared log contracts and admin log WebSocket
+   (PR #137). It supplies `/api/admin/servers/$id/logs/ws` and the browser
+   frame schemas the tab imports.
+3. The Logs tab itself. Its branch starts at the PR #125 head and merges PR
+   #137 before adding UI; it must not be rebased onto #125 alone. The app build,
+   not a standalone router CLI, regenerates `app/src/route-tree.gen.ts` for the
+   new route.
+4. Remote log level controls, as a separate follow-up after the policy backend
+   lands. The Logs tab deliberately leaves that wiring out.
+
+### Search and inspect
+
+- Send `logs.search` over the admin log WebSocket and relay it to the selected agent. Search the retained, redacted buffer, including entries outside the live view. Support case-insensitive literal text, source, severity, and UTC time range. Return newest matches first in `logs.search.result`, with a request ID, actual searchable time range, and a cursor for the next page. Pin pagination to the buffer generation and its newest sequence at search start. If eviction overtakes the cursor or the agent restarts, report incomplete coverage and let the operator rerun the search.
+- Cap requests at a proposed 256 characters and 100 results per page. Bound scan time and concurrent searches, add `logs.search.cancel`, and discard late results after a replacement query or server switch. Keep searches independent of live tail delivery. Report unsupported capability, offline agent, no matches, and incomplete coverage as distinct states. Local journal and file history stay outside the initial search scope.
+- Open a result with a bounded set of surrounding lines from the same source and generation using a `logs.context` request. Show timestamps, source, and severity, highlight matched text, and offer copy for the selected redacted lines. Keep search text and results out of URLs, persistent storage, and audit payloads. Audit search access by operator, server, time range, and outcome.
+
+### Log level controls
+
+- Show the configured, requested, and effective levels for server-agent and sing-box separately. Use `error`, `warn`, and `info` as baseline levels, with an option to restore the local or generated default. Offer `debug` and `trace` as temporary overrides, with a proposed 15-minute default and 60-minute maximum. Show the expiry and a Restore now action. Viewing or filtering logs leaves the emitting level unchanged.
+- Use an audited admin POST server function to store the per-server policy, with a monotonically increasing revision, source, baseline, and optional override deadline. Reject unsupported levels and conflicting edits. Notify the current agent after commit and reconcile missed notifications through the WebSocket status exchange. An offline edit appears as pending. Skip expired overrides when the agent reconnects, and apply each revision idempotently. Audit the source, old and new policy, expiration, and application outcome.
+- Apply agent levels through a reloadable tracing filter. For sing-box, apply the effective level as a local overlay on the compiled configuration's `log.level` and use the existing validated reload path. Reapply the overlay when installing a new configuration snapshot. Warn before applying a change that can briefly interrupt sing-box. Serialize policy changes with configuration reconciliation and preserve the last working configuration on failure. A logging-only edit uses the log policy revision and leaves the desired configuration digest and subscription publish revision unchanged. Record effective levels after application. [Current sing-box config compiler](../../../app/src/orpc/proxy/singbox.ts) · [sing-box log configuration](https://sing-box.sagernet.org/configuration/log/)
+- Persist enough policy state locally to restore the baseline when an override expires during a disconnect or before either process starts after a restart. Keep override expiry independent of the WebSocket connection. If baseline restoration fails, retain the working proxy configuration, report the effective level and failure, and retry through the existing bounded reconciliation path. Keep log buffers and stream quotas active at every level.

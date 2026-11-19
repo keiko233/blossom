@@ -20,6 +20,7 @@ export const Route = createFileRoute("/api/admin/servers/$id/stream")({
             enabled: server.enabled,
             transport: server.transportMode,
             connectedAt: server.wsConnectedAt,
+            sessionId: server.wsSessionId,
             capabilities: server.agentCapabilities,
           })
           .from(server)
@@ -30,11 +31,14 @@ export const Route = createFileRoute("/api/admin/servers/$id/stream")({
           new URL(request.url).searchParams.get("inspect") === "1"
             ? "snapshot"
             : "sample";
+        const liveCapable =
+          row.capabilities.includes("telemetry-v2") ||
+          row.capabilities.includes("telemetry-v1");
         const state = !row.enabled
           ? "disabled"
           : row.transport !== "ws"
             ? "fallback"
-            : !row.capabilities.includes("telemetry-v1")
+            : !liveCapable
               ? "legacy"
               : "connected";
 
@@ -43,11 +47,21 @@ export const Route = createFileRoute("/api/admin/servers/$id/stream")({
             { state: state === "connected" ? "unavailable" : state },
             { headers },
           );
-        const reply = await getRealtimeHub().requestTelemetry(
-          params.id,
-          kind,
-          row.connectedAt.toISOString(),
-        );
+        const sessionId = row.capabilities.includes("telemetry-v2")
+          ? row.sessionId
+          : null;
+        const reply =
+          kind === "snapshot"
+            ? await getRealtimeHub().inspectTelemetry(
+                params.id,
+                row.connectedAt.toISOString(),
+                sessionId,
+              )
+            : await getRealtimeHub().requestTelemetry(
+                params.id,
+                "sample",
+                row.connectedAt.toISOString(),
+              );
         if (!reply) return Response.json({ state: "unavailable" }, { headers });
         if (reply.kind === "sample") {
           return Response.json({ state, sample: reply.data }, { headers });

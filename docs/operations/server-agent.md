@@ -16,7 +16,7 @@ Older notes and agents may refer to `/agent/config/v2`. The control plane no lon
 
 ### Interactive terminal (opt-in)
 
-The admin server page can open an interactive shell through the agent's existing outbound WebSocket. This is **off by default**: restart the agent with `AGENT_PTY_ENABLED=true` (or `--pty-enabled`) to advertise `pty-v1`. Optional bounds are `AGENT_PTY_MAX_SESSIONS` (default 2, maximum 4), `AGENT_PTY_IDLE_TIMEOUT_SECONDS` (default 900) and `AGENT_PTY_MAX_SESSION_SECONDS` (default 3600). The shell runs as the agent's OS user, with that user's filesystem and network permissions; session start and end are written to the admin audit log, but terminal input and output are never stored. No inbound agent port is opened. If the agent is not on the WebSocket transport, the terminal is unavailable.
+The admin server page can open an interactive shell through the agent's existing outbound WebSocket. This is **off by default**: restart the agent with `AGENT_PTY_ENABLED=true` (or `--pty-enabled`) to advertise `pty-v1`. The agent refuses to enable the terminal while it runs as root, so run it under its dedicated non-root service account; a container that runs the agent as root has no terminal. Optional settings are `AGENT_PTY_SHELL` (an absolute path; unset uses `/bin/bash`, then `/bin/sh`), `AGENT_PTY_WORKING_DIR` (default `/`), `AGENT_PTY_MAX_SESSIONS` (default 1, maximum 4), `AGENT_PTY_IDLE_TIMEOUT_SECONDS` (default 300) and `AGENT_PTY_MAX_SESSION_SECONDS` (default 1800). The shell runs as the agent's OS user, with that user's filesystem and network permissions, and its environment is limited to an allowlist; the admin page names that account once the shell starts. Closing the terminal stops the shell and its background jobs. Session start and end are written to the admin audit log, but terminal input and output are never stored. No inbound agent port is opened. If the agent is not on the WebSocket transport, the terminal is unavailable.
 
 ## Install
 
@@ -59,6 +59,155 @@ The first start needs outbound access to `api.github.com`, `github.com` release 
 | `off`             | No family preference (curl's default)                                                          |
 
 This only helps when the host has IPv6 connectivity *and* the name resolves to AAAA: some resolvers (and `api.github.com` on some networks) return A records only, and then the request stays on IPv4 regardless. A rate-limited IPv4 egress is fixed by `AGENT_GITHUB_TOKEN` or by seeding binaries, not by the family preference.
+
+## Systemd installation (OAuth enrollment)
+
+Phase 2B installs a Linux systemd service with a per-server OAuth machine identity. The control plane renders one fixed installer template from trusted data; the archive download cannot replace the expected SHA-256. The installer defaults to OAuth and does not use `AGENT_TOKEN`.
+
+The installer requires Linux, amd64 or arm64, systemd, root for the one-time setup, `curl`, `sha256sum`, `tar`, and the standard systemd account tools. It refuses command-line arguments, unsupported architectures, missing prerequisites, HTTP release URLs, and digest or version mismatches.
+
+### Approved release gate
+
+The control plane approves releases in [`app/src/lib/agent-installer-releases.ts`](../../app/src/lib/agent-installer-releases.ts). The catalog is empty until a release is reviewed. An entry pins the release version, both architecture URLs, both agent SHA-256 digests and the compatible sing-box version/digests. A release is usable only when it declares `installerContract: 1` and these capabilities:
+
+- `oauth-enrollment-cli-v1` — the binary implements the `enroll` command below.
+- `credentials-file-v1` — the runtime accepts `--credentials-file`.
+- `oauth-ws-v1` — the agent can authenticate its WebSocket session with the machine identity.
+
+Until a compatible entry exists, `createAgentEnrollmentGrant` and the download route refuse with a conflict. Do not add a digest obtained from an unverified mirror; copy it from the reviewed release after checking `SHA256SUMS`.
+
+### One-time script delivery
+
+The audited `createAgentEnrollmentGrant` POST selects the approved release and creates a 15-minute grant. Its `delivery` field chooses one of two modes:
+
+- `inline` returns `script.content` once. The script contains the grant, takes no arguments and changes its own mode to `0600` when it is a regular file. Save it on the administrator's machine with mode `0600`, run it once as root on the target host, then delete it. If the response is lost, revoke the grant and create a fresh one; the download route never reveals it.
+- `stdin` (the default) returns `secret` once and a `downloadPath`, not a secret-bearing file. Download the script from the fixed same-origin admin route:
+
+  ```text
+  /api/admin/servers/<serverId>/installation/script/<grantId>
+  ```
+
+  The route requires the admin session, checks that the grant belongs to that server and is still unspent and unexpired, and returns an attachment with `Cache-Control: private, no-store`. Every later download omits the grant. Put the one-time grant in a `0600` file and pipe it without putting it in argv:
+
+  ```bash
+  install -m 600 /dev/null /root/blossom-enrollment-grant
+  # Write exactly one egr_... line into the protected file, then:
+  sudo BLOSSOM_GRANT_STDIN=1 sh /root/blossom-agent-install.sh < /root/blossom-enrollment-grant
+  rm -f /root/blossom-enrollment-grant
+  ```
+
+Neither mode puts the grant or client secret in a filename, URL, audit payload or process argument. The script passes only a temporary grant-file path to the Rust client.
+
+### Rust enrollment CLI and credential handoff
+
+The approved binary must implement this exact issuance interface. The installer calls it after staging and verifying both binaries:
+
+```bash
+/usr/local/lib/blossom-agent/server-agent enroll \
+  --url https://blossom.example.com/api \
+  --grant-file /protected/one-line-grant \
+  --credentials-file /protected/credentials.json
+```
+
+The client:
+
+1. Reads the `egr_...` grant from the one-line file (mode `0600`) and never accepts it as a positional argument, flag, environment value, URL component or stdin prompt.
+2. POSTs `{ "enrollmentGrant": "..." }` to `<url>/agent/enrollment/redeem` with `Content-Type: application/json`.
+3. Writes the successful response body atomically to `--credentials-file` with mode `0600`, and writes no secret to stdout, stderr or logs.
+4. Exits non-zero without writing credentials on any non-200 response. A lost response is not retried for a secret; an administrator revokes the grant/pending identity and issues a fresh grant.
+
+The credential file is the redemption response verbatim and contains:
+
+```json
+{
+  "serverId": "...",
+  "identityId": "...",
+  "generation": 1,
+  "identityStatus": "pending",
+  "clientId": "agent_...",
+  "clientSecret": "ags_...",
+  "clientAuthMethod": "client_secret_basic",
+  "grantType": "client_credentials",
+  "tokenEndpoint": "https://blossom.example.com/api/auth/oauth2/token",
+  "issuer": "https://blossom.example.com/api/auth",
+  "resource": "https://blossom.example.com/api/agent",
+  "scope": "blossom:agent:connect",
+  "tokenLifetimeSeconds": 900
+}
+```
+
+The service runs the binary with the same credential file; the file is the only OAuth credential input:
+
+```bash
+/usr/local/lib/blossom-agent/server-agent \
+  --url https://blossom.example.com/api \
+  --credentials-file /etc/blossom-agent/credentials.json \
+  --state-dir /var/lib/blossom-agent \
+  --sing-box-path /usr/local/lib/blossom-agent/sing-box \
+  --download-dir /var/lib/blossom-agent/downloads \
+  --self-update=false
+```
+
+The WebSocket client obtains and refreshes its token from `tokenEndpoint`, `clientId` and `clientSecret`; it must not print or audit those fields. A first enrollment remains pending until the WebSocket handshake promotion in the companion change. A `replace` grant is also pending until that companion promotes the new generation.
+
+The credential file selects protocol v2 automatically, so the unit above does
+not pass `--ws-protocol`. A static `--token` remains an explicit legacy or
+backup mode: it defaults to v1 unless `--ws-protocol v2` is also given, and the
+agent refuses to combine it with `--credentials-file`. OAuth failures never
+fall back to a static token or the HTTP agent API.
+
+At startup the service checks that the credential file is a regular file owned
+by the service user with exactly mode `0600`. It also re-checks that
+`tokenEndpoint`, `issuer` and `resource` are on the configured origin before
+it sends the client secret. Tokens are requested with
+`grant_type=client_credentials`, the credential's `resource` and
+`blossom:agent:connect`, and are refreshed before their advertised lifetime
+ends. A refresh failure retries with bounded backoff (1s to 60s); while the
+token endpoint or WebSocket is unavailable the agent keeps the last-known-good
+sing-box process running and does not poll `/agent/config/v3`, `/heartbeat` or
+`/traffic`. Replacing the credential file with a new `replace` grant is picked
+up on the next refresh, and a service restart reuses the same file.
+
+The client secret and every issued token are registered with the bounded,
+scoped log redactor under a dedicated OAuth scope, and previous token values
+stay masked after a refresh or rotation. The grant, the secret and the token
+are never written to stdout, stderr, tracing output or the retained log buffer.
+
+### Installed layout and permissions
+
+| Path | Owner and mode | Contents |
+| --- | --- | --- |
+| `/usr/local/lib/blossom-agent/server-agent` | `root:root 0755` | verified agent |
+| `/usr/local/lib/blossom-agent/sing-box` | `root:root 0755` | verified sing-box |
+| `/usr/local/lib/blossom-agent/*.previous` | `root:root 0755` | previous agent, sing-box and unit after a successful replacement |
+| `/etc/blossom-agent/` | `blossom-agent:blossom-agent 0700` | installation metadata and credentials |
+| `/etc/blossom-agent/credentials.json` | `blossom-agent:blossom-agent 0600` | OAuth machine credential |
+| `/etc/blossom-agent/installation.json` | `root:root 0600` | server ID, origin, release, grant ID and mode |
+| `/var/lib/blossom-agent/` | `blossom-agent:blossom-agent 0700` | configs, certificates, traffic queue, downloads |
+| `/etc/systemd/system/blossom-agent.service` | `root:root 0644` | fixed unit |
+
+The unit runs as `User=blossom-agent`/`Group=blossom-agent`, not root. It sets `UMask=0077`, `NoNewPrivileges=true`, `ProtectSystem=strict`, `ProtectHome=true`, a read-write exception only for `/var/lib/blossom-agent`, and only `CAP_NET_BIND_SERVICE` (needed for low ports such as an ACME HTTP-01 responder). `--self-update=false` keeps binary replacement under this installer.
+
+Upgrade a systemd installation by rerunning a script created from the new approved release. The service account cannot replace the root-owned binaries, and agent self-update is disabled; do not depend on control-plane desired-version updates for this layout.
+
+### Reruns, conflicts and rollback
+
+- Running the same script for the same server and grant is a no-op when the installed binary exists and the service is active. It does not download or redeem again. If the service is inactive, it restarts the existing installation with the existing credential.
+- The same server and origin with a new grant is a normal credential replacement or upgrade. The script stages and verifies new artifacts, replaces the service atomically and keeps the existing state, certificates and traffic queue.
+- A different server, origin or unidentifiable existing installation requires `BLOSSOM_INSTALL_CONFIRM=replace`. The previous state directory is moved to `/var/lib/blossom-agent.previous-<UTC timestamp>` so a different server cannot inherit its config or certificates.
+- If staging, enrollment, replacement or service activation fails after commit starts, the script stops the new unit and restores the previous binary, sing-box, unit, credentials, metadata and state. It then reloads systemd and starts the previous service. On a clean install it removes the new unit and files. `systemctl status blossom-agent --no-pager` reports the local service separately from the control plane's first configuration acknowledgment.
+
+Uninstall on the host:
+
+```bash
+systemctl disable --now blossom-agent
+rm -f /etc/systemd/system/blossom-agent.service
+systemctl daemon-reload
+rm -rf /usr/local/lib/blossom-agent /etc/blossom-agent /var/lib/blossom-agent
+userdel blossom-agent
+```
+
+Choose whether to preserve `/var/lib/blossom-agent` before deleting it; it contains certificate private keys and the traffic queue. Revoke the server's identity in the control plane before discarding the credential or reusing the host.
 
 ### The generated Docker command embeds the secret
 

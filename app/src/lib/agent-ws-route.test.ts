@@ -15,6 +15,11 @@ const server = {
   name: "edge",
   enabled: true,
 } as Server;
+const staticCredential = { kind: "static" as const, tokenHash: "hash-1" };
+const authenticated = (value: Server = server) => ({
+  server: value,
+  credential: staticCredential,
+});
 
 const welcome: AgentWsWelcomePayload = {
   serverId: "srv-1",
@@ -39,11 +44,21 @@ function makeHub() {
           headers: { Upgrade: "websocket" },
         }),
     ),
+    acceptAgentV2: vi.fn(
+      async () =>
+        new Response(null, {
+          status: 426,
+          headers: { Upgrade: "websocket" },
+        }),
+    ),
     notifyConfigChanged: vi.fn(async () => undefined),
     notifyUpdateTrigger: vi.fn(async () => undefined),
   } satisfies Pick<
     RealtimeHub,
-    "acceptAgent" | "notifyConfigChanged" | "notifyUpdateTrigger"
+    | "acceptAgent"
+    | "acceptAgentV2"
+    | "notifyConfigChanged"
+    | "notifyUpdateTrigger"
   >;
 }
 
@@ -55,6 +70,7 @@ describe("agent WebSocket route", () => {
     const authenticated = await authenticateAgentWsRequest(
       request({ authorization: "Bearer not-a-real-token" }),
       lookup,
+      async () => null,
     );
     expect(authenticated).toBeNull();
     expect(lookup).toHaveBeenCalledWith(hashAgentToken("not-a-real-token"));
@@ -67,6 +83,7 @@ describe("agent WebSocket route", () => {
       await authenticateAgentWsRequest(
         request({ authorization: "Bearer fake-token" }),
         lookup,
+        async () => null,
       ),
     ).toBeNull();
 
@@ -76,6 +93,7 @@ describe("agent WebSocket route", () => {
       {
         authenticate: async () => null,
         buildWelcome: async () => welcome,
+        wakeCertificateIssuance: async () => undefined,
         hub,
       },
     );
@@ -84,6 +102,34 @@ describe("agent WebSocket route", () => {
       (response as Response & { crossws?: unknown }).crossws,
     ).toBeDefined();
     expect(hub.acceptAgent).not.toHaveBeenCalled();
+  });
+
+  it("maps an OAuth machine token to its identity server and generation", async () => {
+    const authenticated = await authenticateAgentWsRequest(
+      request({ authorization: "Bearer machine-token" }),
+      async () => null,
+      async () => ({
+        serverId: "srv-1",
+        identityId: "identity-2",
+        generation: 3,
+        identityStatus: "pending",
+        clientId: "agent_test",
+        expiresAt: 1_900_000_000,
+      }),
+      async () => server,
+    );
+
+    expect(authenticated).toEqual({
+      server,
+      credential: {
+        kind: "oauth",
+        identityId: "identity-2",
+        generation: 3,
+        clientId: "agent_test",
+        expiresAt: 1_900_000_000,
+        identityStatus: "pending",
+      },
+    });
   });
 
   it("authenticates before handing the upgrade to the hub", async () => {
@@ -95,8 +141,9 @@ describe("agent WebSocket route", () => {
     });
 
     const response = await handleAgentWsRequest(upgradeRequest, {
-      authenticate: async () => server,
+      authenticate: async () => authenticated(),
       buildWelcome,
+      wakeCertificateIssuance: async () => undefined,
       hub,
     });
 
@@ -112,8 +159,9 @@ describe("agent WebSocket route", () => {
   it("returns 426 for a valid plain HTTP request and 503 on hub failure", async () => {
     const hub = makeHub();
     const plain = await handleAgentWsRequest(request(), {
-      authenticate: async () => server,
+      authenticate: async () => authenticated(),
       buildWelcome: async () => welcome,
+      wakeCertificateIssuance: async () => undefined,
       hub,
     });
     expect(plain.status).toBe(426);
@@ -123,11 +171,104 @@ describe("agent WebSocket route", () => {
     const failed = await handleAgentWsRequest(
       request({ upgrade: "websocket" }),
       {
-        authenticate: async () => server,
+        authenticate: async () => authenticated(),
         buildWelcome: async () => welcome,
+        wakeCertificateIssuance: async () => undefined,
         hub,
       },
     );
     expect(failed.status).toBe(503);
+  });
+
+  it("keeps clients that offer no subprotocol on the v1 handshake", async () => {
+    const hub = makeHub();
+    const buildWelcome = vi.fn(async () => welcome);
+    const upgradeRequest = request({ upgrade: "websocket" });
+
+    await handleAgentWsRequest(upgradeRequest, {
+      authenticate: async () => authenticated(),
+      buildWelcome,
+      wakeCertificateIssuance: async () => undefined,
+      hub,
+    });
+
+    expect(buildWelcome).toHaveBeenCalledWith(server);
+    expect(hub.acceptAgentV2).not.toHaveBeenCalled();
+  });
+
+  it("refuses an OAuth credential on the v1 handshake", async () => {
+    const hub = makeHub();
+    const response = await handleAgentWsRequest(
+      request({ upgrade: "websocket" }),
+      {
+        authenticate: async () => ({
+          server,
+          credential: {
+            kind: "oauth",
+            identityId: "id-1",
+            generation: 1,
+            clientId: "agent_test",
+            expiresAt: 1_900_000_000,
+            identityStatus: "active",
+          },
+        }),
+        buildWelcome: async () => welcome,
+        wakeCertificateIssuance: async () => undefined,
+        hub,
+      },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe(
+      "OAuth requires the blossom-agent.v2 subprotocol",
+    );
+    expect(hub.acceptAgent).not.toHaveBeenCalled();
+  });
+
+  it("hands a v2 upgrade to the v2 hub without building a v1 welcome", async () => {
+    const hub = makeHub();
+    const buildWelcome = vi.fn(async () => welcome);
+    const upgradeRequest = request({
+      upgrade: "websocket",
+      "sec-websocket-protocol": "blossom-agent.v2",
+    });
+
+    await handleAgentWsRequest(upgradeRequest, {
+      authenticate: async () => authenticated(),
+      buildWelcome,
+      wakeCertificateIssuance: async () => undefined,
+      hub,
+    });
+
+    expect(hub.acceptAgentV2).toHaveBeenCalledWith(
+      upgradeRequest,
+      server,
+      staticCredential,
+    );
+    expect(buildWelcome).not.toHaveBeenCalled();
+    expect(hub.acceptAgent).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown subprotocol before the upgrade", async () => {
+    const hub = makeHub();
+    const response = await handleAgentWsRequest(
+      request({
+        upgrade: "websocket",
+        "sec-websocket-protocol": "blossom-agent.v9",
+      }),
+      {
+        authenticate: async () => authenticated(),
+        buildWelcome: async () => welcome,
+        wakeCertificateIssuance: async () => undefined,
+        hub,
+      },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe(
+      "Unsupported agent WebSocket subprotocol",
+    );
+    expect(hub.acceptAgent).not.toHaveBeenCalled();
+    expect(hub.acceptAgentV2).not.toHaveBeenCalled();
   });
 });

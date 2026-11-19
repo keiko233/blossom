@@ -1,3 +1,4 @@
+import { createAgentWsFrame } from "@blossom/contracts/agent-ws";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -117,6 +118,28 @@ describe("PTY protocol helpers", () => {
       ok: false,
       code: "wrong-session",
     });
+  });
+
+  it("forwards the agent's shell-started frame and never accepts it from the browser", () => {
+    const payload = {
+      sessionId: "pty-1",
+      shell: "/bin/bash",
+      user: "blossom",
+    };
+    const parsed = parsePtyAgentFrame(
+      createAgentWsFrame("pty.started", payload),
+      "pty-1",
+    );
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.message).toEqual({ type: "pty.started", payload });
+    }
+    expect(
+      parsePtyBrowserFrame(
+        JSON.stringify(createAgentWsFrame("pty.started", payload)),
+        "pty-1",
+      ),
+    ).toEqual({ ok: false, code: "wrong-type" });
   });
 
   it("encodes open/close frames deterministically", () => {

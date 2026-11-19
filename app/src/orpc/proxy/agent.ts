@@ -1,26 +1,26 @@
 import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 
-import { hashAgentToken, parseBearerToken } from "@/lib/agent-token";
+import { authenticateStaticAgentToken } from "@/lib/agent-static-auth";
+import { parseBearerToken } from "@/lib/agent-token";
 import {
-  computeTrafficReportHash,
-  findAgentServerByTokenHash,
-  listServerNodeIds,
-  recordAgentTraffic,
   TrafficReportConflictError,
   updateAgentHeartbeat,
 } from "@/query/agent";
 import { applyAgentCertificateDeployments } from "@/query/certificate-agent";
 
 import { base } from "../base";
-import { buildAgentDesiredState } from "./agent-desired-state";
+import {
+  buildAgentConfigV3Output,
+  buildAgentDesiredState,
+} from "./agent-desired-state";
+import { applyAgentTrafficReport } from "./agent-traffic-report";
 import {
   agentConfigV3OutputSchema,
   heartbeatSchema,
   trafficReportOutputSchema,
   trafficReportSchema,
 } from "./schema";
-import { resolveReportedTrafficUser } from "./traffic-user-codec";
 
 function readHeader(
   headers: Headers | Record<string, string | undefined>,
@@ -33,9 +33,10 @@ function readHeader(
 }
 
 /**
- * Authenticates an agent by its server-level token (Authorization: Bearer
- * <token>). The token is hashed and matched against `server.agentTokenHash`,
- * resolving to exactly one server — the unit this request can read or update.
+ * Authenticates an agent by its optional static backup token
+ * (Authorization: Bearer <token>). The token is hashed and matched against
+ * `server.agentTokenHash`, resolving to exactly one server — the unit this
+ * request can read or update. OAuth machine tokens are never accepted here.
  * This is the sole public surface: no login session, no cross-server access,
  * no admin operations reachable here. Tokens used to live on individual nodes;
  * they were migrated onto the parent server and the shared `address`/heartbeat
@@ -47,12 +48,14 @@ const agentProcedure = base.use(async ({ context, next }) => {
     throw new ORPCError("UNAUTHORIZED");
   }
 
-  const row = await findAgentServerByTokenHash(hashAgentToken(token));
-  if (!row) {
+  const authentication = await authenticateStaticAgentToken(token, {
+    allowDisabled: true,
+  });
+  if (!authentication) {
     throw new ORPCError("UNAUTHORIZED");
   }
 
-  return next({ context: { ...context, server: row } });
+  return next({ context: { ...context, server: authentication.server } });
 });
 
 /**
@@ -93,32 +96,8 @@ export const getAgentConfigV3 = agentProcedure
     // the content hash. The agent treats it as opaque (equality + content
     // byte-compare only); the subscription gate parses the seq prefix back
     // out of heartbeat `appliedRevision` reports.
-    const {
-      config,
-      materializedNodeIds,
-      managedTlsBindings,
-      certificateArtifacts,
-      desiredRevision,
-    } = await buildAgentDesiredState(context.server);
-
-    return {
-      apiVersion: 3 as const,
-      agent: {
-        configPollIntervalSeconds: context.server.configPollIntervalSeconds,
-        heartbeatIntervalSeconds: context.server.heartbeatIntervalSeconds,
-        ...(context.server.desiredAgentVersion
-          ? { desiredAgentVersion: context.server.desiredAgentVersion }
-          : {}),
-        ...(context.server.desiredSingBoxVersion
-          ? { desiredSingBoxVersion: context.server.desiredSingBoxVersion }
-          : {}),
-      },
-      desiredRevision,
-      materializedNodeIds,
-      singboxConfig: config,
-      managedTlsBindings,
-      certificateArtifacts,
-    };
+    const desired = await buildAgentDesiredState(context.server);
+    return buildAgentConfigV3Output(context.server, desired);
   });
 
 export const agentHeartbeat = agentProcedure
@@ -176,46 +155,11 @@ export const reportAgentTraffic = agentProcedure
   .input(trafficReportSchema)
   .output(trafficReportOutputSchema)
   .handler(async ({ context, input }) => {
-    const eligible = input.entries.filter(
-      (entry) => entry.uplinkBytes + entry.downlinkBytes > 0,
-    );
-    if (eligible.length === 0 && input.reportId === undefined) {
-      return { accepted: 0, dropped: 0 };
-    }
-
-    // Resolve the calling server's node ids once; used for verifying coded node
-    // ids and for legacy single-node attribution.
-    const serverNodeIds = new Set(await listServerNodeIds(context.server.id));
-
-    const entries = eligible.map((entry) => {
-      const resolved = resolveReportedTrafficUser(
-        entry.subscriptionId,
-        serverNodeIds,
-      );
-      return {
-        subscriptionId: resolved.subscriptionId,
-        nodeId: resolved.nodeId,
-        uplinkBytes: entry.uplinkBytes,
-        downlinkBytes: entry.downlinkBytes,
-      };
-    });
-
     try {
-      const result = await recordAgentTraffic({
-        serverId: context.server.id,
-        reportId: input.reportId,
-        contentHash:
-          input.reportId === undefined
-            ? undefined
-            : computeTrafficReportHash(input),
-        windowStartedAt: input.windowStartedAt
-          ? new Date(input.windowStartedAt)
-          : null,
-        windowEndedAt: input.windowEndedAt
-          ? new Date(input.windowEndedAt)
-          : null,
-        entries,
-      });
+      const result = await applyAgentTrafficReport(context.server.id, input);
+      if (!("duplicate" in result)) {
+        return result;
+      }
       return {
         accepted: result.accepted,
         dropped: result.dropped,

@@ -46,6 +46,7 @@ import type { DnsProvider } from "@/lib/dns-providers/types";
 import { getServerEnv } from "@/lib/env";
 import { BINDING_GENERATION_RESET_WRITE } from "@/lib/node-certificate-binding";
 import { createSelfSignedCertificate } from "@/lib/self-signed-certificate";
+import { invalidateDesiredConfigRevisionsAfterCommit } from "@/query/agent";
 
 type CertificatePolicy = ManagedCertificate;
 type IssuanceJob = CertificateIssuanceJob;
@@ -181,6 +182,9 @@ async function persistMaterial(
       ...BINDING_GENERATION_RESET_WRITE,
     })
     .where(eq(certificateServer.certificateId, policy.id));
+  // The installed material changes every bound server's compiled configuration
+  // without moving its publish-gate sequence, so cached identifiers are dropped.
+  await invalidateDesiredConfigRevisionsAfterCommit(undefined, database);
 }
 
 async function issueSelfSigned(policy: CertificatePolicy) {

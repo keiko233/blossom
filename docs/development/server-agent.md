@@ -16,33 +16,58 @@ configured port is an overlap indicator, since a socket can belong to the
 managed sing-box process. Telemetry uses no Docker socket, host mounts or
 shell commands.
 
+The same Linux collector also serves protocol v2. A `--ws-protocol v2` agent
+advertises `telemetry-v2` and `telemetry-history-v2`; a legacy agent keeps
+`telemetry-v1`. One sampler runs per v2 connection. `live` subscriptions use
+the control plane's coalesced interval, while `history` runs on its own
+minute-or-longer cadence, including when no admin viewer is connected. A
+replaced session starts with no subscriptions.
+
+Network rates are sums of counter deltas across a stable, sorted set of
+non-loopback `/proc/net/dev` interfaces, divided by a monotonic elapsed
+window. The first observation, a counter reset, an interface-set change, a
+failed read, or a non-monotonic/oversized window sends `network: null`; a
+changed interface set also changes `scopeKey`. `scopeKey` is
+`environment|cgroup|cpulimit|memorylimit|interfaces` with `-` for absent
+values, for example `systemd|-|-|-|eth0,eth1`. Sampling and inspection run on
+blocking threads behind bounded queues, so config application and traffic
+acknowledgements stay responsive. See
+[Agent WebSocket v2](agent-ws-v2.md#telemetry).
+
 ## Module map
 
-| File               | Responsibility                                                                                                                                                  |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/main.rs`      | CLI (`clap`, flags mirrored by `AGENT_*` env vars), startup from the last-known-good config, the config-poll/heartbeat loops, WebSocket event wiring, shutdown.  |
-| `src/client.rs`    | Wraps the progenitor-generated client; injects the `Authorization: Bearer` token as a sensitive default header.                                                  |
-| `src/config.rs`    | Fetches the v3 desired state, applies certificate bindings to the base sing-box config, writes candidates, tracks active / last-known-good, reports errors.      |
-| `src/ws/codec.rs`  | Frozen v1 JSON frame envelope (`hello`/`welcome`, `ping`/`pong`, `config.*`, `update.*`) and typed message decoding that ignores unknown frames.                  |
-| `src/ws/ports.rs`  | Narrow `WsTransport`/`WsConnection`/`AgentCommandSink` traits, the bounded outbound queue, and the jittered backoff/fallback policy.                            |
-| `src/ws/adapters.rs` | `tokio-tungstenite` transport: `/api/agent/ws` URL derivation, sensitive bearer header, `rustls` (`ring`) TLS.                                                |
-| `src/ws/mod.rs`    | Reconnect loop: `hello` on every connect, keepalive ping/pong, proactive reconnect, and HTTP-fallback signalling.                                               |
-| `src/acme/mod.rs`  | Bounded ACME job manager: typed issue/ack dispatch, per-job deadline, duplicate-result replay, and challenge solver wiring.                                      |
-| `src/acme/ports.rs` | Consumer-owned ACME/DNS/challenge ports, redacting secret wrappers, typed error phases, and the order state machine.                                             |
-| `src/acme/instant_backend.rs` | `instant-acme` adapter for Let's Encrypt/ZeroSSL, EAB decoding, order/finalize/certificate flow, and cleanup on every exit path.                           |
-| `src/acme/solver_http01.rs` | Ephemeral bounded HTTP-01 responder that serves only exact registered challenge tokens.                                                                   |
-| `src/acme/solver_dns01.rs` | DNS-01 relay over the agent WebSocket with exact TXT-value acknowledgement matching and cleanup tracking.                                                |
-| `src/pty/`         | Opt-in interactive PTY sessions: `portable-pty` adapter, bounded reader/writer queues, session cap, idle/hard lifetime limits, and incremental UTF-8 output chunks. |
-| `src/certificate.rs` | Validated, generation-addressed certificate store under `<state_dir>/certificates/<id>/generation-<n>/`.                                                      |
-| `src/process.rs`   | Supervises the sing-box child (`processkit`): log forwarding, restart with backoff, graceful replacement, `sing-box check` preflight.                            |
-| `src/stats.rs`     | Hand-written tonic/prost client for sing-box's built-in `api` service (`StartedService.SubscribeConnections`; no `.proto` files, no `tonic-build`).              |
-| `src/accountant.rs` | Pure per-connection accounting state machine that turns connection events into per-user deltas.                                                                 |
-| `src/traffic.rs`   | Runs the connection stream in the background, accumulates per-user deltas, maps them to subscription/node ids and reports them.                                  |
-| `src/update.rs`    | Resolves GitHub releases, verifies the published SHA-256 digest, stages atomically replaced agent/sing-box binaries and tracks retry/rollback state.             |
-| `build.rs`         | Generates the API client from `openapi/spec.json` and stamps the build id (see below).                                                                           |
-| `examples/query_stats.rs` | Manual smoke test that prints the connection stream of a running sing-box >= 1.14.                                                                     |
-| `scripts/entrypoint.sh` | Thin-image PID-1 helper: first-start downloads, `/data` layout, signal forwarding and crash rollback.                                                       |
-| `tests/mock_control_plane.py`, `scripts/test-managed-tls-docker.sh` | Docker-based end-to-end test of the managed-TLS lifecycle, plus WebSocket push/reconnect, against a mock control plane. |
+| File                                                                | Responsibility                                                                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `src/main.rs`                                                       | CLI (`clap`, flags mirrored by `AGENT_*` env vars), startup from the last-known-good config, the config-poll/heartbeat loops, WebSocket event wiring, shutdown.                                                                                                                                              |
+| `src/agent_v2.rs`                                                   | Protocol v2 core loop (`--ws-protocol v2`): no HTTP agent API, snapshot apply/rollback, status publication, update/ACME/PTY operations, and v2 traffic reporting.                                                                                                                                            |
+| `src/client.rs`                                                     | Wraps the progenitor-generated client; injects the `Authorization: Bearer` token as a sensitive default header.                                                                                                                                                                                              |
+| `src/config.rs`                                                     | Fetches the v3 desired state, applies certificate bindings to the base sing-box config, writes candidates, tracks active / last-known-good, reports errors.                                                                                                                                                  |
+| `src/ws/codec.rs`                                                   | Frozen v1 JSON frame envelope (`hello`/`welcome`, `ping`/`pong`, `config.*`, `update.*`) and typed message decoding that ignores unknown frames.                                                                                                                                                             |
+| `src/ws/ports.rs`                                                   | Narrow `WsTransport`/`WsConnection`/`AgentCommandSink` traits, the bounded outbound queue, and the jittered backoff/fallback policy.                                                                                                                                                                         |
+| `src/ws/adapters.rs`                                                | `tokio-tungstenite` transport: `/api/agent/ws` URL derivation, sensitive bearer header, `rustls` (`ring`) TLS.                                                                                                                                                                                               |
+| `src/ws/mod.rs`                                                     | Reconnect loop: `hello` on every connect, keepalive ping/pong, proactive reconnect, and HTTP-fallback signalling.                                                                                                                                                                                            |
+| `src/ws/v2/`                                                        | Opt-in protocol v2: `serde`-backed codec, subprotocol adapter, bounded snapshot assembler, session state machine, reconnect/backoff, and traffic acknowledgement routing.                                                                                                                                    |
+| `src/ws/v2/logs/`                                                   | Session-scoped v2 log binding: bounded tails with resume/gap reporting, cancellable retained search, context lookup, and per-connection reset.                                                                                                                                                               |
+| `src/ws/v2/telemetry/`                                              | v2 subscriptions and coalesced sampling: Linux collector reuse, scoped network counter deltas, inspection snapshots, and bounded output queues.                                                                                                                                                              |
+| `src/acme/mod.rs`                                                   | Bounded ACME job manager: typed issue/ack dispatch, per-job deadline, duplicate-result replay, and challenge solver wiring.                                                                                                                                                                                  |
+| `src/acme/ports.rs`                                                 | Consumer-owned ACME/DNS/challenge ports, redacting secret wrappers, typed error phases, and the order state machine.                                                                                                                                                                                         |
+| `src/acme/instant_backend.rs`                                       | `instant-acme` adapter for Let's Encrypt/ZeroSSL, EAB decoding, order/finalize/certificate flow, and cleanup on every exit path.                                                                                                                                                                             |
+| `src/acme/solver_http01.rs`                                         | Ephemeral bounded HTTP-01 responder that serves only exact registered challenge tokens.                                                                                                                                                                                                                      |
+| `src/acme/solver_dns01.rs`                                          | DNS-01 relay over the agent WebSocket with exact TXT-value acknowledgement matching and cleanup tracking.                                                                                                                                                                                                    |
+| `src/oauth/`                                                        | Protected `0600` credential files, the one-shot `enroll` redemption CLI, same-origin validation, and the Better Auth `client_credentials` token cache/refresh loop.                                                                                                                                          |
+| `src/pty/`                                                          | Opt-in interactive PTY sessions: `launch.rs` (explicit shell, controlled environment), `session.rs` (`portable-pty` adapter, bounded reader/writer queues, session-wide cleanup), `sys.rs` (Linux account and session lookups), session cap, idle/hard lifetime limits, and incremental UTF-8 output chunks. |
+| `src/certificate.rs`                                                | Validated, generation-addressed certificate store under `<state_dir>/certificates/<id>/generation-<n>/`.                                                                                                                                                                                                     |
+| `src/process.rs`                                                    | Supervises the sing-box child (`processkit`): stdout/stderr capture into the log buffer and tracing, restart with backoff, graceful replacement, `sing-box check` preflight.                                                                                                                                 |
+| `src/logs/`                                                         | Bounded in-memory log buffer: tracing capture (`layer.rs`), byte/line/age budgets (`ring.rs`, `model.rs`), known-secret redaction and normalization (`text.rs`), retained search (`search.rs`), and the locked facade (`store.rs`).                                                                          |
+| `src/log_policy.rs`                                                 | Bounded local log-level policy: per-source revisions, persisted baseline/deadline, agent tracing-filter reloads, sing-box `log.level` overlays, expiry restoration and retry status.                                                                                                                         |
+| `src/stats.rs`                                                      | Hand-written tonic/prost client for sing-box's built-in `api` service (`StartedService.SubscribeConnections`; no `.proto` files, no `tonic-build`).                                                                                                                                                          |
+| `src/accountant.rs`                                                 | Pure per-connection accounting state machine that turns connection events into per-user deltas.                                                                                                                                                                                                              |
+| `src/traffic.rs`                                                    | Runs the connection stream in the background, accumulates per-user deltas, maps them to subscription/node ids and reports them.                                                                                                                                                                              |
+| `src/update.rs`                                                     | Resolves GitHub releases, verifies the published SHA-256 digest, stages atomically replaced agent/sing-box binaries and tracks retry/rollback state.                                                                                                                                                         |
+| `build.rs`                                                          | Generates the API client from `openapi/spec.json` and stamps the build id (see below).                                                                                                                                                                                                                       |
+| `examples/query_stats.rs`                                           | Manual smoke test that prints the connection stream of a running sing-box >= 1.14.                                                                                                                                                                                                                           |
+| `scripts/entrypoint.sh`                                             | Thin-image PID-1 helper: first-start downloads, `/data` layout, signal forwarding and crash rollback.                                                                                                                                                                                                        |
+| `tests/mock_control_plane.py`, `scripts/test-managed-tls-docker.sh` | Docker-based end-to-end test of the managed-TLS lifecycle, plus WebSocket push/reconnect, against a mock control plane.                                                                                                                                                                                      |
 
 ## Contract with the control plane
 
@@ -64,6 +89,17 @@ The agent opens one outbound WebSocket to `<AGENT_URL>/agent/ws` (`https` -> `ws
 - Keepalive pings are answered with `pong`; `welcome.reconnectBeforeSeconds` arms a proactive reconnect for serverless targets that cap connection lifetime.
 - Reconnect uses 1s -> 2s -> 5s -> 15s -> 30s backoff with jitter. A rejected upgrade (400/403/404/426/501) or a failure streak announces HTTP fallback, and the poll/heartbeat loops plus `TrafficReporter` keep running throughout.
 
+### Protocol v2 (opt-in)
+
+`--ws-protocol v2` / `AGENT_WS_PROTOCOL=v2` selects the WebSocket-first path in `src/agent_v2.rs`; `legacy` remains the default. The v2 client offers `blossom-agent.v2`, requires the echo before it proceeds, and makes no HTTP agent API calls. Configuration, status, and traffic all travel over that session.
+
+- Configuration arrives as bounded, ordered, digest-validated snapshots and only the verified body reaches the ordinary compile, preflight, promote, probation, and rollback path. A partial snapshot is discarded on disconnect; a failed identifier (including a refused snapshot) is held briefly so status reconciliation cannot spin on the same request.
+- `hello` reports the applied identifier or `null`. `welcome` and `agent.status.ack` carry the authoritative identifier, so a missed `config.notify` is recovered on the next status exchange. Deadlines, liveness, proactive `reconnectBeforeSeconds`, and jittered backoff (about 1 s to 60 s) are handled in `src/ws/v2/link.rs`; no HTTP fallback is attempted.
+- Traffic uses the same durable outbox as v1. A report stays on disk until `traffic.ack`; a lost acknowledgement or session resends the identical `reportId` and payload, and the control-plane ledger answers `duplicate`.
+- Updates, ACME, and PTY are served over v2. `update.trigger` and `update.status` use the v1 payloads, while `welcome.updatePolicy` and `agent.status.ack.updatePolicy` still replay the version targets. The v2 `hello` advertises `acme-v1`, and `pty-v2` when local PTY sessions are enabled under a non-root account; it never advertises `pty-v1`. Telemetry and log policy remain v1-only. Promoting v2 to the global default remains a separate change.
+- Updates, ACME, PTY, remote log policy, retained log tail/search, and telemetry are served over v2. `update.trigger` and `update.status` use the v1 payloads, while `welcome.updatePolicy` and `agent.status.ack.updatePolicy` still replay the version targets. The v2 `hello` advertises `acme-v1`, `pty-v2` when local PTY sessions are enabled under a non-root account, `log-policy-v1`, `logs-tail-v1`/`logs-search-v1`, and `telemetry-v2`/`telemetry-history-v2` when the sampler is available; it never advertises the v1 PTY, ACME or telemetry capabilities. Promoting v2 to the global default remains a separate change.
+- Telemetry v2 is served on Linux: `telemetry.subscribe` starts or replaces a `live`/`history` cadence, `telemetry.unsubscribe` stops it, `telemetry.inspect` answers with the existing snapshot, and samples carry a `scopeKey` plus counter-derived network rates. Subscriptions belong to one connection and are dropped when it ends.
+
 ### Agent-executed ACME
 
 The agent advertises `acme-v1`. A job is bounded to 100 unique lowercase DNS
@@ -83,14 +119,59 @@ with per-job EAB). It never accepts an arbitrary CA directory URL.
   error phase. Private keys and EAB HMAC values use redacting/zeroizing wrappers
   and never appear in logs. A duplicate job id replays the cached result until
   the bounded in-memory expiry; a different job id is a separate order.
+
+### OAuth machine identity
+
+`server-agent enroll --url ... --grant-file ... --credentials-file ...` reads a
+one-line `egr_...` grant from a regular file owned by the effective user with
+mode `0600`, makes exactly one same-origin
+`POST /api/enrollment/redeem`, validates the bounded response, and writes it
+verbatim through an atomic `0600` replace. There is no retry and no output that
+contains the grant or the client secret.
+
+At service start, `--credentials-file` selects protocol v2 automatically. The
+provider checks the file's owner and mode again, enforces the configured
+origin for `tokenEndpoint`, `issuer` and `resource`, and requests
+`client_credentials` tokens with the credential's `resource` and
+`blossom:agent:connect`. A token is refreshed before its advertised lifetime
+ends; the session reconnects at that deadline and the retry ladder is bounded.
+A still-valid cached token covers a transient token-endpoint failure, while the
+last-known-good sing-box process keeps running. A content change in the
+credential file rotates the identity on the next refresh.
+
+`--token` is an explicit static-token mode. It defaults to v1, may opt into v2
+with `--ws-protocol v2`, and is refused together with `--credentials-file`.
+OAuth mode never downgrades to a static token or the HTTP agent API. The client
+secret and current access token are registered in the `OAuth` log-redaction
+scope before use; replaced secrets stay masked.
+
 ### Interactive terminal (opt-in)
 
-The admin terminal is disabled unless the agent starts with `--pty-enabled` / `AGENT_PTY_ENABLED=true`; only then does `hello` advertise `pty-v1`. The control plane sends `pty.open`, `pty.data`, `pty.resize` and `pty.close` over the same authenticated socket, and the agent replies with bounded `pty.data` chunks and `pty.exit`.
+The admin terminal is disabled unless the agent starts with `--pty-enabled` / `AGENT_PTY_ENABLED=true`; only then does `hello` advertise `pty-v1`. The agent refuses to enable it while running as root, because the shell would then be root. The control plane sends `pty.open`, `pty.data`, `pty.resize` and `pty.close` over the same authenticated socket. The agent answers `pty.open` with `pty.started` (shell path and account) once the shell exists, or with `pty.exit` carrying a typed reason and a sanitized `detail`, then streams bounded `pty.data` chunks.
 
-- At most `AGENT_PTY_MAX_SESSIONS` (default 2, hard cap 4) sessions exist. `AGENT_PTY_IDLE_TIMEOUT_SECONDS` defaults to 900 and is clamped to 30–3600; `AGENT_PTY_MAX_SESSION_SECONDS` defaults to 3600 and is clamped to 60–86400, so a continuously active shell still has a hard lifetime bound.
+- At most `AGENT_PTY_MAX_SESSIONS` (default 1, hard cap 4) sessions exist. `AGENT_PTY_IDLE_TIMEOUT_SECONDS` defaults to 300 and is clamped to 30–3600; `AGENT_PTY_MAX_SESSION_SECONDS` defaults to 1800 and is clamped to 60–86400, so a continuously active shell still has a hard lifetime bound.
+- The shell is `AGENT_PTY_SHELL` (an absolute path) when set, and otherwise the first runnable of `/bin/bash` then `/bin/sh`. An explicit path is authoritative: a broken setting fails the session instead of silently starting another shell. The shell starts with `-i` in `AGENT_PTY_WORKING_DIR` (default `/`). Startup checks run in order: working directory, shell executable, PTY allocation, spawn. The failures map to `shell_unavailable`, `pty_unavailable` and `spawn_failed`.
+- The shell environment is rebuilt from an allowlist: `TERM`, `COLORTERM`, a fixed `PATH`, `SHELL`, `USER`/`LOGNAME`, `HOME`, and `LANG`/`LC_*`/`TZ` when set. `AGENT_*`, `GITHUB_TOKEN` and anything else in the agent's environment are not inherited.
+- Closing the session, the shell exiting, or the PTY manager being dropped SIGKILLs every process in the shell's session on Linux (found through `/proc`), so background jobs do not outlive the terminal. Other platforms signal only the shell process.
+- The control plane's relays re-check the admin session, its admin role, the server and the agent connection every 30 seconds and close the shell with `authorization_revoked` on failure. The Cloudflare Durable Object re-checks from a storage alarm, so it also runs while the object hibernates; the agent's idle and hard limits still bound a shell whose relay is gone. The browser's status probe (`GET /api/admin/servers/$id/pty/status`) distinguishes denied, disabled, offline and unsupported before it opens a socket.
 - `cols`/`rows` are clamped to 20–400 × 5–200. Session ids must be 1–128 ASCII alphanumerics, `-` or `_`.
 - Reader, waiter and writer work runs on dedicated OS threads, never on Tokio workers. Reader output is bounded by a 64-frame queue; writer input by a 64-write queue of 16 KiB chunks. A full writer queue closes the session with `input_backpressure`; a full outbound WebSocket queue closes it with `output_backpressure` instead of growing memory.
 - PTY output is decoded incrementally, so a UTF-8 character split across reads is not corrupted. A shell exit, idle timeout, protocol error or WebSocket drop kills the child and emits `pty.exit` when the socket is still available.
+
+### Local log-level policy
+
+The v2 agent advertises `log-policy-v1` and serves the [remote policy](log-policy.md). `log.policy.snapshot` entries are mapped to the existing `PolicyRequest`/`PolicyAction` API, and `PolicyStatus` is published as a bounded `log.policy.ack`. There is no v1 or HTTP policy path.
+
+- `src/log_policy.rs` persists one record per source (`agent`, `sing-box`) in `<state_dir>/log-policy.json` (mode `0600`). Each record carries a revision scoped to that source, the requested level, the generated or local baseline, the effective level, an optional deadline and the last error.
+- Requests accept `error`, `warn`, `info` and `default` as baselines. `debug` and `trace` are temporary only: the default lifetime is 15 minutes and the local maximum is 60 minutes, regardless of a longer control-plane deadline. A baseline request carrying a deadline and a stale revision are rejected.
+- Agent levels change a `tracing_subscriber::reload` layer shared by local formatting and the retained `CaptureLayer`, so the buffer, its quotas and its redaction state are never rebuilt. A filter reload failure leaves the previous level effective and records the error.
+- Sing-box levels are a local overlay on `log.level` in the compiled candidate. The overlay is applied after certificate bindings and the agent `api` service, and the desired revision and digest are untouched. A log-only change writes a candidate, runs `sing-box check`, promotes and restarts the process, waits through probation and commits to last-known-good; any failure rolls back to the working configuration. The applied revision, node set and publish sequencing do not change.
+- Every desired-config compile re-reads the generated `log.level` as the new baseline and reapplies the current overlay, so refreshes, retries and a malformed `log` object converge on the same combined config. Newly received node credentials are registered for retained-log redaction before validation errors can be captured.
+- Supervisors call policy maintenance on a local timer even when the control plane is offline. Expired overrides restore the baseline through the same reload path, and a failed restoration keeps the working configuration, reports the requested/effective/error status and retries with a 30-second bound. At startup the persisted state is loaded and the committed and last-known-good configs are rewritten before `start_last_known_good`, so an override never outlives a restart.
+
+The v2 core maps an authenticated `log-policy-v1` entry to `PolicyRequest`, calls `LogPolicy::request_snapshot` (which ignores an already-expired temporary override), then executes the returned `PolicyAction` in its single supervision loop. An agent action calls `LogPolicy::apply_agent`; a sing-box action stages the overlay through the validated reload path and calls `LogPolicy::record` with the outcome. The session publishes changed `PolicyStatus` values as `log.policy.ack`. `welcome` and `agent.status.ack` carry the server-wide policy revision, so a lost push, offline edit or reconnect recovers through `log.policy.get`.
+
+Snapshot entries are idempotent per source revision. A lower revision is ignored, a conflicting level for the same revision is reported, and a temporary request is never extended beyond the local 60-minute cap. Local expiry runs on the supervision timer even while disconnected; the resulting effective baseline is persisted and acknowledged when a session returns. Log policy never changes the applied configuration identifier, node set or publish-gate sequence.
 
 ## Safety invariants
 
@@ -102,8 +183,11 @@ These are the behaviours the code and its comments establish. Preserve them when
 - **Report honestly.** `installed` is reported once material is staged and validated; `inUse` only after the candidate has been committed.
 - **Self-heal.** An equal `desiredRevision` is skipped only while the active config still parses and every referenced generation still validates.
 - **Secrets stay out of logs.** The token header is marked sensitive; keep tokens, keys and full config bodies out of `tracing` output.
+- **Retained logs are bounded and redacted.** The in-memory log buffer (`src/logs/`) redacts registered agent credentials (the agent token, the GitHub token and the per-run stats secret), `Bearer` tokens, whole PEM private-key blocks and the credential fields of every inbound `users` entry before insertion, then applies byte, line and age budgets. The current stats secret and both active and staged-candidate node credentials are registered on startup, fetch, promotion and rollback, and replaced sets stay redacted until the fixed registry bound retires them. A registration that would exceed the bound makes capture fail closed: every later line is stored as `[REDACTED]` rather than left exposed, while the proxy keeps running. Local host logging is unchanged; only the retained buffer is redacted.
+- **OAuth credentials need their own registration handoff.** When OAuth machine identity lands, add a dedicated `SecretScope` and register the client secret plus the current access token (and any refresh token) before the first token request or authenticated call, then replace that set on every refresh and rotation. The static-token `Agent` scope is not enough, because its set never rotates. Until then, only the configured static agent token is covered.
 - **ACME secrets stay bounded.** The agent accepts only the built-in ACME providers, validates every job/domain/challenge value, never logs or persists the generated private key, and returns it only over the authenticated WebSocket for control-plane encryption.
 - **The terminal is opt-in and bounded.** It is off by default, advertises `pty-v1` only when enabled, never opens a listening port, caps concurrent sessions, and kills every session when the process or WebSocket goes away. Terminal bytes are never written to logs, the database or audit rows.
+- **The shell is non-root and environment-scoped.** A root agent keeps PTY disabled even when opted in. The shell never inherits the agent's tokens or unrelated variables, and the identity it runs as is reported to the browser in `pty.started`.
 - **Do not trust the base config for traffic collection.** The agent strips `experimental.v2ray_api` and any pre-existing `api` service, then injects its own `api` service bound to `127.0.0.1` on a random free port with a random per-run secret. The injected endpoint lives inside the written configs, so a restart of the same agent run stays consistent, and the secret never leaves the process.
 
 ## Traffic delivery
@@ -137,6 +221,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 ```
 
 - Unit tests are inline in each module (`#[test]` / `#[tokio::test]`); they need neither sing-box nor a network. `rcgen` (dev-dependency) builds throw-away certificates for the certificate tests.
+- `tests/ws_v2_lifecycle.rs` is a process-level, loopback-only test. It runs the built agent with a temporary state directory, a fake sing-box, and a local v2 WebSocket control plane that fails and records any HTTP agent API request. It covers cold apply, exact traffic replay after a lost `traffic.ack`, status reconciliation, failed-apply rollback, offline last-known-good startup, a history sample with no viewer, a live sample with network rates, inspection, and unsubscribed sessions. It runs as part of `cargo test --locked`.
 - CI additionally builds the agent image and runs the managed-TLS lifecycle test:
 
   ```bash
@@ -145,6 +230,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
   ```
 
   `Dockerfile.test` is test-only: it builds the agent and downloads the pinned official sing-box, seeding both under `/data/bin`, so the test does not need GitHub at container start. The production `Dockerfile` remains thin. The script needs Docker, `python3` and `curl`, starts a mock control plane on port 18765 (override with `MOCK_PORT`) and a container, and cleans both up on exit. The mock serves the agent WebSocket too, so the script also pushes a `config.notify` and asserts `config.ack`, drops the socket to assert a reconnect, and then takes the control plane offline to assert the HTTP fallback still reports. Run it when you change certificate handling, config application, the transport, or the heartbeat/reporting contract; skip it for unrelated edits and say so.
+
 - The pre-commit hook runs `cargo fmt` and `cargo clippy --fix` on staged `.rs` files (see [Workflow](workflow.md#git-hooks)).
 - `cargo run` starts a long-running process. It needs a reachable control plane, an agent token and a sing-box binary >= 1.14 (official release binaries include the `api` service used for traffic stats), and it launches and supervises sing-box, which binds the inbound ports the control plane assigns. Its state directory defaults to `/var/lib/blossom-agent`, so pass `--state-dir` (or `AGENT_STATE_DIR`) pointing at a temporary directory when experimenting, point `--url` at a disposable local control plane rather than a production one, and never run it on a host whose real proxy you depend on. The mock control plane used by the Docker lifecycle test is the contained way to exercise the agent end to end. Whether to run any of this is for the task instructions to decide.
 
@@ -165,3 +251,13 @@ Static binaries are published by `.github/workflows/server-agent-release.yml`, w
 3. The workflow runs `cargo test --locked`, `cargo fmt --check` and `cargo clippy -D warnings`, then builds fully static musl binaries per architecture (amd64 on `ubuntu-latest`, arm64 on `ubuntu-24.04-arm`, both inside a `rust:alpine` container like `Dockerfile.test`'s build stage) and publishes a GitHub Release with `server-agent-linux-amd64`, `server-agent-linux-arm64` and a `SHA256SUMS` covering them. Asset names carry no version so `releases/download/<tag>/...` URLs stay stable (`releases/latest/download/...` does not point at these releases); releases are published with `make_latest: false`, and consumers must resolve releases via the `server-agent-v` tag prefix (GitHub API `GET /repos/{owner}/{repo}/releases` filtered by `tag_name`), since this repo also publishes app image `v*` tags that share the `latest` feed.
 
 `workflow_dispatch` runs only build and check; a release is created only from a `server-agent-v*` tag.
+
+The systemd installer does not resolve GitHub releases at runtime. After
+reviewing a published release's `SHA256SUMS`, add its exact version, both
+architecture asset URLs and SHA-256 digests to
+`app/src/lib/agent-installer-releases.ts`. The entry must declare
+`installerContract: 1` and the `oauth-enrollment-cli-v1`,
+`credentials-file-v1` and `oauth-ws-v1` capabilities; the installer gate
+refuses an unapproved or incompatible release. Host-facing setup and the exact
+Rust `enroll`/`--credentials-file` contract are in
+[Installing and running the server agent](../operations/server-agent.md#systemd-installation-oauth-enrollment).

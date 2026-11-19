@@ -37,6 +37,7 @@ pub mod frame_type {
     pub const ACME_DNS_ACK: &str = "acme.dns_ack";
     pub const ACME_RESULT: &str = "acme.result";
     pub const PTY_OPEN: &str = "pty.open";
+    pub const PTY_STARTED: &str = "pty.started";
     pub const PTY_DATA: &str = "pty.data";
     pub const PTY_RESIZE: &str = "pty.resize";
     pub const PTY_CLOSE: &str = "pty.close";

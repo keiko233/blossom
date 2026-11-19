@@ -13,11 +13,13 @@ pub trait PtyProcess: Send {
     fn kill(&mut self);
 }
 
+/// A started shell and the absolute path it was launched from.
+pub struct SpawnedPty {
+    pub process: Box<dyn PtyProcess>,
+    pub shell: String,
+}
+
 /// Spawns local shells. The session id is already validated by the manager.
 pub trait PtyFactory: Send + Sync {
-    fn spawn(
-        &self,
-        session_id: &str,
-        dimensions: PtyDimensions,
-    ) -> Result<Box<dyn PtyProcess>, PtyError>;
+    fn spawn(&self, session_id: &str, dimensions: PtyDimensions) -> Result<SpawnedPty, PtyError>;
 }

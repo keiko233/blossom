@@ -10,13 +10,20 @@ import { decryptCertificateSecret } from "@/lib/certificate-crypto";
 import { advanceCertificateIssuance } from "@/lib/certificate-issuance";
 import { BINDING_GENERATION_RESET_WRITE } from "@/lib/node-certificate-binding";
 import { decideCertificateDeployment } from "@/orpc/proxy/singbox";
+import { currentAgentSessionFenceSql } from "@/query/agent";
 
-export async function getCertificateAgentContext(serverId: string) {
+export async function getCertificateAgentContext(
+  serverId: string,
+  options: { database?: Database; advanceIssuance?: boolean } = {},
+) {
+  const database = options.database ?? db;
   // Serverless runtimes have no resident scheduler. Any agent config poll is a
   // wake-up signal for the global, lease-protected server-side issuer; the
   // calling agent never performs issuance or handles DNS credentials.
-  await advanceCertificateIssuance();
-  const rows = await db
+  if (options.advanceIssuance ?? true) {
+    await advanceCertificateIssuance();
+  }
+  const rows = await database
     .select({ certificate: managedCertificate, binding: certificateServer })
     .from(certificateServer)
     .innerJoin(
@@ -42,7 +49,7 @@ export async function getCertificateAgentContext(serverId: string) {
         }
       | undefined;
     if (activeVersion !== null) {
-      const [stored] = await db
+      const [stored] = await database
         .select()
         .from(certificateMaterial)
         .where(
@@ -97,15 +104,30 @@ export interface AgentCertificateDeployment {
 export async function applyAgentCertificateDeployments(
   serverId: string,
   deployments: AgentCertificateDeployment[],
-  database: Database = db,
+  options: { database?: Database; sessionId?: string } = {},
 ): Promise<void> {
+  const database = options.database ?? db;
+  // A v2 report carries its session fence. A replaced, revoked or expired
+  // session must not be able to change certificate deployment state; v1 keeps
+  // its historical unfenced behavior.
+  const fence =
+    options.sessionId === undefined
+      ? undefined
+      : currentAgentSessionFenceSql(serverId, options.sessionId);
   if (deployments.length === 0) {
     return;
   }
   const bindingRows = await database
     .select()
     .from(certificateServer)
-    .where(eq(certificateServer.serverId, serverId));
+    .where(
+      fence
+        ? and(eq(certificateServer.serverId, serverId), fence)
+        : eq(certificateServer.serverId, serverId),
+    );
+  if (fence && bindingRows.length === 0) {
+    return;
+  }
   const bindingByCertId = new Map(
     bindingRows.map((binding) => [binding.certificateId, binding]),
   );
@@ -162,6 +184,7 @@ export async function applyAgentCertificateDeployments(
           and(
             eq(certificateServer.certificateId, deployment.certificateId),
             eq(certificateServer.serverId, serverId),
+            ...(fence ? [fence] : []),
           ),
         );
       binding.desiredGeneration = activeVersion;
@@ -213,6 +236,7 @@ export async function applyAgentCertificateDeployments(
         and(
           eq(certificateServer.certificateId, deployment.certificateId),
           eq(certificateServer.serverId, serverId),
+          ...(fence ? [fence] : []),
         ),
       );
   }

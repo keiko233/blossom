@@ -15,6 +15,8 @@ export interface ServerFormValues {
   desiredSingBoxVersion: string;
   configPollIntervalSeconds: number;
   heartbeatIntervalSeconds: number;
+  /** Create-time only; ignored when editing. OAuth is the default. */
+  enableBackupToken: boolean;
 }
 
 function defaultValues(server?: ServerDTO): ServerFormValues {
@@ -27,6 +29,7 @@ function defaultValues(server?: ServerDTO): ServerFormValues {
     desiredSingBoxVersion: server?.desiredSingBoxVersion ?? "",
     configPollIntervalSeconds: server?.configPollIntervalSeconds ?? 60,
     heartbeatIntervalSeconds: server?.heartbeatIntervalSeconds ?? 30,
+    enableBackupToken: false,
   };
 }
 
@@ -62,9 +65,13 @@ export interface UseServerFormControllerOptions {
   server?: ServerDTO;
   /**
    * Called after a successful save. `token` is the one-time plaintext agent
-   * token, present only on create; the page reveals it before navigating back.
+   * token, present only on create when a backup credential was requested.
+   * `serverId` is present on create so the page can open the Connection tab.
    */
-  onSuccess: (result: { token?: string }) => void | Promise<void>;
+  onSuccess: (result: {
+    token?: string | null;
+    serverId?: string;
+  }) => void | Promise<void>;
 }
 
 /**
@@ -84,12 +91,17 @@ export function useServerFormController({
       const payload = toPayload(values);
       if (server) {
         await updateServer({ data: { id: server.id, ...payload } });
-        return { token: undefined as string | undefined };
+        return {
+          token: undefined as string | undefined,
+          serverId: server.id,
+        };
       }
-      const result = await createServer({ data: payload });
-      return { token: result.token };
+      const result = await createServer({
+        data: { ...payload, enableBackupToken: values.enableBackupToken },
+      });
+      return { token: result.token, serverId: result.server.id };
     },
-    onSuccess: async ({ token }) => {
+    onSuccess: async ({ token, serverId }) => {
       await queryClient.invalidateQueries({ queryKey: SERVERS_QUERY_KEY });
       toastManager.add({
         type: "success",
@@ -97,7 +109,7 @@ export function useServerFormController({
           ? m.admin_proxies_servers_toast_updated()
           : m.admin_proxies_servers_toast_created(),
       });
-      await onSuccess({ token });
+      await onSuccess({ token, serverId });
     },
     onError: () => {
       toastManager.add({

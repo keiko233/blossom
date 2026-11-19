@@ -28,6 +28,13 @@ pub enum WsError {
     Closed,
     /// The bounded outbound queue is full; the caller may retry later.
     QueueFull,
+    /// The upgrade succeeded but the control plane did not echo the required
+    /// subprotocol, so it does not speak it (an older control plane, or a
+    /// proxy that strips the header).
+    SubprotocolMismatch,
+    /// A machine access token could not be obtained. The agent keeps its
+    /// last-known-good configuration and retries with bounded backoff.
+    Auth(String),
 }
 
 impl WsError {
@@ -48,6 +55,10 @@ impl WsError {
             Self::Protocol(message) => format!("websocket protocol error: {message}"),
             Self::Closed => "websocket closed".to_string(),
             Self::QueueFull => "outbound websocket queue is full".to_string(),
+            Self::SubprotocolMismatch => {
+                "control plane did not accept the required websocket subprotocol".to_string()
+            }
+            Self::Auth(message) => format!("agent authentication unavailable: {message}"),
         }
     }
 }
