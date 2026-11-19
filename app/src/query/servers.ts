@@ -18,6 +18,7 @@ import {
   serverIdSchema,
   updateServerSchema,
 } from "@/orpc/proxy/schema";
+import { rotateAgentCredential } from "@/query/agent";
 import {
   countPendingConfigChangesByServer,
   recordConfigChange,
@@ -231,16 +232,9 @@ export const regenerateServerToken = createServerFn({ method: "POST" })
     await ensureAdmin();
     const credential = generateAgentToken();
 
-    const [row] = await db
-      .update(server)
-      .set({
-        agentTokenHash: credential.hash,
-        agentTokenPrefix: credential.prefix,
-        transportMode: "http",
-        wsConnectedAt: null,
-      })
-      .where(eq(server.id, data.id))
-      .returning();
+    // The rotation also ends the server's current v2 session, in the same
+    // statement, so the old credential's session cannot keep writing.
+    const row = await rotateAgentCredential(data.id, credential);
 
     if (!row) {
       throw new Error("Not found");
