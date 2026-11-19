@@ -62,7 +62,14 @@ const serverMetaSchema = z.object({
   heartbeatIntervalSeconds: z.number().int().min(5).max(300).default(30),
 });
 
-export const createServerSchema = serverMetaSchema;
+export const createServerSchema = serverMetaSchema.extend({
+  /**
+   * Standalone callers that omit this field keep the existing static-token
+   * default. The create form sends `false` explicitly so the UI is OAuth-first
+   * without changing the API's rollout behavior.
+   */
+  enableBackupToken: z.boolean().default(true),
+});
 
 export const updateServerSchema = serverMetaSchema.partial().extend({
   id: z.string().min(1),

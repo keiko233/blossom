@@ -117,12 +117,12 @@ unchanged (`config.get`, snapshots, `config.ack`, `agent.status`,
    creates generation n+1 as `pending` while generation n stays `active`. The
    new agent may connect and prove its credential with `hello`; until that
    proof, the live generation and its connection are untouched.
-3. The first valid `hello` from the pending generation makes the switch:
-   generation n is marked `superseded`, generation n+1 becomes `active`, and the
-   session fence moves to the new socket. The old socket's next frame or lease
-   check fails with `session_replaced` (close `4000`). A crash between the
-   demote and promote is recovered by the next handshake, which promotes the
-   still-pending generation when no active identity exists.
+3. The first valid `hello` from the pending generation makes the switch in one
+   statement: generation n is marked `superseded`, generation n+1 becomes
+   `active`, and the session fence moves to the new socket. A wrong proof
+   session, an expired pending token, or a concurrent revocation changes
+   nothing, so the old credential and fence remain usable. The old socket's
+   next frame or lease check fails with `session_replaced` (close `4000`).
 4. The Rust agent must keep its local proxy running if a replacement or
    reauthorization fails. A failed rotation leaves the old credential and the
    running proxy available. Do not delete the old secret until the new identity
@@ -156,9 +156,13 @@ unchanged (`config.get`, snapshots, `config.ack`, `agent.status`,
 
 **Established.**
 
-- Existing servers keep the static `Authorization: Bearer <token>` on v1 and
-  v2. Regenerating it clears the current session fence and refuses the old
-  token at the next upgrade.
+- OAuth-only servers have no static token: `agent_token_hash` is null. Existing
+  servers keep their static `Authorization: Bearer <token>` on v1, v2, and HTTP
+  until an administrator disables or replaces it.
+- An administrator can enable, disable, or reset the backup token. Reset also
+  works when the backup was never enabled. Disable and reset clear only a
+  current static session and refuse the old token at the next upgrade; an
+  active OAuth connection keeps its fence.
 - OAuth is the installer default. Static mode is an explicit backup choice; the
   agent must use the configured authentication mode even when OAuth is refused.
 - The static token is not accepted as an OAuth credential and is never sent to

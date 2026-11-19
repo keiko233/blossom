@@ -9,7 +9,7 @@ import type {
   AgentWsV2StatusPayload,
 } from "@blossom/contracts/agent-ws-v2";
 import { parseRevisionSeq } from "@blossom/domain/config-revision";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, sql } from "drizzle-orm";
 import { createHash, randomUUID } from "node:crypto";
 import type { z } from "zod";
 
@@ -74,8 +74,9 @@ function updateStatusColumns(
 
 export async function findAgentServerByTokenHash(
   tokenHash: string,
+  database: DbHandle = db,
 ): Promise<Server | null> {
-  const [row] = await db
+  const [row] = await database
     .select()
     .from(server)
     .where(eq(server.agentTokenHash, tokenHash));
@@ -259,6 +260,10 @@ export async function startAgentWsSession(
       wsCredentialIdentityId: null,
       wsCredentialGeneration: null,
       wsCredentialExpiresAt: null,
+      wsPendingSessionId: null,
+      wsPendingIdentityId: null,
+      wsPendingGeneration: null,
+      wsPendingExpiresAt: null,
     })
     .where(eq(server.id, serverId));
   return { connectedAt, sessionId };
@@ -274,8 +279,13 @@ export async function startAgentWsSession(
  */
 function currentAgentCredentialSql() {
   return sql`(
-    ${server.wsCredentialKind} IS NULL
-    OR ${server.wsCredentialKind} = 'static'
+    (
+      (
+        ${server.wsCredentialKind} IS NULL
+        OR ${server.wsCredentialKind} = 'static'
+      )
+      AND ${server.agentTokenHash} IS NOT NULL
+    )
     OR (
       ${server.wsCredentialKind} = 'oauth'
       AND ${server.wsCredentialExpiresAt} > timezone('utc', now())
@@ -350,6 +360,10 @@ function oauthSessionColumns(
     wsCredentialIdentityId: credential.identityId,
     wsCredentialGeneration: credential.generation,
     wsCredentialExpiresAt: new Date(credential.expiresAt * 1000),
+    wsPendingSessionId: null,
+    wsPendingIdentityId: null,
+    wsPendingGeneration: null,
+    wsPendingExpiresAt: null,
   };
 }
 
@@ -379,6 +393,10 @@ export async function startAgentV2WsSession(
         wsCredentialIdentityId: null,
         wsCredentialGeneration: null,
         wsCredentialExpiresAt: null,
+        wsPendingSessionId: null,
+        wsPendingIdentityId: null,
+        wsPendingGeneration: null,
+        wsPendingExpiresAt: null,
       })
       .where(
         and(
@@ -435,6 +453,25 @@ export async function startAgentV2WsSession(
   }
 
   if (identity.status === "pending") {
+    const proof = await database
+      .update(server)
+      .set({
+        wsPendingSessionId: sessionId,
+        wsPendingIdentityId: credential.identityId,
+        wsPendingGeneration: credential.generation,
+        wsPendingExpiresAt: new Date(credential.expiresAt * 1000),
+      })
+      .where(
+        and(
+          eq(server.id, serverId),
+          eq(server.enabled, true),
+          usableOauthIdentitySql(serverId, credential, ["pending"]),
+        ),
+      )
+      .returning({ id: server.id });
+    if (proof.length === 0) {
+      return null;
+    }
     return {
       connectedAt,
       sessionId,
@@ -469,11 +506,12 @@ export async function startAgentV2WsSession(
 
 /**
  * Promotes a pending OAuth identity after its `hello` proved the connection,
- * then makes that session current. First installation is one conditional
- * UPDATE. Rotation demotes the old active identity before promoting the pending
- * one; a crash between those two statements is recovered on the next handshake
- * because promotion also runs when the server has no active identity. Both
- * statements are idempotent and work on neon-http's non-interactive driver.
+ * and moves the active fence to that exact socket. The proof lane, the identity
+ * transition, and the server fence are one statement: either the pending
+ * generation becomes active and owns the lane, or nothing changes and the old
+ * active identity and session remain usable. The demote and promote are one
+ * row-set UPDATE, so the partial unique active index stays satisfied and the
+ * statement is safe on neon-http's non-interactive driver.
  */
 export async function promoteAgentV2WsSession(
   serverId: string,
@@ -488,132 +526,104 @@ export async function promoteAgentV2WsSession(
     return null;
   }
 
-  const [identity] = await database
-    .select({
-      status: agentIdentity.status,
-      generation: agentIdentity.generation,
-    })
-    .from(agentIdentity)
-    .where(
-      and(
-        eq(agentIdentity.id, credential.identityId),
-        eq(agentIdentity.serverId, serverId),
-        eq(agentIdentity.generation, credential.generation),
-        inArray(agentIdentity.status, ["pending", "active"]),
+  const rows = await database.execute<{ id: string }>(
+    sql`
+      WITH proof AS MATERIALIZED (
+        SELECT s.id AS server_id, a.id AS identity_id, a.generation
+        FROM server s
+        JOIN agent_identity a ON a.server_id = s.id
+        JOIN oauth_client oc ON oc.client_id = a.oauth_client_id
+        WHERE s.id = ${serverId}::text
+          AND s.enabled = true
+          AND s.ws_pending_session_id = ${sessionId}::text
+          AND s.ws_pending_identity_id = ${credential.identityId}::text
+          AND s.ws_pending_generation = ${credential.generation}::integer
+          AND s.ws_pending_expires_at > timezone('utc', now())
+          AND a.id = ${credential.identityId}::text
+          AND a.generation = ${credential.generation}::integer
+          AND a.status = 'pending'
+          AND oc.disabled = false
+          AND EXISTS (
+            SELECT 1 FROM oauth_client_resource r
+            WHERE r.client_id = oc.client_id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM agent_identity newer
+            WHERE newer.server_id = s.id
+              AND newer.generation > a.generation
+              AND newer.status IN ('pending', 'active')
+          )
+        FOR UPDATE OF s, a
       ),
-    )
-    .limit(1);
-  if (
-    !identity ||
-    !(await usableOauthIdentity(serverId, credential, database))
-  ) {
+      transition AS (
+        UPDATE agent_identity a
+        SET status = CASE
+              WHEN a.id = ${credential.identityId}::text THEN 'active'
+              ELSE 'superseded'
+            END,
+            activated_at = CASE
+              WHEN a.id = ${credential.identityId}::text
+                THEN timezone('utc', now())
+              ELSE a.activated_at
+            END,
+            updated_at = timezone('utc', now())
+        WHERE a.server_id = ${serverId}::text
+          AND EXISTS (SELECT 1 FROM proof)
+          AND (
+            (
+              a.id = ${credential.identityId}::text
+              AND a.status = 'pending'
+            )
+            OR (
+              a.status = 'active'
+              AND a.id <> ${credential.identityId}::text
+              AND a.generation < ${credential.generation}::integer
+            )
+          )
+        RETURNING a.id, a.status
+      ),
+      fence AS (
+        UPDATE server s
+        SET last_seen_at = timezone('utc', now()),
+            transport_mode = 'ws',
+            ws_connected_at = timezone('utc', now()),
+            ws_session_id = ${sessionId}::text,
+            ws_credential_kind = 'oauth',
+            ws_credential_identity_id = ${credential.identityId}::text,
+            ws_credential_generation = ${credential.generation}::integer,
+            ws_credential_expires_at = to_timestamp(${credential.expiresAt}),
+            ws_pending_session_id = NULL,
+            ws_pending_identity_id = NULL,
+            ws_pending_generation = NULL,
+            ws_pending_expires_at = NULL,
+            updated_at = timezone('utc', now())
+        WHERE s.id = ${serverId}::text
+          AND EXISTS (SELECT 1 FROM proof)
+          AND EXISTS (
+            SELECT 1 FROM transition
+            WHERE id = ${credential.identityId}::text
+              AND status = 'active'
+          )
+        RETURNING s.id
+      )
+      SELECT id FROM fence
+    `,
+    "objects",
+  );
+  if (rows.length === 0) {
     return null;
   }
-
-  if (identity.status === "pending") {
-    const promoted = await database.execute<{ id: string }>(
-      sql`
-        UPDATE agent_identity
-        SET status = 'active',
-            activated_at = timezone('utc', now()),
-            updated_at = timezone('utc', now())
-        WHERE id = ${credential.identityId}::text
-          AND server_id = ${serverId}::text
-          AND generation = ${credential.generation}::integer
-          AND status = 'pending'
-          AND NOT EXISTS (
-            SELECT 1 FROM agent_identity a
-            WHERE a.server_id = ${serverId}::text AND a.status = 'active'
-          )
-        RETURNING id
-      `,
-      "objects",
-    );
-    if (promoted.length === 0) {
-      // A replace grant leaves the previous generation active. Demote it, then
-      // promote this generation; the next handshake repeats this sequence if
-      // the process stops between the two statements.
-      await database.execute(
-        sql`
-          UPDATE agent_identity
-          SET status = 'superseded',
-              updated_at = timezone('utc', now())
-          WHERE server_id = ${serverId}::text
-            AND status = 'active'
-            AND id <> ${credential.identityId}::text
-            AND generation < ${credential.generation}::integer
-        `,
-        "objects",
-      );
-      await database.execute(
-        sql`
-          UPDATE agent_identity
-          SET status = 'active',
-              activated_at = timezone('utc', now()),
-              updated_at = timezone('utc', now())
-          WHERE id = ${credential.identityId}::text
-            AND server_id = ${serverId}::text
-            AND generation = ${credential.generation}::integer
-            AND status = 'pending'
-            AND NOT EXISTS (
-              SELECT 1 FROM agent_identity a
-              WHERE a.server_id = ${serverId}::text AND a.status = 'active'
-            )
-          RETURNING id
-        `,
-        "objects",
-      );
-    }
-  }
-
-  const [row] = await database
-    .update(server)
-    .set(oauthSessionColumns(new Date(), sessionId, credential))
-    .where(
-      and(
-        eq(server.id, serverId),
-        eq(server.enabled, true),
-        usableOauthIdentitySql(serverId, credential, ["active"]),
-      ),
-    )
-    .returning();
-  return row ?? null;
+  return loadCurrentAgentServer(serverId, sessionId, database);
 }
 
-async function usableOauthIdentity(
-  serverId: string,
-  credential: Extract<AgentSessionCredential, { kind: "oauth" }>,
-  database: DbHandle,
-): Promise<boolean> {
-  const [row] = await database
-    .select({ id: agentIdentity.id })
-    .from(agentIdentity)
-    .innerJoin(
-      oauthClient,
-      eq(oauthClient.clientId, agentIdentity.oauthClientId),
-    )
-    .innerJoin(server, eq(server.id, agentIdentity.serverId))
-    .where(
-      and(
-        eq(agentIdentity.id, credential.identityId),
-        eq(agentIdentity.serverId, serverId),
-        eq(agentIdentity.generation, credential.generation),
-        inArray(agentIdentity.status, ["pending", "active"]),
-        eq(oauthClient.disabled, false),
-        eq(server.enabled, true),
-        sql`EXISTS (
-          SELECT 1 FROM oauth_client_resource r
-          WHERE r.client_id = ${oauthClient.clientId}
-        )`,
-      ),
-    )
-    .limit(1);
-  return Boolean(row);
-}
-
-/** Whether a pending proof session still holds an unexpired usable identity. */
+/**
+ * Whether this exact pending proof lane still holds an unexpired usable
+ * identity. A newer handshake for the same pending identity overwrites the
+ * proof columns, so the older socket fails its lease check.
+ */
 export async function revalidatePendingAgentV2Session(
   serverId: string,
+  sessionId: string,
   credential: AgentSessionCredential,
   database: DbHandle = db,
 ): Promise<boolean> {
@@ -623,7 +633,34 @@ export async function revalidatePendingAgentV2Session(
   if (credential.expiresAt <= Math.floor(Date.now() / 1000)) {
     return false;
   }
-  return usableOauthIdentity(serverId, credential, database);
+  const [row] = await database
+    .select({ id: server.id })
+    .from(server)
+    .innerJoin(agentIdentity, eq(agentIdentity.serverId, server.id))
+    .innerJoin(
+      oauthClient,
+      eq(oauthClient.clientId, agentIdentity.oauthClientId),
+    )
+    .where(
+      and(
+        eq(server.id, serverId),
+        eq(server.enabled, true),
+        eq(server.wsPendingSessionId, sessionId),
+        eq(server.wsPendingIdentityId, credential.identityId),
+        eq(server.wsPendingGeneration, credential.generation),
+        gt(server.wsPendingExpiresAt, new Date()),
+        eq(agentIdentity.id, credential.identityId),
+        eq(agentIdentity.generation, credential.generation),
+        eq(agentIdentity.status, "pending"),
+        eq(oauthClient.disabled, false),
+        sql`EXISTS (
+          SELECT 1 FROM oauth_client_resource r
+          WHERE r.client_id = ${oauthClient.clientId}
+        )`,
+      ),
+    )
+    .limit(1);
+  return Boolean(row);
 }
 
 /**
@@ -667,18 +704,62 @@ export async function endAgentWsSession(
   sessionId: string,
   database: DbHandle = db,
 ): Promise<void> {
-  await database
-    .update(server)
-    .set({
-      transportMode: "http",
-      wsConnectedAt: null,
-      wsSessionId: null,
-      wsCredentialKind: null,
-      wsCredentialIdentityId: null,
-      wsCredentialGeneration: null,
-      wsCredentialExpiresAt: null,
-    })
-    .where(and(eq(server.id, serverId), eq(server.wsSessionId, sessionId)));
+  await database.execute(
+    sql`
+      UPDATE server
+      SET transport_mode = CASE
+            WHEN ws_session_id = ${sessionId}::text THEN 'http'
+            ELSE transport_mode
+          END,
+          ws_connected_at = CASE
+            WHEN ws_session_id = ${sessionId}::text THEN NULL
+            ELSE ws_connected_at
+          END,
+          ws_session_id = CASE
+            WHEN ws_session_id = ${sessionId}::text THEN NULL
+            ELSE ws_session_id
+          END,
+          ws_credential_kind = CASE
+            WHEN ws_session_id = ${sessionId}::text THEN NULL
+            ELSE ws_credential_kind
+          END,
+          ws_credential_identity_id = CASE
+            WHEN ws_session_id = ${sessionId}::text THEN NULL
+            ELSE ws_credential_identity_id
+          END,
+          ws_credential_generation = CASE
+            WHEN ws_session_id = ${sessionId}::text THEN NULL
+            ELSE ws_credential_generation
+          END,
+          ws_credential_expires_at = CASE
+            WHEN ws_session_id = ${sessionId}::text THEN NULL
+            ELSE ws_credential_expires_at
+          END,
+          ws_pending_session_id = CASE
+            WHEN ws_pending_session_id = ${sessionId}::text THEN NULL
+            ELSE ws_pending_session_id
+          END,
+          ws_pending_identity_id = CASE
+            WHEN ws_pending_session_id = ${sessionId}::text THEN NULL
+            ELSE ws_pending_identity_id
+          END,
+          ws_pending_generation = CASE
+            WHEN ws_pending_session_id = ${sessionId}::text THEN NULL
+            ELSE ws_pending_generation
+          END,
+          ws_pending_expires_at = CASE
+            WHEN ws_pending_session_id = ${sessionId}::text THEN NULL
+            ELSE ws_pending_expires_at
+          END,
+          updated_at = timezone('utc', now())
+      WHERE id = ${serverId}::text
+        AND (
+          ws_session_id = ${sessionId}::text
+          OR ws_pending_session_id = ${sessionId}::text
+        )
+    `,
+    "objects",
+  );
 }
 
 /**
@@ -1109,33 +1190,94 @@ export async function invalidateDesiredConfigRevisionsAfterCommit(
   }
 }
 
+/** Ends only a current static session, leaving an active OAuth fence intact. */
+function clearStaticSessionAssignmentsSql() {
+  const isStatic = sql`${server.wsCredentialKind} IS NULL OR ${server.wsCredentialKind} = 'static'`;
+  return sql`
+    transport_mode = CASE WHEN ${isStatic} THEN 'http' ELSE ${server.transportMode} END,
+    ws_connected_at = CASE WHEN ${isStatic} THEN NULL ELSE ${server.wsConnectedAt} END,
+    ws_session_id = CASE WHEN ${isStatic} THEN NULL ELSE ${server.wsSessionId} END,
+    ws_credential_kind = CASE WHEN ${isStatic} THEN NULL ELSE ${server.wsCredentialKind} END,
+    ws_credential_identity_id = CASE WHEN ${isStatic} THEN NULL ELSE ${server.wsCredentialIdentityId} END,
+    ws_credential_generation = CASE WHEN ${isStatic} THEN NULL ELSE ${server.wsCredentialGeneration} END,
+    ws_credential_expires_at = CASE WHEN ${isStatic} THEN NULL ELSE ${server.wsCredentialExpiresAt} END
+  `;
+}
+
 /**
- * Replaces a server's static agent credential and ends its current v2 session
- * in the same statement. The old session's fenced writes then match no row and
- * its configuration reads fail, so it stops at its next frame, and a reconnect
- * with the old credential is refused at the upgrade.
+ * Enables a static backup credential only when the server has none. Existing
+ * OAuth or static sessions are untouched: there was no static credential to
+ * invalidate.
+ */
+export async function enableAgentBackupCredential(
+  serverId: string,
+  credential: { hash: string; prefix: string },
+  database: DbHandle = db,
+): Promise<{ id: string } | null> {
+  const rows = await database.execute<{ id: string }>(
+    sql`
+      UPDATE server
+      SET agent_token_hash = ${credential.hash},
+          agent_token_prefix = ${credential.prefix},
+          updated_at = timezone('utc', now())
+      WHERE id = ${serverId}::text
+        AND agent_token_hash IS NULL
+      RETURNING id
+    `,
+    "objects",
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * Disables the static backup credential and ends an existing static session in
+ * the same statement. An active OAuth session, and any pending OAuth proof, is
+ * left untouched.
+ */
+export async function disableAgentBackupCredential(
+  serverId: string,
+  database: DbHandle = db,
+): Promise<{ id: string } | null> {
+  const rows = await database.execute<{ id: string }>(
+    sql`
+      UPDATE server
+      SET agent_token_hash = NULL,
+          agent_token_prefix = NULL,
+          ${clearStaticSessionAssignmentsSql()},
+          updated_at = timezone('utc', now())
+      WHERE id = ${serverId}::text
+      RETURNING id
+    `,
+    "objects",
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * Replaces (or first enables) a server's static backup credential and ends its
+ * current static v2 session in the same statement. The old session's fenced
+ * writes then match no row and its configuration reads fail, so it stops at
+ * its next frame; a reconnect with the old credential is refused at upgrade.
+ * An active OAuth session is not displaced.
  */
 export async function rotateAgentCredential(
   serverId: string,
   credential: { hash: string; prefix: string },
   database: DbHandle = db,
 ): Promise<{ id: string } | null> {
-  const [row] = await database
-    .update(server)
-    .set({
-      agentTokenHash: credential.hash,
-      agentTokenPrefix: credential.prefix,
-      transportMode: "http",
-      wsConnectedAt: null,
-      wsSessionId: null,
-      wsCredentialKind: null,
-      wsCredentialIdentityId: null,
-      wsCredentialGeneration: null,
-      wsCredentialExpiresAt: null,
-    })
-    .where(eq(server.id, serverId))
-    .returning({ id: server.id });
-  return row ?? null;
+  const rows = await database.execute<{ id: string }>(
+    sql`
+      UPDATE server
+      SET agent_token_hash = ${credential.hash},
+          agent_token_prefix = ${credential.prefix},
+          ${clearStaticSessionAssignmentsSql()},
+          updated_at = timezone('utc', now())
+      WHERE id = ${serverId}::text
+      RETURNING id
+    `,
+    "objects",
+  );
+  return rows[0] ?? null;
 }
 
 /**

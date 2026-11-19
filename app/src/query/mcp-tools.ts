@@ -4,7 +4,7 @@ import { db, getDatabaseDriver } from "@/db";
 import { user } from "@/db/auth-schema";
 import { session } from "@/db/auth-schema";
 import { plan, type Subscription, subscription } from "@/db/plan-schema";
-import { type Node, node, type Server, server } from "@/db/proxy-schema";
+import { type Node, node, server } from "@/db/proxy-schema";
 import { notifyAgentConfigChanged } from "@/lib/agent-notifications";
 import { supportsInteractiveTransactions } from "@/lib/env-schema";
 import {
@@ -19,7 +19,7 @@ import {
   recordConfigChange,
 } from "@/query/config-change";
 import { deleteServerRecord } from "@/query/server-deletion";
-import type { ServerDTO } from "@/query/servers";
+import { type ServerDTO, toServerDTO } from "@/query/server-dto";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -42,11 +42,6 @@ export type UserSummary = {
   createdAt: Date;
   updatedAt: Date;
 };
-
-function stripAgentTokenHash(row: Server): ServerDTO {
-  const { agentTokenHash: _, ...rest } = row;
-  return rest;
-}
 
 function stripSubscriptionCredentials(row: Subscription): SubscriptionSummary {
   const {
@@ -149,7 +144,7 @@ export async function listServersMCP(
     .from(server)
     .orderBy(desc(server.createdAt))
     .limit(clampLimit(limit));
-  return rows.map(stripAgentTokenHash);
+  return rows.map(toServerDTO);
 }
 
 export async function getServerMCP(
@@ -158,7 +153,7 @@ export async function getServerMCP(
 ): Promise<ServerDTO | null> {
   await requireActorAdmin(actorUserId);
   const [row] = await db.select().from(server).where(eq(server.id, serverId));
-  return row ? stripAgentTokenHash(row) : null;
+  return row ? toServerDTO(row) : null;
 }
 
 export async function listPlansMCP(
@@ -475,7 +470,7 @@ export async function updateServerMCP(
       serverIds: [serverId],
     });
   }
-  return stripAgentTokenHash(row);
+  return toServerDTO(row);
 }
 
 export async function enableServerMCP(
@@ -502,7 +497,7 @@ export async function enableServerMCP(
       serverIds: [serverId],
     });
   }
-  return stripAgentTokenHash(row);
+  return toServerDTO(row);
 }
 
 export async function disableServerMCP(
@@ -529,7 +524,7 @@ export async function disableServerMCP(
       serverIds: [serverId],
     });
   }
-  return stripAgentTokenHash(row);
+  return toServerDTO(row);
 }
 
 export async function deleteServerMCP(

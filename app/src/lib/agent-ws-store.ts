@@ -132,6 +132,7 @@ export function createAgentWsV2Store(
       if (pending) {
         return (await revalidatePendingAgentV2Session(
           serverId,
+          sessionId,
           credential,
           database,
         ))

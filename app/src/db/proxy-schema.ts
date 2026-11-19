@@ -48,8 +48,8 @@ export type AgentWsCredentialKind = "static" | "oauth";
  * it owns the agent token, heartbeat, agent version, and a default public
  * address. One server has many nodes, each compiled into a separate sing-box
  * inbound that the agent pulls as a single multi-inbound config. The agent
- * authenticates with `server.agentTokenHash`; nodes inherit no token of their
- * own.
+ * authenticates with its OAuth identity, or with `server.agentTokenHash` when
+ * a static backup is enabled; nodes inherit no credential of their own.
  */
 export const server = pgTable(
   "server",
@@ -63,12 +63,13 @@ export const server = pgTable(
     // the node has no address override of its own.
     address: text("address").notNull(),
 
-    // Server-level agent credential (Authorization: Bearer <token>) shared by
-    // every node running on the host. Only a SHA-256 hash is stored; the
-    // plaintext is returned once at create/reset time. The prefix is kept for
-    // display/identification.
-    agentTokenHash: text("agent_token_hash").notNull().unique(),
-    agentTokenPrefix: text("agent_token_prefix").notNull(),
+    // Optional static backup credential (Authorization: Bearer <token>). OAuth
+    // machine identity is the default; a server has a static token only when an
+    // administrator explicitly enables it. Existing rows keep their hash.
+    // Only a SHA-256 hash is stored; the plaintext is returned once at
+    // enable/reset time. The prefix is kept for display/identification.
+    agentTokenHash: text("agent_token_hash").unique(),
+    agentTokenPrefix: text("agent_token_prefix"),
     lastSeenAt: timestamp("last_seen_at"),
     // Current push-channel transport. HTTP polling remains the fallback, so a
     // closed agent WebSocket returns this to "http" until the next handshake.
@@ -90,6 +91,14 @@ export const server = pgTable(
     wsCredentialIdentityId: text("ws_credential_identity_id"),
     wsCredentialGeneration: integer("ws_credential_generation"),
     wsCredentialExpiresAt: timestamp("ws_credential_expires_at"),
+    // A pending OAuth identity gets a proof-only lane until its `hello`. These
+    // columns name exactly which socket proof still belongs to the rotation;
+    // promotion consumes them atomically with the active fence transition. A
+    // later pending handshake overwrites them, fencing the older proof socket.
+    wsPendingSessionId: text("ws_pending_session_id"),
+    wsPendingIdentityId: text("ws_pending_identity_id"),
+    wsPendingGeneration: integer("ws_pending_generation"),
+    wsPendingExpiresAt: timestamp("ws_pending_expires_at"),
     agentVersion: text("agent_version"),
     // Build identity and capability surface reported by the agent on every
     // heartbeat. `agentBuildId` is a stable build tag; `agentCapabilities`

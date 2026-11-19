@@ -8,7 +8,8 @@ import {
   verifyAgentAccessToken,
   type AgentIdentityUse,
 } from "@/lib/agent-oauth";
-import { hashAgentToken, parseBearerToken } from "@/lib/agent-token";
+import { authenticateStaticAgentToken } from "@/lib/agent-static-auth";
+import { parseBearerToken } from "@/lib/agent-token";
 import { getServerEnv } from "@/lib/env";
 import { getOAuthResourceIdentifiers } from "@/lib/oauth-provider-config";
 import { getRealtimeHub } from "@/lib/realtime-hub";
@@ -59,15 +60,19 @@ export async function authenticateAgentWsRequest(
   if (!token) {
     return null;
   }
-  const tokenHash = hashAgentToken(token);
-  const staticServer = await lookup(tokenHash);
-  if (staticServer) {
-    return staticServer.enabled
-      ? {
-          server: staticServer,
-          credential: { kind: "static", tokenHash },
-        }
-      : null;
+  const staticAuthentication = await authenticateStaticAgentToken(
+    token,
+    { allowDisabled: false },
+    lookup,
+  );
+  if (staticAuthentication) {
+    return {
+      server: staticAuthentication.server,
+      credential: {
+        kind: "static",
+        tokenHash: staticAuthentication.tokenHash,
+      },
+    };
   }
 
   const identity = await verifyOauth(token).catch((error: unknown) => {
