@@ -679,6 +679,7 @@ async fn a_replaced_session_and_a_disabled_server_end_the_connection() {
         )))
         .unwrap();
     assert_eq!(harness.task.await.unwrap(), SessionEnd::ServerDisabled);
+    assert_eq!(harness.core.disabled.recv().await, Some(()));
 }
 
 #[tokio::test(start_paused = true)]

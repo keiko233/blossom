@@ -1,8 +1,11 @@
-//! Process-level lifecycle test for protocol v2.
+//! Process-level lifecycle test for the default protocol v2 path.
 //!
 //! The real agent binary runs against a local WebSocket control plane and a
 //! fake sing-box. The control plane never serves the old HTTP agent API; any
-//! such request is recorded and failed. The test covers a cold snapshot apply,
+//! such request is recorded and failed. The agent is started without
+//! `--ws-protocol` (and with any inherited `AGENT_WS_PROTOCOL` removed), so
+//! this is the same entry point an installed static backup uses. The test
+//! covers a cold snapshot apply,
 //! a traffic acknowledgement lost with the socket and replayed under the same
 //! report id, a missed-notification recovery through `agent.status.ack`, a
 //! failed candidate that rolls back to the last-known-good config, and an
@@ -68,6 +71,13 @@ struct Harness {
 }
 
 impl Harness {
+    fn state_file(&self) -> Value {
+        serde_json::from_slice(&fs::read(self.state_dir.join("state.json")).unwrap_or_default())
+            .unwrap_or(Value::Null)
+    }
+}
+
+impl Harness {
     fn new() -> Self {
         let dir = TestDir::new();
         let state_dir = dir.path().join("state");
@@ -94,13 +104,14 @@ impl Harness {
             .open(&self.agent_log)
             .unwrap();
         let mut command = Command::new(env!("CARGO_BIN_EXE_server-agent"));
+        // Exercise the shipped default: a static backup token with no
+        // `--ws-protocol` flag and no `AGENT_WS_PROTOCOL` override.
         command
+            .env_remove("AGENT_WS_PROTOCOL")
             .arg("--url")
             .arg(url)
             .arg("--token")
             .arg("test-agent-token")
-            .arg("--ws-protocol")
-            .arg("v2")
             .arg("--state-dir")
             .arg(&self.state_dir)
             .arg("--sing-box-path")
@@ -131,6 +142,11 @@ impl Harness {
         fs::read_to_string(self.state_dir.join("active.json")).unwrap_or_default()
     }
 
+    fn running_config(&self) -> Value {
+        let path = format!("{}.config", self.fake_log.display());
+        serde_json::from_slice(&fs::read(path).unwrap_or_default()).unwrap_or(Value::Null)
+    }
+
     fn agent_output(&self) -> String {
         fs::read_to_string(&self.agent_log).unwrap_or_default()
     }
@@ -150,6 +166,7 @@ case "$1" in
     ;;
   run)
     echo "run $3" >> "$FAKE_SINGBOX_LOG"
+    cp "$3" "${FAKE_SINGBOX_LOG}.config"
     echo "synthetic-alpha INFO agent ready"
     echo "synthetic-warn WARN dial tcp refused" >&2
     echo "synthetic-secret ERROR authorization=Bearer topsecret-value" >&2
@@ -546,19 +563,122 @@ async fn session_two(stream: TcpStream, first_traffic: Value) {
     let _ = socket.close(None).await;
 }
 
+async fn session_disabled_live(stream: TcpStream) -> Value {
+    let mut socket = upgrade(stream).await;
+    let hello = receive(&mut socket).await;
+    assert_eq!(hello["type"], "hello", "first session: {hello}");
+    send(&mut socket, &welcome(D1)).await;
+    loop {
+        let Some(frame) = next_session_frame(&mut socket).await else {
+            panic!("the disabled session ended before reaching applied");
+        };
+        match frame["type"].as_str().unwrap_or_default() {
+            "config.get" => {
+                let request_id = frame["payload"]["requestId"].as_str().unwrap();
+                send_snapshot(&mut socket, request_id, D1, &document(D1, false)).await;
+            }
+            "config.ack" => {
+                assert_eq!(frame["payload"]["outcome"], "applied", "{frame}");
+                let _ = send(
+                    &mut socket,
+                    &json!({
+                        "v": 2,
+                        "type": "error",
+                        "ts": chrono::Utc::now().to_rfc3339(),
+                        "payload": {"code": "server_disabled", "message": "server is disabled"}
+                    }),
+                )
+                .await;
+                let _ = socket.close(None).await;
+                return frame;
+            }
+            "traffic.report" => {
+                let report_id = frame["payload"]["reportId"].as_str().unwrap();
+                send(&mut socket, &traffic_ack(report_id)).await;
+            }
+            "agent.status" => {
+                assert!(
+                    frame["payload"]["activeNodeIds"]
+                        .as_array()
+                        .is_some_and(|ids| ids.iter().any(|id| id == "node-test")),
+                    "the proxy must be reported as applied before the disable: {frame}"
+                );
+            }
+            "log.policy.ack" => {}
+            "telemetry.sample" => {}
+            other => panic!("unexpected frame before disable: {other}: {frame}"),
+        }
+    }
+}
+
+async fn session_reenabled_live(stream: TcpStream) {
+    let mut socket = upgrade(stream).await;
+    let hello = receive(&mut socket).await;
+    assert_eq!(hello["type"], "hello", "re-enabled session: {hello}");
+    // The teardown has no applied identifier, so a disabled restart may send
+    // `null`. Either way, only the fresh authoritative revision may commit.
+    send(&mut socket, &welcome(D2)).await;
+    loop {
+        let Some(frame) = next_session_frame(&mut socket).await else {
+            panic!("the enabled session ended before acknowledging its snapshot");
+        };
+        match frame["type"].as_str().unwrap_or_default() {
+            "config.get" => {
+                let request_id = frame["payload"]["requestId"].as_str().unwrap();
+                send_snapshot(&mut socket, request_id, D2, &document(D2, false)).await;
+            }
+            "config.ack" => {
+                assert_eq!(frame["payload"]["outcome"], "applied", "{frame}");
+                let _ = socket.close(None).await;
+                return;
+            }
+            "agent.status" | "traffic.report" | "log.policy.ack" | "telemetry.sample" => {}
+            other => panic!("unexpected frame in the re-enabled session: {other}: {frame}"),
+        }
+    }
+}
+
+async fn next_session_frame(socket: &mut WebSocket) -> Option<Value> {
+    loop {
+        let Some(Ok(item)) = timeout(Duration::from_secs(20), socket.next())
+            .await
+            .ok()
+            .flatten()
+        else {
+            return None;
+        };
+        match item {
+            Message::Text(text) => return Some(serde_json::from_str(text.as_str()).unwrap()),
+            Message::Ping(payload) => {
+                socket.send(Message::Pong(payload)).await.unwrap();
+            }
+            Message::Pong(_) | Message::Frame(_) => {}
+            Message::Binary(_) => panic!("v2 carries text frames only"),
+            Message::Close(_) => return None,
+        }
+    }
+}
+
 async fn run_first_session(socket: &mut WebSocket) -> Value {
     let mut config_acked = false;
     let mut traffic = None;
     let mut history_seen = false;
     let mut live_seen = false;
     let mut snapshot_seen = false;
+    let mut committed = false;
     let has_interfaces = has_non_loopback_interface();
     send(
         socket,
         &telemetry_subscribe("history-session-1", "history", 60_000),
     )
     .await;
-    while !config_acked || traffic.is_none() || !history_seen || !live_seen || !snapshot_seen {
+    while !config_acked
+        || traffic.is_none()
+        || !history_seen
+        || !live_seen
+        || !snapshot_seen
+        || !committed
+    {
         let frame = receive(socket).await;
         match frame["type"].as_str().unwrap() {
             "config.get" => {
@@ -641,9 +761,44 @@ async fn run_first_session(socket: &mut WebSocket) -> Value {
                 )
                 .await;
             }
-            "agent.status" => {}
+            "agent.status" => {
+                if frame["payload"]["activeNodeIds"]
+                    .as_array()
+                    .is_some_and(|ids| ids.iter().any(|id| id == "node-test"))
+                    && frame["payload"]["configState"] == "applied"
+                {
+                    committed = true;
+                }
+            }
             "log.policy.ack" => {}
             other => panic!("unexpected frame in the first session: {other}: {frame}"),
+        }
+    }
+    // Let the core publish the durable commit before the reconnect follows.
+    // The status above is the transition; the next status confirms it.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while tokio::time::Instant::now() < deadline {
+        match timeout(Duration::from_millis(100), socket.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                let frame: Value = serde_json::from_str(text.as_str()).unwrap();
+                match frame["type"].as_str().unwrap_or_default() {
+                    "agent.status" => break,
+                    "config.get" => {
+                        let request_id = frame["payload"]["requestId"].as_str().unwrap();
+                        send_snapshot(socket, request_id, D1, &document(D1, false)).await;
+                    }
+                    "traffic.report" => {}
+                    "log.policy.ack" => {}
+                    _ => {}
+                }
+            }
+            Ok(Some(Ok(Message::Ping(payload)))) => {
+                socket.send(Message::Pong(payload)).await.unwrap();
+            }
+            Ok(Some(Ok(Message::Close(_)))) | Ok(None) => break,
+            Ok(Some(Ok(_))) => {}
+            Ok(Some(Err(_))) => break,
+            Err(_) => break,
         }
     }
     send(socket, &log_policy_notify(1)).await;
@@ -716,7 +871,7 @@ async fn run_first_session(socket: &mut WebSocket) -> Value {
                     break;
                 }
             }
-            "agent.status" => {}
+            "agent.status" | "config.get" => {}
             other => panic!("unexpected frame while log policy reconciled: {other}: {frame}"),
         }
     }
@@ -1039,8 +1194,24 @@ async fn stop_agent(child: &mut Child) {
     }
 }
 
+async fn wait_for_state(harness: &Harness, condition: impl Fn(&Value) -> bool) -> Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let state = harness.state_file();
+        if condition(&state) {
+            return state;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "state did not converge:\n{}",
+            serde_json::to_string_pretty(&state).unwrap_or_default()
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 #[tokio::test]
-async fn the_v2_agent_completes_its_lifecycle_without_the_http_agent_api() {
+async fn the_default_agent_completes_its_lifecycle_without_the_http_agent_api() {
     let harness = Harness::new();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -1114,5 +1285,93 @@ async fn the_v2_agent_completes_its_lifecycle_without_the_http_agent_api() {
         harness.http_requests.lock().unwrap().is_empty(),
         "the offline v2 agent called the HTTP agent API: {:?}",
         harness.http_requests.lock().unwrap()
+    );
+}
+
+#[tokio::test]
+async fn a_live_disable_tears_down_and_a_later_enabled_config_reapplies() {
+    let harness = Harness::new();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        for session in 0..2 {
+            let stream = listener.accept().await.expect("accept").0;
+            if peek_is_websocket(&stream).await {
+                if session == 0 {
+                    session_disabled_live(stream).await;
+                } else {
+                    session_reenabled_live(stream).await;
+                    break;
+                }
+            }
+        }
+    });
+
+    let url = format!("http://{address}/api");
+    let mut agent = harness.spawn_agent(&url);
+    let state = wait_for_state(&harness, |state| state["disabled"] == true).await;
+    assert_eq!(state["disabled"], true, "{state}");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while harness.running_config()["inbounds"] != json!([])
+        && tokio::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        harness.running_config()["inbounds"],
+        json!([]),
+        "the applied proxy config must stop serving"
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while harness.active_config().contains("\"node-test\"")
+        && tokio::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        !harness.active_config().contains("\"node-test\""),
+        "active config still serves the old inbound:\n{}",
+        harness.active_config()
+    );
+    // Restart the agent: the persisted disabled state must not restore the
+    // old proxy inbound, and the next enabled welcome must apply before serving.
+    stop_agent(&mut agent).await;
+    let runs = harness.runs();
+    let mut restarted = harness.spawn_agent(&url);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while harness.runs() <= runs && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        harness.runs() > runs,
+        "the disabled restart did not launch its teardown"
+    );
+    assert_eq!(harness.running_config()["inbounds"], json!([]));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while harness.state_file()["disabled"] != false && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        harness.state_file()["disabled"],
+        false,
+        "a fresh enabled snapshot must clear the disable marker:\n{}",
+        serde_json::to_string_pretty(&harness.state_file()).unwrap_or_default()
+    );
+    assert_eq!(
+        harness.state_file()["applied_revision"],
+        D2,
+        "the fresh enabled revision must commit"
+    );
+    assert_eq!(
+        harness.running_config()["inbounds"][0]["tag"],
+        "node-test",
+        "the re-enabled proxy must serve the fresh inbound"
+    );
+    stop_agent(&mut restarted).await;
+    let _ = timeout(Duration::from_secs(1), server).await;
+    assert!(
+        harness.active_config().contains("node-test"),
+        "the enabled config must replace the persisted teardown:\n{}",
+        harness.active_config()
     );
 }

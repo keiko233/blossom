@@ -194,6 +194,7 @@ pub struct SessionPorts {
     commands: mpsc::Sender<Command>,
     outbound: mpsc::Receiver<WsCommand>,
     online: watch::Sender<bool>,
+    pub(super) disabled: mpsc::Sender<()>,
     failed: FailedApply,
 }
 
@@ -209,6 +210,8 @@ pub struct CorePorts {
     pub commands: mpsc::Receiver<Command>,
     pub outbound: Arc<dyn AgentCommandSink>,
     pub online: watch::Receiver<bool>,
+    /// A positive disablement from the upgrade or an open session.
+    pub disabled: mpsc::Receiver<()>,
 }
 
 /// The traffic task's end: it submits reports and watches whether a session
@@ -235,6 +238,7 @@ pub fn channels(
     let (commands_tx, commands_rx) = mpsc::channel(16);
     let (outbound_sink, outbound_rx) = crate::ws::ports::command_channel(64);
     let (online_tx, online_rx) = watch::channel(false);
+    let (disabled_tx, disabled_rx) = mpsc::channel(1);
     let core_online = online_tx.subscribe();
     (
         SessionPorts {
@@ -249,6 +253,7 @@ pub fn channels(
             commands: commands_tx,
             outbound: outbound_rx,
             online: online_tx,
+            disabled: disabled_tx,
             failed: FailedApply::default(),
         },
         CorePorts {
@@ -262,6 +267,7 @@ pub fn channels(
             commands: commands_rx,
             outbound: Arc::new(outbound_sink),
             online: core_online,
+            disabled: disabled_rx,
         },
         TrafficPorts {
             requests: traffic_tx,
@@ -525,6 +531,7 @@ async fn run_connection<W: Wire>(
         outbound,
         online,
         failed,
+        disabled,
     } = ports;
 
     loop {
@@ -697,6 +704,7 @@ async fn run_connection<W: Wire>(
                         refusals,
                         commands,
                         online,
+                        disabled,
                         log_jobs,
                         log_acks: &current_log_acks,
                         telemetry,
@@ -730,6 +738,7 @@ struct Context<'a, W: Wire> {
     log_jobs: &'a mpsc::Sender<LogPolicyJob>,
     log_acks: &'a [LogPolicyAck],
     online: &'a mut watch::Sender<bool>,
+    disabled: &'a mpsc::Sender<()>,
     telemetry: &'a SessionTelemetry,
     frame_limit: &'a mut usize,
     failed: &'a mut FailedApply,
@@ -747,6 +756,7 @@ async fn handle<W: Wire>(
         policy,
         refusals,
         commands,
+        disabled,
         log_jobs,
         log_acks,
         online,
@@ -985,7 +995,10 @@ async fn handle<W: Wire>(
         }
         Message::Error(frame) => match frame.code {
             ErrorCode::SessionReplaced => return Ok(Flow::End(SessionEnd::Replaced)),
-            ErrorCode::ServerDisabled => return Ok(Flow::End(SessionEnd::ServerDisabled)),
+            ErrorCode::ServerDisabled => {
+                let _ = disabled.try_send(());
+                return Ok(Flow::End(SessionEnd::ServerDisabled));
+            }
             // The error names no report id. Reports are sent one at a time, so
             // every waiter is the report that was refused.
             ErrorCode::InvalidPayload if frame.r#type.as_deref() == Some("traffic.report") => {

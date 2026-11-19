@@ -600,6 +600,83 @@ function listen(server, port) {
   });
 }
 
+/**
+ * Opens an admin WebSocket with the browser headers the app requires. Node's
+ * built-in WebSocket accepts a headers option, unlike the browser constructor.
+ * The caller supplies the same-origin `Origin` and the admin cookie.
+ */
+async function openAdminSocket({ origin, cookie, path, description }) {
+  const url = new URL(path, origin);
+  url.protocol = origin.startsWith("https:") ? "wss:" : "ws:";
+  const socket = new WebSocket(url, {
+    headers: { origin, cookie },
+  });
+  const frames = [];
+  const waiters = [];
+  socket.addEventListener("message", (event) => {
+    let frame;
+    try {
+      frame = JSON.parse(String(event.data));
+    } catch {
+      return;
+    }
+    frames.push(frame);
+    for (let index = waiters.length - 1; index >= 0; index -= 1) {
+      const waiter = waiters[index];
+      if (!waiter.predicate(frame)) continue;
+      waiters.splice(index, 1);
+      clearTimeout(waiter.timer);
+      waiter.resolve(frame);
+    }
+  });
+  const opened = new Promise((resolve, reject) => {
+    socket.addEventListener("open", resolve, { once: true });
+    socket.addEventListener(
+      "error",
+      () => reject(new Error(`failed to open ${description}`)),
+      { once: true },
+    );
+  });
+  await Promise.race([
+    opened,
+    delay(15_000).then(() => {
+      throw new Error(`timed out opening ${description}`);
+    }),
+  ]);
+  return {
+    socket,
+    frames,
+    waitFor(predicate, descriptionText, timeoutMs = 20_000) {
+      const existing = frames.find(predicate);
+      if (existing) return Promise.resolve(existing);
+      return new Promise((resolve, reject) => {
+        const waiter = { predicate, resolve };
+        waiter.timer = setTimeout(() => {
+          const index = waiters.indexOf(waiter);
+          if (index >= 0) waiters.splice(index, 1);
+          reject(
+            new Error(
+              `timed out waiting for ${descriptionText}; frames=${JSON.stringify(
+                frames.slice(-8),
+              )}`,
+            ),
+          );
+        }, timeoutMs);
+        waiters.push(waiter);
+      });
+    },
+  };
+}
+
+function wsTextFrame(type, payload, version = 2) {
+  return JSON.stringify({
+    v: version,
+    type,
+    ts: new Date().toISOString(),
+    payload,
+  });
+}
+
 // ---------------------------------------------------------------- installer sandbox
 
 function fakeBin(dir, state, agentUrl, singBoxUrl, agentFile, singBoxArchive) {
@@ -739,6 +816,11 @@ function decodeJwt(token) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  // The admin/installer origin uses a freshly generated self-signed loopback
+  // certificate. Node's fetch trust store cannot be updated after process
+  // start, so disable verification only in this disposable harness process.
+  // The app and agent children keep their own TLS settings.
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
   const { releaseVersion, singBoxVersion } = options;
   if (!existsSync(OUTPUT)) {
     throw new Error(
@@ -882,6 +964,13 @@ async function main() {
     log("signing up the first administrator through Better Auth");
     await admin.signUp(adminEmail, adminPassword, "OAuth Runtime Admin");
     adminHttp.adoptCookies(admin.cookieHeader());
+    // The agent and its admin relays must share one Node instance (the
+    // in-process hub); app B owns the WebSocket for this run. Sign in through
+    // app B's configured origin, then reuse that non-secure session directly.
+    const agentAuth = new AppClient(originB);
+    await agentAuth.signIn(adminEmail, adminPassword);
+    const agentAdminHttp = new AppClient(`http://127.0.0.1:${ports.appB}`);
+    agentAdminHttp.adoptCookies(agentAuth.cookieHeader());
     const fn = {
       createServer: ["src/query/servers.ts", "createServer"],
       createNode: ["src/query/nodes.ts", "createNode"],
@@ -894,6 +983,16 @@ async function main() {
         "revokeAgentIdentityAccess",
       ],
       identityState: ["src/query/agent-identity.ts", "getAgentIdentityState"],
+      getAdminOverview: ["src/query/admin-overview.ts", "getAdminOverview"],
+      getLogPolicy: ["src/query/server-log-policy.ts", "getServerLogPolicy"],
+      updateLogPolicy: [
+        "src/query/server-log-policy.ts",
+        "updateServerLogPolicy",
+      ],
+      resetLogPolicy: [
+        "src/query/server-log-policy.ts",
+        "resetServerLogPolicy",
+      ],
     };
     const installerServer = await adminHttp.call(fn.createServer, {
       name: "installer-server",
@@ -1244,6 +1343,7 @@ exit 64
         "--download-dir",
         path.join(root, "agent-downloads"),
         "--self-update=false",
+        "--pty-enabled",
         "--log-level",
         "debug",
       ],
@@ -1342,6 +1442,11 @@ exit 64
       false,
       "v2 must not advertise pty-v1",
     );
+    assert.equal(
+      hello.payload.capabilities.includes("pty-v2"),
+      true,
+      "the default v2 agent with --pty-enabled must advertise pty-v2",
+    );
     assert.equal(logging.upgrades.length >= 1, true);
     assert.equal(logging.upgrades.at(-1).accepted, V2_PROTOCOL);
     const helloIndex = logging.frames.findIndex(
@@ -1380,6 +1485,299 @@ exit 64
       "the agent must obtain a token",
     );
     log("no legacy HTTP agent polling observed");
+
+    // ------------------------------------------------- operations workspace
+
+    log("reading the authenticated Connection and Overview admin surfaces");
+    const identityState = await adminHttp.call(
+      fn.identityState,
+      { serverId: runtimeServer.server.id },
+      { method: "GET" },
+    );
+    assert.equal(
+      identityState.identities.some((identity) => identity.status === "active"),
+      true,
+      "the Connection workspace must see the active OAuth identity",
+    );
+    const overview = await adminHttp.call(fn.getAdminOverview, undefined, {
+      method: "GET",
+    });
+    assert.equal(
+      typeof overview.servers,
+      "object",
+      "the Overview admin function must return server totals",
+    );
+    assert.ok(
+      overview.servers.total >= 2,
+      "the Overview must include the runtime and backup servers",
+    );
+    assert.ok(
+      overview.servers.online >= 1,
+      "the Overview must see at least the active v2 runtime server",
+    );
+    assert.ok(
+      Number.isFinite(overview.traffic.last30dBytes),
+      true,
+      "the Overview must return traffic history totals",
+    );
+    log("Connection and Overview admin reads verified");
+
+    log("opening an interactive terminal through the v2 admin relay");
+    const ptySessionId = "pty-it-1";
+    const ptyStatus = await fetch(
+      new URL(
+        `/api/admin/servers/${runtimeServer.server.id}/pty/status`,
+        agentAdminHttp.baseUrl,
+      ),
+      { headers: agentAdminHttp.headers() },
+    );
+    const ptyStatusText = await ptyStatus.text();
+    assert.equal(
+      ptyStatus.status,
+      200,
+      `the PTY status probe failed with HTTP ${ptyStatus.status}: ${ptyStatusText}`,
+    );
+    assert.equal(
+      JSON.parse(ptyStatusText).available,
+      true,
+      "the PTY status probe must report an available v2 terminal",
+    );
+    const pty = await openAdminSocket({
+      origin: agentAdminHttp.baseUrl,
+      cookie: agentAdminHttp.cookieHeader(),
+      path: `/api/admin/servers/${runtimeServer.server.id}/pty/ws?sessionId=${ptySessionId}&cols=80&rows=24`,
+      description: "admin PTY socket",
+    });
+    await pty.waitFor((frame) => frame.type === "pty.started", "pty.started");
+    pty.socket.send(
+      wsTextFrame(
+        "pty.data",
+        {
+          sessionId: ptySessionId,
+          data: "echo INTEROP_PTY_OK\n",
+        },
+        1,
+      ),
+    );
+    await waitFor(
+      "the INTEROP_PTY_OK terminal echo",
+      () => {
+        const output = pty.frames
+          .filter((frame) => frame.type === "pty.data")
+          .map((frame) => String(frame.payload?.data ?? ""))
+          .join("");
+        return output.includes("INTEROP_PTY_OK") ? output : null;
+      },
+      { timeoutMs: 10_000, intervalMs: 200 },
+    );
+    pty.socket.close();
+    log("interactive PTY round-trip verified");
+
+    log("streaming retained logs and running search plus context lookup");
+    const logs = await openAdminSocket({
+      origin: agentAdminHttp.baseUrl,
+      cookie: agentAdminHttp.cookieHeader(),
+      path: `/api/admin/servers/${runtimeServer.server.id}/logs/ws`,
+      description: "admin logs socket",
+    });
+    logs.socket.send(
+      wsTextFrame("logs.subscribe", {
+        subscriptionId: "logs-it-1",
+        filter: {},
+        resume: null,
+        limit: 100,
+      }),
+    );
+    const batch = await logs.waitFor(
+      (frame) =>
+        frame.type === "logs.batch" &&
+        Array.isArray(frame.payload?.records) &&
+        frame.payload.records.length > 0,
+      "the retained log tail",
+    );
+    assert.ok(
+      batch.payload.records.every(
+        (record) =>
+          typeof record.text === "string" && typeof record.source === "string",
+      ),
+      "retained log records must carry redacted text and a source",
+    );
+    logs.socket.send(
+      wsTextFrame("logs.search", {
+        requestId: "search-it-1",
+        query: { text: "configuration applied" },
+        cursor: null,
+        limit: 20,
+      }),
+    );
+    const search = await logs.waitFor(
+      (frame) =>
+        frame.type === "logs.search.result" || frame.type === "logs.error",
+      "the retained log search",
+    );
+    assert.equal(
+      search.type,
+      "logs.search.result",
+      `the retained log search failed: ${JSON.stringify(search.payload ?? {})}`,
+    );
+    assert.ok(
+      search.payload.matches.some((record) =>
+        record.text.includes("configuration applied"),
+      ),
+      "retained search must find the applied-configuration agent record",
+    );
+    const target = search.payload.matches[0];
+    logs.socket.send(
+      wsTextFrame("logs.context", {
+        requestId: "context-it-1",
+        generation: search.payload.generation,
+        seq: target.seq,
+        before: 5,
+        after: 5,
+      }),
+    );
+    const context = await logs.waitFor(
+      (frame) =>
+        frame.type === "logs.context.result" || frame.type === "logs.error",
+      "the retained log context",
+    );
+    assert.equal(
+      context.type,
+      "logs.context.result",
+      `the retained log context failed: ${JSON.stringify(context.payload ?? {})}`,
+    );
+    assert.equal(context.payload.target.seq, target.seq);
+    logs.socket.close();
+    log("retained tail, search and context verified");
+
+    log("applying and restoring a temporary remote log level");
+    const policyBefore = await agentAdminHttp.call(fn.getLogPolicy, {
+      serverId: runtimeServer.server.id,
+    });
+    const policyUpdated = await agentAdminHttp.call(fn.updateLogPolicy, {
+      serverId: runtimeServer.server.id,
+      source: "agent",
+      level: "debug",
+      temporarySeconds: 60,
+      expectedRevision: policyBefore.revision,
+    });
+    assert.equal(
+      policyUpdated.ok,
+      true,
+      `the log-policy update was refused: ${JSON.stringify(policyUpdated)}`,
+    );
+    assert.equal(policyUpdated.next.targetLevel, "debug");
+    await waitFor(
+      "the agent to acknowledge the temporary debug level",
+      () => {
+        const row = psql(
+          postgres,
+          `select coalesce(effective_level, ''), effective_pending::text
+           from server_log_policy
+           where server_id = '${runtimeServer.server.id}' and source = 'agent'`,
+        ).split("|");
+        return row[0] === "debug" && row[1] === "false" ? row : null;
+      },
+      { timeoutMs: 40_000, intervalMs: 1_000 },
+    );
+    const policyRestored = await agentAdminHttp.call(fn.resetLogPolicy, {
+      serverId: runtimeServer.server.id,
+      source: "agent",
+      expectedRevision: policyUpdated.policy.revision,
+    });
+    assert.equal(
+      policyRestored.ok,
+      true,
+      `the log-policy restore was refused: ${JSON.stringify(policyRestored)}`,
+    );
+    log("temporary log override applied, acknowledged and restored");
+
+    // ------------------------------------------------------ static backup
+
+    log("creating an explicitly selected static backup server");
+    const staticServer = await adminHttp.call(fn.createServer, {
+      name: "static-backup-server",
+      remark: "default v2 static backup",
+      address: "127.0.0.1",
+      configPollIntervalSeconds: 5,
+      heartbeatIntervalSeconds: 5,
+      enableBackupToken: true,
+    });
+    assert.match(
+      staticServer.token,
+      /^agt_/,
+      "the explicitly selected static backup must return its one-time token",
+    );
+    secret(staticServer.token);
+    const staticNodePort = await freePort();
+    await adminHttp.call(fn.createNode, {
+      name: "static-vmess",
+      serverId: staticServer.server.id,
+      listenPort: staticNodePort,
+      protocol: "vmess",
+      settings: {},
+    });
+    const staticSingBoxState = path.join(root, "singbox-static");
+    mkdirSync(staticSingBoxState, { recursive: true });
+    const staticRequestsBefore = logging.requests.length;
+    const staticAgent = startProcess(
+      "agent-static",
+      agentBin,
+      [
+        "--url",
+        `${originB}/api`,
+        "--token",
+        staticServer.token,
+        "--state-dir",
+        path.join(root, "static-agent-state"),
+        "--sing-box-path",
+        fakeSingBox,
+        "--download-dir",
+        path.join(root, "static-agent-downloads"),
+        "--self-update=false",
+        "--log-level",
+        "debug",
+      ],
+      {
+        workdir: root,
+        cwd: root,
+        env: {
+          PATH: process.env.PATH,
+          HOME: path.join(root, "home"),
+          FAKE_SINGBOX_STATE: staticSingBoxState,
+        },
+      },
+    );
+    await waitFor(
+      "the default static-backup entry point to apply over v2",
+      () => {
+        const row = psql(
+          postgres,
+          `select coalesce(s.transport_mode, ''), coalesce(s.ws_credential_kind, ''), s.config_state
+           from server s where s.id = '${staticServer.server.id}'`,
+        ).split("|");
+        return row[0] === "ws" && row[1] === "static" && row[2] === "applied"
+          ? row
+          : null;
+      },
+      { timeoutMs: 120_000, intervalMs: 1_000 },
+    );
+    const staticRequests = logging.requests.slice(staticRequestsBefore);
+    for (const suffix of forbidden) {
+      assert.equal(
+        staticRequests.some((request) => request.path.startsWith(suffix)),
+        false,
+        `the default static-backup agent used legacy polling (${suffix})`,
+      );
+    }
+    assert.ok(
+      existsSync(path.join(staticSingBoxState, "running-config.json")),
+      "the static-backup agent must apply a compiled config",
+    );
+    assert.equal(staticAgent.child.exitCode, null);
+    stopProcess(staticAgent);
+    await staticAgent.exited;
+    log("default static backup used v2 and never polled HTTP");
 
     // ------------------------------------------------------------ outage
 
@@ -1554,6 +1952,89 @@ exit 64
     );
     assert.equal(agent2.child.exitCode, null);
     log("fresh generation reconnected and applied");
+
+    log("replacing the active OAuth identity with a new generation");
+    const replaceGrant = await adminHttp.call(fn.createGrant, {
+      serverId: runtimeServer.server.id,
+      mode: "replace",
+      confirmReplace: true,
+      capabilities: RELEASE_CAPABILITIES,
+      release: releaseVersion,
+      delivery: "stdin",
+    });
+    secret(replaceGrant.secret);
+    const replaceGrantFile = path.join(root, "replace-grant");
+    writeFileSync(replaceGrantFile, `${replaceGrant.secret}\n`);
+    chmodSync(replaceGrantFile, 0o600);
+    const replaceCredentials = path.join(root, "replace-credentials.json");
+    const replaceEnroll = await runCapture(
+      agentBin,
+      [
+        "enroll",
+        "--url",
+        `${originB}/api`,
+        "--grant-file",
+        replaceGrantFile,
+        "--credentials-file",
+        replaceCredentials,
+      ],
+      { env: { PATH: process.env.PATH, HOME: path.join(root, "home") } },
+    );
+    assert.equal(replaceEnroll.status, 0, replaceEnroll.stderr);
+    stopProcess(agent2);
+    await agent2.exited;
+    const agent3 = startProcess(
+      "agent-3",
+      agentBin,
+      [
+        "--url",
+        `${originB}/api`,
+        "--credentials-file",
+        replaceCredentials,
+        "--state-dir",
+        path.join(root, "agent-state"),
+        "--sing-box-path",
+        fakeSingBox,
+        "--download-dir",
+        path.join(root, "agent-downloads"),
+        "--self-update=false",
+        "--log-level",
+        "debug",
+      ],
+      {
+        workdir: root,
+        cwd: root,
+        env: {
+          PATH: process.env.PATH,
+          HOME: path.join(root, "home"),
+          FAKE_SINGBOX_STATE: singBoxState,
+        },
+      },
+    );
+    await waitFor(
+      "generation 3 to replace the active identity and apply",
+      () => {
+        const row = psql(
+          postgres,
+          `select i.status || '|' || i.generation || '|' || s.config_state
+           from server s join agent_identity i on i.server_id = s.id
+           where s.id = '${runtimeServer.server.id}' and i.status = 'active'`,
+        );
+        return row === "active|3|applied" ? row : null;
+      },
+      { timeoutMs: 120_000, intervalMs: 1_000 },
+    );
+    assert.equal(
+      psql(
+        postgres,
+        `select status from agent_identity
+         where server_id = '${runtimeServer.server.id}' and generation = 2`,
+      ),
+      "superseded",
+      "the replaced generation must be superseded",
+    );
+    assert.equal(agent3.child.exitCode, null);
+    log("replacement generation promoted and synchronized");
 
     log(`PASS (workdir ${root})`);
   } finally {

@@ -130,6 +130,15 @@ impl V2Connector {
         let (stream, response) = match handshake {
             Ok(pair) => pair,
             Err(TungsteniteError::Http(response)) => {
+                if response.status().as_u16() == 409
+                    && response
+                        .headers()
+                        .get("x-blossom-agent-state")
+                        .and_then(|value| value.to_str().ok())
+                        == Some("disabled")
+                {
+                    return Err(WsError::ServerDisabled { status: 409 });
+                }
                 return Err(WsError::Rejected {
                     status: response.status().as_u16(),
                 });
@@ -262,6 +271,8 @@ mod tests {
         WrongEcho,
         /// Refuses the upgrade with an HTTP status.
         Refuses(u16),
+        /// Refuses with a 409 and the explicit disabled-state marker.
+        Disabled,
     }
 
     async fn spawn_peer(peer: Peer) -> String {
@@ -307,6 +318,15 @@ mod tests {
                     Peer::Refuses(status) => {
                         let mut error = ErrorResponse::new(None);
                         *error.status_mut() = StatusCode::from_u16(status).unwrap();
+                        Err(error)
+                    }
+                    Peer::Disabled => {
+                        let mut error = ErrorResponse::new(None);
+                        *error.status_mut() = StatusCode::CONFLICT;
+                        error.headers_mut().insert(
+                            "x-blossom-agent-state",
+                            HeaderValue::from_static("disabled"),
+                        );
                         Err(error)
                     }
                 }
@@ -365,6 +385,15 @@ mod tests {
         assert_eq!(
             connector(url).connect().await.unwrap_err(),
             WsError::Rejected { status: 400 }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_409_with_the_disabled_marker_is_a_positive_disable() {
+        let url = spawn_peer(Peer::Disabled).await;
+        assert_eq!(
+            connector(url).connect().await.unwrap_err(),
+            WsError::ServerDisabled { status: 409 }
         );
     }
 

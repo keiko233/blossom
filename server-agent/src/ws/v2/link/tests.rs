@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tokio::time::Instant;
+use tokio::time::{Instant, timeout};
 use tokio_util::sync::CancellationToken;
 
 use super::{Connector, LinkOptions, ReconnectBackoff, run};
@@ -30,6 +30,20 @@ enum Plan {
     Frames(Vec<String>),
     /// As `Frames`, but the socket then stays open until a session deadline ends it.
     Hold(Vec<String>),
+}
+
+struct DisabledConnector(ScriptConnector);
+
+impl Connector for DisabledConnector {
+    type Wire = ScriptWire;
+
+    async fn connect(&self) -> Result<ScriptWire, WsError> {
+        Connector::connect(&self.0).await
+    }
+
+    fn disabled(&self, error: &WsError) -> bool {
+        matches!(error, WsError::ServerDisabled { .. })
+    }
 }
 
 #[derive(Clone)]
@@ -235,6 +249,85 @@ async fn a_disabled_server_waits_about_a_minute_before_retrying() {
     ];
     let gaps = drive(plans, 0.0, Duration::from_secs(60)).await;
     assert_eq!(gaps[1], Duration::from_secs(30));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_rejected_upgrade_with_the_disabled_marker_reaches_the_core() {
+    let connector = DisabledConnector(ScriptConnector {
+        plans: Arc::new(Mutex::new(VecDeque::from([Plan::Fail(
+            WsError::ServerDisabled { status: 409 },
+        )]))),
+        connects: Arc::new(Mutex::new(Vec::new())),
+    });
+    let (mut ports, mut core, _traffic) = channels(
+        status(),
+        UpdatePolicy {
+            desired_agent_version: None,
+            desired_sing_box_version: None,
+        },
+        Vec::new(),
+    );
+    let cancel = CancellationToken::new();
+    let task_cancel = cancel.clone();
+    let store = LogStore::new(RingLimits::default());
+    let task = tokio::spawn(async move {
+        run(
+            &connector,
+            &mut ports,
+            &options(),
+            &FixedJitter(0.0),
+            &task_cancel,
+            &store,
+        )
+        .await;
+    });
+    assert!(
+        timeout(Duration::from_secs(5), core.disabled.recv())
+            .await
+            .expect("the disabled signal reaches the core")
+            .is_some()
+    );
+    cancel.cancel();
+    task.await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_ordinary_auth_rejection_never_becomes_a_disable_command() {
+    let plans = vec![Plan::Fail(WsError::Rejected { status: 401 })];
+    let connector = DisabledConnector(ScriptConnector {
+        plans: Arc::new(Mutex::new(plans.into())),
+        connects: Arc::new(Mutex::new(Vec::new())),
+    });
+    let (mut ports, mut core, _traffic) = channels(
+        status(),
+        UpdatePolicy {
+            desired_agent_version: None,
+            desired_sing_box_version: None,
+        },
+        Vec::new(),
+    );
+    let cancel = CancellationToken::new();
+    let task_cancel = cancel.clone();
+    let store = LogStore::new(RingLimits::default());
+    let task = tokio::spawn(async move {
+        run(
+            &connector,
+            &mut ports,
+            &options(),
+            &FixedJitter(0.0),
+            &task_cancel,
+            &store,
+        )
+        .await;
+    });
+    assert!(
+        timeout(Duration::from_secs(2), core.disabled.recv())
+            .await
+            .is_err(),
+        "a plain 401 must remain an authentication failure"
+    );
+    cancel.cancel();
+    task.await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]

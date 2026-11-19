@@ -25,6 +25,9 @@ services:
       AGENT_URL: ${AGENT_URL:?set AGENT_URL in .env}
       # Per-server token (shown once at server creation or token reset).
       AGENT_TOKEN: ${AGENT_TOKEN:?set AGENT_TOKEN in .env}
+      # Protocol v2 is the default for this static backup token. Set `legacy`
+      # only for a control plane that requires the v1 WebSocket and HTTP poll.
+      # AGENT_WS_PROTOCOL: ${AGENT_WS_PROTOCOL:-v2}
       # trace | debug | info | warn | error
       AGENT_LOG_LEVEL: ${AGENT_LOG_LEVEL:-info}
       # Optional interactive admin terminal; disabled unless explicitly enabled.

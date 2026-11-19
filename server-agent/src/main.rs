@@ -196,21 +196,25 @@ struct Args {
     )]
     update_retry_seconds: u64,
 
-    /// Connect the push WebSocket; when disabled (or rejected by the control
-    /// plane) the agent keeps the HTTP config poll and heartbeat.
+    /// Connect the push WebSocket. This is required for protocol v2; the
+    /// explicit legacy protocol may run with it disabled and use only the HTTP
+    /// config poll and heartbeat.
     #[arg(
         long,
         default_value_t = true,
+        num_args = 0..=1,
+        default_missing_value = "true",
         env = "AGENT_WS_ENABLED",
         value_parser = clap::builder::BoolishValueParser::new()
     )]
     ws_enabled: bool,
 
-    /// Agent WebSocket protocol. `legacy` keeps the v1 WebSocket with the HTTP
-    /// config poll, heartbeat, and traffic reports. `v2` carries configuration,
-    /// status, and traffic over `blossom-agent.v2` and makes no HTTP requests.
-    /// An OAuth credential file selects `v2` unless this is given as `legacy`
-    /// (which is refused) or `v2`.
+    /// Agent WebSocket protocol. `v2` is the default for both OAuth credential
+    /// files and explicit static backup tokens: configuration, status, and
+    /// traffic travel over `blossom-agent.v2` and no HTTP agent API is used.
+    /// `legacy` is an explicit opt-in for installations that still need the v1
+    /// WebSocket with the HTTP config poll, heartbeat, and traffic reports.
+    /// OAuth credentials are refused with `legacy`.
     #[arg(long, value_enum, env = "AGENT_WS_PROTOCOL")]
     ws_protocol: Option<WsProtocol>,
 
@@ -304,9 +308,10 @@ struct Args {
 /// The agent WebSocket protocol selected at start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum WsProtocol {
-    /// The v1 WebSocket with HTTP config poll, heartbeat, and traffic (the shipped default).
+    /// Explicit legacy mode: the v1 WebSocket with HTTP config poll,
+    /// heartbeat, and traffic.
     Legacy,
-    /// Protocol v2: WebSocket-only, with no HTTP agent API calls.
+    /// Protocol v2 (the default): WebSocket-only, with no HTTP agent API calls.
     V2,
 }
 
@@ -332,12 +337,23 @@ pub(crate) struct ServiceStartup {
     pub(crate) protocol: WsProtocol,
 }
 
+/// The explicit WebSocket-disabled deprecation warning. It names the exact
+/// action that keeps an existing static-token installation running and the
+/// action that removes HTTP from the deployment.
+const WS_DISABLED_DEPRECATION: &str = concat!(
+    "agent websocket disabled without an explicit protocol; starting legacy HTTP-only mode. ",
+    "This implicit fallback is deprecated: keep it explicitly with --ws-protocol legacy ",
+    "(or AGENT_WS_PROTOCOL=legacy), or enable the websocket with --ws-enabled=true ",
+    "(or AGENT_WS_ENABLED=true) to use protocol v2"
+);
+
 impl Args {
     /// Resolves the base URL, the one credential input, and the transport.
     ///
-    /// An OAuth credential file defaults to protocol v2 to match the
-    /// installer unit, which passes only `--credentials-file`. Static tokens
-    /// remain an explicit legacy/backup mode; OAuth never falls back to one.
+    /// Both OAuth credential files and explicit static backup tokens default to
+    /// protocol v2, so the installer unit and the container entry point need no
+    /// protocol flag. `--ws-protocol legacy` is the explicit compatibility
+    /// opt-in; OAuth never falls back to a static token or HTTP.
     fn startup(&self) -> Result<ServiceStartup> {
         let url = self
             .url
@@ -348,11 +364,11 @@ impl Args {
             .to_string();
 
         let (auth, default_protocol) = match (self.token.as_deref(), &self.credentials_file) {
-            (Some(token), None) => (AuthMode::Static(token.to_string()), WsProtocol::Legacy),
+            (Some(token), None) => (AuthMode::Static(token.to_string()), WsProtocol::V2),
             (None, Some(path)) => (AuthMode::OAuth(path.clone()), WsProtocol::V2),
             (Some(_), Some(_)) => {
                 return Err(anyhow::anyhow!(
-                    "choose either --token (static, legacy/backup) or --credentials-file (OAuth), not both"
+                    "choose either --token (static backup) or --credentials-file (OAuth), not both"
                 ));
             }
             (None, None) => {
@@ -361,16 +377,28 @@ impl Args {
                 ));
             }
         };
-        let protocol = self.ws_protocol.unwrap_or(default_protocol);
+        // A WS-disabled installation predates the v2 default. With no protocol
+        // flag it keeps its HTTP poll/heartbeat path instead of failing to
+        // start, but the fallback is explicit in the log and deprecated. An
+        // explicit v2 request with the WebSocket disabled stays incompatible.
+        let protocol = match (self.ws_protocol, self.ws_enabled) {
+            (None, false) => WsProtocol::Legacy,
+            (Some(protocol), _) => protocol,
+            (None, true) => default_protocol,
+        };
+        let implicit_legacy = self.ws_protocol.is_none() && !self.ws_enabled;
         if matches!(auth, AuthMode::OAuth(_)) && protocol != WsProtocol::V2 {
             return Err(anyhow::anyhow!(
-                "OAuth credentials require --ws-protocol v2; static-token mode is a separate, explicit choice"
+                "OAuth credentials require protocol v2; legacy HTTP-only mode needs a static token and --ws-protocol legacy"
             ));
         }
         if !self.ws_enabled && protocol == WsProtocol::V2 {
             return Err(anyhow::anyhow!(
-                "--ws-protocol v2 is the WebSocket path and cannot run with --ws-enabled=false"
+                "protocol v2 is the WebSocket path and cannot run with --ws-enabled=false; use --ws-protocol legacy with a static token for HTTP-only mode"
             ));
+        }
+        if implicit_legacy {
+            warn!(WS_DISABLED_DEPRECATION);
         }
         Ok(ServiceStartup {
             url,
@@ -2609,22 +2637,92 @@ mod tests {
     }
 
     #[test]
-    fn a_static_token_keeps_the_legacy_default_and_can_opt_into_v2() {
-        let legacy = service_startup(&["--url", "http://127.0.0.1:1/api", "--token", "agt_test"])
+    fn a_static_token_selects_v2_by_default_and_can_opt_into_legacy() {
+        let default = service_startup(&["--url", "http://127.0.0.1:1/api", "--token", "agt_test"])
             .expect("static startup resolves");
-        assert_eq!(legacy.protocol, WsProtocol::Legacy);
-        assert_eq!(legacy.auth.static_token(), Some("agt_test"));
+        assert_eq!(default.protocol, WsProtocol::V2);
+        assert_eq!(default.auth.static_token(), Some("agt_test"));
 
-        let backup = service_startup(&[
+        let legacy = service_startup(&[
             "--url",
             "http://127.0.0.1:1/api",
             "--token",
             "agt_test",
             "--ws-protocol",
-            "v2",
+            "legacy",
         ])
-        .expect("static v2 startup resolves");
-        assert_eq!(backup.protocol, WsProtocol::V2);
+        .expect("static legacy startup resolves");
+        assert_eq!(legacy.protocol, WsProtocol::Legacy);
+    }
+
+    #[test]
+    fn a_ws_disabled_static_installation_without_a_protocol_starts_legacy() {
+        let cli = service_startup(&[
+            "--url",
+            "http://127.0.0.1:1/api",
+            "--token",
+            "agt_test",
+            "--ws-enabled=false",
+        ])
+        .expect("disabled websocket plus a static token keeps HTTP-only mode");
+        assert_eq!(cli.protocol, WsProtocol::Legacy);
+        assert_eq!(cli.auth.static_token(), Some("agt_test"));
+
+        let enabled_false = service_startup(&[
+            "--url",
+            "http://127.0.0.1:1/api",
+            "--token",
+            "agt_test",
+            "--ws-protocol",
+            "legacy",
+            "--ws-enabled=false",
+        ])
+        .expect("explicit legacy plus disabled websocket resolves");
+        assert_eq!(enabled_false.protocol, WsProtocol::Legacy);
+    }
+
+    #[test]
+    fn an_environment_ws_disable_has_the_same_precedence_as_the_flag() {
+        const KEY: &str = "AGENT_WS_ENABLED";
+        let parse = |value: &str| {
+            // SAFETY: this test owns the variable and no other test reads it.
+            unsafe { std::env::set_var(KEY, value) };
+            let result =
+                service_startup(&["--url", "http://127.0.0.1:1/api", "--token", "agt_test"]);
+            // SAFETY: paired with the set above in this single test.
+            unsafe { std::env::remove_var(KEY) };
+            result
+        };
+        let startup = parse("false").expect("AGENT_WS_ENABLED=false resolves legacy");
+        assert_eq!(startup.protocol, WsProtocol::Legacy);
+        let startup = parse("true").expect("AGENT_WS_ENABLED=true keeps the v2 default");
+        assert_eq!(startup.protocol, WsProtocol::V2);
+    }
+
+    #[test]
+    fn an_incompatible_explicit_protocol_and_websocket_state_is_rejected() {
+        assert!(
+            service_startup(&[
+                "--url",
+                "http://127.0.0.1:1/api",
+                "--token",
+                "agt_test",
+                "--ws-protocol",
+                "v2",
+                "--ws-enabled=false",
+            ])
+            .is_err()
+        );
+        assert!(
+            service_startup(&[
+                "--url",
+                "http://127.0.0.1:1/api",
+                "--credentials-file",
+                "/tmp/credentials.json",
+                "--ws-enabled=false",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
