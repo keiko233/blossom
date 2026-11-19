@@ -62,8 +62,12 @@ function makeStore(overrides: Partial<AgentWsV2Store> = {}) {
     promoteSession: vi.fn(async () => server()),
     recordStatus: vi.fn(async () => server()),
     recordConfigAck: vi.fn(async () => "applied" as const),
+    recordUpdateStatus: vi.fn(async () => true),
     cacheDesiredRevision: vi.fn(async () => undefined),
     applyCertificateDeployments: vi.fn(async () => undefined),
+    handleAcmeDnsPresent: vi.fn(async () => true),
+    handleAcmeDnsCleanup: vi.fn(async () => true),
+    handleAcmeResult: vi.fn(async () => true),
     revalidateSession: vi.fn(async () => "ok" as const),
     applyTraffic: vi.fn(async () => ({
       status: "applied" as const,

@@ -20,6 +20,7 @@ import {
   getRealtimeHub,
   type PtyRelayEvent,
 } from "./realtime-hub";
+import type { AgentPtyTarget } from "./realtime-hub-types";
 
 interface PtyPeer {
   id: string;
@@ -43,6 +44,14 @@ const PTY_REVALIDATE_INTERVAL_MS = 30 * 1000;
  */
 const PTY_RELAY_IDLE_BACKSTOP_MS = 60 * 60 * 1000;
 
+function ptyTarget(context: AdminPtyAcceptContext): AgentPtyTarget {
+  return {
+    protocol: context.agentProtocol,
+    connectedAt: context.connectedAt,
+    agentSessionId: context.agentSessionId,
+  };
+}
+
 class PtyRelay {
   private readonly hub = getRealtimeHub();
   private unregister: (() => void) | undefined;
@@ -56,9 +65,10 @@ class PtyRelay {
   ) {}
 
   async start(): Promise<void> {
+    const target = ptyTarget(this.context);
     this.unregister = this.hub.registerPtyRelay(
       this.context.serverId,
-      this.context.connectedAt,
+      target,
       this.context.sessionId,
       (event) => {
         void this.onAgentEvent(event);
@@ -66,7 +76,7 @@ class PtyRelay {
     );
     const sent = await this.hub.sendPtyFrame(
       this.context.serverId,
-      this.context.connectedAt,
+      target,
       this.context.sessionId,
       encodePtyFrame(
         ptyOpenFrame(this.context.sessionId, {
@@ -105,7 +115,7 @@ class PtyRelay {
     this.touch();
     const sent = await this.hub.sendPtyFrame(
       this.context.serverId,
-      this.context.connectedAt,
+      ptyTarget(this.context),
       this.context.sessionId,
       encodePtyFrame(parsed.frame),
     );
@@ -242,7 +252,7 @@ class PtyRelay {
     if (options.notifyAgent) {
       void this.hub.sendPtyFrame(
         this.context.serverId,
-        this.context.connectedAt,
+        ptyTarget(this.context),
         this.context.sessionId,
         encodePtyFrame(ptyCloseFrame(this.context.sessionId)),
       );
@@ -298,7 +308,7 @@ export async function acceptAdminPty(
       { status: 429, headers: { "cache-control": "no-store" } },
     );
   }
-  if (!(await hub.hasAgentConnection(context.serverId, context.connectedAt))) {
+  if (!(await hub.hasAgentConnection(context.serverId, ptyTarget(context)))) {
     return Response.json(
       { error: "agent_unavailable" },
       { status: 503, headers: { "cache-control": "no-store" } },

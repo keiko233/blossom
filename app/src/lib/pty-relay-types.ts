@@ -3,6 +3,10 @@ import type { AdminPtySession } from "@/query/pty-audit";
 export interface AdminPtyAcceptContext {
   serverId: string;
   connectedAt: string;
+  /** Which agent envelope carries the terminal frames. */
+  agentProtocol: "v1" | "v2";
+  /** `wsSessionId`; required for v2 and ignored for v1. */
+  agentSessionId: string | null;
   sessionId: string;
   cols: number;
   rows: number;

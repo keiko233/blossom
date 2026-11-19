@@ -1,4 +1,13 @@
-import type { AgentWsCertificateDeployment } from "@blossom/contracts/agent-ws";
+import type {
+  AgentWsAcmeDnsCleanupPayload,
+  AgentWsAcmeDnsPresentPayload,
+  AgentWsAcmeResultPayload,
+  AgentWsCertificateDeployment,
+  AgentWsPtyDataPayload,
+  AgentWsPtyExitPayload,
+  AgentWsPtyStartedPayload,
+  AgentWsUpdateStatuses,
+} from "@blossom/contracts/agent-ws";
 import {
   AGENT_WS_V2_LIMITS,
   createAgentWsV2Frame,
@@ -9,6 +18,7 @@ import {
   type AgentWsV2ConfigNotifyPayload,
   type AgentWsV2ErrorPayload,
   type AgentWsV2HelloPayload,
+  type AgentWsV2Message,
   type AgentWsV2PayloadOf,
   type AgentWsV2StatusPayload,
   type AgentWsV2TrafficReportPayload,
@@ -39,6 +49,11 @@ export type AgentWsV2TrafficOutcome =
   | { status: "applied" | "duplicate"; accepted: number; dropped: number }
   | { status: "conflict"; message: string }
   | { status: "replaced" };
+
+export type AgentWsV2PtyFrame =
+  | { type: "pty.started"; payload: AgentWsPtyStartedPayload }
+  | { type: "pty.data"; payload: AgentWsPtyDataPayload }
+  | { type: "pty.exit"; payload: AgentWsPtyExitPayload };
 
 /**
  * Persistence port for one v2 session. Every write names the session, and the
@@ -71,6 +86,11 @@ export interface AgentWsV2Store {
     sessionId: string,
     ack: AgentWsV2ConfigAckPayload,
   ): Promise<AgentWsV2AckOutcome>;
+  recordUpdateStatus(
+    serverId: string,
+    sessionId: string,
+    updates: AgentWsUpdateStatuses,
+  ): Promise<boolean>;
   /**
    * Completes a pending OAuth proof after `hello`, promoting the identity and
    * taking the server fence. Returns `null` if the credential is no longer
@@ -106,6 +126,21 @@ export interface AgentWsV2Store {
     sessionId: string,
     report: AgentWsV2TrafficReportPayload,
   ): Promise<AgentWsV2TrafficOutcome>;
+  handleAcmeDnsPresent(
+    serverId: string,
+    sessionId: string,
+    payload: AgentWsAcmeDnsPresentPayload,
+  ): Promise<boolean>;
+  handleAcmeDnsCleanup(
+    serverId: string,
+    sessionId: string,
+    payload: AgentWsAcmeDnsCleanupPayload,
+  ): Promise<boolean>;
+  handleAcmeResult(
+    serverId: string,
+    sessionId: string,
+    payload: AgentWsAcmeResultPayload,
+  ): Promise<boolean>;
   /**
    * Compiles the same desired state the v3 HTTP response serves. `validUntil`
    * is the instant the identifier must be recompiled by, even with no change.
@@ -139,6 +174,12 @@ export interface OpenAgentWsV2SessionOptions {
   welcomed?: boolean;
   /** Advertised early reconnect deadline (Vercel function lifetime). */
   reconnectBeforeSeconds?: number;
+  /**
+   * Delivers one terminal frame to the relay bound to this exact agent
+   * session. Returns false when no relay is open, so the session tells the
+   * agent to stop the shell.
+   */
+  onPtyFrame?: (frame: AgentWsV2PtyFrame) => boolean | Promise<boolean>;
 }
 
 export interface AgentWsV2Session {
@@ -485,6 +526,45 @@ export function openAgentWsV2Session(
     });
   }
 
+  async function onUpdateStatus(updates: AgentWsUpdateStatuses) {
+    if (!(await store.recordUpdateStatus(serverId, sessionId, updates))) {
+      stop("session_replaced", "a newer session is active");
+    }
+  }
+
+  async function onAcmeDnsPresent(payload: AgentWsAcmeDnsPresentPayload) {
+    if (!(await store.handleAcmeDnsPresent(serverId, sessionId, payload))) {
+      stop("session_replaced", "a newer session is active");
+    }
+  }
+
+  async function onAcmeDnsCleanup(payload: AgentWsAcmeDnsCleanupPayload) {
+    if (!(await store.handleAcmeDnsCleanup(serverId, sessionId, payload))) {
+      stop("session_replaced", "a newer session is active");
+    }
+  }
+
+  async function onAcmeResult(payload: AgentWsAcmeResultPayload) {
+    if (!(await store.handleAcmeResult(serverId, sessionId, payload))) {
+      stop("session_replaced", "a newer session is active");
+    }
+  }
+
+  async function onPtyFrame(
+    frame: Extract<
+      AgentWsV2Message,
+      { kind: "pty.started" | "pty.data" | "pty.exit" }
+    >,
+  ) {
+    const delivered = await options.onPtyFrame?.({
+      type: frame.kind,
+      payload: frame.payload,
+    } as AgentWsV2PtyFrame);
+    if (delivered === false && frame.kind === "pty.data") {
+      send("pty.close", { sessionId: frame.payload.sessionId });
+    }
+  }
+
   return {
     get welcomed() {
       return welcomed;
@@ -545,6 +625,23 @@ export function openAgentWsV2Session(
             return;
           case "traffic.report":
             await onTrafficReport(message.payload);
+            return;
+          case "update.status":
+            await onUpdateStatus(message.payload);
+            return;
+          case "acme.dns_present":
+            await onAcmeDnsPresent(message.payload);
+            return;
+          case "acme.dns_cleanup":
+            await onAcmeDnsCleanup(message.payload);
+            return;
+          case "acme.result":
+            await onAcmeResult(message.payload);
+            return;
+          case "pty.started":
+          case "pty.data":
+          case "pty.exit":
+            await onPtyFrame(message);
             return;
         }
       } catch (error) {

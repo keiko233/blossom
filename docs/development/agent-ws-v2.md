@@ -1,6 +1,6 @@
 # Agent WebSocket protocol v2
 
-Statements are **Established** when the control plane implements them. The Rust client is not yet migrated, so anything about agent behaviour is **Recommended** until the server-agent change lands. The machine-checked contract is `packages/contracts/src/agent-ws-v2.ts`; the wire examples the Rust implementation must reproduce are `packages/contracts/fixtures/agent-ws-v2.frames.json`, which `packages/contracts/src/agent-ws-v2.test.ts` already validates on the control-plane side.
+Statements are **Established** when the control plane implements them. The Rust client implements v2 behind the explicit `--ws-protocol v2` / `AGENT_WS_PROTOCOL=v2` selection; `legacy` remains the default and keeps the v1 WebSocket with HTTP config polling, heartbeat, and traffic. The machine-checked contract is `packages/contracts/src/agent-ws-v2.ts`; the wire examples the Rust client reproduces are `packages/contracts/fixtures/agent-ws-v2.frames.json`, which `packages/contracts/src/agent-ws-v2.test.ts` validates on the control-plane side and `server-agent/src/ws/v2/codec.rs` decodes in tests.
 
 ## Negotiation
 
@@ -76,14 +76,23 @@ Discard a partial snapshot on disconnect and request a new one after reconnect. 
 - **Absence of `traffic.ack` proves nothing.** A report that was replaced before its write does not commit. But a write can commit and its acknowledgement can be lost, on a dropped socket or a replaced session, so the agent cannot tell from a missing ack whether the rows exist. Keep the report on disk and resend the **same** `reportId` and payload on the next session until a `traffic.ack` arrives. The ledger deduplicates the replay and answers `duplicate` with the original counts.
 - Keep the report queue on disk until its `traffic.ack` arrives. Traffic collection must not wait on the socket.
 
+## Operations
+
+The admin update, certificate, and terminal surfaces use the same typed payloads as v1, carried in v2 envelopes. The control plane only sends these to the current session, and each agent-to-control write is fenced or bound to that session.
+
+| Operation | Frames | Notes |
+| --- | --- | --- |
+| Agent and sing-box updates | `update.trigger`, `update.status` | `trigger` is the immediate operation; the desired versions in `welcome.updatePolicy` and every `agent.status.ack` remain the replayable policy. `update.status` streams the reconciler's state. |
+| ACME | `acme.issue`, `acme.dns_present`, `acme.dns_cleanup`, `acme.dns_ack`, `acme.result` | Same job id, issuer-server, generation, challenge-expiry, and bounded DNS record fences as v1. The control plane also checks that the result came from the job's current agent session. |
+| Admin PTY | `pty.open`, `pty.started`, `pty.data`, `pty.resize`, `pty.close`, `pty.exit` | `pty.data` is the one type valid in both directions. The admin relay binds the browser shell to the exact `wsSessionId`; a replaced session cannot receive or deliver its bytes. |
+
+`pty-v2` is advertised only when the agent runs with `AGENT_PTY_ENABLED=true` under a non-root service account. A v2 agent does not advertise `pty-v1`, so an older control plane never attempts the v1 relay on a v2 socket. `AGENT_PTY_MAX_SESSIONS`, the idle/hard lifetime limits, input/output backpressure, dimension clamping, and the local shell allowlist are unchanged from v1.
+
 ## Not in v2 yet
 
 These remain v1-only and are never sent to v2 sessions:
 
-- `update.trigger` and `update.status`, and the `acme.*` messages. The control plane does not push them to v2 sessions.
-- `telemetry.*`, `pty.*`, and the log policy messages.
-
-Until the PTY moves to v2, a v2 agent **must not advertise `pty-v1`** in `hello.capabilities`. The admin terminal would otherwise offer a session that cannot start.
+- `telemetry.*` and the log policy messages.
 
 ## Limits
 
@@ -135,9 +144,12 @@ The control plane advertises `reconnectBeforeSeconds`. Remote delivery across in
 Each target is listed separately. "Not run" means the change has no evidence on that target.
 
 - **Automated, no database.** Contract schemas, direction and size checks, and both sides of the wire fixtures (`packages/contracts`). Session state machine, snapshot chunking, deadline expiry, fenced snapshots, disabled servers and hub routing, including the token-bound start (`app/src/lib/agent-ws-v2-*.test.ts`, `app/src/lib/realtime-hub-v2.test.ts`).
+- **Operation parity.** Contract fixtures cover `pty.data` in both directions and the update, ACME, and PTY frames. The v2 session and hub tests, the admin PTY route/authorization tests, and the Cloudflare PTY tests cover exact-session routing.
+- **Rust lifecycle.** `server-agent/tests/ws_v2_lifecycle.rs` runs the real agent binary against a local v2 WebSocket control plane and a fake sing-box with disposable state. It covers a cold multi-chunk snapshot apply, an unacknowledged traffic report replayed byte-for-byte under the same id, missed-notification recovery through `agent.status.ack`, a failed candidate rolling back to the last-known-good config, and an offline restart from that config. The control plane records and fails every plain HTTP agent API request; the test asserts none occurred.
 - **Disposable PostgreSQL, node-postgres and neon-http.** Fenced acknowledgements, status and traffic, the version fence on cached identifiers, token rotation and the token-bound start (`app/src/query/agent-ws-v2-state.integration.test.ts`). Convergence through the real store adapter and compiler: a routing-rule change with no notification is recovered by the status exchange after the deadline, an invalidated change is reported on the next status, and a rotated credential, a disabled server and a snapshot each stop or serve as specified (`app/src/query/agent-ws-v2-convergence.integration.test.ts`). The neon-http runs use a local `/sql` proxy in front of the same database, not Neon's hosted service.
 - **Disposable PostgreSQL, OAuth.** `agent-ws-v2-oauth.integration.test.ts` uses real provider tokens for the pending proof, first promotion, generation replacement, interrupted-rotation recovery, replay refusal, revocation, expiry, certificate-deployment fencing, and server deletion cleanup. Ran on node-postgres and on neon-http through a local `/sql` proxy in front of the same database.
 - **Node server, built and run locally.** Against the built Node target, with PostgreSQL through node-postgres: the subprotocol echo, `hello` and `welcome`, a status acknowledgement, a snapshot whose length and digest verify, a credential rotation during a live session (a `config.get` then sends no snapshot, the session stops with `session_replaced` and close 4000), the old token refused with `401`, and the new token welcomed. Checked on 2026-11-19 with a scratch client that is not committed; the built-server handshake recorded in `adc180c` and the v1 route are not re-run here.
+- **Node server + Rust agent, built and run locally.** On 2026-11-19 the built Node target ran against a disposable PostgreSQL and the real `server-agent` in `--ws-protocol v2` mode with a fake sing-box and disposable state. The agent completed `hello`/`welcome`, applied the compiled snapshot, advertised `pty-v2`, and the database recorded the fenced session and applied revision. A first-user admin then opened the real `/api/admin/servers/$id/pty/ws` route, and `echo INTEROP_PTY_OK` round-tripped through the browser relay, Node hub, Rust PTY, and back. Update download and ACME order execution were not driven end to end because they would need a fake release feed/CA; their frames are covered by unit and fixture tests.
 - **Cloudflare, local workerd.** `wrangler dev --local` (Wrangler 4.164) running a copy of the Cloudflare build, with a local Hyperdrive connection string to the same disposable PostgreSQL. Checked on 2026-11-19 with the same scratch client: the same sequence as the Node run, which covers the Durable Object's upgrade, its message path and its fenced close. A session welcomed, then left idle for 70 seconds, still accepted a status, and disabling the server stopped the next status with `server_disabled` and close 4000. Workerd does not report hibernation, so the idle run shows that the welcomed flag survived the idle period, not that the object hibernated. The `401` on the Cloudflare upgrade for a credential that rotates after authentication is covered only by the unit and database tests, not by a race on workerd.
 - **Cloudflare, hibernation.** Not verified. Hibernation was not observed, and timer behaviour and the `4000`-series close after a real wake were not run in any environment. Check them against a deployment before relying on them.
 - **Cloudflare, hosted.** Not verified. Nothing was deployed, and hosted Hyperdrive and the `Sec-WebSocket-Protocol` response through the platform were not exercised.

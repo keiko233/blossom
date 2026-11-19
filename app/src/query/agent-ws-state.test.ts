@@ -10,7 +10,13 @@ vi.mock("@/db", () => ({
     update: () => ({
       set: (values: Record<string, unknown>) => {
         mocks.updates.push(values);
-        return { where: async () => undefined };
+        const scoped = Object.assign(Promise.resolve(undefined), {
+          returning: async () => [{ id: "srv-1" }],
+        });
+        return {
+          where: () => scoped,
+          ...scoped,
+        };
       },
     }),
   },
@@ -24,6 +30,7 @@ import {
   recordAgentConfigAck,
   recordAgentHello,
   recordAgentUpdateStatus,
+  recordAgentV2UpdateStatus,
 } from "./agent";
 
 beforeEach(() => {
@@ -110,5 +117,18 @@ describe("agent WebSocket state writes", () => {
     expect(values).not.toHaveProperty("configState");
     expect(values).not.toHaveProperty("agentCapabilities");
     expect(values).not.toHaveProperty("appliedRevision");
+  });
+
+  it("fences a v2 update status on the current session", async () => {
+    await expect(
+      recordAgentV2UpdateStatus("srv-1", "session-1", {
+        singBox: { state: "up_to_date" },
+      }),
+    ).resolves.toBe(true);
+
+    expect(mocks.updates[0]).toMatchObject({
+      singBoxUpdateState: "up_to_date",
+    });
+    expect(mocks.updates[0]).not.toHaveProperty("agentUpdateState");
   });
 });

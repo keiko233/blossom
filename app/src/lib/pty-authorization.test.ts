@@ -15,6 +15,7 @@ function server(overrides: Partial<PtyServerRecord> = {}): PtyServerRecord {
     enabled: true,
     transportMode: "ws",
     wsConnectedAt: CONNECTED_AT,
+    wsSessionId: null,
     agentCapabilities: ["pty-v1"],
     ...overrides,
   };
@@ -34,7 +35,9 @@ function record(
 
 const expected = {
   userId: "admin-1",
+  protocol: "v1" as const,
   serverConnectedAt: CONNECTED_AT.toISOString(),
+  serverSessionId: null,
   now: NOW,
 };
 
