@@ -171,7 +171,7 @@ struct Args {
     )]
     github_api: String,
 
-    /// Repository that publishes `server-agent-v*` static binaries.
+    /// Repository that publishes unified `v*` releases with `server-agent` static binaries.
     #[arg(long, default_value = "keiko233/blossom", env = "AGENT_RELEASE_REPO")]
     release_repo: String,
 

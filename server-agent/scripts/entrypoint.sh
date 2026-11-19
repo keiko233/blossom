@@ -128,18 +128,22 @@ seed_binaries() {
 
 select_agent_release() {
   release_file=$1
+  asset=$2
   if [ "$agent_version" = latest ]; then
     gh_get "$github_api/repos/$agent_repo/releases?per_page=30" -o "$release_file" ||
       fail "cannot query $agent_repo releases"
-    jq -e '
+    jq -e --arg asset "$asset" '
       [ .[]
         | select((.draft | not) and (.prerelease | not))
-        | select(.tag_name | test("^server-agent-v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+        | select(.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+        | select(any(.assets[]?; .name == $asset))
       ][0]
     ' "$release_file" >"$release_file.selected" ||
-      fail "no published server-agent-v* release found"
+      fail "no published v* release with $asset found"
   else
-    tag="server-agent-v${agent_version#v}"
+    ver=${agent_version#server-agent-v}
+    ver=${ver#v}
+    tag="v${ver}"
     gh_get "$github_api/repos/$agent_repo/releases/tags/$tag" -o "$release_file.selected" ||
       fail "cannot resolve agent release $tag"
   fi
@@ -153,8 +157,8 @@ install_agent() {
   [ "$agent_version" = none ] && fail "agent binary missing and AGENT_BOOTSTRAP_VERSION=none"
 
   release_file="$download_dir/agent-release.json"
-  select_agent_release "$release_file"
   asset="server-agent-linux-$release_arch"
+  select_agent_release "$release_file" "$asset"
   url=$(jq -er --arg name "$asset" \
     '.assets[] | select(.name == $name) | .browser_download_url' \
     "$release_file.selected") || fail "agent release has no asset $asset"

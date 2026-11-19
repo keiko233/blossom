@@ -219,7 +219,7 @@ function manifest(sandbox: Sandbox, version = "1.4.0") {
     {
       schemaVersion: 1,
       version,
-      tag: `server-agent-v${version}`,
+      tag: `v${version}`,
       installerContract: 1,
       agent: {
         capabilities: [

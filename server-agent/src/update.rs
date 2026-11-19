@@ -30,7 +30,7 @@ pub const AGENT_RESTART_EXIT_CODE: i32 = 75;
 pub type StatusObserver = Arc<dyn Fn(&UpdateStatus, &UpdateStatus) + Send + Sync>;
 
 const USER_AGENT: &str = concat!("blossom-server-agent/", env!("CARGO_PKG_VERSION"));
-const AGENT_TAG_PREFIX: &str = "server-agent-v";
+const AGENT_TAG_PREFIX: &str = "v";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -644,6 +644,7 @@ impl UpdateManager {
             {
                 return Ok(release.clone());
             }
+            let expected_asset = format!("server-agent-linux-{}", release_arch()?);
             let url = format!(
                 "{}/repos/{}/releases?per_page=30",
                 self.config.github_api, self.config.agent_repo
@@ -655,8 +656,12 @@ impl UpdateManager {
                     !release.draft
                         && !release.prerelease
                         && is_stable_version(AGENT_TAG_PREFIX, &release.tag_name)
+                        && release
+                            .assets
+                            .iter()
+                            .any(|asset| asset.name == expected_asset)
                 })
-                .context("no published server-agent-v* release found")?;
+                .context("no published v* release with server-agent binary found")?;
             let resolved = resolve_release(release, AGENT_TAG_PREFIX)?;
             self.agent_latest = Some((resolved.clone(), Instant::now()));
             return Ok(resolved);
@@ -811,8 +816,8 @@ fn find_asset<'a>(release: &'a ResolvedRelease, name: &str) -> Result<&'a Asset>
 fn normalize_version(value: &str) -> String {
     let value = value.trim();
     value
-        .strip_prefix(AGENT_TAG_PREFIX)
-        .or_else(|| value.strip_prefix('v'))
+        .strip_prefix("server-agent-v")
+        .or_else(|| value.strip_prefix(AGENT_TAG_PREFIX))
         .unwrap_or(value)
         .to_string()
 }
@@ -942,15 +947,16 @@ mod tests {
 
     #[test]
     fn resolves_release_versions_from_tags() {
-        let resolved = resolve_release(release("server-agent-v0.3.0"), "server-agent-v").unwrap();
+        let resolved = resolve_release(release("v0.3.0"), "v").unwrap();
         assert_eq!(resolved.version, "0.3.0");
-        assert!(resolve_release(release("v0.3.0"), "server-agent-v").is_err());
+        assert!(resolve_release(release("server-agent-v0.3.0"), "v").is_err());
     }
 
     #[test]
     fn latest_only_accepts_plain_semver_tags() {
         assert!(is_stable_version("v", "v1.14.4"));
-        assert!(is_stable_version("server-agent-v", "server-agent-v0.3.0"));
+        assert!(is_stable_version("v", "v0.3.0"));
+        assert!(!is_stable_version("v", "server-agent-v0.3.0"));
         assert!(!is_stable_version("v", "v1.15.0-alpha.1"));
         assert!(!is_stable_version("v", "v1.14"));
         assert!(!is_stable_version("v", "latest"));
@@ -1062,9 +1068,9 @@ mod tests {
         let api = serve_with(|api| {
             HashMap::from([
                 (
-                    "/repos/acme/blossom/releases/tags/server-agent-v0.3.0".to_string(),
+                    "/repos/acme/blossom/releases/tags/v0.3.0".to_string(),
                     serde_json::to_vec(&serde_json::json!({
-                        "tag_name": "server-agent-v0.3.0",
+                        "tag_name": "v0.3.0",
                         "draft": false,
                         "prerelease": false,
                         "assets": [{
@@ -1104,6 +1110,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn latest_agent_release_skips_releases_without_agent_binary() {
+        let dir = temp_dir("latest-agent");
+        let executable = dir.join("server-agent");
+        std::fs::write(&executable, b"old-agent").unwrap();
+        let replacement = b"#!/bin/sh\necho latest-agent\n";
+        let asset_name = format!("server-agent-linux-{}", release_arch().unwrap());
+        let digest = hex::encode(sha2::Sha256::digest(replacement));
+        let api = serve_with(|api| {
+            HashMap::from([
+                (
+                    "/repos/acme/blossom/releases?per_page=30".to_string(),
+                    serde_json::to_vec(&serde_json::json!([
+                        {
+                            "tag_name": "v1.5.0-rc.1",
+                            "draft": false,
+                            "prerelease": true,
+                            "assets": [{
+                                "name": asset_name,
+                                "browser_download_url": format!("{api}/wrong"),
+                                "digest": format!("sha256:{digest}")
+                            }]
+                        },
+                        {
+                            "tag_name": "v1.4.1",
+                            "draft": false,
+                            "prerelease": false,
+                            "assets": []
+                        },
+                        {
+                            "tag_name": "v1.4.0",
+                            "draft": false,
+                            "prerelease": false,
+                            "assets": [{
+                                "name": asset_name,
+                                "browser_download_url": format!("{api}/agent"),
+                                "digest": format!("sha256:{digest}")
+                            }]
+                        }
+                    ]))
+                    .unwrap(),
+                ),
+                ("/agent".to_string(), replacement.to_vec()),
+            ])
+        })
+        .await;
+
+        let mut manager =
+            UpdateManager::new(update_config(api, &dir), "1.3.0".to_string(), None).unwrap();
+        assert!(
+            manager
+                .maybe_update_agent("latest", &executable)
+                .await
+                .unwrap()
+        );
+        assert_eq!(std::fs::read(&executable).unwrap(), replacement);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn status_observer_sees_every_transition() {
         use std::sync::{Arc, Mutex};
 
@@ -1116,9 +1181,9 @@ mod tests {
         let api = serve_with(|api| {
             HashMap::from([
                 (
-                    "/repos/acme/blossom/releases/tags/server-agent-v0.3.0".to_string(),
+                    "/repos/acme/blossom/releases/tags/v0.3.0".to_string(),
                     serde_json::to_vec(&serde_json::json!({
-                        "tag_name": "server-agent-v0.3.0",
+                        "tag_name": "v0.3.0",
                         "draft": false,
                         "prerelease": false,
                         "assets": [{

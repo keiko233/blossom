@@ -2,7 +2,7 @@
 header = """
 # Changelog
 
-All notable changes to the Blossom app.
+All notable changes to Blossom.
 """
 body = """
 {% if version %}## {{ version }} - {{ timestamp | date(format="%Y-%m-%d") }}{% else %}## Unreleased{% endif %}

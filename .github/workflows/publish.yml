@@ -3,14 +3,6 @@ name: "[Release] Prepare Version and Release"
 on:
   workflow_dispatch:
     inputs:
-      target:
-        description: Release target
-        required: true
-        type: choice
-        options:
-          - app
-          - server-agent
-          - both
       version_type:
         description: Version bump
         required: true
@@ -25,7 +17,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: release-${{ inputs.target }}
+  group: release
   cancel-in-progress: false
 
 jobs:
@@ -35,8 +27,7 @@ jobs:
     outputs:
       version: ${{ steps.plan.outputs.version }}
       commit-sha: ${{ steps.commit.outputs.sha }}
-      app-tag: ${{ steps.commit.outputs.app-tag }}
-      agent-tag: ${{ steps.commit.outputs.agent-tag }}
+      tag: ${{ steps.commit.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -55,12 +46,10 @@ jobs:
 
       - id: plan
         env:
-          TARGET: ${{ inputs.target }}
           VERSION_TYPE: ${{ inputs.version_type }}
         run: |
           set -euo pipefail
           node scripts/src/release.ts \
-            --target "$TARGET" \
             --bump "$VERSION_TYPE" \
             --dry-run > release-plan.json
           version="$(node -p "JSON.parse(require('node:fs').readFileSync('release-plan.json', 'utf8')).version")"
@@ -68,98 +57,66 @@ jobs:
 
       - name: Apply version
         env:
-          TARGET: ${{ inputs.target }}
           VERSION_TYPE: ${{ inputs.version_type }}
         run: |
           set -euo pipefail
-          node scripts/src/release.ts \
-            --target "$TARGET" \
-            --bump "$VERSION_TYPE"
+          node scripts/src/release.ts --bump "$VERSION_TYPE"
 
-      - name: Update changelogs
+      - name: Update changelog
         env:
-          TARGET: ${{ inputs.target }}
           VERSION: ${{ steps.plan.outputs.version }}
         run: |
           set -euo pipefail
-          if [[ "$TARGET" == "app" || "$TARGET" == "both" ]]; then
-            git-cliff --config cliff.toml \
-              --include-path 'app/**' \
-              --include-path 'packages/**' \
-              --include-path 'package.json' \
-              --include-path 'pnpm-lock.yaml' \
-              --unreleased --tag "v${VERSION}" \
-              --prepend CHANGELOG.md
-          fi
-          if [[ "$TARGET" == "server-agent" || "$TARGET" == "both" ]]; then
-            git-cliff --config cliff-agent.toml \
-              --include-path 'server-agent/**' \
-              --unreleased --tag "server-agent-v${VERSION}" \
-              --prepend server-agent/CHANGELOG.md
-          fi
+          git-cliff --config cliff.toml \
+            --unreleased --tag "v${VERSION}" \
+            --prepend CHANGELOG.md
 
       - id: commit
         env:
-          TARGET: ${{ inputs.target }}
           VERSION: ${{ steps.plan.outputs.version }}
         run: |
           set -euo pipefail
-          if [[ "$TARGET" == "app" ]]; then
-            files=(package.json app/package.json CHANGELOG.md)
-          elif [[ "$TARGET" == "server-agent" ]]; then
-            files=(server-agent/Cargo.toml server-agent/Cargo.lock server-agent/CHANGELOG.md)
-          else
-            files=(package.json app/package.json CHANGELOG.md server-agent/Cargo.toml server-agent/Cargo.lock server-agent/CHANGELOG.md)
-          fi
+          tag="v${VERSION}"
+          files=(
+            package.json
+            app/package.json
+            server-agent/Cargo.toml
+            server-agent/Cargo.lock
+            CHANGELOG.md
+          )
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "${files[@]}"
-          git commit -m "chore(release): prepare ${TARGET} v${VERSION}"
+          git commit -m "chore(release): prepare ${tag}"
 
-          app_tag=""
-          agent_tag=""
-          tags_to_push=()
-          if [[ "$TARGET" == "app" || "$TARGET" == "both" ]]; then
-            app_tag="v${VERSION}"
-            git tag -a "$app_tag" -m "Blossom ${app_tag}"
-            tags_to_push+=("$app_tag")
-          fi
-          if [[ "$TARGET" == "server-agent" || "$TARGET" == "both" ]]; then
-            agent_tag="server-agent-v${VERSION}"
-            git tag -a "$agent_tag" -m "server-agent v${VERSION}"
-            tags_to_push+=("$agent_tag")
-          fi
-
+          git tag -a "$tag" -m "Blossom ${tag}"
           git push origin HEAD:main
-          git push origin "${tags_to_push[@]}"
+          git push origin "$tag"
 
           commit_sha="$(git rev-parse HEAD)"
           echo "sha=${commit_sha}" >> "$GITHUB_OUTPUT"
-          echo "app-tag=${app_tag}" >> "$GITHUB_OUTPUT"
-          echo "agent-tag=${agent_tag}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
 
   release:
     needs: prepare
-    if: needs.prepare.outputs.app-tag != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.prepare.outputs.app-tag }}
+          ref: ${{ needs.prepare.outputs.tag }}
 
-      - name: Create app release
+      - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-          APP_TAG: ${{ needs.prepare.outputs.app-tag }}
+          TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           set -euo pipefail
-          gh release create "$APP_TAG" \
+          gh release create "$TAG" \
             --verify-tag \
-            --title "Blossom v${VERSION}" \
+            --title "Blossom ${TAG}" \
             --generate-notes
 
   docker:
@@ -169,17 +126,15 @@ jobs:
       packages: write
     uses: ./.github/workflows/docker.yml
     with:
-      app-tag: ${{ needs.prepare.outputs.app-tag }}
-      agent-tag: ${{ needs.prepare.outputs.agent-tag }}
+      tag: ${{ needs.prepare.outputs.tag }}
       commit-sha: ${{ needs.prepare.outputs.commit-sha }}
     secrets: inherit
 
   server-agent-release:
-    needs: prepare
-    if: needs.prepare.outputs.agent-tag != ''
+    needs: [prepare, release]
     permissions:
       contents: write
     uses: ./.github/workflows/server-agent-release.yml
     with:
-      tag: ${{ needs.prepare.outputs.agent-tag }}
+      tag: ${{ needs.prepare.outputs.tag }}
     secrets: inherit

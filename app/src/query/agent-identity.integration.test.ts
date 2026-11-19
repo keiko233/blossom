@@ -101,7 +101,7 @@ function grantFor(
     serverId,
     mode,
     capabilities: ["ws"],
-    release: "server-agent-v0.0.0-test",
+    release: "v0.0.0-test",
     createdById: OPERATOR,
     now: at,
   });

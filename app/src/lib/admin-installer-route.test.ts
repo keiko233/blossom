@@ -11,7 +11,7 @@ const PATH = `/api/admin/servers/${SERVER_ID}/installation/script/${GRANT_ID}`;
 const manifest = {
   schemaVersion: 1,
   version: "1.4.0",
-  tag: "server-agent-v1.4.0",
+  tag: "v1.4.0",
   installerContract: 1,
   agent: {
     capabilities: [...AGENT_INSTALLER_REQUIRED_CAPABILITIES],

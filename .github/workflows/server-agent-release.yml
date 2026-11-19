@@ -2,28 +2,23 @@ name: "[Release] Build and Publish Server Agent Binaries"
 
 on:
   push:
-    tags: ["server-agent-v*"]
+    tags: ["v*"]
   workflow_dispatch:
   workflow_call:
     inputs:
       tag:
-        description: Server agent release tag (e.g. server-agent-v1.4.0)
+        description: Unified release tag (e.g. v1.4.0)
         required: true
         type: string
 
-# This workflow publishes static `server-agent` binaries (not Docker images)
-# as GitHub Release assets for a bootstrap script to download. It is separate
-# from docker.yml, which publishes the self-contained images to GHCR on `v*`
-# tags; those share the `releases/latest` feed with every other tag in this
-# repo (app images included), so releases created here MUST use
-# `make_latest: false` and the agent must resolve its release via the tag
-# prefix `server-agent-v` (GitHub API
-# `GET /repos/{owner}/{repo}/releases`, filtered by `tag_name` prefix), not
-# `releases/latest`. Asset names deliberately carry no version so that
-# `.../releases/download/<tag>/server-agent-linux-amd64` stays stable.
+# This workflow builds static `server-agent` binaries and uploads them (plus
+# `SHA256SUMS`) to the unified `v*` GitHub Release. Asset names deliberately
+# carry no version so `.../releases/download/<tag>/server-agent-linux-amd64`
+# stays stable.
 #
 # workflow_dispatch only builds and checks (assets stay as workflow artifacts);
-# a release is created for `server-agent-v*` tag pushes and `workflow_call`.
+# `v*` tag pushes and `workflow_call` upload the binaries to the `v*` release
+# (creating it first if it does not already exist).
 
 permissions:
   contents: read
@@ -42,15 +37,21 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
 
-      - name: Verify tag matches server-agent/Cargo.toml version
+      - name: Verify tag matches manifest versions
         if: github.ref_type == 'tag' || github.event_name == 'workflow_call'
         env:
           TAG_NAME: ${{ inputs.tag || github.ref_name }}
         run: |
-          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' server-agent/Cargo.toml | head -n1)"
-          expected="server-agent-v${version}"
+          agent_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' server-agent/Cargo.toml | head -n1)"
+          expected="v${agent_version}"
           if [ "${TAG_NAME}" != "${expected}" ]; then
-            echo "tag ${TAG_NAME} does not match Cargo.toml version ${version} (expected ${expected})" >&2
+            echo "tag ${TAG_NAME} does not match Cargo.toml version ${agent_version} (expected ${expected})" >&2
+            exit 1
+          fi
+          root_version="$(jq -r .version package.json)"
+          app_version="$(jq -r .version app/package.json)"
+          if [ "${root_version}" != "${agent_version}" ] || [ "${app_version}" != "${agent_version}" ]; then
+            echo "manifest version mismatch: package.json=${root_version}, app/package.json=${app_version}, Cargo.toml=${agent_version}" >&2
             exit 1
           fi
 
@@ -145,14 +146,17 @@ jobs:
         working-directory: release-assets
         run: sha256sum server-agent-linux-* > SHA256SUMS
 
-      - name: Create release
+      - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ inputs.tag || github.ref_name }}
         run: |
-          gh release create "${TAG_NAME}" \
-            --verify-tag \
-            --title "server-agent ${TAG_NAME#server-agent-v}" \
-            --notes "Static server-agent binaries. Verify checksums against SHA256SUMS." \
-            --latest=false \
-            release-assets/*
+          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            gh release upload "${TAG_NAME}" release-assets/* --clobber
+          else
+            gh release create "${TAG_NAME}" \
+              --verify-tag \
+              --title "Blossom ${TAG_NAME}" \
+              --generate-notes \
+              release-assets/*
+          fi

@@ -9,29 +9,30 @@ import {
   createPlan,
   nextVersion,
   readAppVersion,
+  readCurrentVersion,
   readServerAgentVersion,
-  tagsFor,
+  tagFor,
 } from "./release.ts";
 
-async function createFixtureRepository(): Promise<string> {
+async function createFixtureRepository(version = "0.1.0"): Promise<string> {
   const repository = await mkdtemp(path.join(tmpdir(), "blossom-release-"));
   await mkdir(path.join(repository, "app"), { recursive: true });
   await mkdir(path.join(repository, "server-agent"), { recursive: true });
   await writeFile(
     path.join(repository, "package.json"),
-    `${JSON.stringify({ name: "fixture", private: true, version: "0.1.0" }, null, 2)}\n`,
+    `${JSON.stringify({ name: "fixture", private: true, version }, null, 2)}\n`,
   );
   await writeFile(
     path.join(repository, "app/package.json"),
-    `${JSON.stringify({ name: "fixture-app", private: true, version: "0.1.0" }, null, 2)}\n`,
+    `${JSON.stringify({ name: "fixture-app", private: true, version }, null, 2)}\n`,
   );
   await writeFile(
     path.join(repository, "server-agent/Cargo.toml"),
-    `[package]\nname = "server-agent"\nversion = "0.2.0"\n`,
+    `[package]\nname = "server-agent"\nversion = "${version}"\n`,
   );
   await writeFile(
     path.join(repository, "server-agent/Cargo.lock"),
-    `[[package]]\nname = "other"\nversion = "1.0.0"\n\n[[package]]\nname = "server-agent"\nversion = "0.2.0"\n`,
+    `[[package]]\nname = "other"\nversion = "1.0.0"\n\n[[package]]\nname = "server-agent"\nversion = "${version}"\n`,
   );
   return repository;
 }
@@ -48,18 +49,18 @@ test("rejects invalid and prerelease versions", () => {
     () => nextVersion("1.2.3-beta.1", "patch"),
     /must not be a prerelease/,
   );
-  assert.throws(() => tagsFor("app", "1.2.3-rc.1"), /must not be a prerelease/);
+  assert.throws(() => tagFor("1.2.3-rc.1"), /must not be a prerelease/);
 });
 
-test("reads and validates current versions", async () => {
-  const repository = await createFixtureRepository();
-  assert.equal(await readAppVersion(repository), "0.1.0");
-  assert.equal(await readServerAgentVersion(repository), "0.2.0");
-  assert.ok(repository.length > 0);
+test("reads and validates unified current version", async () => {
+  const repository = await createFixtureRepository("1.3.0");
+  assert.equal(await readAppVersion(repository), "1.3.0");
+  assert.equal(await readServerAgentVersion(repository), "1.3.0");
+  assert.equal(await readCurrentVersion(repository), "1.3.0");
 });
 
-test("rejects missing and mismatched app versions", async () => {
-  const repository = await createFixtureRepository();
+test("rejects missing and mismatched versions across manifests", async () => {
+  const repository = await createFixtureRepository("0.1.0");
   const rootManifestPath = path.join(repository, "package.json");
   const appManifestPath = path.join(repository, "app/package.json");
   const rootManifest = JSON.parse(await readFile(rootManifestPath, "utf8"));
@@ -79,60 +80,61 @@ test("rejects missing and mismatched app versions", async () => {
     `${JSON.stringify({ name: "@fixture/app", private: true, version: "0.1.1" }, null, 2)}\n`,
   );
   await assert.rejects(readAppVersion(repository), /version mismatch/);
+
+  await writeFile(
+    appManifestPath,
+    `${JSON.stringify({ name: "fixture-app", private: true, version: "0.1.0" }, null, 2)}\n`,
+  );
+  await writeFile(
+    path.join(repository, "server-agent/Cargo.toml"),
+    `[package]\nname = "server-agent"\nversion = "0.2.0"\n`,
+  );
+  await writeFile(
+    path.join(repository, "server-agent/Cargo.lock"),
+    `[[package]]\nname = "server-agent"\nversion = "0.2.0"\n`,
+  );
+  await assert.rejects(
+    readCurrentVersion(repository),
+    /version mismatch between app \(0\.1\.0\) and server-agent \(0\.2\.0\)/,
+  );
 });
 
-test("creates independent release lines", async () => {
-  const repository = await createFixtureRepository();
-  const appPlan = await createPlan({
+test("creates a unified release plan", async () => {
+  const repository = await createFixtureRepository("1.3.0");
+  const plan = await createPlan({
     repositoryRoot: repository,
-    target: "app",
-    bump: "patch",
-    dryRun: true,
-  });
-  const agentPlan = await createPlan({
-    repositoryRoot: repository,
-    target: "server-agent",
-    bump: "patch",
-    dryRun: true,
-  });
-  const bothPlan = await createPlan({
-    repositoryRoot: repository,
-    target: "both",
     bump: "minor",
     dryRun: true,
   });
-  assert.equal(appPlan.version, "0.1.1");
-  assert.equal(agentPlan.version, "0.2.1");
-  assert.equal(bothPlan.version, "0.2.0");
-  assert.deepEqual(tagsFor("app", appPlan.version), ["v0.1.1"]);
-  assert.deepEqual(tagsFor("server-agent", agentPlan.version), [
-    "server-agent-v0.2.1",
+  assert.equal(plan.current, "1.3.0");
+  assert.equal(plan.version, "1.4.0");
+  assert.equal(plan.tag, "v1.4.0");
+  assert.deepEqual(plan.files, [
+    "package.json",
+    "app/package.json",
+    "server-agent/Cargo.toml",
+    "server-agent/Cargo.lock",
   ]);
-  assert.deepEqual(tagsFor("both", bothPlan.version), [
-    "v0.2.0",
-    "server-agent-v0.2.0",
-  ]);
-  assert.ok(repository.length > 0);
+  assert.equal(tagFor(plan.version), "v1.4.0");
 });
 
-test("updates JSON and Cargo files without external dependencies", async () => {
-  const repository = await createFixtureRepository();
+test("updates JSON and Cargo files together without external dependencies", async () => {
+  const repository = await createFixtureRepository("1.3.0");
   await assert.rejects(
-    applyVersion("app", "1.2.3-beta.1", repository),
+    applyVersion("1.2.3-beta.1", repository),
     /must not be a prerelease/,
   );
-  await applyVersion("app", "1.2.3", repository);
-  await applyVersion("server-agent", "2.3.4", repository);
+  await applyVersion("1.4.0", repository);
   assert.equal(
     JSON.parse(await readFile(path.join(repository, "package.json"), "utf8"))
       .version,
-    "1.2.3",
+    "1.4.0",
   );
   assert.equal(
     JSON.parse(
       await readFile(path.join(repository, "app/package.json"), "utf8"),
     ).version,
-    "1.2.3",
+    "1.4.0",
   );
   const manifest = await readFile(
     path.join(repository, "server-agent/Cargo.toml"),
@@ -142,6 +144,7 @@ test("updates JSON and Cargo files without external dependencies", async () => {
     path.join(repository, "server-agent/Cargo.lock"),
     "utf8",
   );
-  assert.match(manifest, /name = "server-agent"\nversion = "2\.3\.4"/);
-  assert.match(lock, /name = "server-agent"\nversion = "2\.3\.4"/);
+  assert.match(manifest, /name = "server-agent"\nversion = "1\.4\.0"/);
+  assert.match(lock, /name = "server-agent"\nversion = "1\.4\.0"/);
+  assert.equal(await readCurrentVersion(repository), "1.4.0");
 });

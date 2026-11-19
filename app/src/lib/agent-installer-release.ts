@@ -64,7 +64,7 @@ const releaseManifestSchema = z
     tag: z
       .string()
       .regex(
-        /^server-agent-v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/,
+        /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/,
       ),
     installerContract: z.literal(AGENT_INSTALLER_CONTRACT_VERSION),
     agent: z
@@ -85,7 +85,7 @@ const releaseManifestSchema = z
   })
   .strict()
   .superRefine((manifest, ctx) => {
-    if (manifest.tag !== `server-agent-v${manifest.version}`) {
+    if (manifest.tag !== `v${manifest.version}`) {
       ctx.addIssue({
         code: "custom",
         path: ["tag"],

@@ -14,17 +14,17 @@ function manifest(overrides: Record<string, unknown> = {}) {
   return {
     schemaVersion: 1,
     version: "1.4.0",
-    tag: "server-agent-v1.4.0",
+    tag: "v1.4.0",
     installerContract: 1,
     agent: {
       capabilities: [...AGENT_INSTALLER_REQUIRED_CAPABILITIES, "pty-v1"],
       assets: {
         amd64: {
-          url: "https://github.com/example/blossom/releases/download/server-agent-v1.4.0/server-agent-linux-amd64",
+          url: "https://github.com/example/blossom/releases/download/v1.4.0/server-agent-linux-amd64",
           sha256: sha,
         },
         arm64: {
-          url: "https://github.com/example/blossom/releases/download/server-agent-v1.4.0/server-agent-linux-arm64",
+          url: "https://github.com/example/blossom/releases/download/v1.4.0/server-agent-linux-arm64",
           sha256: "b".repeat(64),
         },
       },
@@ -53,9 +53,9 @@ describe("approved agent installer releases", () => {
     expect(releases).toHaveLength(1);
     expect(isAgentReleaseCompatible(releases[0]!)).toBe(true);
     expect(selectApprovedAgentRelease(releases, null).version).toBe("1.4.0");
-    expect(
-      selectApprovedAgentRelease(releases, "server-agent-v1.4.0").version,
-    ).toBe("1.4.0");
+    expect(selectApprovedAgentRelease(releases, "v1.4.0").version).toBe(
+      "1.4.0",
+    );
   });
 
   it("refuses an unapproved version", () => {
@@ -91,7 +91,10 @@ describe("approved agent installer releases", () => {
     );
 
     expect(() =>
-      parseApprovedAgentReleases([manifest({ tag: "server-agent-v9.9.9" })]),
+      parseApprovedAgentReleases([manifest({ tag: "v9.9.9" })]),
+    ).toThrow();
+    expect(() =>
+      parseApprovedAgentReleases([manifest({ tag: "server-agent-v1.4.0" })]),
     ).toThrow();
 
     const insecure = manifest();

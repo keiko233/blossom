@@ -112,7 +112,7 @@ describe("admin grant input", () => {
       }).success;
     expect(parse({ capabilities: ["ws", "log.tail"] })).toBe(true);
     expect(parse({ capabilities: ["Bad Name"] })).toBe(false);
-    expect(parse({ release: "server-agent-v1.2.3" })).toBe(true);
+    expect(parse({ release: "v1.2.3" })).toBe(true);
     expect(parse({ release: "x".repeat(65) })).toBe(false);
   });
 });

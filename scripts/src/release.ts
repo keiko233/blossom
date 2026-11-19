@@ -2,24 +2,28 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export type ReleaseTarget = "app" | "server-agent" | "both";
 export type ReleaseVersionType = "major" | "minor" | "patch";
 
 export type ReleaseOptions = {
   repositoryRoot?: string;
-  target: ReleaseTarget;
   bump: ReleaseVersionType;
   dryRun: boolean;
 };
 
 export type ReleasePlan = {
-  target: ReleaseTarget;
-  current: { app: string; "server-agent": string };
+  current: string;
   version: string;
-  tags: string[];
+  tag: string;
   files: string[];
   dryRun: boolean;
 };
+
+const UNIFIED_FILES = [
+  "package.json",
+  "app/package.json",
+  "server-agent/Cargo.toml",
+  "server-agent/Cargo.lock",
+] as const;
 
 const defaultRepositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -28,12 +32,6 @@ const defaultRepositoryRoot = path.resolve(
 
 function resolveRepositoryRoot(root?: string): string {
   return root ?? defaultRepositoryRoot;
-}
-
-function parseTarget(value: string | undefined): ReleaseTarget {
-  if (value === "app" || value === "server-agent" || value === "both")
-    return value;
-  throw new Error(`invalid --target: ${value ?? "(missing)"}`);
 }
 
 function parseVersionType(value: string | undefined): ReleaseVersionType {
@@ -172,6 +170,21 @@ export async function readServerAgentVersion(
   return match[1];
 }
 
+export async function readCurrentVersion(
+  repositoryRoot?: string,
+): Promise<string> {
+  const [appVersion, serverAgentVersion] = await Promise.all([
+    readAppVersion(repositoryRoot),
+    readServerAgentVersion(repositoryRoot),
+  ]);
+  if (appVersion !== serverAgentVersion) {
+    throw new Error(
+      `version mismatch between app (${appVersion}) and server-agent (${serverAgentVersion})`,
+    );
+  }
+  return appVersion;
+}
+
 function replaceOnce(
   source: string,
   match: RegExpExecArray,
@@ -227,60 +240,37 @@ async function updateCargoVersion(
   await writeFile(lockPath, replaceOnce(lockSource, lockMatch, lockStart));
 }
 
-export function tagsFor(target: ReleaseTarget, version: string): string[] {
+export function tagFor(version: string): string {
   assertStableVersion(parseVersion(version), "release version");
-  if (target === "app") return [`v${version}`];
-  if (target === "server-agent") return [`server-agent-v${version}`];
-  return [`v${version}`, `server-agent-v${version}`];
-}
-
-function filesFor(target: ReleaseTarget): string[] {
-  const appFiles = ["package.json", "app/package.json"];
-  const agentFiles = ["server-agent/Cargo.toml", "server-agent/Cargo.lock"];
-  if (target === "app") return appFiles;
-  if (target === "server-agent") return agentFiles;
-  return [...appFiles, ...agentFiles];
+  return `v${version}`;
 }
 
 export async function createPlan(
   options: ReleaseOptions,
 ): Promise<ReleasePlan> {
-  const [appVersion, serverAgentVersion] = await Promise.all([
-    readAppVersion(options.repositoryRoot),
-    readServerAgentVersion(options.repositoryRoot),
-  ]);
-  const version = nextVersion(
-    options.target === "server-agent" ? serverAgentVersion : appVersion,
-    options.bump,
-  );
+  const current = await readCurrentVersion(options.repositoryRoot);
+  const version = nextVersion(current, options.bump);
   return {
-    target: options.target,
-    current: { app: appVersion, "server-agent": serverAgentVersion },
+    current,
     version,
-    tags: tagsFor(options.target, version),
-    files: filesFor(options.target),
+    tag: tagFor(version),
+    files: [...UNIFIED_FILES],
     dryRun: options.dryRun,
   };
 }
 
 export async function applyVersion(
-  target: ReleaseTarget,
   version: string,
   repositoryRoot?: string,
 ): Promise<void> {
   const root = resolveRepositoryRoot(repositoryRoot);
   assertStableVersion(parseVersion(version), "release version");
-  if (target === "app" || target === "both") {
-    await updateJsonVersion(root, "package.json", version);
-    await updateJsonVersion(root, "app/package.json", version);
-  }
-  if (target === "server-agent" || target === "both") {
-    await updateCargoVersion(root, version);
-  }
+  await updateJsonVersion(root, "package.json", version);
+  await updateJsonVersion(root, "app/package.json", version);
+  await updateCargoVersion(root, version);
 }
 
 export async function release(argv: string[]): Promise<ReleasePlan> {
-  let target: ReleaseTarget | undefined;
   let bump: ReleaseVersionType | undefined;
   let dryRun = false;
   for (let index = 0; index < argv.length; index += 2) {
@@ -294,14 +284,12 @@ export async function release(argv: string[]): Promise<ReleasePlan> {
       continue;
     }
     if (value === undefined) throw new Error(`missing value for ${name}`);
-    if (name === "--target") target = parseTarget(value);
-    else if (name === "--bump") bump = parseVersionType(value);
+    if (name === "--bump") bump = parseVersionType(value);
     else throw new Error(`unknown option: ${name}`);
   }
-  if (!target || !bump) throw new Error("--target and --bump are required");
+  if (!bump) throw new Error("--bump is required");
   const plan = await createPlan({
     repositoryRoot: defaultRepositoryRoot,
-    target,
     bump,
     dryRun,
   });
@@ -309,7 +297,7 @@ export async function release(argv: string[]): Promise<ReleasePlan> {
     console.log(JSON.stringify(plan, null, 2));
     return plan;
   }
-  await applyVersion(target, plan.version, defaultRepositoryRoot);
+  await applyVersion(plan.version, defaultRepositoryRoot);
   console.log(JSON.stringify({ ...plan, applied: true }, null, 2));
   return plan;
 }

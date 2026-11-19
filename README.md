@@ -36,14 +36,14 @@ For Cloudflare, push secrets with `wrangler secret put <NAME>` and non-secret va
 
 ### Prebuilt Docker images
 
-`v*` and `server-agent-v*` tags run `.github/workflows/docker.yml`, which builds and publishes multi-arch (amd64/arm64) images to GHCR:
+`v*` tags run `.github/workflows/docker.yml`, which builds and publishes multi-arch (amd64/arm64) images to GHCR:
 
 | Image | Contents |
 |---|---|
 | `ghcr.io/keiko233/blossom` | The app as a self-contained Node server on port 3000 (built with `DEPLOY_TARGET=node`). |
 | `ghcr.io/keiko233/blossom/server-agent` | Thin runtime (`curl`, `jq`, `tar`, `tini`, entrypoint). On first start it downloads the agent and official sing-box into the persistent `/data` volume. |
 
-Tags: `latest` tracks `main`, `sha-<commit>` pins a build, and `v*` releases also get semver tags (`1.2.3`, `1.2`). Note the app image only runs the server — database migrations still need to be applied separately (see below). `VITE_APP_NAME` is baked in at build time, so a custom app name requires building the image yourself with `--build-arg VITE_APP_NAME=<name>`.
+Tags: `latest` tracks releases (and manual dispatches from `main`), `sha-<commit>` pins a build, and `v*` releases also get semver tags (`1.2.3`, `1.2`). Note the app image only runs the server — database migrations still need to be applied separately (see below). `VITE_APP_NAME` is baked in at build time, so a custom app name requires building the image yourself with `--build-arg VITE_APP_NAME=<name>`.
 
 ## Environment variables
 

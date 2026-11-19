@@ -12,7 +12,7 @@ const manifest = parseApprovedAgentReleases([
   {
     schemaVersion: 1,
     version: "1.4.0",
-    tag: "server-agent-v1.4.0",
+    tag: "v1.4.0",
     installerContract: 1,
     agent: {
       capabilities: [
