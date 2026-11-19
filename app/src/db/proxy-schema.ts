@@ -76,6 +76,10 @@ export const server = pgTable(
       .default("http")
       .notNull(),
     wsConnectedAt: timestamp("ws_connected_at"),
+    // Identity of the current agent WebSocket session (v1 or v2). Each
+    // handshake replaces it in one UPDATE, and every durable write from a
+    // session is conditional on it, so a replaced connection cannot write.
+    wsSessionId: text("ws_session_id"),
     agentVersion: text("agent_version"),
     // Build identity and capability surface reported by the agent on every
     // heartbeat. `agentBuildId` is a stable build tag; `agentCapabilities`
@@ -134,6 +138,10 @@ export const server = pgTable(
     // owning server's applied seq (see `@/lib/publish-gate`).
     desiredRevisionSeq: integer("desired_revision_seq").default(0).notNull(),
     appliedRevisionSeq: integer("applied_revision_seq").default(0).notNull(),
+    // Cached full configuration identifier ("<seq>:sha256:<hex>") served on v2
+    // status acknowledgments without compiling. Null means "not compiled since
+    // the last change"; the next reader compiles and stores it again.
+    desiredConfigRevision: text("desired_config_revision"),
     activeNodeIds: jsonb("active_node_ids")
       .$type<string[]>()
       .default([])

@@ -29,6 +29,7 @@ Established. Know which surface you are on, because they authenticate differentl
 | Agent API (oRPC)              | `app/src/orpc/router/index.ts`, `app/src/orpc/proxy/agent.ts`          | per-server `Authorization: Bearer` token             | The only procedures in the oRPC router: `agent.getConfigV3`, `agent.heartbeat`, `agent.reportTraffic`.                                 |
 | Agent WebSocket               | `app/src/routes/api/agent/ws.ts`                                       | per-server `Authorization: Bearer` token             | One outbound `/api/agent/ws` connection per server; the token is checked before the upgrade.                                           |
 | Admin PTY WebSocket           | `app/src/routes/api/admin/servers/$id/pty/ws.ts`                        | better-auth admin session + same-origin check        | Human-only browser terminal relayed to one enrolled agent; no server function or MCP tool exposes it.                                  |
+| Admin installer download      | `app/src/routes/api/admin/servers/$id/installation/script/$grantId.ts` | better-auth admin session + same-origin check        | Fixed per-server, grant-bound script attachment; never contains the grant and always returns `private, no-store`.                      |
 | oRPC mounts                   | `app/src/routes/api/$.ts` (OpenAPI), `app/src/routes/api/rpc/$.ts` (RPC) | same as above                                      | `/api/*` serves the OpenAPI document (`/api/spec.json`, consumed by the agent codegen); `/api/rpc/*` is the oRPC RPC protocol.         |
 | better-auth                   | `app/src/routes/api/auth/$.ts`                                         | its own                                              | Email/password, magic link, GitHub/Google (when configured), admin and JWT plugins, OAuth provider for MCP.                            |
 | MCP                           | `app/src/routes/api/mcp.ts`, `app/src/orpc/mcp/`                       | OAuth 2.0 bearer; admin actor; `blossom:mcp:*` scopes | Tools call an in-process oRPC router (`mcpRouter`); write tools need `confirm: true` and are audited.                                  |
@@ -41,7 +42,10 @@ An isomorphic oRPC client and TanStack Query utilities exist in `app/src/orpc/cl
 
 Established. The frozen v1 envelope and payload schemas live in
 `packages/contracts/src/agent-ws.ts`; the matching Rust client is added by
-PR #112 under `server-agent/src/ws/`. The control plane authenticates the
+PR #112 under `server-agent/src/ws/`. Clients that offer the
+`blossom-agent.v2` subprotocol use the v2 session protocol on the same route,
+documented in [Agent WebSocket v2](agent-ws-v2.md). The control plane
+implements v2 sessions; the Rust v2 client is a later change. The control plane authenticates the
 upgrade request with the same hashed per-server bearer token as the oRPC agent
 API.
 

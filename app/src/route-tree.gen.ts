@@ -58,6 +58,7 @@ import { Route as adminAdminUsersUserIdRouteImport } from './routes/(admin)/admi
 import { Route as userDashboardSubscriptionsIndexRouteImport } from './routes/(user)/dashboard/subscriptions/index'
 import { Route as DotwellKnownOauthAuthorizationServerApiAuthRouteImport } from './routes/[.]well-known.oauth-authorization-server.api.auth'
 import { Route as DotwellKnownOauthProtectedResourceApiMcpRouteImport } from './routes/[.]well-known.oauth-protected-resource.api.mcp'
+import { Route as ApiAgentEnrollmentRedeemRouteImport } from './routes/api/agent/enrollment/redeem'
 import { Route as adminAdminProxiesCertificatesIndexRouteImport } from './routes/(admin)/admin/proxies/certificates/index'
 import { Route as adminAdminProxiesGroupsIndexRouteImport } from './routes/(admin)/admin/proxies/groups/index'
 import { Route as adminAdminProxiesGroupsGroupIdRouteImport } from './routes/(admin)/admin/proxies/groups/$groupId'
@@ -76,6 +77,7 @@ import { Route as adminAdminProxiesServersServerIdSettingsRouteImport } from './
 import { Route as adminAdminProxiesServersServerIdTerminalRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId/terminal'
 import { Route as ApiAdminCertificatesCertificateIdExportPartRouteImport } from './routes/api/admin/certificates/$certificateId/export/$part'
 import { Route as ApiAdminServersIdPtyWsRouteImport } from './routes/api/admin/servers/$id/pty/ws'
+import { Route as ApiAdminServersIdInstallationScriptGrantIdRouteImport } from './routes/api/admin/servers/$id/installation/script/$grantId'
 
 const adminRouteRoute = adminRouteRouteImport.update({
   id: '/(admin)',
@@ -341,6 +343,12 @@ const DotwellKnownOauthProtectedResourceApiMcpRoute =
     path: '/api/mcp',
     getParentRoute: () => DotwellKnownOauthProtectedResourceRoute,
   } as any)
+const ApiAgentEnrollmentRedeemRoute =
+  ApiAgentEnrollmentRedeemRouteImport.update({
+    id: '/api/agent/enrollment/redeem',
+    path: '/api/agent/enrollment/redeem',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const adminAdminProxiesCertificatesIndexRoute =
   adminAdminProxiesCertificatesIndexRouteImport.update({
     id: '/',
@@ -447,6 +455,12 @@ const ApiAdminServersIdPtyWsRoute = ApiAdminServersIdPtyWsRouteImport.update({
   path: '/api/admin/servers/$id/pty/ws',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAdminServersIdInstallationScriptGrantIdRoute =
+  ApiAdminServersIdInstallationScriptGrantIdRouteImport.update({
+    id: '/api/admin/servers/$id/installation/script/$grantId',
+    path: '/api/admin/servers/$id/installation/script/$grantId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof staticIndexRoute
@@ -487,6 +501,7 @@ export interface FileRoutesByFullPath {
   '/admin/users/$userId': typeof adminAdminUsersUserIdRoute
   '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
   '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
+  '/api/agent/enrollment/redeem': typeof ApiAgentEnrollmentRedeemRoute
   '/admin/announcements/': typeof adminAdminAnnouncementsIndexRoute
   '/admin/audit/': typeof adminAdminAuditIndexRoute
   '/admin/mcp/': typeof adminAdminMcpIndexRoute
@@ -515,6 +530,7 @@ export interface FileRoutesByFullPath {
   '/api/admin/certificates/$certificateId/export/$part': typeof ApiAdminCertificatesCertificateIdExportPartRoute
   '/api/admin/servers/$id/pty/ws': typeof ApiAdminServersIdPtyWsRoute
   '/admin/proxies/servers/$serverId/': typeof adminAdminProxiesServersServerIdIndexRoute
+  '/api/admin/servers/$id/installation/script/$grantId': typeof ApiAdminServersIdInstallationScriptGrantIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof staticIndexRoute
@@ -542,6 +558,7 @@ export interface FileRoutesByTo {
   '/admin/users/$userId': typeof adminAdminUsersUserIdRoute
   '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
   '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
+  '/api/agent/enrollment/redeem': typeof ApiAgentEnrollmentRedeemRoute
   '/admin/announcements': typeof adminAdminAnnouncementsIndexRoute
   '/admin/audit': typeof adminAdminAuditIndexRoute
   '/admin/mcp': typeof adminAdminMcpIndexRoute
@@ -569,6 +586,7 @@ export interface FileRoutesByTo {
   '/api/admin/certificates/$certificateId/export/$part': typeof ApiAdminCertificatesCertificateIdExportPartRoute
   '/api/admin/servers/$id/pty/ws': typeof ApiAdminServersIdPtyWsRoute
   '/admin/proxies/servers/$serverId': typeof adminAdminProxiesServersServerIdIndexRoute
+  '/api/admin/servers/$id/installation/script/$grantId': typeof ApiAdminServersIdInstallationScriptGrantIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -613,6 +631,7 @@ export interface FileRoutesById {
   '/(admin)/admin/users/$userId': typeof adminAdminUsersUserIdRoute
   '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
   '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
+  '/api/agent/enrollment/redeem': typeof ApiAgentEnrollmentRedeemRoute
   '/(admin)/admin/announcements/': typeof adminAdminAnnouncementsIndexRoute
   '/(admin)/admin/audit/': typeof adminAdminAuditIndexRoute
   '/(admin)/admin/mcp/': typeof adminAdminMcpIndexRoute
@@ -641,6 +660,7 @@ export interface FileRoutesById {
   '/api/admin/certificates/$certificateId/export/$part': typeof ApiAdminCertificatesCertificateIdExportPartRoute
   '/api/admin/servers/$id/pty/ws': typeof ApiAdminServersIdPtyWsRoute
   '/(admin)/admin/proxies/servers/$serverId/': typeof adminAdminProxiesServersServerIdIndexRoute
+  '/api/admin/servers/$id/installation/script/$grantId': typeof ApiAdminServersIdInstallationScriptGrantIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -683,6 +703,7 @@ export interface FileRouteTypes {
     | '/admin/users/$userId'
     | '/.well-known/oauth-authorization-server/api/auth'
     | '/.well-known/oauth-protected-resource/api/mcp'
+    | '/api/agent/enrollment/redeem'
     | '/admin/announcements/'
     | '/admin/audit/'
     | '/admin/mcp/'
@@ -711,6 +732,7 @@ export interface FileRouteTypes {
     | '/api/admin/certificates/$certificateId/export/$part'
     | '/api/admin/servers/$id/pty/ws'
     | '/admin/proxies/servers/$serverId/'
+    | '/api/admin/servers/$id/installation/script/$grantId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -738,6 +760,7 @@ export interface FileRouteTypes {
     | '/admin/users/$userId'
     | '/.well-known/oauth-authorization-server/api/auth'
     | '/.well-known/oauth-protected-resource/api/mcp'
+    | '/api/agent/enrollment/redeem'
     | '/admin/announcements'
     | '/admin/audit'
     | '/admin/mcp'
@@ -765,6 +788,7 @@ export interface FileRouteTypes {
     | '/api/admin/certificates/$certificateId/export/$part'
     | '/api/admin/servers/$id/pty/ws'
     | '/admin/proxies/servers/$serverId'
+    | '/api/admin/servers/$id/installation/script/$grantId'
   id:
     | '__root__'
     | '/(admin)'
@@ -808,6 +832,7 @@ export interface FileRouteTypes {
     | '/(admin)/admin/users/$userId'
     | '/.well-known/oauth-authorization-server/api/auth'
     | '/.well-known/oauth-protected-resource/api/mcp'
+    | '/api/agent/enrollment/redeem'
     | '/(admin)/admin/announcements/'
     | '/(admin)/admin/audit/'
     | '/(admin)/admin/mcp/'
@@ -836,6 +861,7 @@ export interface FileRouteTypes {
     | '/api/admin/certificates/$certificateId/export/$part'
     | '/api/admin/servers/$id/pty/ws'
     | '/(admin)/admin/proxies/servers/$serverId/'
+    | '/api/admin/servers/$id/installation/script/$grantId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -852,9 +878,11 @@ export interface RootRouteChildren {
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiRpcSplatRoute: typeof ApiRpcSplatRoute
   ApiSubTokenRoute: typeof ApiSubTokenRoute
+  ApiAgentEnrollmentRedeemRoute: typeof ApiAgentEnrollmentRedeemRoute
   ApiAdminServersIdStreamRoute: typeof ApiAdminServersIdStreamRoute
   ApiAdminCertificatesCertificateIdExportPartRoute: typeof ApiAdminCertificatesCertificateIdExportPartRoute
   ApiAdminServersIdPtyWsRoute: typeof ApiAdminServersIdPtyWsRoute
+  ApiAdminServersIdInstallationScriptGrantIdRoute: typeof ApiAdminServersIdInstallationScriptGrantIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -1216,6 +1244,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DotwellKnownOauthProtectedResourceApiMcpRouteImport
       parentRoute: typeof DotwellKnownOauthProtectedResourceRoute
     }
+    '/api/agent/enrollment/redeem': {
+      id: '/api/agent/enrollment/redeem'
+      path: '/api/agent/enrollment/redeem'
+      fullPath: '/api/agent/enrollment/redeem'
+      preLoaderRoute: typeof ApiAgentEnrollmentRedeemRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/(admin)/admin/proxies/certificates/': {
       id: '/(admin)/admin/proxies/certificates/'
       path: '/'
@@ -1340,6 +1375,13 @@ declare module '@tanstack/react-router' {
       path: '/api/admin/servers/$id/pty/ws'
       fullPath: '/api/admin/servers/$id/pty/ws'
       preLoaderRoute: typeof ApiAdminServersIdPtyWsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/servers/$id/installation/script/$grantId': {
+      id: '/api/admin/servers/$id/installation/script/$grantId'
+      path: '/api/admin/servers/$id/installation/script/$grantId'
+      fullPath: '/api/admin/servers/$id/installation/script/$grantId'
+      preLoaderRoute: typeof ApiAdminServersIdInstallationScriptGrantIdRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -1696,10 +1738,13 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiRpcSplatRoute: ApiRpcSplatRoute,
   ApiSubTokenRoute: ApiSubTokenRoute,
+  ApiAgentEnrollmentRedeemRoute: ApiAgentEnrollmentRedeemRoute,
   ApiAdminServersIdStreamRoute: ApiAdminServersIdStreamRoute,
   ApiAdminCertificatesCertificateIdExportPartRoute:
     ApiAdminCertificatesCertificateIdExportPartRoute,
   ApiAdminServersIdPtyWsRoute: ApiAdminServersIdPtyWsRoute,
+  ApiAdminServersIdInstallationScriptGrantIdRoute:
+    ApiAdminServersIdInstallationScriptGrantIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

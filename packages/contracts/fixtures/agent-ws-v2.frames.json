@@ -1,0 +1,447 @@
+{
+  "$comment": "Agent WebSocket protocol v2 wire fixtures. Each frame is the JSON object sent as one text frame. `sender` is the side that produced it; the receiver is the other side. `expect` is \"ok\", \"unknown\" (a well-formed frame of an unknown type that must be ignored), or the parse error code the receiver must report. Checked by packages/contracts/src/agent-ws-v2.test.ts; the Rust implementation must produce the same results.",
+  "subprotocol": "blossom-agent.v2",
+  "frames": [
+    {
+      "name": "agent hello with an empty configuration cache",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "id": "hello-1",
+        "type": "hello",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "agentVersion": "0.4.0",
+          "agentBuildId": "build-0001",
+          "capabilities": ["config-v3", "ws-v2"],
+          "applied": null
+        }
+      }
+    },
+    {
+      "name": "agent hello with an applied configuration and update status",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "id": "hello-2",
+        "type": "hello",
+        "ts": "2026-11-19T00:00:01.000Z",
+        "payload": {
+          "agentVersion": "0.4.0",
+          "agentBuildId": "build-0001",
+          "capabilities": ["config-v3", "ws-v2", "traffic-v2"],
+          "applied": {
+            "desiredRevisionSeq": 7,
+            "desiredRevision": "7:sha256:48a9e1aa59f365863b57348ccd1701026c39652cfb74b8e2b039811611802ec6"
+          },
+          "updates": {
+            "agent": {
+              "targetVersion": "0.4.1",
+              "state": "checking",
+              "checkedAt": "2026-11-19T00:00:00.000Z"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "agent status with a cleared error and certificate deployment",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "agent.status",
+        "ts": "2026-11-19T00:00:30.000Z",
+        "payload": {
+          "reason": "interval",
+          "runtimeState": "running",
+          "configState": "applied",
+          "singBoxVersion": "1.13.0",
+          "activeNodeIds": ["node-1"],
+          "error": null,
+          "certificateDeployments": [
+            {
+              "certificateId": "cert-1",
+              "generation": 2,
+              "fingerprintSha256": "deadbeef",
+              "installed": true,
+              "inUse": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "agent config.get after an empty cache",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "id": "get-1",
+        "type": "config.get",
+        "ts": "2026-11-19T00:00:02.000Z",
+        "payload": { "requestId": "snap-1", "reason": "initial" }
+      }
+    },
+    {
+      "name": "agent config.ack reporting an applied identifier",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "config.ack",
+        "ts": "2026-11-19T00:00:03.000Z",
+        "payload": {
+          "requestId": "snap-1",
+          "desired": {
+            "desiredRevisionSeq": 7,
+            "desiredRevision": "7:sha256:48a9e1aa59f365863b57348ccd1701026c39652cfb74b8e2b039811611802ec6"
+          },
+          "outcome": "applied"
+        }
+      }
+    },
+    {
+      "name": "agent config.ack reporting a failed validation stage",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "config.ack",
+        "ts": "2026-11-19T00:00:04.000Z",
+        "payload": {
+          "requestId": "snap-2",
+          "desired": {
+            "desiredRevisionSeq": 8,
+            "desiredRevision": "8:sha256:2e8ae9a0be2819b1d63bef33ca897ea498557c1677a201bb59fb80fc01104422"
+          },
+          "outcome": "failed",
+          "stage": "validate",
+          "error": "sing-box check rejected inbound tag"
+        }
+      }
+    },
+    {
+      "name": "agent traffic report with a required report id",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "traffic.report",
+        "ts": "2026-11-19T00:01:00.000Z",
+        "payload": {
+          "reportId": "report-0001",
+          "windowStartedAt": "2026-11-19T00:00:00.000Z",
+          "windowEndedAt": "2026-11-19T00:01:00.000Z",
+          "entries": [
+            {
+              "subscriptionId": "sub-1",
+              "uplinkBytes": 1024,
+              "downlinkBytes": 4096
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "agent frame with a future type is ignored",
+      "sender": "agent",
+      "expect": "unknown",
+      "frame": {
+        "v": 2,
+        "type": "future.thing",
+        "ts": "2026-11-19T00:01:00.000Z",
+        "payload": { "x": 1 }
+      }
+    },
+    {
+      "name": "control welcome for a new session",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "id": "hello-1",
+        "type": "welcome",
+        "ts": "2026-11-19T00:00:00.500Z",
+        "payload": {
+          "sessionId": "9f1d2c3a-0000-4000-8000-000000000001",
+          "serverId": "server-1",
+          "serverName": "edge-1",
+          "desired": {
+            "desiredRevisionSeq": 7,
+            "desiredRevision": "7:sha256:48a9e1aa59f365863b57348ccd1701026c39652cfb74b8e2b039811611802ec6"
+          },
+          "updatePolicy": {
+            "desiredAgentVersion": "latest",
+            "desiredSingBoxVersion": null
+          },
+          "statusIntervalSeconds": 30,
+          "reconnectBeforeSeconds": 240,
+          "limits": {
+            "maxFrameBytes": 4194304,
+            "snapshotChunkBytes": 65536,
+            "maxSnapshotBytes": 8388608
+          }
+        }
+      }
+    },
+    {
+      "name": "control agent.status.ack carrying authoritative identifiers",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "agent.status.ack",
+        "ts": "2026-11-19T00:00:30.100Z",
+        "payload": {
+          "desired": {
+            "desiredRevisionSeq": 8,
+            "desiredRevision": "8:sha256:2e8ae9a0be2819b1d63bef33ca897ea498557c1677a201bb59fb80fc01104422"
+          },
+          "updatePolicy": {
+            "desiredAgentVersion": null,
+            "desiredSingBoxVersion": "1.13.0"
+          }
+        }
+      }
+    },
+    {
+      "name": "control config.notify hint",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "config.notify",
+        "ts": "2026-11-19T00:02:00.000Z",
+        "payload": {
+          "desired": {
+            "desiredRevisionSeq": 8,
+            "desiredRevision": "8:sha256:2e8ae9a0be2819b1d63bef33ca897ea498557c1677a201bb59fb80fc01104422"
+          },
+          "reason": "node updated"
+        }
+      }
+    },
+    {
+      "name": "control snapshot begin for a single-chunk body",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "config.snapshot.begin",
+        "ts": "2026-11-19T00:00:02.100Z",
+        "payload": {
+          "requestId": "snap-1",
+          "desired": {
+            "desiredRevisionSeq": 7,
+            "desiredRevision": "7:sha256:48a9e1aa59f365863b57348ccd1701026c39652cfb74b8e2b039811611802ec6"
+          },
+          "contentType": "application/json",
+          "totalBytes": 110,
+          "chunkCount": 1,
+          "digest": "af9157b466198981713afa60dd2b114ba34fbaf78b5d95f5291bc02ababe6fcc"
+        }
+      }
+    },
+    {
+      "name": "control snapshot chunk 0 of the body above",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "config.snapshot.chunk",
+        "ts": "2026-11-19T00:00:02.200Z",
+        "payload": {
+          "requestId": "snap-1",
+          "index": 0,
+          "data": "eyJhcGlWZXJzaW9uIjozLCJkZXNpcmVkUmV2aXNpb24iOiI3OnNoYTI1Njo0OGE5ZTFhYTU5ZjM2NTg2M2I1NzM0OGNjZDE3MDEwMjZjMzk2NTJjZmI3NGI4ZTJiMDM5ODExNjExODAyZWM2In0="
+        }
+      }
+    },
+    {
+      "name": "control snapshot end",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "config.snapshot.end",
+        "ts": "2026-11-19T00:00:02.300Z",
+        "payload": { "requestId": "snap-1" }
+      }
+    },
+    {
+      "name": "control snapshot refused as too large",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "config.snapshot.error",
+        "ts": "2026-11-19T00:00:02.400Z",
+        "payload": {
+          "requestId": "snap-3",
+          "code": "snapshot_too_large",
+          "message": "compiled configuration exceeds the 8388608 byte limit"
+        }
+      }
+    },
+    {
+      "name": "control traffic.ack applied",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "traffic.ack",
+        "ts": "2026-11-19T00:01:00.500Z",
+        "payload": {
+          "reportId": "report-0001",
+          "result": "applied",
+          "accepted": 1,
+          "dropped": 0
+        }
+      }
+    },
+    {
+      "name": "control traffic.ack conflict",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "traffic.ack",
+        "ts": "2026-11-19T00:01:00.600Z",
+        "payload": {
+          "reportId": "report-0001",
+          "result": "conflict",
+          "error": "traffic report id was already used with different content"
+        }
+      }
+    },
+    {
+      "name": "control error for a replaced session",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "error",
+        "ts": "2026-11-19T00:05:00.000Z",
+        "payload": {
+          "code": "session_replaced",
+          "message": "a newer session is active"
+        }
+      }
+    },
+    {
+      "name": "reject: control-plane type sent by the agent",
+      "sender": "agent",
+      "expect": "invalid-direction",
+      "frame": {
+        "v": 2,
+        "type": "welcome",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {}
+      }
+    },
+    {
+      "name": "reject: agent type sent by the control plane",
+      "sender": "control-plane",
+      "expect": "invalid-direction",
+      "frame": {
+        "v": 2,
+        "type": "hello",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {}
+      }
+    },
+    {
+      "name": "reject: v1 envelope on the v2 protocol",
+      "sender": "agent",
+      "expect": "unsupported-version",
+      "frame": {
+        "v": 1,
+        "type": "pong",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {}
+      }
+    },
+    {
+      "name": "reject: envelope without a timestamp",
+      "sender": "agent",
+      "expect": "invalid-envelope",
+      "frame": {
+        "v": 2,
+        "type": "config.get",
+        "payload": { "requestId": "snap-1", "reason": "initial" }
+      }
+    },
+    {
+      "name": "reject: identifier prefix does not match its sequence",
+      "sender": "agent",
+      "expect": "invalid-payload",
+      "frame": {
+        "v": 2,
+        "type": "hello",
+        "ts": "2026-11-19T00:00:00.000Z",
+        "payload": {
+          "agentVersion": "0.4.0",
+          "agentBuildId": "build-0001",
+          "capabilities": [],
+          "applied": {
+            "desiredRevisionSeq": 6,
+            "desiredRevision": "7:sha256:48a9e1aa59f365863b57348ccd1701026c39652cfb74b8e2b039811611802ec6"
+          }
+        }
+      }
+    },
+    {
+      "name": "reject: applied config.ack that also carries an error",
+      "sender": "agent",
+      "expect": "invalid-payload",
+      "frame": {
+        "v": 2,
+        "type": "config.ack",
+        "ts": "2026-11-19T00:00:03.000Z",
+        "payload": {
+          "desired": {
+            "desiredRevisionSeq": 7,
+            "desiredRevision": "7:sha256:48a9e1aa59f365863b57348ccd1701026c39652cfb74b8e2b039811611802ec6"
+          },
+          "outcome": "applied",
+          "error": "should not be here"
+        }
+      }
+    },
+    {
+      "name": "reject: traffic report without a report id",
+      "sender": "agent",
+      "expect": "invalid-payload",
+      "frame": {
+        "v": 2,
+        "type": "traffic.report",
+        "ts": "2026-11-19T00:01:00.000Z",
+        "payload": { "entries": [] }
+      }
+    },
+    {
+      "name": "reject: snapshot chunk count that does not match the byte total",
+      "sender": "control-plane",
+      "expect": "invalid-payload",
+      "frame": {
+        "v": 2,
+        "type": "config.snapshot.begin",
+        "ts": "2026-11-19T00:00:02.100Z",
+        "payload": {
+          "requestId": "snap-1",
+          "desired": {
+            "desiredRevisionSeq": 7,
+            "desiredRevision": "7:sha256:48a9e1aa59f365863b57348ccd1701026c39652cfb74b8e2b039811611802ec6"
+          },
+          "contentType": "application/json",
+          "totalBytes": 110,
+          "chunkCount": 2,
+          "digest": "af9157b466198981713afa60dd2b114ba34fbaf78b5d95f5291bc02ababe6fcc"
+        }
+      }
+    }
+  ]
+}

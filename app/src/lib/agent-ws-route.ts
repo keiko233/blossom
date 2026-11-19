@@ -1,4 +1,5 @@
 import type { AgentWsWelcomePayload } from "@blossom/contracts/agent-ws";
+import { negotiateAgentWsProtocol } from "@blossom/contracts/agent-ws-v2";
 
 import type { Server } from "@/db/proxy-schema";
 import { hashAgentToken, parseBearerToken } from "@/lib/agent-token";
@@ -35,14 +36,31 @@ export async function authenticateAgentWsRequest(
 export interface AgentWsRouteDependencies {
   authenticate(request: Request): Promise<Server | null>;
   buildWelcome(server: Server): Promise<AgentWsWelcomePayload>;
-  hub: Pick<RealtimeHub, "acceptAgent">;
+  /**
+   * Advances the global certificate issuer on each v2 upgrade. It runs in the
+   * request context, which a Durable Object message does not have, and it
+   * replaces the wake-up a v1 config poll performs.
+   */
+  wakeCertificateIssuance(): Promise<void>;
+  hub: Pick<RealtimeHub, "acceptAgent" | "acceptAgentV2">;
 }
 
 const defaultDependencies: AgentWsRouteDependencies = {
   authenticate: authenticateAgentWsRequest,
   buildWelcome: buildAgentWelcome,
+  wakeCertificateIssuance: async () => {
+    try {
+      const { advanceCertificateIssuance } =
+        await import("@/lib/certificate-issuance");
+      await advanceCertificateIssuance();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`agent websocket certificate wake-up failed: ${message}`);
+    }
+  },
   hub: {
     acceptAgent: (...args) => getRealtimeHub().acceptAgent(...args),
+    acceptAgentV2: (...args) => getRealtimeHub().acceptAgentV2(...args),
   },
 };
 
@@ -78,6 +96,15 @@ export async function handleAgentWsRequest(
   if (!server) {
     return rejectUpgrade(request, plainResponse(401, "Unauthorized"));
   }
+  const negotiation = negotiateAgentWsProtocol(
+    request.headers.get("sec-websocket-protocol"),
+  );
+  if (negotiation.protocol === "unsupported") {
+    return rejectUpgrade(
+      request,
+      plainResponse(400, "Unsupported agent WebSocket subprotocol"),
+    );
+  }
   if (!isWebSocketUpgrade(request)) {
     return rejectUpgrade(
       request,
@@ -93,6 +120,10 @@ export async function handleAgentWsRequest(
   }
 
   try {
+    if (negotiation.protocol === "v2") {
+      await dependencies.wakeCertificateIssuance();
+      return await dependencies.hub.acceptAgentV2(request, server);
+    }
     const welcome = await dependencies.buildWelcome(server);
     return await dependencies.hub.acceptAgent(request, server, welcome);
   } catch (error) {

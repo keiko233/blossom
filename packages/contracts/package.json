@@ -4,6 +4,7 @@
   "type": "module",
   "exports": {
     "./agent-ws": "./src/agent-ws.ts",
+    "./agent-ws-v2": "./src/agent-ws-v2.ts",
     "./plan": "./src/plan.ts",
     "./user": "./src/user.ts"
   },
