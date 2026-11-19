@@ -101,6 +101,41 @@ export async function buildAgentDesiredState(
   };
 }
 
+/**
+ * The v3 configuration document: the HTTP `GET /agent/config/v3` body and the
+ * WebSocket v2 snapshot body are the same bytes, so an agent can switch
+ * transports without its applied configuration changing meaning.
+ */
+export function buildAgentConfigV3Output(
+  server: Pick<
+    Server,
+    | "configPollIntervalSeconds"
+    | "heartbeatIntervalSeconds"
+    | "desiredAgentVersion"
+    | "desiredSingBoxVersion"
+  >,
+  desired: AgentDesiredState,
+) {
+  return {
+    apiVersion: 3 as const,
+    agent: {
+      configPollIntervalSeconds: server.configPollIntervalSeconds,
+      heartbeatIntervalSeconds: server.heartbeatIntervalSeconds,
+      ...(server.desiredAgentVersion
+        ? { desiredAgentVersion: server.desiredAgentVersion }
+        : {}),
+      ...(server.desiredSingBoxVersion
+        ? { desiredSingBoxVersion: server.desiredSingBoxVersion }
+        : {}),
+    },
+    desiredRevision: desired.desiredRevision,
+    materializedNodeIds: desired.materializedNodeIds,
+    singboxConfig: desired.config,
+    managedTlsBindings: desired.managedTlsBindings,
+    certificateArtifacts: desired.certificateArtifacts,
+  };
+}
+
 export async function buildAgentWelcome(
   server: Server,
 ): Promise<AgentWsWelcomePayload> {
