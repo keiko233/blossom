@@ -153,6 +153,10 @@ export const server = pgTable(
     // long an input with no change record (a subscription that expires with
     // the clock, a temporary ban) can stay unreflected in the identifier.
     desiredConfigValidUntil: timestamp("desired_config_valid_until"),
+    // Monotonic server-wide revision for the independent log-level policy.
+    // It never feeds `desiredRevisionSeq`; the agent applies log changes
+    // separately and the publish gate stays untouched.
+    logPolicyRevision: integer("log_policy_revision").default(0).notNull(),
     activeNodeIds: jsonb("active_node_ids")
       .$type<string[]>()
       .default([])

@@ -59,7 +59,16 @@ Discard a partial snapshot on disconnect and request a new one after reconnect. 
 ## Status
 
 - `agent.status` `{reason, runtimeState?, configState?, singBoxVersion?, activeNodeIds?, error?, certificateDeployments, updates?}` reports only the fields present. `error: null` clears the last error.
-- `agent.status.ack` `{desired, updatePolicy}` carries the control plane's identifier. If it differs from the applied identifier, send `config.get`. This is how a lost `config.notify` is recovered. The identifier is authoritative within the bounds in [Known limits](#known-limits-of-the-control-plane): a change that no path signalled is reflected at the first status exchange after the cached identifier's deadline.
+- `agent.status.ack` `{desired, updatePolicy, logPolicyRevision?}` carries the control plane's identifier. If it differs from the applied identifier, send `config.get`. This is how a lost `config.notify` is recovered. The identifier is authoritative within the bounds in [Known limits](#known-limits-of-the-control-plane): a change that no path signalled is reflected at the first status exchange after the cached identifier's deadline. A newer `logPolicyRevision` recovers a missed policy notification through `log.policy.get`.
+
+## Log policy
+
+- `log.policy.notify` `{revision, source?, reason?}` tells a capable agent that the server-wide policy revision changed.
+- `log.policy.get` `{requestId}` asks for the desired snapshot.
+- `log.policy.snapshot` `{requestId, revision, sources}` carries one entry per source: source-local revision, level, and an absolute deadline for `debug`/`trace`. A baseline level has no deadline.
+- `log.policy.ack` `{source, sourceRevision, requested, baseline, effective, deadline, error, pending}` reports requested and effective status only. It never carries log entries. The control plane accepts it only for the current session and current desired source revision.
+- `welcome` and `agent.status.ack` carry `logPolicyRevision` only when the agent advertised `log-policy-v1`. The first accepted snapshot advances the agent's known revision; a lost push or snapshot is retried by the next status exchange.
+- Local expiry is authoritative even while disconnected. An expired override returns to the generated or local baseline, and the next session acknowledges that effective status. A logging-only edit never moves the configuration identifier or the publish gate. See [Remote log-level policy](log-policy.md).
 
 ## Traffic
 
@@ -76,7 +85,7 @@ Discard a partial snapshot on disconnect and request a new one after reconnect. 
 These remain v1-only and are never sent to v2 sessions:
 
 - `update.trigger` and `update.status`, and the `acme.*` messages. The control plane does not push them to v2 sessions.
-- `telemetry.*`, `pty.*`, and the log policy messages.
+- `telemetry.*` and `pty.*`.
 
 Until the PTY moves to v2, a v2 agent **must not advertise `pty-v1`** in `hello.capabilities`. The admin terminal would otherwise offer a session that cannot start.
 
@@ -127,11 +136,11 @@ The control plane advertises `reconnectBeforeSeconds`. Remote delivery across in
 
 Each target is listed separately. "Not run" means the change has no evidence on that target.
 
-- **Automated, no database.** Contract schemas, direction and size checks, and both sides of the wire fixtures (`packages/contracts`). Session state machine, snapshot chunking, deadline expiry, fenced snapshots, disabled servers and hub routing, including the token-bound start (`app/src/lib/agent-ws-v2-*.test.ts`, `app/src/lib/realtime-hub-v2.test.ts`).
-- **Disposable PostgreSQL, node-postgres and neon-http.** Fenced acknowledgements, status and traffic, the version fence on cached identifiers, token rotation and the token-bound start (`app/src/query/agent-ws-v2-state.integration.test.ts`). Convergence through the real store adapter and compiler: a routing-rule change with no notification is recovered by the status exchange after the deadline, an invalidated change is reported on the next status, and a rotated credential, a disabled server and a snapshot each stop or serve as specified (`app/src/query/agent-ws-v2-convergence.integration.test.ts`). The neon-http runs use a local `/sql` proxy in front of the same database, not Neon's hosted service.
+- **Automated, no database.** Contract schemas, direction and size checks, and both sides of the wire fixtures (`packages/contracts`). Session state machine, snapshot chunking, deadline expiry, fenced snapshots, disabled servers, hub routing and log-policy request/ack routing, including the token-bound start (`app/src/lib/agent-ws-v2-*.test.ts`, `app/src/lib/realtime-hub-v2.test.ts`).
+- **Disposable PostgreSQL, node-postgres and neon-http.** Fenced acknowledgements, status and traffic, the version fence on cached identifiers, token rotation and the token-bound start (`app/src/query/agent-ws-v2-state.integration.test.ts`). Log-policy revision CAS, expiry normalization, stale and replaced ACKs, failed-apply status and reconnect snapshots (`app/src/query/log-policy.integration.test.ts`). Convergence through the real store adapter and compiler: a routing-rule change with no notification is recovered by the status exchange after the deadline, an invalidated change is reported on the next status, and a rotated credential, a disabled server and a snapshot each stop or serve as specified (`app/src/query/agent-ws-v2-convergence.integration.test.ts`). The neon-http runs use a local `/sql` proxy in front of the same database, not Neon's hosted service.
 - **Node server, built and run locally.** Against the built Node target, with PostgreSQL through node-postgres: the subprotocol echo, `hello` and `welcome`, a status acknowledgement, a snapshot whose length and digest verify, a credential rotation during a live session (a `config.get` then sends no snapshot, the session stops with `session_replaced` and close 4000), the old token refused with `401`, and the new token welcomed. Checked on 2026-11-19 with a scratch client that is not committed; the built-server handshake recorded in `adc180c` and the v1 route are not re-run here.
 - **Cloudflare, local workerd.** `wrangler dev --local` (Wrangler 4.164) running a copy of the Cloudflare build, with a local Hyperdrive connection string to the same disposable PostgreSQL. Checked on 2026-11-19 with the same scratch client: the same sequence as the Node run, which covers the Durable Object's upgrade, its message path and its fenced close. A session welcomed, then left idle for 70 seconds, still accepted a status, and disabling the server stopped the next status with `server_disabled` and close 4000. Workerd does not report hibernation, so the idle run shows that the welcomed flag survived the idle period, not that the object hibernated. The `401` on the Cloudflare upgrade for a credential that rotates after authentication is covered only by the unit and database tests, not by a race on workerd.
 - **Cloudflare, hibernation.** Not verified. Hibernation was not observed, and timer behaviour and the `4000`-series close after a real wake were not run in any environment. Check them against a deployment before relying on them.
 - **Cloudflare, hosted.** Not verified. Nothing was deployed, and hosted Hyperdrive and the `Sec-WebSocket-Protocol` response through the platform were not exercised.
 - **Vercel.** Built only. Connection lifetime, `reconnectBeforeSeconds` and cross-instance Redis delivery are not verified.
-- **Rust agent.** The client is not migrated, so no agent behaviour is verified. The wire fixtures are the agreed contract.
+- **Rust agent.** The v2 client applies configuration, status, traffic and `log-policy-v1` over the real binary against a loopback control plane and fake sing-box (`server-agent/tests/ws_v2_lifecycle.rs`). The lifecycle records and fails every HTTP agent API request and asserts none occurred. PTY, ACME and telemetry remain v1-only and are not advertised on v2.

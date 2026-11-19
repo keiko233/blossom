@@ -107,7 +107,7 @@ The admin terminal is disabled unless the agent starts with `--pty-enabled` / `A
 
 ### Local log-level policy
 
-This branch implements the local half of the [log-level controls](../spec/2026-11-19-agent-ws-oauth-server-workspace/server-workspace.md#log-level-controls). It is not reachable from the control plane yet: no WebSocket frame, admin mutation, UI or `log-policy-v1` capability is added here.
+The v2 agent advertises `log-policy-v1` and serves the [remote policy](log-policy.md). `log.policy.snapshot` entries are mapped to the existing `PolicyRequest`/`PolicyAction` API, and `PolicyStatus` is published as a bounded `log.policy.ack`. There is no v1 or HTTP policy path.
 
 - `src/log_policy.rs` persists one record per source (`agent`, `sing-box`) in `<state_dir>/log-policy.json` (mode `0600`). Each record carries a revision scoped to that source, the requested level, the generated or local baseline, the effective level, an optional deadline and the last error.
 - Requests accept `error`, `warn`, `info` and `default` as baselines. `debug` and `trace` are temporary only: the default lifetime is 15 minutes and the local maximum is 60 minutes, regardless of a longer control-plane deadline. A baseline request carrying a deadline and a stale revision are rejected.
@@ -116,7 +116,9 @@ This branch implements the local half of the [log-level controls](../spec/2026-1
 - Every desired-config compile re-reads the generated `log.level` as the new baseline and reapplies the current overlay, so refreshes, retries and a malformed `log` object converge on the same combined config. Newly received node credentials are registered for retained-log redaction before validation errors can be captured.
 - Supervisors call policy maintenance on a local timer even when the control plane is offline. Expired overrides restore the baseline through the same reload path, and a failed restoration keeps the working configuration, reports the requested/effective/error status and retries with a 30-second bound. At startup the persisted state is loaded and the committed and last-known-good configs are rewritten before `start_last_known_good`, so an override never outlives a restart.
 
-Handoff for the later policy contract: map an authenticated `log-policy-v1` revision to `PolicyRequest`, call `LogPolicy::request`, then execute the returned `PolicyAction`. An agent action calls `LogPolicy::apply_agent`; a sing-box action stages the overlay through the validated reload path and calls `LogPolicy::record` with the outcome. Publish `PolicyStatus` as the requested/effective/error view. The local API is unit-tested with recording filters and a fake sing-box process; the wire contract must add the capability and tests when it lands.
+The v2 core maps an authenticated `log-policy-v1` entry to `PolicyRequest`, calls `LogPolicy::request_snapshot` (which ignores an already-expired temporary override), then executes the returned `PolicyAction` in its single supervision loop. An agent action calls `LogPolicy::apply_agent`; a sing-box action stages the overlay through the validated reload path and calls `LogPolicy::record` with the outcome. The session publishes changed `PolicyStatus` values as `log.policy.ack`. `welcome` and `agent.status.ack` carry the server-wide policy revision, so a lost push, offline edit or reconnect recovers through `log.policy.get`.
+
+Snapshot entries are idempotent per source revision. A lower revision is ignored, a conflicting level for the same revision is reported, and a temporary request is never extended beyond the local 60-minute cap. Local expiry runs on the supervision timer even while disconnected; the resulting effective baseline is persisted and acknowledged when a session returns. Log policy never changes the applied configuration identifier, node set or publish-gate sequence.
 
 ## Safety invariants
 

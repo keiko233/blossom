@@ -12,17 +12,6 @@
 //! levels are written as a local overlay on the compiled configuration and
 //! travel through the ordinary validated reload path.
 //!
-//! The request/status API has no remote caller until the WebSocket
-//! `log-policy-v1` binding lands; the lint is suppressed only for non-test
-//! builds so the local execution and its tests stay compiled.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "local policy API is consumed by the WebSocket log binding in a follow-up change"
-    )
-)]
-
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io::Write as _;
@@ -41,6 +30,8 @@ pub(crate) const MAX_TEMPORARY: Duration = Duration::minutes(60);
 pub(crate) const RETRY_INTERVAL: Duration = Duration::seconds(30);
 /// Bound on a persisted error message.
 const MAX_ERROR_CHARS: usize = 512;
+/// Every locally controlled source, in a stable order.
+pub(crate) const SOURCES: [Source; 2] = [Source::Agent, Source::SingBox];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -539,10 +530,15 @@ impl LogPolicy {
             });
         }
         if request.revision == state.revision {
-            if state.requested == request.level
-                && state.deadline == deadline
-                && state.error.is_none()
-            {
+            let exact_replay = state.requested == request.level && state.deadline == deadline;
+            // The control plane normalizes an expired override to a baseline
+            // request at the same revision. If the local deadline already
+            // passed, that is the same target as the persisted temporary
+            // request, not a conflicting edit.
+            let expired_replay = request.level == Level::Default
+                && deadline.is_none()
+                && state.target(now) == state.baseline;
+            if (exact_replay || expired_replay) && state.error.is_none() {
                 return Ok(PolicyDecision {
                     status: state.status(request.source, now),
                     action: None,
@@ -577,6 +573,28 @@ impl LogPolicy {
             action,
             reason: DecisionReason::Requested,
         })
+    }
+
+    /// Applies a control-plane snapshot entry. An expired temporary request
+    /// becomes a baseline request at the same source revision, so a reconnect
+    /// cannot revive an override whose deadline already passed.
+    pub(crate) fn request_snapshot(
+        &self,
+        request: PolicyRequest,
+        now: DateTime<Utc>,
+    ) -> Result<PolicyDecision, PolicyError> {
+        if request.level.is_temporary() && request.deadline.is_some_and(|deadline| deadline <= now)
+        {
+            return self.request(
+                PolicyRequest {
+                    level: Level::Default,
+                    deadline: None,
+                    ..request
+                },
+                now,
+            );
+        }
+        self.request(request, now)
     }
 
     /// Applies an agent filter change synchronously and records the outcome.

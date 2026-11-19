@@ -16,6 +16,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
+use crate::log_policy::{Level as PolicyLevel, Source as PolicySource};
 use crate::ws::codec::{CertificateDeployment, UpdateStatusPayload};
 
 /// The subprotocol the agent offers and requires to see echoed.
@@ -36,6 +37,8 @@ const AGENT_TYPES: &[&str] = &[
     "config.get",
     "config.ack",
     "traffic.report",
+    "log.policy.get",
+    "log.policy.ack",
 ];
 const CONTROL_TYPES: &[&str] = &[
     "welcome",
@@ -46,6 +49,8 @@ const CONTROL_TYPES: &[&str] = &[
     "config.snapshot.end",
     "config.snapshot.error",
     "traffic.ack",
+    "log.policy.notify",
+    "log.policy.snapshot",
     "error",
 ];
 
@@ -123,6 +128,8 @@ pub enum Message {
     ConfigGet(ConfigGet),
     ConfigAck(ConfigAck),
     TrafficReport(TrafficReport),
+    LogPolicyGet(LogPolicyGet),
+    LogPolicyAck(LogPolicyAck),
     Welcome(Welcome),
     StatusAck(StatusAck),
     ConfigNotify(ConfigNotify),
@@ -131,6 +138,8 @@ pub enum Message {
     SnapshotEnd(SnapshotEnd),
     SnapshotError(SnapshotError),
     TrafficAck(TrafficAck),
+    LogPolicyNotify(LogPolicyNotify),
+    LogPolicySnapshot(LogPolicySnapshot),
     Error(ErrorFrame),
     /// A well-formed frame of a type this codec does not know. Callers ignore it.
     Unknown(String),
@@ -202,6 +211,12 @@ pub fn decode(text: &str, sender: Sender, max_frame_bytes: usize) -> Result<Deco
         "traffic.report" => {
             Message::TrafficReport(checked(payload, TrafficReport::check).ok_or_else(invalid)?)
         }
+        "log.policy.get" => {
+            Message::LogPolicyGet(checked(payload, LogPolicyGet::check).ok_or_else(invalid)?)
+        }
+        "log.policy.ack" => {
+            Message::LogPolicyAck(checked(payload, LogPolicyAck::check).ok_or_else(invalid)?)
+        }
         "welcome" => Message::Welcome(checked(payload, Welcome::check).ok_or_else(invalid)?),
         "agent.status.ack" => {
             Message::StatusAck(checked(payload, StatusAck::check).ok_or_else(invalid)?)
@@ -224,6 +239,12 @@ pub fn decode(text: &str, sender: Sender, max_frame_bytes: usize) -> Result<Deco
         "traffic.ack" => {
             Message::TrafficAck(checked(payload, TrafficAck::check).ok_or_else(invalid)?)
         }
+        "log.policy.notify" => {
+            Message::LogPolicyNotify(checked(payload, LogPolicyNotify::check).ok_or_else(invalid)?)
+        }
+        "log.policy.snapshot" => Message::LogPolicySnapshot(
+            checked(payload, LogPolicySnapshot::check).ok_or_else(invalid)?,
+        ),
         "error" => Message::Error(checked(payload, ErrorFrame::check).ok_or_else(invalid)?),
         other => Message::Unknown(other.to_string()),
     };
@@ -353,6 +374,8 @@ pub struct Welcome {
     pub desired: ConfigIdentifier,
     pub update_policy: UpdatePolicy,
     pub status_interval_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_policy_revision: Option<u64>,
     #[serde(default)]
     pub reconnect_before_seconds: Option<u64>,
     pub limits: Limits,
@@ -486,11 +509,183 @@ impl StatusReport {
 pub struct StatusAck {
     pub desired: ConfigIdentifier,
     pub update_policy: UpdatePolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_policy_revision: Option<u64>,
 }
 
 impl StatusAck {
     fn check(&self) -> bool {
         self.desired.check()
+    }
+}
+
+/// The two local log-level sources. `sing-box` is the wire spelling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LogPolicySource {
+    #[serde(rename = "agent")]
+    Agent,
+    #[serde(rename = "sing-box")]
+    SingBox,
+}
+
+impl From<LogPolicySource> for PolicySource {
+    fn from(source: LogPolicySource) -> Self {
+        match source {
+            LogPolicySource::Agent => PolicySource::Agent,
+            LogPolicySource::SingBox => PolicySource::SingBox,
+        }
+    }
+}
+
+impl From<PolicySource> for LogPolicySource {
+    fn from(source: PolicySource) -> Self {
+        match source {
+            PolicySource::Agent => Self::Agent,
+            PolicySource::SingBox => Self::SingBox,
+        }
+    }
+}
+
+/// A wire log level. The values match the local policy API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    Default,
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl LogLevel {
+    pub fn is_temporary(self) -> bool {
+        matches!(self, Self::Debug | Self::Trace)
+    }
+}
+
+impl From<LogLevel> for PolicyLevel {
+    fn from(level: LogLevel) -> Self {
+        match level {
+            LogLevel::Default => PolicyLevel::Default,
+            LogLevel::Error => PolicyLevel::Error,
+            LogLevel::Warn => PolicyLevel::Warn,
+            LogLevel::Info => PolicyLevel::Info,
+            LogLevel::Debug => PolicyLevel::Debug,
+            LogLevel::Trace => PolicyLevel::Trace,
+        }
+    }
+}
+
+impl From<PolicyLevel> for LogLevel {
+    fn from(level: PolicyLevel) -> Self {
+        match level {
+            PolicyLevel::Default => Self::Default,
+            PolicyLevel::Error => Self::Error,
+            PolicyLevel::Warn => Self::Warn,
+            PolicyLevel::Info => Self::Info,
+            PolicyLevel::Debug => Self::Debug,
+            PolicyLevel::Trace => Self::Trace,
+        }
+    }
+}
+
+/// One source of `log.policy.snapshot`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogPolicyDesired {
+    pub source: LogPolicySource,
+    pub revision: u64,
+    pub level: LogLevel,
+    pub deadline: Option<DateTime<Utc>>,
+}
+
+impl LogPolicyDesired {
+    fn check(&self) -> bool {
+        if self.level.is_temporary() {
+            self.deadline.is_some()
+        } else {
+            self.deadline.is_none()
+        }
+    }
+}
+
+/// `log.policy.notify` (control plane to agent). A hint; `log.policy.get`
+/// carries the authoritative snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogPolicyNotify {
+    pub revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<LogPolicySource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl LogPolicyNotify {
+    fn check(&self) -> bool {
+        self.reason.as_ref().is_none_or(|r| bounded(r, 1, 256))
+    }
+}
+
+/// `log.policy.get` (agent to control plane).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogPolicyGet {
+    pub request_id: String,
+}
+
+impl LogPolicyGet {
+    fn check(&self) -> bool {
+        bounded(&self.request_id, 1, 128)
+    }
+}
+
+/// `log.policy.snapshot` (control plane to agent). Each source appears once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogPolicySnapshot {
+    pub request_id: String,
+    pub revision: u64,
+    pub sources: Vec<LogPolicyDesired>,
+}
+
+impl LogPolicySnapshot {
+    fn check(&self) -> bool {
+        bounded(&self.request_id, 1, 128)
+            && (1..=2).contains(&self.sources.len())
+            && self.sources.iter().all(LogPolicyDesired::check)
+            && self.sources.iter().enumerate().all(|(index, source)| {
+                self.sources
+                    .iter()
+                    .skip(index + 1)
+                    .all(|other| other.source != source.source)
+            })
+    }
+}
+
+/// `log.policy.ack` (agent to control plane): requested/effective status only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogPolicyAck {
+    pub source: LogPolicySource,
+    pub source_revision: u64,
+    pub requested: LogLevel,
+    pub baseline: LogLevel,
+    pub effective: LogLevel,
+    pub deadline: Option<DateTime<Utc>>,
+    pub error: Option<String>,
+    pub pending: bool,
+}
+
+impl LogPolicyAck {
+    fn check(&self) -> bool {
+        let deadline_ok = if self.requested.is_temporary() {
+            self.deadline.is_some()
+        } else {
+            self.deadline.is_none()
+        };
+        deadline_ok && self.error.as_ref().is_none_or(|e| bounded(e, 1, 512))
     }
 }
 

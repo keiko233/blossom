@@ -37,6 +37,10 @@ import {
   TrafficReportConflictError,
 } from "@/query/agent";
 import { applyAgentCertificateDeployments } from "@/query/certificate-agent";
+import {
+  loadAgentLogPolicySnapshot,
+  recordAgentLogPolicyAck,
+} from "@/query/log-policy";
 
 import type { AgentWsStore } from "./agent-ws-session";
 import type { AgentWsV2Store } from "./agent-ws-v2-session";
@@ -122,6 +126,10 @@ export function createAgentWsV2Store(
         throw error;
       }
     },
+    loadLogPolicy: (serverId, sessionId) =>
+      loadAgentLogPolicySnapshot(serverId, sessionId, database),
+    recordLogPolicyAck: (serverId, sessionId, ack) =>
+      recordAgentLogPolicyAck(serverId, sessionId, ack, database),
     compile: async (server) => {
       const desired = await buildAgentDesiredState(server, {
         database,

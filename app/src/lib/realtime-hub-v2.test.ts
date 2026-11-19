@@ -28,7 +28,9 @@ const server = {
   name: "edge",
   enabled: true,
   agentTokenHash: "hash-1",
-} as Server;
+  agentCapabilities: [],
+  logPolicyRevision: 0,
+} as unknown as Server;
 
 type Hooks = {
   upgrade(request: Request): { protocol: string };
@@ -95,6 +97,8 @@ function fakeV2Store() {
           heartbeatIntervalSeconds: 30,
           desiredAgentVersion: null,
           desiredSingBoxVersion: null,
+          agentCapabilities: [],
+          logPolicyRevision: 0,
         }) as unknown as Server,
     ),
     recordStatus: vi.fn(async () => null),
@@ -106,6 +110,24 @@ function fakeV2Store() {
       accepted: 0,
       dropped: 0,
     })),
+    loadLogPolicy: vi.fn(async () => ({
+      revision: 0,
+      sources: [
+        {
+          source: "agent" as const,
+          revision: 0,
+          level: "default" as const,
+          deadline: null,
+        },
+        {
+          source: "sing-box" as const,
+          revision: 0,
+          level: "default" as const,
+          deadline: null,
+        },
+      ],
+    })),
+    recordLogPolicyAck: vi.fn(async () => "recorded" as const),
     compile: vi.fn(async () => ({
       desiredRevision: REVISION,
       document: {},
@@ -263,6 +285,38 @@ describe("NitroRealtimeHub v2 sessions", () => {
     await hub.notifyUpdateTrigger("srv-1", { target: "agent", force: false });
 
     expect(peer.sent).toEqual([]);
+  });
+
+  it("pushes log policy only to welcomed v2 sessions", async () => {
+    const { hub, backplane } = makeHub();
+    const hooks = await acceptV2(hub);
+    const welcomed = makePeer("welcomed");
+    const pending = makePeer("pending");
+    await hooks.open(welcomed);
+    await hooks.open(pending);
+    await hooks.message(
+      welcomed,
+      agentFrame("hello", {
+        agentVersion: "0.4.0",
+        agentBuildId: "build-1",
+        capabilities: ["log-policy-v1"],
+        applied: null,
+        certificateDeployments: [],
+      }),
+    );
+
+    await hub.notifyLogPolicy("srv-1", {
+      revision: 3,
+      source: "agent",
+      reason: "log policy changed",
+    });
+
+    expect(sentTypes(welcomed)).toEqual(["welcome", "log.policy.notify"]);
+    expect(sentTypes(pending)).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(backplane.publish).toHaveBeenCalledWith(
+      expect.objectContaining({ serverId: "srv-1", protocol: "v2" }),
+    );
   });
 
   it("delivers a remote v2 push only to welcomed local sessions", async () => {

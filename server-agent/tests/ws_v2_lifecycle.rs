@@ -271,6 +271,66 @@ fn status_ack(revision: &str) -> Value {
     })
 }
 
+fn status_ack_with_log(revision: &str, log_policy_revision: u64) -> Value {
+    json!({
+        "v": 2,
+        "type": "agent.status.ack",
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "payload": {
+            "desired": identifier(revision),
+            "updatePolicy": {
+                "desiredAgentVersion": null,
+                "desiredSingBoxVersion": null,
+            },
+            "logPolicyRevision": log_policy_revision,
+        },
+    })
+}
+
+fn log_policy_notify(revision: u64) -> Value {
+    json!({
+        "v": 2,
+        "type": "log.policy.notify",
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "payload": {
+            "revision": revision,
+            "source": "agent",
+            "reason": "administrator changed the level",
+        },
+    })
+}
+
+fn log_policy_snapshot(
+    request_id: &str,
+    revision: u64,
+    agent_level: &str,
+    sing_box_level: &str,
+) -> Value {
+    json!({
+        "v": 2,
+        "type": "log.policy.snapshot",
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "payload": {
+            "requestId": request_id,
+            "revision": revision,
+            "sources": [
+                {
+                    "source": "agent",
+                    "revision": revision,
+                    "level": agent_level,
+                    "deadline": null,
+                },
+                {
+                    "source": "sing-box",
+                    "revision": revision,
+                    "level": sing_box_level,
+                    "deadline": null,
+                },
+            ],
+        },
+    })
+}
+
 fn traffic_ack(report_id: &str) -> Value {
     json!({
         "v": 2,
@@ -450,6 +510,14 @@ async fn session_one(stream: TcpStream) -> Value {
         "first session: {hello}"
     );
     assert!(
+        hello["payload"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "log-policy-v1"),
+        "the v2 agent advertises log policy: {hello}"
+    );
+    assert!(
         hello["payload"]["applied"].is_null(),
         "a cold start reports an empty cache: {hello}"
     );
@@ -491,7 +559,80 @@ async fn run_first_session(socket: &mut WebSocket) -> Value {
             }
             "traffic.report" => traffic = Some(frame["payload"].clone()),
             "agent.status" => {}
+            "log.policy.ack" => {}
             other => panic!("unexpected frame in the first session: {other}: {frame}"),
+        }
+    }
+    send(socket, &log_policy_notify(1)).await;
+    let get = loop {
+        let frame = receive(socket).await;
+        match frame["type"].as_str().unwrap() {
+            "log.policy.get" => break frame,
+            "agent.status" => {}
+            "log.policy.ack" => {}
+            other => panic!("unexpected frame before log.policy.get: {other}: {frame}"),
+        }
+    };
+    let request_id = get["payload"]["requestId"].as_str().unwrap();
+    send(socket, &log_policy_snapshot(request_id, 1, "info", "info")).await;
+    let mut agent_acked = false;
+    let mut sing_box_acked = false;
+    while !agent_acked || !sing_box_acked {
+        let frame = receive(socket).await;
+        match frame["type"].as_str().unwrap() {
+            "log.policy.ack" => {
+                if frame["payload"]["sourceRevision"] != 1 {
+                    continue;
+                }
+                assert_eq!(frame["payload"]["error"], Value::Null, "{frame}");
+                assert_eq!(frame["payload"]["pending"], false, "{frame}");
+                match frame["payload"]["source"].as_str().unwrap() {
+                    "agent" => {
+                        assert_eq!(frame["payload"]["sourceRevision"], 1, "{frame}");
+                        assert_eq!(frame["payload"]["requested"], "info", "{frame}");
+                        assert_eq!(frame["payload"]["effective"], "info", "{frame}");
+                        agent_acked = true;
+                    }
+                    "sing-box" => {
+                        assert_eq!(frame["payload"]["sourceRevision"], 1, "{frame}");
+                        assert_eq!(frame["payload"]["effective"], "info", "{frame}");
+                        sing_box_acked = true;
+                    }
+                    other => panic!("unknown log policy source {other}: {frame}"),
+                }
+            }
+            "agent.status" => {}
+            other => panic!("unexpected frame while log policy applied: {other}: {frame}"),
+        }
+    }
+
+    // A lost notification is recovered from the status acknowledgement.
+    send(socket, &status_ack_with_log(D1, 2)).await;
+    let get = loop {
+        let frame = receive(socket).await;
+        match frame["type"].as_str().unwrap() {
+            "log.policy.get" => break frame,
+            "agent.status" => {}
+            "log.policy.ack" => {}
+            other => panic!("unexpected frame before log policy reconciliation: {other}: {frame}"),
+        }
+    };
+    let request_id = get["payload"]["requestId"].as_str().unwrap();
+    send(socket, &log_policy_snapshot(request_id, 2, "warn", "info")).await;
+    loop {
+        let frame = receive(socket).await;
+        match frame["type"].as_str().unwrap() {
+            "log.policy.ack" => {
+                if frame["payload"]["source"] == "agent" && frame["payload"]["sourceRevision"] == 2
+                {
+                    assert_eq!(frame["payload"]["sourceRevision"], 2, "{frame}");
+                    assert_eq!(frame["payload"]["requested"], "warn", "{frame}");
+                    assert_eq!(frame["payload"]["effective"], "warn", "{frame}");
+                    break;
+                }
+            }
+            "agent.status" => {}
+            other => panic!("unexpected frame while log policy reconciled: {other}: {frame}"),
         }
     }
     // Close without acknowledging the report: the durable queue must resend it
@@ -513,6 +654,7 @@ async fn run_second_session(socket: &mut WebSocket, first_traffic: Value) {
                 break;
             }
             "agent.status" => {}
+            "log.policy.ack" => {}
             other => panic!("unexpected frame before the traffic replay: {other}: {frame}"),
         }
     }
@@ -525,6 +667,7 @@ async fn run_second_session(socket: &mut WebSocket, first_traffic: Value) {
         match frame["type"].as_str().unwrap() {
             "config.get" => break frame,
             "agent.status" => {}
+            "log.policy.ack" => {}
             other => panic!("unexpected frame before config.get: {other}: {frame}"),
         }
     };
@@ -542,6 +685,7 @@ async fn run_second_session(socket: &mut WebSocket, first_traffic: Value) {
                 break;
             }
             "agent.status" => {}
+            "log.policy.ack" => {}
             other => panic!("unexpected frame while the candidate failed: {other}: {frame}"),
         }
     }

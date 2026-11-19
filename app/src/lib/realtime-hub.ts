@@ -10,6 +10,7 @@ import {
   type AgentWsWelcomePayload,
 } from "@blossom/contracts/agent-ws";
 import { AGENT_WS_V2_SUBPROTOCOL } from "@blossom/contracts/agent-ws-v2";
+import type { LogPolicyNotifyPayload } from "@blossom/contracts/log-policy";
 import Redis from "ioredis";
 
 import type { Server } from "@/db/proxy-schema";
@@ -34,6 +35,7 @@ import {
 } from "./agent-ws-store";
 import {
   encodeAgentWsV2ConfigNotify,
+  encodeAgentWsV2LogPolicyNotify,
   openAgentWsV2Session,
   type AgentWsV2Session,
 } from "./agent-ws-v2-session";
@@ -802,6 +804,13 @@ export class NitroRealtimeHub implements RealtimeHub {
       serverId,
       encodeAgentWsFrame(createAgentWsFrame("acme.dns_ack", payload)),
     );
+  }
+
+  async notifyLogPolicy(
+    serverId: string,
+    payload: LogPolicyNotifyPayload,
+  ): Promise<void> {
+    this.publishV2(serverId, encodeAgentWsV2LogPolicyNotify(payload));
   }
 }
 

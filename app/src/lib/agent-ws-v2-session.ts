@@ -15,10 +15,21 @@ import {
   type AgentWsV2UpdatePolicy,
   type AgentWsV2ControlMessageType,
 } from "@blossom/contracts/agent-ws-v2";
+import {
+  LOG_POLICY_CAPABILITY,
+  type LogPolicyAckPayload,
+  type LogPolicyGetPayload,
+  type LogPolicyNotifyPayload,
+  type LogPolicySnapshotPayload,
+} from "@blossom/contracts/log-policy";
 import { parseRevisionSeq } from "@blossom/domain/config-revision";
 
 import type { Server } from "@/db/proxy-schema";
 import type { CachedDesiredRevision } from "@/query/agent";
+import type {
+  AgentLogPolicySnapshot,
+  LogPolicyAckOutcome,
+} from "@/query/log-policy";
 
 import { encodeConfigSnapshot } from "./agent-ws-v2-snapshot";
 
@@ -80,6 +91,20 @@ export interface AgentWsV2Store {
     report: AgentWsV2TrafficReportPayload,
   ): Promise<AgentWsV2TrafficOutcome>;
   /**
+   * Reads the desired policy only while the session is current, or `null`
+   * when the session has been replaced.
+   */
+  loadLogPolicy(
+    serverId: string,
+    sessionId: string,
+  ): Promise<AgentLogPolicySnapshot | null>;
+  /** Fenced, revision-checked acknowledgement of one source's effective state. */
+  recordLogPolicyAck(
+    serverId: string,
+    sessionId: string,
+    ack: LogPolicyAckPayload,
+  ): Promise<LogPolicyAckOutcome>;
+  /**
    * Compiles the same desired state the v3 HTTP response serves. `validUntil`
    * is the instant the identifier must be recompiled by, even with no change.
    */
@@ -121,6 +146,15 @@ export function encodeAgentWsV2ConfigNotify(
   return encodeAgentWsV2Frame(createAgentWsV2Frame("config.notify", payload));
 }
 
+/** Encodes a `log.policy.notify` frame for welcomed v2 sessions. */
+export function encodeAgentWsV2LogPolicyNotify(
+  payload: LogPolicyNotifyPayload,
+): string {
+  return encodeAgentWsV2Frame(
+    createAgentWsV2Frame("log.policy.notify", payload),
+  );
+}
+
 function logFailure(operation: string, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
   console.warn(`agent websocket v2 ${operation} failed: ${message}`);
@@ -142,6 +176,10 @@ function updatePolicyOf(server: Server): AgentWsV2UpdatePolicy {
     desiredAgentVersion: server.desiredAgentVersion ?? null,
     desiredSingBoxVersion: server.desiredSingBoxVersion ?? null,
   };
+}
+
+function supportsLogPolicy(server: Server): boolean {
+  return server.agentCapabilities.includes(LOG_POLICY_CAPABILITY);
 }
 
 /**
@@ -286,6 +324,9 @@ export function openAgentWsV2Session(
         ...(options.reconnectBeforeSeconds === undefined
           ? {}
           : { reconnectBeforeSeconds: options.reconnectBeforeSeconds }),
+        ...(supportsLogPolicy(server)
+          ? { logPolicyRevision: server.logPolicyRevision }
+          : {}),
         limits: {
           maxFrameBytes: AGENT_WS_V2_LIMITS.maxFrameBytes,
           snapshotChunkBytes: AGENT_WS_V2_LIMITS.snapshotChunkBytes,
@@ -319,6 +360,9 @@ export function openAgentWsV2Session(
       {
         desired: await currentDesired(server),
         updatePolicy: updatePolicyOf(server),
+        ...(supportsLogPolicy(server)
+          ? { logPolicyRevision: server.logPolicyRevision }
+          : {}),
       },
       id,
     );
@@ -409,6 +453,28 @@ export function openAgentWsV2Session(
     });
   }
 
+  async function onLogPolicyGet(payload: LogPolicyGetPayload) {
+    const server = await requireCurrentServer();
+    if (!server) return;
+    const policy = await store.loadLogPolicy(serverId, sessionId);
+    if (!policy) {
+      stop("session_replaced", "a newer session is active");
+      return;
+    }
+    send("log.policy.snapshot", {
+      requestId: payload.requestId,
+      revision: policy.revision,
+      sources: policy.sources,
+    } satisfies LogPolicySnapshotPayload);
+  }
+
+  async function onLogPolicyAck(ack: LogPolicyAckPayload) {
+    const outcome = await store.recordLogPolicyAck(serverId, sessionId, ack);
+    if (outcome === "replaced") {
+      stop("session_replaced", "a newer session is active");
+    }
+  }
+
   return {
     get welcomed() {
       return welcomed;
@@ -459,6 +525,12 @@ export function openAgentWsV2Session(
             return;
           case "traffic.report":
             await onTrafficReport(message.payload);
+            return;
+          case "log.policy.get":
+            await onLogPolicyGet(message.payload);
+            return;
+          case "log.policy.ack":
+            await onLogPolicyAck(message.payload);
             return;
         }
       } catch (error) {
