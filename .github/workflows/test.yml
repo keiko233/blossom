@@ -51,6 +51,16 @@ jobs:
         env:
           BLOSSOM_BOOTSTRAP_TEST_DATABASE_URL: postgres://postgres:ci-disposable-only@127.0.0.1:5432/blossom_test
 
+      - name: Verify Drizzle migrations
+        working-directory: app
+        run: |
+          ./node_modules/.bin/drizzle-kit check --output json
+          status="$(./node_modules/.bin/drizzle-kit generate --explain --output json | node -e 'const fs = require("node:fs"); const lines = fs.readFileSync(0, "utf8").trim().split(/\r?\n/); console.log(JSON.parse(lines.at(-1)).status);')"
+          if [ "$status" != "no_changes" ]; then
+            echo "Drizzle schema has un-generated changes (status=$status). Run pnpm --filter @blossom/app db:generate." >&2
+            exit 1
+          fi
+
       - name: Build app (Cloudflare)
         run: pnpm build
 
