@@ -46,12 +46,15 @@ Established. The frozen v1 envelope and payload schemas live in
 PR #112 under `server-agent/src/ws/`. Clients that offer the
 `blossom-agent.v2` subprotocol use the v2 session protocol on the same route,
 documented in [Agent WebSocket v2](agent-ws-v2.md). The control plane
-implements v2 sessions; the Rust v2 client runs them behind an explicit
-protocol flag. The control plane authenticates the upgrade request with either
-the hashed per-server static backup token or, on v2, a Better Auth machine
-token whose identity maps to exactly one server. A pending identity may prove
-itself in a proof-only lane; only its exact successful `hello` moves the
-session fence and supersedes the active generation.
+implements v2 sessions, and the shipped Rust agent selects v2 by default for
+both an OAuth credential file and an explicit static backup token. The explicit
+`legacy` protocol is the compatibility opt-in for the v1 envelope plus HTTP
+poll, heartbeat, and traffic; v2 never downgrades to HTTP. The control plane
+authenticates the upgrade request with either the hashed per-server static
+backup token or, on v2, a Better Auth machine token whose identity maps to
+exactly one server. A pending identity may prove itself in a proof-only lane;
+only its exact successful `hello` moves the session fence and supersedes the
+active generation.
 
 - **Nitro (`node`, `vercel`)** uses Nitro's `crossws` WebSocket support. The
   route returns a `426` response carrying crossws hooks; the Node and Vercel
@@ -74,9 +77,10 @@ session fence and supersedes the active generation.
   agent connection identified by `wsConnectedAt`; it does not accept a host,
   port or command. Nitro keeps the relay in process (or on the Redis
   backplane), while Cloudflare forwards the browser upgrade into the same
-  `AgentSessionDO` that holds the agent socket. The agent advertises `pty-v1`
-  only when started with `AGENT_PTY_ENABLED=true` and not running as root. The
-  browser shows the terminal as connected only after `pty.started`. Session open
+  `AgentSessionDO` that holds the agent socket. The agent advertises `pty-v2`
+  on the default transport (or `pty-v1` in explicit legacy mode) only when
+  started with `AGENT_PTY_ENABLED=true` and not running as root. The browser
+  shows the terminal as connected only after `pty.started`. Session open
   and close are written to `admin_audit_log` as metadata only; terminal bytes are
   never stored. Both relays re-check the admin session, the user's admin role,
   the server and the agent connection every 30 seconds, and close the shell
