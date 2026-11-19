@@ -9,8 +9,10 @@ import {
 } from "./admin-pty-route";
 import type { AdminPtyAcceptContext } from "./pty-relay-types";
 
+const { getSession } = vi.hoisted(() => ({ getSession: vi.fn() }));
+
 vi.mock("@/lib/auth", () => ({
-  getAuth: () => ({ api: { getSession: vi.fn() } }),
+  getAuth: () => ({ api: { getSession } }),
 }));
 
 const ORIGIN = "https://panel.example.com";
@@ -227,5 +229,23 @@ describe("admin PTY status probe", () => {
     ).text();
     expect(unsupported).toBe('{"available":false,"reason":"unsupported"}');
     expect(unsupported).not.toContain("edge");
+  });
+});
+
+describe("admin PTY session lookup", () => {
+  it("reads the admin session without refreshing it, so the upgrade keeps its 101 shape", async () => {
+    // A rolling refresh sets a cookie; TanStack then rebuilds the response to
+    // apply it, and workerd rejects a rebuilt 101 without its webSocket.
+    getSession.mockResolvedValueOnce(null);
+
+    const response = await handleAdminPtyRequest(request(), {
+      serverId: "srv-1",
+    });
+
+    expect(response.status).toBe(403);
+    expect(getSession).toHaveBeenCalledWith({
+      headers: expect.any(Headers),
+      query: { disableRefresh: true },
+    });
   });
 });
