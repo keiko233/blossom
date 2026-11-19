@@ -1,6 +1,26 @@
 # Changelog
 
 All notable changes to the Blossom server agent.
+## server-agent-v1.4.0 - 2026-11-19
+
+### Added
+
+- Add server routing and PTY shell foundation (#173)
+
+- Run admin operations over the v2 lifecycle (#176)
+
+- Complete the agent operations workspace and v2 rollout (#177)
+
+
+### Fixed
+
+- Update rust crate progenitor-client to 0.16.0 (#105)
+
+
+### Maintenance
+
+- Update rust crate zeroize to v1.9.2 (#126)
+
 ## server-agent-v1.3.0 - 2026-11-19
 
 ### Added
