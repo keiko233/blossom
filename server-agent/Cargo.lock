@@ -1438,9 +1438,9 @@ dependencies = [
 
 [[package]]
 name = "progenitor-client"
-version = "0.15.1"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6aa13eb6d9499a851512ec8fa3280f586be059682da4f05d953924be45d736f0"
+checksum = "77a5c9bb7a283a09f3ed5fab3a41fc1afb73782b7ca6f701ed26cb457b5fca3f"
 dependencies = [
  "bytes",
  "futures-core",
@@ -1453,9 +1453,9 @@ dependencies = [
 
 [[package]]
 name = "progenitor-client"
-version = "0.16.1"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77a5c9bb7a283a09f3ed5fab3a41fc1afb73782b7ca6f701ed26cb457b5fca3f"
+checksum = "77fe5eb0bf64f4e2d6753d13a208bd258eb7d8ab3f41aba633a4c87215c0308a"
 dependencies = [
  "bytes",
  "futures-core",
@@ -2081,7 +2081,7 @@ dependencies = [
  "prettyplease",
  "processkit",
  "progenitor",
- "progenitor-client 0.15.1",
+ "progenitor-client 0.17.0",
  "prost",
  "rcgen",
  "reqwest",
