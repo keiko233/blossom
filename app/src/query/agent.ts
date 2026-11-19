@@ -386,6 +386,13 @@ export interface RecordTrafficReport {
   reportId?: string;
   /** Required with `reportId`; see {@link computeTrafficReportHash}. */
   contentHash?: string;
+  /**
+   * WebSocket v2 session fence. When set, the report is applied only if this
+   * session is still the server's current one; otherwise
+   * {@link AgentSessionReplacedError} is thrown and nothing is written.
+   * Requires `reportId`, because a fenced report is replayed on the next session.
+   */
+  sessionId?: string;
   windowStartedAt: Date | null;
   windowEndedAt: Date | null;
   entries: TrafficReportRow[];
@@ -396,6 +403,18 @@ export interface RecordTrafficResult {
   dropped: number;
   /** The report id had already been applied; nothing was written. */
   duplicate: boolean;
+}
+
+/**
+ * The WebSocket session that submitted a report is no longer the server's
+ * current session. Nothing was written; the agent resends the report on its
+ * current session, where the ledger deduplicates it.
+ */
+export class AgentSessionReplacedError extends Error {
+  constructor() {
+    super("agent websocket session was replaced");
+    this.name = "AgentSessionReplacedError";
+  }
 }
 
 /** The report id was already used by this server for different content. */
@@ -465,9 +484,12 @@ export function computeTrafficReportHash(report: {
 export async function recordAgentTraffic(
   report: RecordTrafficReport,
 ): Promise<RecordTrafficResult> {
-  const { serverId, reportId } = report;
+  const { serverId, reportId, sessionId } = report;
   if (reportId !== undefined && !report.contentHash) {
     throw new Error("contentHash is required with reportId");
+  }
+  if (sessionId !== undefined && reportId === undefined) {
+    throw new Error("sessionId requires reportId");
   }
   const rows = JSON.stringify(
     report.entries.map((e) => ({
@@ -481,6 +503,19 @@ export async function recordAgentTraffic(
   const windowStartedAt = report.windowStartedAt?.toISOString() ?? null;
   const windowEndedAt = report.windowEndedAt?.toISOString() ?? null;
 
+  // The fence row is locked FOR SHARE, so a session replacement (which updates
+  // the same row) waits until this statement commits. A write therefore either
+  // lands before the replacement or is rejected by it, never in between.
+  const fenceCte =
+    sessionId === undefined
+      ? sql``
+      : sql`fence AS (
+          SELECT 1 FROM server
+          WHERE id = ${serverId}::text AND ws_session_id = ${sessionId}::text
+          FOR SHARE
+        ),`;
+  const fenceGuard =
+    sessionId === undefined ? sql`` : sql`WHERE EXISTS (SELECT 1 FROM fence)`;
   const claimCte =
     reportId === undefined
       ? sql``
@@ -490,6 +525,7 @@ export async function recordAgentTraffic(
                  (SELECT count(*) FROM resolved)::int,
                  ((SELECT count(*) FROM incoming) - (SELECT count(*) FROM resolved))::int,
                  timezone('utc', now())
+          ${fenceGuard}
           ON CONFLICT (server_id, report_id) DO NOTHING
           RETURNING id
         ),`;
@@ -497,6 +533,8 @@ export async function recordAgentTraffic(
     reportId === undefined ? sql`TRUE` : sql`EXISTS (SELECT 1 FROM claim)`;
   const claimedColumn =
     reportId === undefined ? sql`1` : sql`(SELECT count(*) FROM claim)::int`;
+  const fencedColumn =
+    sessionId === undefined ? sql`1` : sql`(SELECT count(*) FROM fence)::int`;
 
   const statement = sql`
     WITH incoming AS (
@@ -507,6 +545,7 @@ export async function recordAgentTraffic(
       SELECT i.id, i.subscription_id, s.user_id, i.node_id, i.uplink_bytes, i.downlink_bytes
       FROM incoming i JOIN subscription s ON s.id = i.subscription_id
     ),
+    ${fenceCte}
     ${claimCte}
     history AS (
       INSERT INTO traffic_record (id, subscription_id, user_id, node_id, server_id, uplink_bytes, downlink_bytes, window_started_at, window_ended_at)
@@ -528,6 +567,7 @@ export async function recordAgentTraffic(
       RETURNING s.id
     )
     SELECT ${claimedColumn} AS claimed,
+           ${fencedColumn} AS fenced,
            (SELECT count(*) FROM history)::int AS accepted,
            ((SELECT count(*) FROM incoming) - (SELECT count(*) FROM resolved))::int AS dropped,
            (SELECT count(*) FROM usage)::int AS usage_rows
@@ -538,11 +578,15 @@ export async function recordAgentTraffic(
   for (let attempt = 0; attempt < 2; attempt++) {
     const [outcome] = await db.execute<{
       claimed: number;
+      fenced: number;
       accepted: number;
       dropped: number;
     }>(statement, "objects");
     if (!outcome) {
       throw new Error("traffic statement returned no row");
+    }
+    if (sessionId !== undefined && Number(outcome.fenced) === 0) {
+      throw new AgentSessionReplacedError();
     }
     if (Number(outcome.claimed) > 0) {
       if (reportId !== undefined) {
