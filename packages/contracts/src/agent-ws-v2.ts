@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  agentWsTelemetrySnapshotPayloadSchema,
   agentWsUpdateStatusesSchema,
   certificateDeploymentSchema,
 } from "./agent-ws";
@@ -27,6 +28,15 @@ import {
 export const AGENT_WS_V2_PROTOCOL_VERSION = 2 as const;
 
 export const AGENT_WS_V2_SUBPROTOCOL = "blossom-agent.v2" as const;
+
+/**
+ * Telemetry capabilities are separate so an agent can enable live samples
+ * before it implements the independent 60-second history cadence. A v2 agent
+ * that advertises neither receives no telemetry subscriptions.
+ */
+export const AGENT_WS_V2_TELEMETRY_CAPABILITY = "telemetry-v2" as const;
+export const AGENT_WS_V2_TELEMETRY_HISTORY_CAPABILITY =
+  "telemetry-history-v2" as const;
 
 /**
  * Bounds enforced on both sides. `maxSnapshotBytes` is a provisional aggregate
@@ -77,6 +87,8 @@ export const AGENT_WS_V2_AGENT_MESSAGE_TYPES = [
   "config.get",
   "config.ack",
   "traffic.report",
+  "telemetry.sample",
+  "telemetry.snapshot",
 ] as const;
 
 export const AGENT_WS_V2_CONTROL_MESSAGE_TYPES = [
@@ -88,6 +100,9 @@ export const AGENT_WS_V2_CONTROL_MESSAGE_TYPES = [
   "config.snapshot.end",
   "config.snapshot.error",
   "traffic.ack",
+  "telemetry.subscribe",
+  "telemetry.unsubscribe",
+  "telemetry.inspect",
   "error",
 ] as const;
 
@@ -393,6 +408,111 @@ export type AgentWsV2TrafficAckPayload = z.infer<
   typeof agentWsV2TrafficAckPayloadSchema
 >;
 
+const telemetrySubscriptionIdSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9._-]+$/);
+
+/**
+ * `telemetry.subscribe` (control plane -> agent). A subscription is either a
+ * bounded browser-driven live stream or the control plane's independent
+ * history cadence. The agent stops sending when it receives
+ * `telemetry.unsubscribe`, when the session ends, or after the advertised
+ * interval is no longer useful; the control plane only keeps subscriptions it
+ * asked for.
+ */
+export const agentWsV2TelemetrySubscribePayloadSchema = z.object({
+  subscriptionId: telemetrySubscriptionIdSchema,
+  purpose: z.enum(["live", "history"]),
+  /** Sampling interval. History is clamped by the control plane to 60s. */
+  intervalMs: z.number().int().min(1_000).max(300_000),
+});
+
+export type AgentWsV2TelemetrySubscribePayload = z.infer<
+  typeof agentWsV2TelemetrySubscribePayloadSchema
+>;
+
+export const agentWsV2TelemetryUnsubscribePayloadSchema = z.object({
+  subscriptionId: telemetrySubscriptionIdSchema,
+});
+
+export type AgentWsV2TelemetryUnsubscribePayload = z.infer<
+  typeof agentWsV2TelemetryUnsubscribePayloadSchema
+>;
+
+/** `telemetry.inspect` (control plane -> agent); same snapshot as v1. */
+export const agentWsV2TelemetryInspectPayloadSchema = z.object({
+  requestId: correlationIdSchema,
+});
+
+export type AgentWsV2TelemetryInspectPayload = z.infer<
+  typeof agentWsV2TelemetryInspectPayloadSchema
+>;
+
+const byteCount = z.number().int().nonnegative();
+const usage = z
+  .object({ used: byteCount, total: byteCount })
+  .refine(({ used, total }) => used <= total);
+
+/**
+ * `telemetry.sample` (agent -> control plane). Measurements use the same
+ * shape as v1 where possible; v2 adds `scopeKey` and counter-derived network
+ * rates.
+ *
+ * `scopeKey` is the canonical identity of everything that makes the
+ * percentages comparable: environment, cgroup version and limits, and the
+ * stable network interface set used for rate deltas. It must change when the
+ * agent restarts, when the interface set changes, or when the denominator
+ * changes. The control plane stores and charts by it, so a changed key starts
+ * a new series rather than joining incomparable values.
+ *
+ * Network rates are null until the agent can read counters. A null
+ * `network` object means not collected, which the UI draws as a gap.
+ */
+export const agentWsV2TelemetrySamplePayloadSchema = z.object({
+  subscriptionId: telemetrySubscriptionIdSchema.optional(),
+  purpose: z.enum(["live", "history"]),
+  sampledAt: timestampSchema,
+  cpuPercent: z.number().min(0).max(100).nullable(),
+  memory: usage.nullable(),
+  disk: usage.nullable(),
+  environment: z.enum([
+    "systemd",
+    "docker",
+    "containerd",
+    "kubernetes",
+    "container",
+    "unknown",
+  ]),
+  networkScope: z.literal("agent"),
+  cgroupVersion: z.union([z.literal(1), z.literal(2)]).nullable(),
+  cpuLimit: z.number().positive().nullable(),
+  memoryLimit: byteCount.nullable(),
+  /** Host/container measurement identity; see the comment above. */
+  scopeKey: z.string().min(1).max(256),
+  network: z
+    .object({
+      txBytesPerSecond: z.number().finite().nonnegative().nullable(),
+      rxBytesPerSecond: z.number().finite().nonnegative().nullable(),
+      /** Monotonic elapsed time between the sampled counter reads. */
+      windowMs: z.number().int().min(1).max(300_000),
+    })
+    .nullable(),
+});
+
+export type AgentWsV2TelemetrySamplePayload = z.infer<
+  typeof agentWsV2TelemetrySamplePayloadSchema
+>;
+
+/** `telemetry.snapshot` (agent -> control plane); the v1 inspection payload. */
+export const agentWsV2TelemetrySnapshotPayloadSchema =
+  agentWsTelemetrySnapshotPayloadSchema;
+
+export type AgentWsV2TelemetrySnapshotPayload = z.infer<
+  typeof agentWsV2TelemetrySnapshotPayloadSchema
+>;
+
 export const AGENT_WS_V2_ERROR_CODES = [
   "invalid_direction",
   "invalid_payload",
@@ -424,6 +544,11 @@ export const agentWsV2PayloadSchemas = {
   "config.snapshot.end": agentWsV2SnapshotEndPayloadSchema,
   "config.snapshot.error": agentWsV2SnapshotErrorPayloadSchema,
   "traffic.ack": agentWsV2TrafficAckPayloadSchema,
+  "telemetry.subscribe": agentWsV2TelemetrySubscribePayloadSchema,
+  "telemetry.unsubscribe": agentWsV2TelemetryUnsubscribePayloadSchema,
+  "telemetry.inspect": agentWsV2TelemetryInspectPayloadSchema,
+  "telemetry.sample": agentWsV2TelemetrySamplePayloadSchema,
+  "telemetry.snapshot": agentWsV2TelemetrySnapshotPayloadSchema,
   error: agentWsV2ErrorPayloadSchema,
 } as const satisfies Record<AgentWsV2MessageType, z.ZodType>;
 

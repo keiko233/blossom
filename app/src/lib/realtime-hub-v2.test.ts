@@ -106,6 +106,7 @@ function fakeV2Store() {
       accepted: 0,
       dropped: 0,
     })),
+    recordMetricHistory: vi.fn(async () => "written" as const),
     compile: vi.fn(async () => ({
       desiredRevision: REVISION,
       document: {},

@@ -160,6 +160,7 @@ function validUsage(usage: MetricUsage | null): MetricUsage | null {
  */
 export function normalizeMetricSample(
   sample: ServerMetricSample,
+  scopeKey: string = metricScopeKey(sample),
 ): StorableMetricSample | null {
   const cpu =
     typeof sample.cpuPercent === "number" &&
@@ -176,7 +177,7 @@ export function normalizeMetricSample(
   if (cpu === null && !memory && !disk && !hasNetwork) return null;
   return {
     scope: metricScopeOf(sample.environment),
-    scopeKey: metricScopeKey(sample),
+    scopeKey,
     cpuPercent: cpu,
     memoryUsedBytes: memory?.used ?? null,
     memoryTotalBytes: memory?.total ?? null,

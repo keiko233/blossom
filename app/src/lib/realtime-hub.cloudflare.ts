@@ -142,6 +142,19 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     }
   }
 
+  async inspectTelemetry(
+    serverId: string,
+    connectedAt: string,
+    sessionId: string | null,
+  ): Promise<TelemetryResult | null> {
+    if (sessionId) {
+      // The Durable Object serves v2 inspection to the admin metric socket it
+      // already holds; there is no stateless route into that request context.
+      return null;
+    }
+    return this.requestTelemetry(serverId, "snapshot", connectedAt);
+  }
+
   async notifyConfigChanged(
     serverId: string,
     payload: AgentWsConfigNotifyPayload,

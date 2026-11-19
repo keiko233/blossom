@@ -1,6 +1,7 @@
 import type { AgentWsCertificateDeployment } from "@blossom/contracts/agent-ws";
 import {
   AGENT_WS_V2_LIMITS,
+  AGENT_WS_V2_TELEMETRY_HISTORY_CAPABILITY,
   createAgentWsV2Frame,
   encodeAgentWsV2Frame,
   parseAgentWsV2Frame,
@@ -11,6 +12,9 @@ import {
   type AgentWsV2HelloPayload,
   type AgentWsV2PayloadOf,
   type AgentWsV2StatusPayload,
+  type AgentWsV2TelemetrySamplePayload,
+  type AgentWsV2TelemetrySnapshotPayload,
+  type AgentWsV2TelemetrySubscribePayload,
   type AgentWsV2TrafficReportPayload,
   type AgentWsV2UpdatePolicy,
   type AgentWsV2ControlMessageType,
@@ -33,6 +37,12 @@ export type AgentWsV2TrafficOutcome =
   | { status: "applied" | "duplicate"; accepted: number; dropped: number }
   | { status: "conflict"; message: string }
   | { status: "replaced" };
+
+export type AgentWsV2MetricOutcome =
+  | "written"
+  | "superseded"
+  | "fenced"
+  | "invalid";
 
 /**
  * Persistence port for one v2 session. Every write names the session, and the
@@ -80,6 +90,17 @@ export interface AgentWsV2Store {
     report: AgentWsV2TrafficReportPayload,
   ): Promise<AgentWsV2TrafficOutcome>;
   /**
+   * Records the independent history cadence. The write is conditional on this
+   * exact session still being `server.ws_session_id`, so a replaced session
+   * can never fill or overwrite a minute bucket. Browser requests never call
+   * this path.
+   */
+  recordMetricHistory(
+    serverId: string,
+    sessionId: string,
+    sample: AgentWsV2TelemetrySamplePayload,
+  ): Promise<AgentWsV2MetricOutcome>;
+  /**
    * Compiles the same desired state the v3 HTTP response serves. `validUntil`
    * is the instant the identifier must be recompiled by, even with no change.
    */
@@ -105,12 +126,23 @@ export interface OpenAgentWsV2SessionOptions {
   welcomed?: boolean;
   /** Advertised early reconnect deadline (Vercel function lifetime). */
   reconnectBeforeSeconds?: number;
+  /** Called for every valid sample, independent of whether it was stored. */
+  onSample?: (sample: AgentWsV2TelemetrySamplePayload) => void;
+  /** Called for an on-demand inspection snapshot. */
+  onSnapshot?: (snapshot: AgentWsV2TelemetrySnapshotPayload) => void;
+  /** Called after `welcome` is sent, for subscriptions held by viewers. */
+  onWelcome?: () => void;
 }
 
 export interface AgentWsV2Session {
   /** True once `welcome` has been sent. Pushes are withheld until then. */
   readonly welcomed: boolean;
   handleText(text: string): Promise<void>;
+  /** Starts or replaces a telemetry subscription on a welcomed session. */
+  subscribeTelemetry(payload: AgentWsV2TelemetrySubscribePayload): void;
+  unsubscribeTelemetry(subscriptionId: string): void;
+  /** Requests the listener/interface snapshot used by the inspection panel. */
+  inspectTelemetry(requestId: string): void;
   close(): Promise<void>;
 }
 
@@ -156,6 +188,7 @@ export function openAgentWsV2Session(
   let welcomed = options.welcomed ?? false;
   let closed = false;
   let snapshotGeneration = 0;
+  let capabilities: readonly string[] = [];
 
   function send<T extends AgentWsV2ControlMessageType>(
     type: T,
@@ -294,6 +327,15 @@ export function openAgentWsV2Session(
       },
       id,
     );
+    options.onWelcome?.();
+    capabilities = hello.capabilities;
+    if (capabilities.includes(AGENT_WS_V2_TELEMETRY_HISTORY_CAPABILITY)) {
+      send("telemetry.subscribe", {
+        subscriptionId: `history-${sessionId}`,
+        purpose: "history",
+        intervalMs: 60_000,
+      });
+    }
   }
 
   async function onStatus(status: AgentWsV2StatusPayload, id?: string) {
@@ -409,6 +451,28 @@ export function openAgentWsV2Session(
     });
   }
 
+  async function onTelemetrySample(sample: AgentWsV2TelemetrySamplePayload) {
+    options.onSample?.(sample);
+    if (sample.purpose !== "history") {
+      return;
+    }
+    const outcome = await store.recordMetricHistory(
+      serverId,
+      sessionId,
+      sample,
+    );
+    if (outcome === "invalid") {
+      logFailure(
+        "metric history",
+        new Error("sample contained no usable measurement"),
+      );
+    }
+  }
+
+  function onTelemetrySnapshot(snapshot: AgentWsV2TelemetrySnapshotPayload) {
+    options.onSnapshot?.(snapshot);
+  }
+
   return {
     get welcomed() {
       return welcomed;
@@ -460,10 +524,37 @@ export function openAgentWsV2Session(
           case "traffic.report":
             await onTrafficReport(message.payload);
             return;
+          case "telemetry.sample":
+            await onTelemetrySample(message.payload);
+            return;
+          case "telemetry.snapshot":
+            onTelemetrySnapshot(message.payload);
+            return;
         }
       } catch (error) {
         logFailure(message.kind, error);
       }
+    },
+
+    subscribeTelemetry(payload) {
+      if (closed || !welcomed) {
+        return;
+      }
+      send("telemetry.subscribe", payload);
+    },
+
+    unsubscribeTelemetry(subscriptionId) {
+      if (closed || !welcomed) {
+        return;
+      }
+      send("telemetry.unsubscribe", { subscriptionId });
+    },
+
+    inspectTelemetry(requestId) {
+      if (closed || !welcomed) {
+        return;
+      }
+      send("telemetry.inspect", { requestId });
     },
 
     async close() {

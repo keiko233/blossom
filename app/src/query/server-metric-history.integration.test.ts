@@ -62,6 +62,7 @@ import {
   loadServerMetricHistory,
   pruneServerMetricHistory,
   recordServerMetricMinute,
+  recordServerMetricMinuteV2,
   type RecordServerMetricInput,
 } from "./server-metric-store";
 
@@ -74,6 +75,7 @@ const admin = new pg.Pool({ connectionString: pgUrl, max: 4 });
 const NOW = Date.UTC(2026, 10, 19, 12, 0, 0);
 const MINUTE = 60_000;
 const SESSION = new Date("2026-11-19T11:00:00.000Z");
+const V2_SESSION = "22222222-2222-4222-8222-222222222222";
 
 async function useDriver(driver: Driver) {
   if (driver === "node-postgres") {
@@ -122,6 +124,31 @@ function write(
   );
 }
 
+function writeV2(
+  overrides: Partial<{
+    serverId: string;
+    sessionId: string;
+    receivedAt: Date;
+    cpu: number | null;
+  }> = {},
+  database: unknown,
+) {
+  return recordServerMetricMinuteV2(
+    {
+      serverId: overrides.serverId ?? "srv1",
+      sessionId: overrides.sessionId ?? V2_SESSION,
+      receivedAt: overrides.receivedAt ?? new Date(NOW),
+      sample: {
+        ...sample(
+          overrides.cpu === undefined ? {} : { cpuPercent: overrides.cpu },
+        ),
+        scopeKey: "systemd|-|-|-|eth0",
+      },
+    },
+    database as Parameters<typeof recordServerMetricMinuteV2>[1],
+  );
+}
+
 async function metricRows(serverId = "srv1") {
   const { rows } = await admin.query(
     `select (extract(epoch from minute) * 1000)::float8 as minute_ms,
@@ -146,6 +173,10 @@ async function resetServers() {
       [id, enabled, SESSION.toISOString()],
     );
   }
+  await admin.query(
+    `update server set ws_session_id = $1 where id in ('srv1','srv2')`,
+    [V2_SESSION],
+  );
 }
 
 describe.skipIf(!pgUrl).each(drivers)(
@@ -226,6 +257,49 @@ describe.skipIf(!pgUrl).each(drivers)(
           ),
         ).resolves.toBe("invalid");
         expect(await metricRows()).toHaveLength(1);
+      });
+    });
+
+    describe("recordServerMetricMinuteV2", () => {
+      it("writes with the exact current session id and keeps the agent scope", async () => {
+        await expect(writeV2({}, database)).resolves.toBe("written");
+        const rows = await metricRows();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+          scope: "host",
+          scope_key: "systemd|-|-|-|eth0",
+          cpu_percent: 20,
+        });
+      });
+
+      it("fences a replaced v2 session even when the receipt time is newer", async () => {
+        await expect(
+          writeV2(
+            {
+              sessionId: "11111111-1111-4111-8111-111111111111",
+              receivedAt: new Date(NOW + 30_000),
+            },
+            database,
+          ),
+        ).resolves.toBe("fenced");
+        expect(await metricRows()).toHaveLength(0);
+      });
+
+      it("fences a disabled server and keeps the newer receipt in a minute", async () => {
+        await admin.query(
+          `update server set enabled = false where id = 'srv1'`,
+        );
+        await expect(writeV2({}, database)).resolves.toBe("fenced");
+        await admin.query(`update server set enabled = true where id = 'srv1'`);
+
+        await writeV2(
+          { receivedAt: new Date(NOW + 40_000), cpu: 80 },
+          database,
+        );
+        await expect(
+          writeV2({ receivedAt: new Date(NOW + 10_000), cpu: 5 }, database),
+        ).resolves.toBe("superseded");
+        expect((await metricRows())[0]!.cpu_percent).toBe(80);
       });
     });
 

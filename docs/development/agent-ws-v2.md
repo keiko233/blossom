@@ -71,12 +71,84 @@ Discard a partial snapshot on disconnect and request a new one after reconnect. 
 - **Absence of `traffic.ack` proves nothing.** A report that was replaced before its write does not commit. But a write can commit and its acknowledgement can be lost, on a dropped socket or a replaced session, so the agent cannot tell from a missing ack whether the rows exist. Keep the report on disk and resend the **same** `reportId` and payload on the next session until a `traffic.ack` arrives. The ledger deduplicates the replay and answers `duplicate` with the original counts.
 - Keep the report queue on disk until its `traffic.ack` arrives. Traffic collection must not wait on the socket.
 
+## Telemetry
+
+Telemetry additions are additive to v2; v1 `telemetry.*` frames are unchanged.
+An agent advertises `telemetry-v2` for live samples and
+`telemetry-history-v2` for the independent history cadence. An agent may
+advertise neither, either or both. The control plane subscribes only when the
+matching capability is present.
+
+| Frame | Direction | Notes |
+| --- | --- | --- |
+| `telemetry.subscribe` `{subscriptionId, purpose, intervalMs}` | control plane to agent | `purpose` is `live` or `history`; `intervalMs` is 1000–300000. The control plane uses 2000 for a coalesced live stream and 60000 for history. |
+| `telemetry.unsubscribe` `{subscriptionId}` | control plane to agent | Sent when the last admin viewer of a live stream leaves, or on replacement. |
+| `telemetry.inspect` `{requestId}` | control plane to agent | Requests the existing listener/interface snapshot. |
+| `telemetry.sample` `{subscriptionId?, purpose, sampledAt, cpuPercent, memory, disk, environment, networkScope, cgroupVersion, cpuLimit, memoryLimit, scopeKey, network?}` | agent to control plane | `network` is `{txBytesPerSecond, rxBytesPerSecond, windowMs}` or null. |
+| `telemetry.snapshot` | agent to control plane | Same payload as the v1 inspection snapshot. |
+
+- **Established.** Live v2 samples feed the same-origin admin WebSocket, which
+  coalesces one sampler per server/session across viewers. They are not stored.
+- **Established.** On `hello` with `telemetry-history-v2`, the control plane
+  sends the history subscription itself, before any browser connects. The
+  receipt minute is the bucket key and the write is conditional on the exact
+  v2 `sessionId` still matching `server.ws_session_id`, in the same SQL
+  statement as the upsert. A replaced or disabled session cannot write.
+- **Established.** `scopeKey` is the canonical identity of the measurement
+  denominator and network interface set. The control plane stores and charts
+  by it; a changed key breaks the series instead of joining incomparable
+  values. A missing measurement is null and becomes a gap.
+- **Recommended.** The agent computes network rates from counter deltas across
+  a stable interface set, using monotonic elapsed time, and changes `scopeKey`
+  on restart or interface-set change. Until it does, `network` is null and the
+  network chart stays empty.
+- **Established.** Live and history frames never carry certificate material,
+  terminal bytes or log contents.
+
+The machine-checked frames are in
+`packages/contracts/fixtures/agent-ws-v2.frames.json`. They include a live
+subscription and sample with network rates, a history subscription and sample
+with a missing network reading, unsubscribe, inspect and snapshot. The Rust
+client must reproduce those frames byte-for-byte after JSON parsing.
+
+### Rust agent handoff
+
+The production Rust agent is not edited by this change. To implement the
+matching client:
+
+1. Add `telemetry-v2` to the advertised capabilities when the Linux collector
+   is built, and `telemetry-history-v2` only when the 60-second history cadence
+   is implemented.
+2. Decode the three control-plane frames and maintain subscriptions in the
+   WebSocket session state. A new subscription with the same id replaces the
+   old cadence; unsubscribe cancels it and stops future sends.
+3. For `live`, sample about every `intervalMs` and send `telemetry.sample` with
+   `purpose: "live"` and the same `subscriptionId`. Reuse the existing
+   `environment`, cgroup version/limit and `/proc` collection. Add network rate
+   counter deltas with a monotonic `windowMs`; use null when a rate cannot be
+   computed.
+4. For `history`, sample independently every 60 seconds and send
+   `purpose: "history"`. Do not wait for a browser or derive the cadence from
+   live subscriptions. Continue while connected even when no admin is viewing.
+5. Compute `scopeKey` from the environment, cgroup version, CPU/memory limits
+   and the stable interface set, e.g. `systemd|-|-|-|eth0,eth1`. Change it on
+   agent restart or when that set changes.
+6. Answer `telemetry.inspect` with the existing snapshot payload and the same
+   `requestId`. Do not send unsolicited snapshots.
+7. Enforce the values received in `welcome.limits`; a sample frame must stay
+   under `maxFrameBytes`.
+
+The fixtures pin the JSON shape. The existing v1 collector can be reused; only
+the frame envelope, subscription state, scope key and network-rate calculation
+are new.
+
 ## Not in v2 yet
 
 These remain v1-only and are never sent to v2 sessions:
 
 - `update.trigger` and `update.status`, and the `acme.*` messages. The control plane does not push them to v2 sessions.
-- `telemetry.*`, `pty.*`, and the log policy messages.
+- `pty.*` and the log policy messages. Telemetry is available only through the
+  separate v2 capability described above.
 
 Until the PTY moves to v2, a v2 agent **must not advertise `pty-v1`** in `hello.capabilities`. The admin terminal would otherwise offer a session that cannot start.
 
@@ -128,7 +200,9 @@ The control plane advertises `reconnectBeforeSeconds`. Remote delivery across in
 Each target is listed separately. "Not run" means the change has no evidence on that target.
 
 - **Automated, no database.** Contract schemas, direction and size checks, and both sides of the wire fixtures (`packages/contracts`). Session state machine, snapshot chunking, deadline expiry, fenced snapshots, disabled servers and hub routing, including the token-bound start (`app/src/lib/agent-ws-v2-*.test.ts`, `app/src/lib/realtime-hub-v2.test.ts`).
+- **Automated, no database, telemetry.** The additive v2 telemetry schemas and fixtures, v2 history subscription on welcome, v2 sample normalization, the 120-point browser window, admin metric route authorization, and one shared v1 sampler for two viewers (`packages/contracts/src/agent-ws-v2.test.ts`, `app/src/lib/live-metrics.test.ts`, `app/src/lib/realtime-hub-live-metrics.test.ts`, `app/src/lib/admin-metrics-route.test.ts`, `app/src/lib/agent-ws-v2-session.test.ts`).
 - **Disposable PostgreSQL, node-postgres and neon-http.** Fenced acknowledgements, status and traffic, the version fence on cached identifiers, token rotation and the token-bound start (`app/src/query/agent-ws-v2-state.integration.test.ts`). Convergence through the real store adapter and compiler: a routing-rule change with no notification is recovered by the status exchange after the deadline, an invalidated change is reported on the next status, and a rotated credential, a disabled server and a snapshot each stop or serve as specified (`app/src/query/agent-ws-v2-convergence.integration.test.ts`). The neon-http runs use a local `/sql` proxy in front of the same database, not Neon's hosted service.
+- **Disposable PostgreSQL, v2 metric history.** A write with the exact `ws_session_id` succeeds, a replaced session id and a disabled server are fenced, and the newer receipt wins within a minute (`app/src/query/server-metric-history.integration.test.ts`, node-postgres).
 - **Node server, built and run locally.** Against the built Node target, with PostgreSQL through node-postgres: the subprotocol echo, `hello` and `welcome`, a status acknowledgement, a snapshot whose length and digest verify, a credential rotation during a live session (a `config.get` then sends no snapshot, the session stops with `session_replaced` and close 4000), the old token refused with `401`, and the new token welcomed. Checked on 2026-11-19 with a scratch client that is not committed; the built-server handshake recorded in `adc180c` and the v1 route are not re-run here.
 - **Cloudflare, local workerd.** `wrangler dev --local` (Wrangler 4.164) running a copy of the Cloudflare build, with a local Hyperdrive connection string to the same disposable PostgreSQL. Checked on 2026-11-19 with the same scratch client: the same sequence as the Node run, which covers the Durable Object's upgrade, its message path and its fenced close. A session welcomed, then left idle for 70 seconds, still accepted a status, and disabling the server stopped the next status with `server_disabled` and close 4000. Workerd does not report hibernation, so the idle run shows that the welcomed flag survived the idle period, not that the object hibernated. The `401` on the Cloudflare upgrade for a credential that rotates after authentication is covered only by the unit and database tests, not by a race on workerd.
 - **Cloudflare, hibernation.** Not verified. Hibernation was not observed, and timer behaviour and the `4000`-series close after a real wake were not run in any environment. Check them against a deployment before relying on them.

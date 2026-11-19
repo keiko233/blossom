@@ -46,8 +46,8 @@ const EXPIRY_BATCH_SIZE = 1000;
  *
  * - `connectedAt`: the `server.wsConnectedAt` of that session. It is the
  *   fence: a write from a replaced or closed socket matches no server row and
- *   returns "fenced". The v2 integration branch replaces the predicate in
- *   `sessionFence` with its session ID; nothing else here changes.
+ *   returns "fenced". v2 uses `recordServerMetricMinuteV2`, which fences on
+ *   the exact `server.wsSessionId` instead.
  * - `receivedAt`: the control plane's receipt time. It selects the UTC minute
  *   and orders samples that land in the same minute.
  * - `sample`: the agent measurements. Pass `network: null` until the agent
@@ -58,6 +58,21 @@ export interface RecordServerMetricInput {
   connectedAt: Date;
   receivedAt: Date;
   sample: ServerMetricSample;
+}
+
+/**
+ * v2 ingestion is fenced by the exact session id the agent WebSocket v2
+ * handshake made current. `ws_session_id` is replaced atomically on every new
+ * session, so a replaced or closed socket matches no server row. This path is
+ * called by the v2 session itself, never by a browser request, which makes the
+ * independent history cadence work without a viewer.
+ */
+export interface RecordServerMetricV2Input {
+  serverId: string;
+  sessionId: string;
+  receivedAt: Date;
+  /** `scopeKey` is the agent's canonical host/container/network identity. */
+  sample: ServerMetricSample & { scopeKey: string };
 }
 
 /**
@@ -81,6 +96,15 @@ function sessionFence(serverId: string, connectedAt: Date) {
   `;
 }
 
+function sessionFenceV2(serverId: string, sessionId: string) {
+  return sql`
+    select s.id from server s
+    where s.id = ${serverId}
+      and s.enabled = true
+      and s.ws_session_id = ${sessionId}
+  `;
+}
+
 /**
  * Writes one minute bucket. The session fence and the conditional upsert run
  * in one statement, so a replaced socket cannot overwrite a newer sample. A
@@ -91,16 +115,42 @@ export async function recordServerMetricMinute(
   input: RecordServerMetricInput,
   database: DbHandle = db,
 ): Promise<RecordServerMetricResult> {
-  const stored = normalizeMetricSample(input.sample);
+  return writeServerMetricMinute(
+    sessionFence(input.serverId, input.connectedAt),
+    input.receivedAt,
+    normalizeMetricSample(input.sample),
+    database,
+  );
+}
+
+/** v2 minute write, fenced by the current `server.ws_session_id`. */
+export async function recordServerMetricMinuteV2(
+  input: RecordServerMetricV2Input,
+  database: DbHandle = db,
+): Promise<RecordServerMetricResult> {
+  return writeServerMetricMinute(
+    sessionFenceV2(input.serverId, input.sessionId),
+    input.receivedAt,
+    normalizeMetricSample(input.sample, input.sample.scopeKey),
+    database,
+  );
+}
+
+async function writeServerMetricMinute(
+  fence: SQL,
+  receivedAt: Date,
+  stored: ReturnType<typeof normalizeMetricSample>,
+  database: DbHandle,
+): Promise<RecordServerMetricResult> {
   if (!stored) return "invalid";
 
   const minute = new Date(
-    metricMinuteStart(input.receivedAt.getTime()),
+    metricMinuteStart(receivedAt.getTime()),
   ).toISOString();
   const rows = await executeRows<{ fenced: number; written: number }>(
     database,
     sql`
-    with fenced as (${sessionFence(input.serverId, input.connectedAt)}),
+    with fenced as (${fence}),
     written as (
       insert into server_metric_minute (
         server_id, minute, scope, scope_key, cpu_percent,
@@ -114,7 +164,7 @@ export async function recordServerMetricMinute(
         ${stored.diskUsedBytes}::bigint, ${stored.diskTotalBytes}::bigint,
         ${stored.networkTxBytesPerSecond}::float8,
         ${stored.networkRxBytesPerSecond}::float8,
-        ${input.receivedAt.toISOString()}::timestamp
+        ${receivedAt.toISOString()}::timestamp
       from fenced
       on conflict (server_id, minute) do update set
         scope = excluded.scope,
@@ -137,7 +187,7 @@ export async function recordServerMetricMinute(
   );
   const outcome = rows[0];
 
-  await pruneServerMetricHistory({ now: input.receivedAt.getTime() }, database);
+  await pruneServerMetricHistory({ now: receivedAt.getTime() }, database);
 
   if (!outcome || Number(outcome.fenced) === 0) return "fenced";
   return Number(outcome.written) === 0 ? "superseded" : "written";

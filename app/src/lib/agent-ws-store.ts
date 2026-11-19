@@ -37,6 +37,7 @@ import {
   TrafficReportConflictError,
 } from "@/query/agent";
 import { applyAgentCertificateDeployments } from "@/query/certificate-agent";
+import { recordServerMetricMinuteV2 } from "@/query/server-metric-store";
 
 import type { AgentWsStore } from "./agent-ws-session";
 import type { AgentWsV2Store } from "./agent-ws-v2-session";
@@ -121,6 +122,32 @@ export function createAgentWsV2Store(
         }
         throw error;
       }
+    },
+    recordMetricHistory: (serverId, sessionId, sample) => {
+      const tx = sample.network?.txBytesPerSecond;
+      const rx = sample.network?.rxBytesPerSecond;
+      return recordServerMetricMinuteV2(
+        {
+          serverId,
+          sessionId,
+          receivedAt: new Date(),
+          sample: {
+            cpuPercent: sample.cpuPercent,
+            memory: sample.memory,
+            disk: sample.disk,
+            environment: sample.environment,
+            cgroupVersion: sample.cgroupVersion,
+            cpuLimit: sample.cpuLimit,
+            memoryLimit: sample.memoryLimit,
+            network:
+              typeof tx === "number" && typeof rx === "number"
+                ? { txBytesPerSecond: tx, rxBytesPerSecond: rx }
+                : null,
+            scopeKey: sample.scopeKey,
+          },
+        },
+        database,
+      );
     },
     compile: async (server) => {
       const desired = await buildAgentDesiredState(server, {

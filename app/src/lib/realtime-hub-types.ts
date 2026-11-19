@@ -9,6 +9,7 @@ import type {
 import type { Server } from "@/db/proxy-schema";
 
 import type { TelemetryKind, TelemetryResult } from "./agent-telemetry";
+import type { LiveMetricSample } from "./live-metrics";
 
 export interface RealtimeHub {
   /**
@@ -29,6 +30,12 @@ export interface RealtimeHub {
     serverId: string,
     kind: TelemetryKind,
     connectedAt: string,
+  ): Promise<TelemetryResult | null>;
+  /** Inspection through the negotiated v1 or v2 agent session. */
+  inspectTelemetry(
+    serverId: string,
+    connectedAt: string,
+    sessionId: string | null,
   ): Promise<TelemetryResult | null>;
   notifyConfigChanged(
     serverId: string,
@@ -60,6 +67,11 @@ export interface RealtimeBackplaneMessage {
   connectedAt?: string;
   agentDisconnected?: true;
   telemetryReply?: true;
+  /** A live sample relayed so every instance's admin viewers can see it. */
+  liveMetricSample?: LiveMetricSample;
+  liveMetricSessionId?: string;
+  /** A v2 inspection snapshot relayed to the instance holding the viewer. */
+  agentSnapshot?: { requestId: string; snapshot: unknown };
 }
 
 export interface RealtimeBackplane {

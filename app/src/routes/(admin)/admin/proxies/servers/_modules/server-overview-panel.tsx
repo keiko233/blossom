@@ -55,7 +55,7 @@ export function ServerOverviewPanel({
         ) : null}
       </section>
 
-      <ServerLivePanel serverId={server.id} />
+      <ServerLivePanel server={server} />
       <ServerHistoryPanel serverId={server.id} />
       <TrafficTrend serverId={server.id} />
     </div>

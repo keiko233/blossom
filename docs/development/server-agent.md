@@ -16,6 +16,13 @@ configured port is an overlap indicator, since a socket can belong to the
 managed sing-box process. Telemetry uses no Docker socket, host mounts or
 shell commands.
 
+The v2 telemetry frames, subscription cadence, scope key and network-rate
+aggregation are a forward contract only: the Rust client still implements
+`telemetry-v1`. The control plane can serve v2 telemetry as soon as an agent
+advertises `telemetry-v2` / `telemetry-history-v2`. See
+[Agent WebSocket v2](agent-ws-v2.md#telemetry) and the wire fixtures before
+changing the collector.
+
 ## Module map
 
 | File               | Responsibility                                                                                                                                                  |

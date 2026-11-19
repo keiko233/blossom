@@ -1,5 +1,6 @@
 import {
   AGENT_WS_V2_LIMITS,
+  AGENT_WS_V2_TELEMETRY_HISTORY_CAPABILITY,
   createAgentWsV2Frame,
   encodeAgentWsV2Frame,
   parseAgentWsV2Frame,
@@ -8,6 +9,7 @@ import {
   type AgentWsV2MessageType,
   type AgentWsV2PayloadOf,
   type AgentWsV2StatusPayload,
+  type AgentWsV2TelemetrySamplePayload,
   type AgentWsV2TrafficReportPayload,
 } from "@blossom/contracts/agent-ws-v2";
 import { createHash } from "node:crypto";
@@ -68,6 +70,7 @@ function makeStore(overrides: Partial<AgentWsV2Store> = {}) {
       accepted: 1,
       dropped: 0,
     })),
+    recordMetricHistory: vi.fn(async () => "written" as const),
     compile: vi.fn(async () => ({
       desiredRevision: REVISION,
       document: { apiVersion: 3, desiredRevision: REVISION },
@@ -463,6 +466,84 @@ describe("agent WebSocket v2 frame validation", () => {
     );
 
     expect(peer.sent).toEqual([]);
+  });
+});
+
+const METRIC_SAMPLE: AgentWsV2TelemetrySamplePayload = {
+  subscriptionId: "history-session",
+  purpose: "history",
+  sampledAt: "2026-11-19T00:01:00.000Z",
+  cpuPercent: 24.5,
+  memory: { used: 512, total: 1024 },
+  disk: { used: 100, total: 1000 },
+  environment: "systemd",
+  networkScope: "agent",
+  cgroupVersion: null,
+  cpuLimit: null,
+  memoryLimit: null,
+  scopeKey: "systemd|-|-|-|eth0",
+  network: {
+    txBytesPerSecond: 1024,
+    rxBytesPerSecond: 2048,
+    windowMs: 2000,
+  },
+};
+
+describe("agent WebSocket v2 telemetry", () => {
+  it("requests the independent history subscription after welcome", async () => {
+    const store = makeStore();
+    const peer = makePeer();
+    const session = open(store, peer);
+    await session.handleText(
+      agentFrame("hello", {
+        ...CURRENT_HELLO,
+        capabilities: ["config-v3", AGENT_WS_V2_TELEMETRY_HISTORY_CAPABILITY],
+      }),
+    );
+
+    expect(received(peer).map((message) => message.kind)).toEqual([
+      "welcome",
+      "telemetry.subscribe",
+    ]);
+    expect(received(peer).at(-1)).toMatchObject({
+      kind: "telemetry.subscribe",
+      payload: {
+        purpose: "history",
+        intervalMs: 60_000,
+        subscriptionId: `history-${SESSION_ID}`,
+      },
+    });
+  });
+
+  it("records only history samples through the exact session fence", async () => {
+    const onSample = vi.fn();
+    const store = makeStore();
+    const peer = makePeer();
+    const session = openAgentWsV2Session({
+      serverId: SERVER_ID,
+      sessionId: SESSION_ID,
+      peer,
+      store,
+      onSample,
+    });
+    await session.handleText(agentFrame("hello", CURRENT_HELLO));
+
+    await session.handleText(agentFrame("telemetry.sample", METRIC_SAMPLE));
+    await session.handleText(
+      agentFrame("telemetry.sample", {
+        ...METRIC_SAMPLE,
+        purpose: "live",
+        subscriptionId: "live-session",
+      }),
+    );
+
+    expect(onSample).toHaveBeenCalledTimes(2);
+    expect(store.recordMetricHistory).toHaveBeenCalledTimes(1);
+    expect(store.recordMetricHistory).toHaveBeenCalledWith(
+      SERVER_ID,
+      SESSION_ID,
+      METRIC_SAMPLE,
+    );
   });
 });
 

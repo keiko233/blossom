@@ -146,6 +146,130 @@
       }
     },
     {
+      "name": "control telemetry subscription for a coalesced live stream",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "telemetry.subscribe",
+        "ts": "2026-11-19T00:02:00.000Z",
+        "payload": {
+          "subscriptionId": "live-srv-1",
+          "purpose": "live",
+          "intervalMs": 2000
+        }
+      }
+    },
+    {
+      "name": "control telemetry subscription for the independent history cadence",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "telemetry.subscribe",
+        "ts": "2026-11-19T00:02:01.000Z",
+        "payload": {
+          "subscriptionId": "history-srv-1",
+          "purpose": "history",
+          "intervalMs": 60000
+        }
+      }
+    },
+    {
+      "name": "agent live telemetry sample with network rates and a scope key",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "telemetry.sample",
+        "ts": "2026-11-19T00:02:02.000Z",
+        "payload": {
+          "subscriptionId": "live-srv-1",
+          "purpose": "live",
+          "sampledAt": "2026-11-19T00:02:02.000Z",
+          "cpuPercent": 37.5,
+          "memory": { "used": 7516192768, "total": 16307453952 },
+          "disk": { "used": 53687091200, "total": 107374182400 },
+          "environment": "systemd",
+          "networkScope": "agent",
+          "cgroupVersion": null,
+          "cpuLimit": null,
+          "memoryLimit": null,
+          "scopeKey": "systemd|-|-|-|eth0,eth1",
+          "network": {
+            "txBytesPerSecond": 8192.5,
+            "rxBytesPerSecond": 65536,
+            "windowMs": 2000
+          }
+        }
+      }
+    },
+    {
+      "name": "agent history telemetry sample with a missing network reading",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "telemetry.sample",
+        "ts": "2026-11-19T00:03:00.000Z",
+        "payload": {
+          "subscriptionId": "history-srv-1",
+          "purpose": "history",
+          "sampledAt": "2026-11-19T00:03:00.000Z",
+          "cpuPercent": null,
+          "memory": { "used": 7516192768, "total": 16307453952 },
+          "disk": null,
+          "environment": "docker",
+          "networkScope": "agent",
+          "cgroupVersion": 2,
+          "cpuLimit": 2,
+          "memoryLimit": 8589934592,
+          "scopeKey": "docker|cg2|cpu2|mem8589934592|eth0",
+          "network": null
+        }
+      }
+    },
+    {
+      "name": "control telemetry unsubscribe for a closed live view",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "telemetry.unsubscribe",
+        "ts": "2026-11-19T00:04:00.000Z",
+        "payload": { "subscriptionId": "live-srv-1" }
+      }
+    },
+    {
+      "name": "control on-demand telemetry inspection",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "telemetry.inspect",
+        "ts": "2026-11-19T00:05:00.000Z",
+        "payload": { "requestId": "inspect-1" }
+      }
+    },
+    {
+      "name": "agent telemetry snapshot for an inspection",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "telemetry.snapshot",
+        "ts": "2026-11-19T00:05:00.100Z",
+        "payload": {
+          "requestId": "inspect-1",
+          "partial": false,
+          "listeners": [
+            { "protocol": "tcp", "address": "127.0.0.1", "port": 8080 }
+          ],
+          "interfaces": [{ "name": "eth0", "address": "192.0.2.10" }]
+        }
+      }
+    },
+    {
       "name": "agent frame with a future type is ignored",
       "sender": "agent",
       "expect": "unknown",
