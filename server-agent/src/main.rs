@@ -193,7 +193,7 @@ struct Args {
     )]
     pty_enabled: bool,
 
-    /// Maximum concurrent PTY sessions (1-4).
+    /// Maximum concurrent PTY sessions (1-4, default 1).
     #[arg(
         long,
         default_value_t = pty::DEFAULT_MAX_SESSIONS as u8,
@@ -219,6 +219,20 @@ struct Args {
         value_parser = clap::value_parser!(u64).range(60..=86_400)
     )]
     pty_max_session_seconds: u64,
+
+    /// Absolute path of the shell for PTY sessions. Unset uses the first
+    /// runnable of /bin/bash and /bin/sh.
+    #[arg(long, env = "AGENT_PTY_SHELL", value_parser = pty::launch::parse_shell_path)]
+    pty_shell: Option<PathBuf>,
+
+    /// Absolute working directory for PTY shells.
+    #[arg(
+        long,
+        default_value = "/",
+        env = "AGENT_PTY_WORKING_DIR",
+        value_parser = pty::launch::parse_working_dir
+    )]
+    pty_working_dir: PathBuf,
 }
 
 fn parse_level(level: &str) -> tracing::Level {
@@ -319,7 +333,16 @@ async fn main() -> Result<()> {
         desired_agent_version: None,
         desired_sing_box_version: None,
     };
-    let capabilities = agent_capabilities(args.pty_enabled);
+    // A root agent would hand the browser a root shell, so PTY stays off there
+    // even when opted in. The installer runs the agent as a dedicated account.
+    let pty_identity = pty::PtyIdentity::current();
+    let pty_enabled = args.pty_enabled && !pty_identity.is_root();
+    if args.pty_enabled && !pty_enabled {
+        error!(
+            "agent PTY terminal disabled: the agent runs as root; run it under its dedicated non-root service account"
+        );
+    }
+    let capabilities = agent_capabilities(pty_enabled);
 
     // The push channel is optional: it is never required for correctness, and
     // every failure path leaves the HTTP poll/heartbeat loop untouched.
@@ -331,22 +354,38 @@ async fn main() -> Result<()> {
         &capabilities,
     )));
     let (pty_event_sender, mut pty_events) = mpsc::channel::<pty::PtyEvent>(64);
+    let pty_launch = pty::launch::LaunchConfig {
+        shell: args.pty_shell.clone(),
+        working_dir: args.pty_working_dir.clone(),
+    };
     let mut pty_manager = pty::PtyManager::new(
         pty::PtyLimits::new(
-            args.pty_enabled,
+            pty_enabled,
             args.pty_max_sessions as usize,
             Duration::from_secs(args.pty_idle_timeout_seconds),
             Duration::from_secs(args.pty_max_session_seconds),
         ),
-        Box::new(pty::session::PortablePtyFactory::new(pty_event_sender)),
+        pty_identity.user.clone(),
+        Box::new(pty::session::PortablePtyFactory::new(
+            pty_event_sender,
+            pty_launch.clone(),
+            pty_identity.user.clone(),
+        )),
     );
-    if args.pty_enabled {
+    if pty_enabled {
         info!(
             max_sessions = pty_manager.limits().max_sessions(),
             idle_timeout_seconds = pty_manager.limits().idle_timeout().as_secs(),
             max_session_seconds = pty_manager.limits().max_session().as_secs(),
+            working_dir = %args.pty_working_dir.display(),
+            user = %pty_identity.user,
             "agent PTY terminal enabled"
         );
+        match pty::launch::resolve_shell(pty_launch.shell.as_deref(), pty::launch::is_runnable_file)
+        {
+            Ok(shell) => info!(shell = %shell.display(), "PTY shell resolved"),
+            Err(error) => warn!("PTY sessions will fail until this is fixed: {error}"),
+        }
     } else {
         info!("agent PTY terminal disabled; set AGENT_PTY_ENABLED=true to opt in");
     }
@@ -1149,6 +1188,14 @@ struct PtyDataPayload<'a> {
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+struct PtyStartedPayload<'a> {
+    session_id: &'a str,
+    shell: &'a str,
+    user: &'a str,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 struct PtyExitPayload<'a> {
     session_id: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1156,6 +1203,8 @@ struct PtyExitPayload<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     signal: Option<&'a str>,
     reason: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<&'a str>,
 }
 
 fn handle_pty_frame(
@@ -1170,31 +1219,24 @@ fn handle_pty_frame(
                 return;
             };
             let dimensions = pty::PtyDimensions::clamped(payload.cols, payload.rows);
-            if let Err(error) = manager.open(&payload.session_id, dimensions) {
-                let reason = match &error {
-                    pty::PtyError::Disabled => pty::PtyExitReason::Disabled,
-                    pty::PtyError::SessionLimit => pty::PtyExitReason::SessionLimit,
-                    pty::PtyError::DuplicateSession | pty::PtyError::InvalidSessionId => {
-                        pty::PtyExitReason::InvalidSession
-                    }
-                    pty::PtyError::Spawn(_) => pty::PtyExitReason::SpawnFailed,
-                    pty::PtyError::InputBackpressure => pty::PtyExitReason::InputBackpressure,
-                    pty::PtyError::Closed => pty::PtyExitReason::Closed,
-                    pty::PtyError::Io(_) => pty::PtyExitReason::IoError,
-                };
-                warn!(
-                    session = %payload.session_id,
-                    "pty.open rejected: {error}"
-                );
-                send_pty_exit(
-                    sink,
-                    pty::PtyExit {
-                        session_id: payload.session_id,
-                        reason,
-                        code: None,
-                        signal: None,
-                    },
-                );
+            match manager.open(&payload.session_id, dimensions) {
+                Ok(started) => send_pty_started(sink, &payload.session_id, &started),
+                Err(error) => {
+                    warn!(
+                        session = %payload.session_id,
+                        "pty.open rejected: {error}"
+                    );
+                    send_pty_exit(
+                        sink,
+                        pty::PtyExit {
+                            session_id: payload.session_id,
+                            reason: error.exit_reason(),
+                            code: None,
+                            signal: None,
+                            detail: Some(bounded_detail(&error.to_string())),
+                        },
+                    );
+                }
             }
         }
         frame_type::PTY_DATA => {
@@ -1306,6 +1348,27 @@ fn send_pty_data(sink: &Arc<ChannelCommandSink>, session_id: &str, data: &str) -
     }
 }
 
+fn send_pty_started(sink: &Arc<ChannelCommandSink>, session_id: &str, started: &pty::PtyStarted) {
+    match AgentWsFrame::new(
+        frame_type::PTY_STARTED,
+        PtyStartedPayload {
+            session_id,
+            shell: &started.shell,
+            user: &started.user,
+        },
+    ) {
+        Ok(frame) => {
+            let _ = enqueue_pty_frame(sink, frame);
+        }
+        Err(error) => warn!("failed to encode pty.started: {error}"),
+    }
+}
+
+/// Startup diagnostics are short; the control plane bounds them to 256 chars.
+fn bounded_detail(message: &str) -> String {
+    message.chars().take(256).collect()
+}
+
 fn send_pty_exit(sink: &Arc<ChannelCommandSink>, exit: pty::PtyExit) {
     match AgentWsFrame::new(
         frame_type::PTY_EXIT,
@@ -1314,6 +1377,7 @@ fn send_pty_exit(sink: &Arc<ChannelCommandSink>, exit: pty::PtyExit) {
             code: exit.code,
             signal: exit.signal.as_deref(),
             reason: exit.reason.as_str(),
+            detail: exit.detail.as_deref(),
         },
     ) {
         Ok(frame) => {
