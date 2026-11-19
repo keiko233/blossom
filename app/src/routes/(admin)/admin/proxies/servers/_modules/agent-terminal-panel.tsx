@@ -2,7 +2,7 @@
 
 import { EraserIcon, SquareTerminalIcon, UnplugIcon } from "lucide-react";
 import type React from "react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   XtermTerminal,
@@ -11,6 +11,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Confirm } from "@/components/ui/confirm";
+import { PTY_OPEN_TIMEOUT_MS } from "@/lib/pty-protocol";
 import { m } from "@/paraglide/messages";
 import type { ServerDTO } from "@/query/servers";
 
@@ -28,8 +29,17 @@ interface ServerFrame {
     reason?: string;
     code?: number;
     signal?: string;
+    detail?: string;
+    shell?: string;
+    user?: string;
   };
 }
+
+type ProbeResult =
+  | { kind: "ready" }
+  | { kind: "denied" }
+  | { kind: "unavailable"; reason: string }
+  | { kind: "failed" };
 
 const MAX_BUFFERED_OUTPUT = 1024 * 1024;
 const MAX_BROWSER_BACKLOG = 4 * 1024 * 1024;
@@ -45,10 +55,97 @@ function parseServerFrame(raw: string): ServerFrame | null {
   }
 }
 
+function unavailableMessage(reason: string): string {
+  switch (reason) {
+    case "disabled":
+      return m.agent_terminal_unavailable_disabled();
+    case "offline":
+      return m.agent_terminal_unavailable_offline();
+    case "unsupported":
+      return m.agent_terminal_unavailable_unsupported();
+    default:
+      return m.agent_terminal_notice_probe_failed();
+  }
+}
+
+/**
+ * Asks the control plane whether a terminal can open before a socket is
+ * created. A failed WebSocket handshake hides its HTTP status from the
+ * browser, so denial is detected here instead.
+ */
+async function probeTerminal(serverId: string): Promise<ProbeResult> {
+  let response: Response;
+  try {
+    response = await fetch(
+      `/api/admin/servers/${encodeURIComponent(serverId)}/pty/status`,
+      { cache: "no-store", credentials: "same-origin" },
+    );
+  } catch {
+    return { kind: "failed" };
+  }
+  if (response.status === 403) {
+    return { kind: "denied" };
+  }
+  if (!response.ok) {
+    return { kind: "failed" };
+  }
+  const body = (await response.json().catch(() => null)) as {
+    available?: boolean;
+    reason?: string;
+  } | null;
+  return body?.available
+    ? { kind: "ready" }
+    : { kind: "unavailable", reason: body?.reason ?? "" };
+}
+
+function probeNotice(probe: ProbeResult): string {
+  switch (probe.kind) {
+    case "denied":
+      return m.agent_terminal_notice_denied();
+    case "unavailable":
+      return unavailableMessage(probe.reason);
+    default:
+      return m.agent_terminal_notice_probe_failed();
+  }
+}
+
+/** Explains why a session ended. Startup reasons carry the agent's detail. */
+function exitNotice(payload: ServerFrame["payload"]): string {
+  const reason = payload?.reason ?? "closed";
+  const detail = payload?.detail ?? "";
+  switch (reason) {
+    case "shell_unavailable":
+      return m.agent_terminal_reason_shell_unavailable({ detail });
+    case "pty_unavailable":
+      return m.agent_terminal_reason_pty_unavailable({ detail });
+    case "spawn_failed":
+      return m.agent_terminal_reason_spawn_failed({ detail });
+    case "relay_timeout":
+      return m.agent_terminal_reason_relay_timeout();
+    case "authorization_revoked":
+      return m.agent_terminal_reason_authorization_revoked();
+    case "session_limit":
+      return m.agent_terminal_reason_session_limit();
+    case "idle_timeout":
+      return m.agent_terminal_reason_idle_timeout();
+    case "session_expired":
+      return m.agent_terminal_reason_session_expired();
+    case "disabled":
+      return m.agent_terminal_reason_disabled();
+    case "shell_exit":
+      return payload?.code === undefined
+        ? m.agent_terminal_exit_reason({ reason })
+        : m.agent_terminal_reason_shell_exit({ code: String(payload.code) });
+    default:
+      return m.agent_terminal_exit_reason({ reason });
+  }
+}
+
 /**
  * The browser half of the agent terminal. A session is created only after an
  * explicit admin confirmation; the control plane authenticates the WebSocket
- * upgrade and relays it to the already-enrolled agent.
+ * upgrade and relays it to the already-enrolled agent. The terminal is shown
+ * as connected only after the agent reports that its shell started.
  */
 export function AgentTerminalPanel({
   server,
@@ -56,20 +153,50 @@ export function AgentTerminalPanel({
   const terminalRef = useRef<XtermTerminalHandle>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const sessionRef = useRef<string | null>(null);
+  const startedRef = useRef(false);
+  const finishedRef = useRef(false);
+  const startTimer = useRef<number | undefined>(undefined);
   const pendingOutput = useRef("");
   const [phase, setPhase] = useState<TerminalPhase>("idle");
   const [notice, setNotice] = useState<string | null>(null);
+  const [identity, setIdentity] = useState<{
+    shell: string;
+    user: string;
+  } | null>(null);
   const [opening, setOpening] = useState(false);
   const [sessionKey, setSessionKey] = useState(0);
   const [terminalMounted, setTerminalMounted] = useState(false);
 
-  const unavailable = !server.enabled
-    ? m.agent_terminal_unavailable_disabled()
+  const unavailableReason = !server.enabled
+    ? "disabled"
     : server.transportMode !== "ws" || !server.wsConnectedAt
-      ? m.agent_terminal_unavailable_offline()
+      ? "offline"
       : !server.agentCapabilities?.includes("pty-v1")
-        ? m.agent_terminal_unavailable_unsupported()
+        ? "unsupported"
         : null;
+  const unavailable = unavailableReason
+    ? unavailableMessage(unavailableReason)
+    : null;
+
+  // Leaving the terminal view, or switching servers, ends the shell. A new
+  // server starts from the idle state rather than showing the old session.
+  useEffect(() => {
+    setPhase("idle");
+    setNotice(null);
+    setIdentity(null);
+    setOpening(false);
+    setTerminalMounted(false);
+    return () => {
+      finishedRef.current = true;
+      if (startTimer.current !== undefined) {
+        window.clearTimeout(startTimer.current);
+        startTimer.current = undefined;
+      }
+      const socket = socketRef.current;
+      socketRef.current = null;
+      socket?.close(1000, "view_closed");
+    };
+  }, [server.id]);
 
   const write = (data: string) => {
     if (terminalRef.current) {
@@ -81,10 +208,22 @@ export function AgentTerminalPanel({
     );
   };
 
+  const clearStartTimer = () => {
+    if (startTimer.current !== undefined) {
+      window.clearTimeout(startTimer.current);
+      startTimer.current = undefined;
+    }
+  };
+
+  // Input and resizes are sent only once the shell exists on the agent.
   const send = (type: string, payload: Record<string, unknown>) => {
     const socket = socketRef.current;
     const sessionId = sessionRef.current;
-    if (!sessionId || socket?.readyState !== WebSocket.OPEN) {
+    if (
+      !sessionId ||
+      !startedRef.current ||
+      socket?.readyState !== WebSocket.OPEN
+    ) {
       return;
     }
     socket.send(
@@ -108,10 +247,22 @@ export function AgentTerminalPanel({
 
     setOpening(true);
     setNotice(null);
+    setIdentity(null);
     setPhase("connecting");
     pendingOutput.current = "";
+
+    const probe = await probeTerminal(server.id);
+    if (probe.kind !== "ready") {
+      setOpening(false);
+      setPhase("error");
+      setNotice(probeNotice(probe));
+      return;
+    }
+
     const sessionId = `pty-${crypto.randomUUID()}`;
     sessionRef.current = sessionId;
+    startedRef.current = false;
+    finishedRef.current = false;
     setSessionKey((value) => value + 1);
     setTerminalMounted(true);
 
@@ -126,9 +277,19 @@ export function AgentTerminalPanel({
 
     const socket = new WebSocket(url);
     socketRef.current = socket;
-    socket.onopen = () => {
+    startTimer.current = window.setTimeout(() => {
+      startTimer.current = undefined;
+      if (startedRef.current || finishedRef.current) {
+        return;
+      }
+      finishedRef.current = true;
       setOpening(false);
-      setPhase("connected");
+      setPhase("error");
+      setNotice(exitNotice({ reason: "relay_timeout" }));
+      socket.close(1011, "relay_timeout");
+    }, PTY_OPEN_TIMEOUT_MS);
+
+    socket.onopen = () => {
       terminalRef.current?.focus();
     };
     socket.onmessage = (event) => {
@@ -136,9 +297,28 @@ export function AgentTerminalPanel({
       if (!frame || frame.payload?.sessionId !== sessionRef.current) {
         return;
       }
+      if (frame.type === "pty.started") {
+        if (finishedRef.current) {
+          return;
+        }
+        startedRef.current = true;
+        clearStartTimer();
+        setOpening(false);
+        setPhase("connected");
+        setIdentity({
+          shell: frame.payload?.shell ?? "",
+          user: frame.payload?.user ?? "",
+        });
+        // The shell began at the default size; correct it now that input is open.
+        terminalRef.current?.fit();
+        terminalRef.current?.focus();
+        return;
+      }
       if (frame.type === "pty.data" && typeof frame.payload.data === "string") {
         write(frame.payload.data);
         if (socket.bufferedAmount > MAX_BROWSER_BACKLOG) {
+          finishedRef.current = true;
+          setOpening(false);
           setNotice(m.agent_terminal_notice_backpressure());
           setPhase("error");
           socket.close(1011, "client_backpressure");
@@ -146,30 +326,47 @@ export function AgentTerminalPanel({
         return;
       }
       if (frame.type === "pty.exit") {
-        setPhase("closed");
-        setNotice(
-          m.agent_terminal_exit_reason({
-            reason: frame.payload.reason ?? "closed",
-          }),
-        );
+        finishedRef.current = true;
+        clearStartTimer();
+        setOpening(false);
+        setPhase(startedRef.current ? "closed" : "error");
+        setNotice(exitNotice(frame.payload));
         socket.close(1000, "terminal_exit");
       }
     };
     socket.onerror = () => {
+      clearStartTimer();
+      finishedRef.current = true;
       setOpening(false);
       setPhase("error");
       setNotice(m.agent_terminal_notice_socket_error());
     };
     socket.onclose = () => {
+      clearStartTimer();
+      if (socketRef.current === socket) {
+        socketRef.current = null;
+      }
       setOpening(false);
-      setPhase((current) => (current === "error" ? current : "closed"));
-      socketRef.current = null;
+      if (finishedRef.current) {
+        return;
+      }
+      finishedRef.current = true;
+      if (startedRef.current) {
+        setPhase("closed");
+        setNotice(m.agent_terminal_notice_disconnected());
+      } else {
+        setPhase("error");
+        setNotice(m.agent_terminal_notice_closed_before_start());
+      }
     };
   };
 
   const disconnect = () => {
+    finishedRef.current = true;
+    clearStartTimer();
     socketRef.current?.close(1000, "admin_closed");
     socketRef.current = null;
+    setOpening(false);
     setPhase("closed");
     setNotice(m.agent_terminal_notice_disconnected());
   };
@@ -210,9 +407,21 @@ export function AgentTerminalPanel({
           <p className="text-xs text-muted-foreground">
             {m.agent_terminal_description()}
           </p>
+          {phase === "connected" && identity ? (
+            <p
+              className="text-xs text-muted-foreground"
+              data-slot="terminal-identity"
+            >
+              {m.agent_terminal_identity({
+                user: identity.user,
+                shell: identity.shell,
+              })}
+            </p>
+          ) : null}
         </div>
         <div className="flex flex-wrap gap-2">
-          {terminalMounted && phase === "connected" ? (
+          {terminalMounted &&
+          (phase === "connected" || phase === "connecting") ? (
             <Button size="sm" variant="outline" onClick={disconnect}>
               <UnplugIcon />
               {m.agent_terminal_action_disconnect()}

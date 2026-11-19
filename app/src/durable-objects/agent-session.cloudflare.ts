@@ -28,7 +28,9 @@ import {
   handlePtyBrowserClose,
   handlePtyBrowserMessage,
   handlePtyConnect,
+  isPtySessionAuthorized,
   readPtyAttachment,
+  revalidatePtySockets,
   type PtySocketAttachment,
   type RecordPtyClose,
 } from "./pty-session.cloudflare";
@@ -123,7 +125,7 @@ export class AgentSessionDO extends DurableObject {
   async fetch(request: Request): Promise<Response> {
     const pathname = new URL(request.url).pathname;
     if (pathname === "/internal/pty/connect") {
-      return handlePtyConnect(this.ctx, request);
+      return handlePtyConnect(this.ctx, request, this.recordPtyClose);
     }
     if (pathname === "/internal/telemetry" && request.method === "POST") {
       const params = new URL(request.url).searchParams;
@@ -227,6 +229,15 @@ export class AgentSessionDO extends DurableObject {
       connectedAt: new Date(attachment.connectedAt),
       store,
     });
+  }
+
+  /** Storage alarm: re-checks every open shell, which also wakes a hibernated object. */
+  async alarm(): Promise<void> {
+    await revalidatePtySockets(this.ctx, this.recordPtyClose, (attachment) =>
+      this.withDatabase((database) =>
+        isPtySessionAuthorized(database, attachment),
+      ),
+    );
   }
 
   async webSocketMessage(

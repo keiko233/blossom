@@ -4,11 +4,8 @@ import { db } from "@/db";
 import { server } from "@/db/proxy-schema";
 import { getAuth } from "@/lib/auth";
 import { getClientIp } from "@/lib/client-ip";
-import {
-  clampPtyDimensions,
-  isValidPtySessionId,
-  PTY_CAPABILITY,
-} from "@/lib/pty-protocol";
+import { ptyAvailability } from "@/lib/pty-authorization";
+import { clampPtyDimensions, isValidPtySessionId } from "@/lib/pty-protocol";
 import { acceptAdminPty } from "@/lib/pty-relay";
 import type { AdminPtyAcceptContext } from "@/lib/pty-relay-types";
 import {
@@ -42,8 +39,12 @@ export interface AdminPtyRouteDependencies {
 
 const defaultDependencies: AdminPtyRouteDependencies = {
   async authenticate(request) {
+    // Read-only: a rolling refresh would set a cookie on the upgrade response,
+    // and TanStack rebuilds that response to apply it, which workerd rejects
+    // for a 101 without its WebSocket. The session still needs to be live.
     const session = await getAuth().api.getSession({
       headers: request.headers,
+      query: { disableRefresh: true },
     });
     return session?.user.role === "admin" ? session : null;
   },
@@ -94,17 +95,50 @@ function plain(status: number, message: string): Response {
   });
 }
 
-function availability(row: AdminPtyServerState): string | null {
-  if (!row.enabled) {
-    return "disabled";
+async function loadAuthorizedServer(
+  request: Request,
+  serverId: string,
+  dependencies: AdminPtyRouteDependencies,
+): Promise<
+  | { ok: true; auth: AdminPtyAuthSession; row: AdminPtyServerState }
+  | { ok: false; response: Response }
+> {
+  const auth = await dependencies.authenticate(request);
+  if (!auth) {
+    return { ok: false, response: plain(403, "Forbidden") };
   }
-  if (row.transportMode !== "ws" || !row.wsConnectedAt) {
-    return "offline";
+  const row = await dependencies.loadServer(serverId);
+  if (!row) {
+    return { ok: false, response: plain(404, "Not found") };
   }
-  if (!row.agentCapabilities.includes(PTY_CAPABILITY)) {
-    return "unsupported";
+  return { ok: true, auth, row };
+}
+
+/**
+ * Same-origin readiness probe for the terminal panel. A failed WebSocket
+ * handshake exposes no HTTP status to the browser, so the panel asks here
+ * first to tell denied access apart from an unavailable agent.
+ */
+export async function handleAdminPtyStatus(
+  request: Request,
+  options: { serverId: string },
+  dependencies: AdminPtyRouteDependencies = defaultDependencies,
+): Promise<Response> {
+  const loaded = await loadAuthorizedServer(
+    request,
+    options.serverId,
+    dependencies,
+  );
+  if (!loaded.ok) {
+    return loaded.response;
   }
-  return null;
+  const unavailable = ptyAvailability(loaded.row);
+  return Response.json(
+    unavailable
+      ? { available: false, reason: unavailable }
+      : { available: true },
+    { headers: { "cache-control": "no-store" } },
+  );
 }
 
 /**
@@ -124,16 +158,16 @@ export async function handleAdminPtyRequest(
     return plain(403, "Cross-origin WebSocket denied");
   }
 
-  const auth = await dependencies.authenticate(request);
-  if (!auth) {
-    return plain(403, "Forbidden");
+  const loaded = await loadAuthorizedServer(
+    request,
+    options.serverId,
+    dependencies,
+  );
+  if (!loaded.ok) {
+    return loaded.response;
   }
-
-  const row = await dependencies.loadServer(options.serverId);
-  if (!row) {
-    return plain(404, "Not found");
-  }
-  const unavailable = availability(row);
+  const { auth, row } = loaded;
+  const unavailable = ptyAvailability(row);
   if (unavailable) {
     return Response.json(
       { error: unavailable },
@@ -168,13 +202,27 @@ export async function handleAdminPtyRequest(
   };
 
   try {
+    const connectedAt = row.wsConnectedAt!.toISOString();
     const response = await dependencies.accept(request, {
       serverId: row.id,
-      connectedAt: row.wsConnectedAt!.toISOString(),
+      connectedAt,
       sessionId,
       cols: dimensions.cols,
       rows: dimensions.rows,
       session,
+      authSessionId: auth.session.id,
+      isAuthorized: async () => {
+        const current = await loadAuthorizedServer(
+          request,
+          row.id,
+          dependencies,
+        );
+        return (
+          current.ok &&
+          ptyAvailability(current.row) === null &&
+          current.row.wsConnectedAt?.toISOString() === connectedAt
+        );
+      },
     });
     const failed = response.status !== 101 && response.status !== 426;
     await dependencies

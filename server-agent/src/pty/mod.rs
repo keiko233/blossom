@@ -7,17 +7,21 @@
 //! are bounded so a slow browser or a stalled WebSocket cannot grow memory
 //! without limit. Dropping the manager kills every remaining session.
 
+pub mod launch;
 pub mod ports;
 pub mod session;
+#[cfg(target_os = "linux")]
+mod sys;
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use self::ports::{PtyFactory, PtyProcess};
 
-pub const DEFAULT_MAX_SESSIONS: usize = 2;
-pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
-pub const DEFAULT_MAX_SESSION: Duration = Duration::from_secs(60 * 60);
+/// One session per server by default; the hard cap stays at four.
+pub const DEFAULT_MAX_SESSIONS: usize = 1;
+pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+pub const DEFAULT_MAX_SESSION: Duration = Duration::from_secs(30 * 60);
 pub const MIN_COLS: u16 = 20;
 pub const MAX_COLS: u16 = 400;
 pub const MIN_ROWS: u16 = 5;
@@ -57,6 +61,8 @@ pub enum PtyExitReason {
     Disabled,
     SessionExpired,
     ShellExit,
+    PtyUnavailable,
+    ShellUnavailable,
 }
 
 impl PtyExitReason {
@@ -75,6 +81,8 @@ impl PtyExitReason {
             Self::Disabled => "disabled",
             Self::SessionExpired => "session_expired",
             Self::ShellExit => "shell_exit",
+            Self::PtyUnavailable => "pty_unavailable",
+            Self::ShellUnavailable => "shell_unavailable",
         }
     }
 }
@@ -86,6 +94,41 @@ pub struct PtyExit {
     pub reason: PtyExitReason,
     pub code: Option<u32>,
     pub signal: Option<String>,
+    /// Sanitized, bounded explanation for startup failures only.
+    pub detail: Option<String>,
+}
+
+/// The shell that a session was started with, reported as `pty.started`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PtyStarted {
+    pub shell: String,
+    pub user: String,
+}
+
+/// The local account the shell runs as. Shown to the administrator so they
+/// know which files the shell can read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PtyIdentity {
+    pub uid: u32,
+    pub user: String,
+}
+
+impl PtyIdentity {
+    pub fn current() -> Self {
+        #[cfg(target_os = "linux")]
+        let uid = sys::effective_uid();
+        #[cfg(not(target_os = "linux"))]
+        let uid = u32::MAX;
+        #[cfg(target_os = "linux")]
+        let user = sys::user_name(uid).unwrap_or_else(|| format!("uid-{uid}"));
+        #[cfg(not(target_os = "linux"))]
+        let user = format!("uid-{uid}");
+        Self { uid, user }
+    }
+
+    pub fn is_root(&self) -> bool {
+        self.uid == 0
+    }
 }
 
 /// Output from the blocking reader/writer threads.
@@ -111,10 +154,32 @@ pub enum PtyError {
     SessionLimit,
     DuplicateSession,
     InvalidSessionId,
+    /// The shell was found but could not be started for another reason.
     Spawn(String),
+    /// The kernel refused to allocate a pseudo-terminal.
+    PtyAllocation(String),
+    /// No runnable shell or usable working directory is configured.
+    ShellUnavailable(String),
     InputBackpressure,
     Closed,
     Io(String),
+}
+
+impl PtyError {
+    /// The `pty.exit` reason reported when a session cannot start.
+    pub fn exit_reason(&self) -> PtyExitReason {
+        match self {
+            Self::Disabled => PtyExitReason::Disabled,
+            Self::SessionLimit => PtyExitReason::SessionLimit,
+            Self::DuplicateSession | Self::InvalidSessionId => PtyExitReason::InvalidSession,
+            Self::Spawn(_) => PtyExitReason::SpawnFailed,
+            Self::PtyAllocation(_) => PtyExitReason::PtyUnavailable,
+            Self::ShellUnavailable(_) => PtyExitReason::ShellUnavailable,
+            Self::InputBackpressure => PtyExitReason::InputBackpressure,
+            Self::Closed => PtyExitReason::Closed,
+            Self::Io(_) => PtyExitReason::IoError,
+        }
+    }
 }
 
 impl std::fmt::Display for PtyError {
@@ -124,7 +189,11 @@ impl std::fmt::Display for PtyError {
             Self::SessionLimit => formatter.write_str("PTY session limit reached"),
             Self::DuplicateSession => formatter.write_str("PTY session already exists"),
             Self::InvalidSessionId => formatter.write_str("invalid PTY session id"),
-            Self::Spawn(message) => write!(formatter, "PTY spawn failed: {message}"),
+            Self::Spawn(message) => write!(formatter, "shell failed to start: {message}"),
+            Self::PtyAllocation(message) => {
+                write!(formatter, "PTY allocation failed: {message}")
+            }
+            Self::ShellUnavailable(message) => write!(formatter, "shell unavailable: {message}"),
             Self::InputBackpressure => formatter.write_str("PTY input queue is full"),
             Self::Closed => formatter.write_str("PTY session is closed"),
             Self::Io(message) => write!(formatter, "PTY I/O failed: {message}"),
@@ -180,14 +249,16 @@ struct ManagedSession {
 
 pub struct PtyManager {
     limits: PtyLimits,
+    identity: String,
     factory: Box<dyn PtyFactory>,
     sessions: HashMap<String, ManagedSession>,
 }
 
 impl PtyManager {
-    pub fn new(limits: PtyLimits, factory: Box<dyn PtyFactory>) -> Self {
+    pub fn new(limits: PtyLimits, identity: String, factory: Box<dyn PtyFactory>) -> Self {
         Self {
             limits,
+            identity,
             factory,
             sessions: HashMap::new(),
         }
@@ -202,7 +273,13 @@ impl PtyManager {
         self.sessions.len()
     }
 
-    pub fn open(&mut self, session_id: &str, dimensions: PtyDimensions) -> Result<(), PtyError> {
+    /// Starts a shell for `session_id`. Success means the shell process exists,
+    /// which is what the browser waits for before showing a connected terminal.
+    pub fn open(
+        &mut self,
+        session_id: &str,
+        dimensions: PtyDimensions,
+    ) -> Result<PtyStarted, PtyError> {
         if !self.limits.enabled {
             return Err(PtyError::Disabled);
         }
@@ -215,16 +292,20 @@ impl PtyManager {
         if self.sessions.len() >= self.limits.max_sessions {
             return Err(PtyError::SessionLimit);
         }
-        let process = self.factory.spawn(session_id, dimensions)?;
+        let spawned = self.factory.spawn(session_id, dimensions)?;
+        let now = Instant::now();
         self.sessions.insert(
             session_id.to_string(),
             ManagedSession {
-                process,
-                opened_at: Instant::now(),
-                last_activity: Instant::now(),
+                process: spawned.process,
+                opened_at: now,
+                last_activity: now,
             },
         );
-        Ok(())
+        Ok(PtyStarted {
+            shell: spawned.shell,
+            user: self.identity.clone(),
+        })
     }
 
     pub fn write(&mut self, session_id: &str, data: &[u8]) -> Result<(), PtyError> {
@@ -256,6 +337,7 @@ impl PtyManager {
             reason,
             code: None,
             signal: None,
+            detail: None,
         })
     }
 
@@ -271,6 +353,7 @@ impl PtyManager {
             reason: PtyExitReason::ShellExit,
             code,
             signal,
+            detail: None,
         })
     }
 
@@ -369,8 +452,9 @@ mod tests {
 
     use super::ports::{PtyFactory, PtyProcess};
     use super::{
-        DEFAULT_MAX_SESSION, MAX_COLS, MAX_ROWS, MIN_COLS, MIN_ROWS, PtyDimensions, PtyError,
-        PtyExitReason, PtyLimits, PtyManager, Utf8Chunker, valid_session_id,
+        DEFAULT_IDLE_TIMEOUT, DEFAULT_MAX_SESSION, DEFAULT_MAX_SESSIONS, MAX_COLS, MAX_ROWS,
+        MIN_COLS, MIN_ROWS, PtyDimensions, PtyError, PtyExitReason, PtyLimits, PtyManager,
+        Utf8Chunker, valid_session_id,
     };
 
     #[derive(Debug, Default)]
@@ -394,15 +478,18 @@ mod tests {
             &self,
             session_id: &str,
             dimensions: PtyDimensions,
-        ) -> Result<Box<dyn PtyProcess>, PtyError> {
+        ) -> Result<super::ports::SpawnedPty, PtyError> {
             self.state
                 .lock()
                 .expect("fake pty state")
                 .spawned
                 .push((session_id.to_string(), dimensions));
-            Ok(Box::new(FakeProcess {
-                state: self.state.clone(),
-            }))
+            Ok(super::ports::SpawnedPty {
+                process: Box::new(FakeProcess {
+                    state: self.state.clone(),
+                }),
+                shell: "/bin/fake-shell".to_owned(),
+            })
         }
     }
 
@@ -446,10 +533,51 @@ mod tests {
                     Duration::from_secs(60),
                     DEFAULT_MAX_SESSION,
                 ),
+                "tester".to_owned(),
                 Box::new(factory),
             ),
             state,
         )
+    }
+
+    #[test]
+    fn open_reports_the_started_shell_and_identity() {
+        let (mut manager, _) = manager(true, 1);
+        assert_eq!(
+            manager.open("pty-1", PtyDimensions::clamped(80, 24)),
+            Ok(super::PtyStarted {
+                shell: "/bin/fake-shell".to_owned(),
+                user: "tester".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn startup_failures_map_to_actionable_exit_reasons() {
+        assert_eq!(
+            PtyError::ShellUnavailable("x".into()).exit_reason(),
+            PtyExitReason::ShellUnavailable
+        );
+        assert_eq!(
+            PtyError::PtyAllocation("x".into()).exit_reason(),
+            PtyExitReason::PtyUnavailable
+        );
+        assert_eq!(
+            PtyError::Spawn("x".into()).exit_reason(),
+            PtyExitReason::SpawnFailed
+        );
+        assert_eq!(
+            PtyExitReason::ShellUnavailable.as_str(),
+            "shell_unavailable"
+        );
+        assert_eq!(PtyExitReason::PtyUnavailable.as_str(), "pty_unavailable");
+    }
+
+    #[test]
+    fn defaults_match_the_one_session_five_minute_thirty_minute_policy() {
+        assert_eq!(DEFAULT_MAX_SESSIONS, 1);
+        assert_eq!(DEFAULT_IDLE_TIMEOUT, Duration::from_secs(300));
+        assert_eq!(DEFAULT_MAX_SESSION, Duration::from_secs(1800));
     }
 
     #[test]
