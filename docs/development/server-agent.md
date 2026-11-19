@@ -34,6 +34,7 @@ shell commands.
 | `src/acme/instant_backend.rs` | `instant-acme` adapter for Let's Encrypt/ZeroSSL, EAB decoding, order/finalize/certificate flow, and cleanup on every exit path.                           |
 | `src/acme/solver_http01.rs` | Ephemeral bounded HTTP-01 responder that serves only exact registered challenge tokens.                                                                   |
 | `src/acme/solver_dns01.rs` | DNS-01 relay over the agent WebSocket with exact TXT-value acknowledgement matching and cleanup tracking.                                                |
+| `src/oauth/`       | Protected `0600` credential files, the one-shot `enroll` redemption CLI, same-origin validation, and the Better Auth `client_credentials` token cache/refresh loop. |
 | `src/pty/`         | Opt-in interactive PTY sessions: `portable-pty` adapter, bounded reader/writer queues, session cap, idle/hard lifetime limits, and incremental UTF-8 output chunks. |
 | `src/certificate.rs` | Validated, generation-addressed certificate store under `<state_dir>/certificates/<id>/generation-<n>/`.                                                      |
 | `src/process.rs`   | Supervises the sing-box child (`processkit`): stdout/stderr capture into the log buffer and tracing, restart with backoff, graceful replacement, `sing-box check` preflight. |
@@ -96,6 +97,31 @@ with per-job EAB). It never accepts an arbitrary CA directory URL.
   error phase. Private keys and EAB HMAC values use redacting/zeroizing wrappers
   and never appear in logs. A duplicate job id replays the cached result until
   the bounded in-memory expiry; a different job id is a separate order.
+
+### OAuth machine identity
+
+`server-agent enroll --url ... --grant-file ... --credentials-file ...` reads a
+one-line `egr_...` grant from a regular file owned by the effective user with
+mode `0600`, makes exactly one same-origin
+`POST /api/enrollment/redeem`, validates the bounded response, and writes it
+verbatim through an atomic `0600` replace. There is no retry and no output that
+contains the grant or the client secret.
+
+At service start, `--credentials-file` selects protocol v2 automatically. The
+provider checks the file's owner and mode again, enforces the configured
+origin for `tokenEndpoint`, `issuer` and `resource`, and requests
+`client_credentials` tokens with the credential's `resource` and
+`blossom:agent:connect`. A token is refreshed before its advertised lifetime
+ends; the session reconnects at that deadline and the retry ladder is bounded.
+A still-valid cached token covers a transient token-endpoint failure, while the
+last-known-good sing-box process keeps running. A content change in the
+credential file rotates the identity on the next refresh.
+
+`--token` is an explicit static-token mode. It defaults to v1, may opt into v2
+with `--ws-protocol v2`, and is refused together with `--credentials-file`.
+OAuth mode never downgrades to a static token or the HTTP agent API. The client
+secret and current access token are registered in the `OAuth` log-redaction
+scope before use; replaced secrets stay masked.
 ### Interactive terminal (opt-in)
 
 The admin terminal is disabled unless the agent starts with `--pty-enabled` / `AGENT_PTY_ENABLED=true`; only then does `hello` advertise `pty-v1`. The control plane sends `pty.open`, `pty.data`, `pty.resize` and `pty.close` over the same authenticated socket, and the agent replies with bounded `pty.data` chunks and `pty.exit`.

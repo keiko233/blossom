@@ -14,6 +14,7 @@ mod client;
 mod config;
 mod log_policy;
 mod logs;
+mod oauth;
 mod process;
 mod pty;
 mod stats;
@@ -31,7 +32,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use chrono::Utc;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use tokio::signal;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -89,15 +90,37 @@ fn agent_capabilities(pty_enabled: bool) -> Vec<&'static str> {
 
 #[derive(Parser)]
 #[command(name = "server-agent", version, about = "blossom proxy server agent")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
+    #[command(flatten)]
+    service: Args,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Redeem one enrollment grant and write a protected credential file.
+    Enroll(oauth::EnrollArgs),
+}
+
+#[derive(clap::Args)]
 struct Args {
     /// Base URL of the blossom API, including the `/api` prefix
     /// (e.g. http://localhost:3000/api).
     #[arg(long, env = "AGENT_URL")]
-    url: String,
+    url: Option<String>,
 
     /// Per-server agent token (shown once at server creation or token reset).
+    /// Static-token mode is for legacy/backup installations; OAuth
+    /// installations use `--credentials-file` instead.
     #[arg(long, env = "AGENT_TOKEN")]
-    token: String,
+    token: Option<String>,
+
+    /// OAuth machine credential file written by `server-agent enroll`.
+    /// Selecting this file enables protocol v2 automatically.
+    #[arg(long, env = "AGENT_CREDENTIALS_FILE", value_name = "FILE")]
+    credentials_file: Option<PathBuf>,
 
     /// Bootstrap interval until the control plane returns per-server settings.
     #[arg(
@@ -183,8 +206,10 @@ struct Args {
     /// Agent WebSocket protocol. `legacy` keeps the v1 WebSocket with the HTTP
     /// config poll, heartbeat, and traffic reports. `v2` carries configuration,
     /// status, and traffic over `blossom-agent.v2` and makes no HTTP requests.
-    #[arg(long, value_enum, default_value_t = WsProtocol::Legacy, env = "AGENT_WS_PROTOCOL")]
-    ws_protocol: WsProtocol,
+    /// An OAuth credential file selects `v2` unless this is given as `legacy`
+    /// (which is refused) or `v2`.
+    #[arg(long, value_enum, env = "AGENT_WS_PROTOCOL")]
+    ws_protocol: Option<WsProtocol>,
 
     /// Probation before a v2 candidate config is committed. A test harness knob.
     #[arg(
@@ -268,6 +293,76 @@ enum WsProtocol {
     V2,
 }
 
+/// The credential input selected for this process. Exactly one is present.
+pub(crate) enum AuthMode {
+    Static(String),
+    OAuth(PathBuf),
+}
+
+impl AuthMode {
+    pub(crate) fn static_token(&self) -> Option<&str> {
+        match self {
+            Self::Static(token) => Some(token),
+            Self::OAuth(_) => None,
+        }
+    }
+}
+
+/// Validated service startup inputs.
+pub(crate) struct ServiceStartup {
+    pub(crate) url: String,
+    pub(crate) auth: AuthMode,
+    pub(crate) protocol: WsProtocol,
+}
+
+impl Args {
+    /// Resolves the base URL, the one credential input, and the transport.
+    ///
+    /// An OAuth credential file defaults to protocol v2 to match the
+    /// installer unit, which passes only `--credentials-file`. Static tokens
+    /// remain an explicit legacy/backup mode; OAuth never falls back to one.
+    fn startup(&self) -> Result<ServiceStartup> {
+        let url = self
+            .url
+            .as_deref()
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("--url (or AGENT_URL) is required"))?
+            .to_string();
+
+        let (auth, default_protocol) = match (self.token.as_deref(), &self.credentials_file) {
+            (Some(token), None) => (AuthMode::Static(token.to_string()), WsProtocol::Legacy),
+            (None, Some(path)) => (AuthMode::OAuth(path.clone()), WsProtocol::V2),
+            (Some(_), Some(_)) => {
+                return Err(anyhow::anyhow!(
+                    "choose either --token (static, legacy/backup) or --credentials-file (OAuth), not both"
+                ));
+            }
+            (None, None) => {
+                return Err(anyhow::anyhow!(
+                    "one of --token (static) or --credentials-file (OAuth) is required"
+                ));
+            }
+        };
+        let protocol = self.ws_protocol.unwrap_or(default_protocol);
+        if matches!(auth, AuthMode::OAuth(_)) && protocol != WsProtocol::V2 {
+            return Err(anyhow::anyhow!(
+                "OAuth credentials require --ws-protocol v2; static-token mode is a separate, explicit choice"
+            ));
+        }
+        if !self.ws_enabled && protocol == WsProtocol::V2 {
+            return Err(anyhow::anyhow!(
+                "--ws-protocol v2 is the WebSocket path and cannot run with --ws-enabled=false"
+            ));
+        }
+        Ok(ServiceStartup {
+            url,
+            auth,
+            protocol,
+        })
+    }
+}
+
 fn new_update_manager(args: &Args, sing_box_version: Option<String>) -> Result<UpdateManager> {
     let state_dir = args.state_dir.clone();
     UpdateManager::new(
@@ -335,8 +430,14 @@ impl AgentFilter for ReloadingFilter {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let cli = Cli::parse();
+    if let Some(Command::Enroll(enroll)) = &cli.command {
+        return oauth::run_enroll(enroll).await;
+    }
+    let args = cli.service;
+    let startup = args.startup()?;
+
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let args = Args::parse();
     let logs = LogStore::shared();
     let agent_baseline = policy_level(&args.log_level);
     let (level_filter, level_handle) =
@@ -358,15 +459,22 @@ async fn main() -> Result<()> {
     for warning in policy_warnings {
         warn!("{warning}");
     }
-    let agent_secrets: Vec<&str> = std::iter::once(args.token.as_str())
+    let agent_secrets: Vec<&str> = startup
+        .auth
+        .static_token()
+        .into_iter()
         .chain(args.github_token.as_deref())
         .collect();
     logs.replace_secrets(SecretScope::Agent, agent_secrets)?;
-    if args.ws_protocol == WsProtocol::V2 {
-        return agent_v2::run(&args, logs.clone(), log_policy).await;
+    if startup.protocol == WsProtocol::V2 {
+        return agent_v2::run(&args, &startup, logs.clone(), log_policy).await;
     }
 
-    let client = client::new_client(&args.url, &args.token)?;
+    let token = startup
+        .auth
+        .static_token()
+        .expect("legacy protocol requires a static token");
+    let client = client::new_client(&startup.url, token)?;
 
     let bin = resolve_binary(args.sing_box_path.clone());
     let mut sing_box_version = singbox_version(&bin).await;
@@ -460,8 +568,8 @@ async fn main() -> Result<()> {
     }
     let mut ws_link = if args.ws_enabled {
         start_ws(
-            &args.url,
-            &args.token,
+            &startup.url,
+            token,
             hello_snapshot.clone(),
             command_receiver,
             command_sink.clone(),
@@ -2066,8 +2174,8 @@ async fn heartbeat(
 #[cfg(test)]
 mod tests {
     use super::{
-        AGENT_CAPABILITIES, CandidateConfig, HelloSnapshot, PTY_CAPABILITY, agent_capabilities,
-        apply_singbox_log_overlay, apply_ws_policy, node_id_from_error,
+        AGENT_CAPABILITIES, CandidateConfig, Cli, HelloSnapshot, PTY_CAPABILITY, WsProtocol,
+        agent_capabilities, apply_singbox_log_overlay, apply_ws_policy, node_id_from_error,
     };
     use crate::config::AgentPolicy;
     use crate::log_policy::{
@@ -2075,6 +2183,7 @@ mod tests {
     };
     use crate::ws::codec::WelcomePayload;
     use chrono::Utc;
+    use clap::Parser as _;
 
     #[test]
     fn maps_singbox_inbound_index_back_to_node() {
@@ -2313,6 +2422,71 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(
             std::env::temp_dir().join(format!("blossom-hello-downloads-{}", std::process::id())),
+        );
+    }
+
+    fn service_startup(arguments: &[&str]) -> anyhow::Result<super::ServiceStartup> {
+        let mut argv = vec!["server-agent"];
+        argv.extend_from_slice(arguments);
+        let cli = Cli::try_parse_from(argv).expect("CLI parses");
+        cli.service.startup()
+    }
+
+    #[test]
+    fn a_credentials_file_selects_v2_without_an_explicit_protocol() {
+        let startup = service_startup(&[
+            "--url",
+            "http://127.0.0.1:1/api",
+            "--credentials-file",
+            "/tmp/credentials.json",
+        ])
+        .expect("OAuth startup resolves");
+        assert_eq!(startup.protocol, WsProtocol::V2);
+        assert!(startup.auth.static_token().is_none());
+    }
+
+    #[test]
+    fn a_static_token_keeps_the_legacy_default_and_can_opt_into_v2() {
+        let legacy = service_startup(&["--url", "http://127.0.0.1:1/api", "--token", "agt_test"])
+            .expect("static startup resolves");
+        assert_eq!(legacy.protocol, WsProtocol::Legacy);
+        assert_eq!(legacy.auth.static_token(), Some("agt_test"));
+
+        let backup = service_startup(&[
+            "--url",
+            "http://127.0.0.1:1/api",
+            "--token",
+            "agt_test",
+            "--ws-protocol",
+            "v2",
+        ])
+        .expect("static v2 startup resolves");
+        assert_eq!(backup.protocol, WsProtocol::V2);
+    }
+
+    #[test]
+    fn oauth_never_downgrades_to_legacy_or_accepts_two_credentials() {
+        assert!(
+            service_startup(&[
+                "--url",
+                "http://127.0.0.1:1/api",
+                "--credentials-file",
+                "/tmp/credentials.json",
+                "--ws-protocol",
+                "legacy",
+            ])
+            .is_err()
+        );
+        assert!(
+            service_startup(&[
+                "--url",
+                "http://127.0.0.1:1/api",
+                "--credentials-file",
+                "/tmp/credentials.json",
+                "--token",
+                "agt_test",
+            ])
+            .is_err()
         );
     }
 }

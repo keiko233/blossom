@@ -23,6 +23,7 @@ Statements are **Established** unless marked **Recommended**.
 
 - Inline unit tests in each module; `cargo test --locked` from `server-agent/`. No sing-box binary or network needed.
 - `server-agent/tests/ws_v2_lifecycle.rs` runs the real agent binary against a loopback v2 WebSocket control plane and a fake sing-box in a disposable state directory. It asserts that no HTTP agent API call occurs, and covers apply, exact traffic replay after a lost acknowledgement, status reconciliation, rollback, and offline last-known-good startup.
+- `server-agent/tests/oauth_service.rs` runs the real `enroll` CLI and the v2 service against a disposable loopback enrollment, token and WebSocket server. It covers protected-file permissions, one-shot redemption, same-origin response validation, automatic v2 selection, token refresh and credential rotation, service restart, the last-known-good proxy during a token outage, and the absence of legacy HTTP agent polling.
 - A Docker-based end-to-end managed-TLS test (`server-agent/scripts/test-managed-tls-docker.sh` with `tests/mock_control_plane.py`) runs in CI. See [Server agent](server-agent.md#checks).
 - `examples/query_stats.rs` is a manual smoke test against a live sing-box, not an automated check.
 

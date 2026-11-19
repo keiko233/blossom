@@ -27,6 +27,7 @@ use tracing::{error, info, warn};
 use crate::config::{AgentPolicy, ConfigError, ConfigManager};
 use crate::log_policy::LogPolicy;
 use crate::logs::{LogStore, SecretScope};
+use crate::oauth::OAuthTokenProvider;
 use crate::process::{ProcessState, SingBoxManager, resolve_binary, singbox_version};
 use crate::traffic::TrafficReporter;
 use crate::update::{AGENT_RESTART_EXIT_CODE, UpdateManager, supports_singbox_version};
@@ -42,9 +43,9 @@ use crate::ws::v2::session::{
 };
 use crate::ws::v2::traffic::run_reporter;
 use crate::{
-    AGENT_BUILD_ID, AGENT_VERSION, AgentStatus, Args, ReportedError, apply_fetched,
-    certificate_deployment, new_update_manager, reconcile_updates, record_config_error,
-    shutdown_signal, start_last_known_good, update_status_payload_from,
+    AGENT_BUILD_ID, AGENT_VERSION, AgentStatus, Args, AuthMode, ReportedError, ServiceStartup,
+    apply_fetched, certificate_deployment, new_update_manager, reconcile_updates,
+    record_config_error, shutdown_signal, start_last_known_good, update_status_payload_from,
 };
 
 /// What v2 advertises in `hello`. PTY, ACME, and telemetry are left out
@@ -66,21 +67,33 @@ const RUNTIME_SAMPLE: Duration = Duration::from_secs(5);
 const MAX_STATUS_MESSAGE_CHARS: usize = 4096;
 
 /// Runs the v2 agent until shutdown or until a self-update asks for a restart.
-pub async fn run(args: &Args, logs: LogStore, log_policy: Arc<LogPolicy>) -> Result<()> {
+pub async fn run(
+    args: &Args,
+    startup: &ServiceStartup,
+    logs: LogStore,
+    log_policy: Arc<LogPolicy>,
+) -> Result<()> {
     if !args.ws_enabled {
         bail!("--ws-protocol v2 is the WebSocket path and cannot run with --ws-enabled=false");
     }
-    let url = ws_url(&args.url)?;
-    let transport = V2Connector::new(WsTransportConfig {
-        url: url.clone(),
-        token: SensitiveHeader::bearer(&args.token)?,
-        connect_timeout: WS_CONNECT_TIMEOUT,
-    });
+    let url = ws_url(&startup.url)?;
+    let transport = match &startup.auth {
+        AuthMode::Static(token) => V2Connector::new(WsTransportConfig {
+            url: url.clone(),
+            token: SensitiveHeader::bearer(token)?,
+            connect_timeout: WS_CONNECT_TIMEOUT,
+        }),
+        AuthMode::OAuth(path) => {
+            let provider =
+                Arc::new(OAuthTokenProvider::load(path, &startup.url, logs.clone()).await?);
+            V2Connector::with_bearer(url.clone(), provider, WS_CONNECT_TIMEOUT)
+        }
+    };
     info!("agent websocket protocol v2 selected; connecting to {url}");
 
     // Nothing here calls the HTTP agent API. The client only supplies the
     // configuration manager's type, and it is never used.
-    let client = crate::client::new_client(&args.url, &args.token)?;
+    let client = crate::client::new_client(&startup.url, "v2-does-not-use-http")?;
     let bin = resolve_binary(args.sing_box_path.clone());
     let mut sing_box_version = singbox_version(&bin).await;
     if let Some(version) = sing_box_version.as_deref()

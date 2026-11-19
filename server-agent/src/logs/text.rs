@@ -31,15 +31,15 @@ pub(crate) const MAX_SECRET_FORMS: usize = 4096;
 /// or written to a config, and again on every rotation or refresh. Never log
 /// such a value by name or by content.
 ///
-/// OAuth handoff: when the agent starts issuing machine credentials, register
-/// the client secret and the current access token (and a refresh token if one
-/// is ever used) under a new `OAuth` scope before the first token request or
-/// authenticated call. The static-token `Agent` scope is not a substitute,
-/// because a token refresh must retire the previous value as a whole.
+/// The OAuth scope is replaced as a whole on every refresh, so a previous
+/// access token retires into the redacted history instead of being forgotten.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum SecretScope {
     /// The per-server agent token and the optional GitHub token, fixed per process.
     Agent,
+    /// The machine client secret and the current access token. Replaced on
+    /// every token refresh and on credential rotation.
+    OAuth,
     /// The loopback stats API secret of the endpoint the current config uses.
     StatsApi,
     /// Node credentials from the active config and the candidate being applied.

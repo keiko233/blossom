@@ -259,6 +259,68 @@ fn rotated_credentials_are_masked_in_every_egress_path() {
 }
 
 #[test]
+fn oauth_secrets_and_each_issued_token_are_masked_across_refreshes() {
+    let store = LogStore::new(RingLimits::default());
+    store
+        .replace_secrets(
+            SecretScope::OAuth,
+            ["ags_FAKE_client_secret_0001", "header1.payload.sig1"],
+        )
+        .unwrap();
+    store.record(
+        LogSource::Agent,
+        LogLevel::Info,
+        1,
+        "token header1.payload.sig1 for ags_FAKE_client_secret_0001",
+    );
+    store
+        .replace_secrets(
+            SecretScope::OAuth,
+            ["ags_FAKE_client_secret_0001", "header2.payload.sig2"],
+        )
+        .unwrap();
+    store.record(
+        LogSource::Agent,
+        LogLevel::Info,
+        1,
+        "refresh header2.payload.sig2 still ags_FAKE_client_secret_0001",
+    );
+    store
+        .replace_secrets(
+            SecretScope::OAuth,
+            ["ags_FAKE_client_secret_0002", "header3.payload.sig3"],
+        )
+        .unwrap();
+    store.record(
+        LogSource::Agent,
+        LogLevel::Info,
+        1,
+        "rotated header3.payload.sig3 and ags_FAKE_client_secret_0002",
+    );
+
+    let cancel = CancellationToken::new();
+    for needle in [
+        "header1.payload",
+        "header2.payload",
+        "header3.payload",
+        "ags_FAKE_client_secret_0001",
+        "ags_FAKE_client_secret_0002",
+    ] {
+        let page = store
+            .search(&text_request(needle, None, 10), &cancel)
+            .unwrap();
+        assert!(page.matches.is_empty(), "{needle} must not be retained");
+    }
+    let tail = store.resume(None, 10).unwrap();
+    assert_eq!(tail.records.len(), 3);
+    assert!(
+        tail.records
+            .iter()
+            .all(|record| record.text.contains("[REDACTED]"))
+    );
+}
+
+#[test]
 fn registry_overflow_masks_new_records_across_every_egress_path() {
     let store = LogStore::new(RingLimits::default());
     let many: Vec<String> = (0..=MAX_SECRET_FORMS)

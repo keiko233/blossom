@@ -150,6 +150,29 @@ The service runs the binary with the same credential file; the file is the only 
 
 The WebSocket client obtains and refreshes its token from `tokenEndpoint`, `clientId` and `clientSecret`; it must not print or audit those fields. A first enrollment remains pending until the WebSocket handshake promotion in the companion change. A `replace` grant is also pending until that companion promotes the new generation.
 
+The credential file selects protocol v2 automatically, so the unit above does
+not pass `--ws-protocol`. A static `--token` remains an explicit legacy or
+backup mode: it defaults to v1 unless `--ws-protocol v2` is also given, and the
+agent refuses to combine it with `--credentials-file`. OAuth failures never
+fall back to a static token or the HTTP agent API.
+
+At startup the service checks that the credential file is a regular file owned
+by the service user with exactly mode `0600`. It also re-checks that
+`tokenEndpoint`, `issuer` and `resource` are on the configured origin before
+it sends the client secret. Tokens are requested with
+`grant_type=client_credentials`, the credential's `resource` and
+`blossom:agent:connect`, and are refreshed before their advertised lifetime
+ends. A refresh failure retries with bounded backoff (1s to 60s); while the
+token endpoint or WebSocket is unavailable the agent keeps the last-known-good
+sing-box process running and does not poll `/agent/config/v3`, `/heartbeat` or
+`/traffic`. Replacing the credential file with a new `replace` grant is picked
+up on the next refresh, and a service restart reuses the same file.
+
+The client secret and every issued token are registered with the bounded,
+scoped log redactor under a dedicated OAuth scope, and previous token values
+stay masked after a refresh or rotation. The grant, the secret and the token
+are never written to stdout, stderr, tracing output or the retained log buffer.
+
 ### Installed layout and permissions
 
 | Path | Owner and mode | Contents |

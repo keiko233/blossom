@@ -31,6 +31,7 @@ const D9: &str = "9:sha256:11111111111111111111111111111111111111111111111111111
 struct ScriptedWire {
     inbound: mpsc::UnboundedReceiver<Result<String, WsError>>,
     outbound: mpsc::UnboundedSender<String>,
+    refresh_deadline: Option<tokio::time::Instant>,
 }
 
 impl Wire for ScriptedWire {
@@ -50,6 +51,10 @@ impl Wire for ScriptedWire {
     }
 
     async fn close(&mut self) {}
+
+    fn refresh_deadline(&self) -> Option<tokio::time::Instant> {
+        self.refresh_deadline
+    }
 }
 
 struct Harness {
@@ -91,6 +96,13 @@ fn identity() -> HelloIdentity {
 }
 
 fn start(applied: Option<&str>) -> Harness {
+    start_with_token_deadline(applied, None)
+}
+
+fn start_with_token_deadline(
+    applied: Option<&str>,
+    refresh_deadline: Option<tokio::time::Instant>,
+) -> Harness {
     let (mut session_ports, core, traffic) = channels(
         status_with(applied),
         UpdatePolicy {
@@ -103,7 +115,11 @@ fn start(applied: Option<&str>) -> Harness {
     let cancel = CancellationToken::new();
     let task_cancel = cancel.clone();
     let task = tokio::spawn(async move {
-        let mut wire = ScriptedWire { inbound, outbound };
+        let mut wire = ScriptedWire {
+            inbound,
+            outbound,
+            refresh_deadline,
+        };
         run(
             &mut wire,
             &mut session_ports,
@@ -616,6 +632,17 @@ async fn an_early_reconnect_deadline_from_welcome_ends_the_session() {
     let mut harness = start(Some(D7));
     expect_type(&mut harness, "hello").await;
     harness.peer.send(Ok(welcome(D7, 30, Some(10)))).unwrap();
+    let end = harness.task.await.unwrap();
+    assert_eq!(end, SessionEnd::Deadline);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_token_refresh_deadline_reconnects_before_the_welcome_hint() {
+    let token_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut harness = start_with_token_deadline(Some(D7), Some(token_deadline));
+    expect_type(&mut harness, "hello").await;
+    // The serverless hint is much later, so the token lease must win.
+    harness.peer.send(Ok(welcome(D7, 30, Some(60)))).unwrap();
     let end = harness.task.await.unwrap();
     assert_eq!(end, SessionEnd::Deadline);
 }
