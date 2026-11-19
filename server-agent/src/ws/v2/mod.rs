@@ -7,3 +7,4 @@
 //! into a v1 session.
 
 pub mod codec;
+pub mod snapshot;
