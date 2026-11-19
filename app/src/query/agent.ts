@@ -14,6 +14,8 @@ import { createHash, randomUUID } from "node:crypto";
 import type { z } from "zod";
 
 import { type Database, db } from "@/db";
+import { agentIdentity } from "@/db/agent-identity-schema";
+import { oauthClient } from "@/db/oauth-schema";
 import { node, type Server, server } from "@/db/proxy-schema";
 import { trafficReport } from "@/db/traffic-schema";
 import type { heartbeatSchema } from "@/orpc/proxy/schema";
@@ -77,6 +79,13 @@ export async function findAgentServerByTokenHash(
     .select()
     .from(server)
     .where(eq(server.agentTokenHash, tokenHash));
+  return row ?? null;
+}
+
+export async function findAgentServerById(
+  serverId: string,
+): Promise<Server | null> {
+  const [row] = await db.select().from(server).where(eq(server.id, serverId));
   return row ?? null;
 }
 
@@ -200,6 +209,34 @@ export interface AgentWsSessionStart {
   sessionId: string;
 }
 
+export type AgentSessionCredential =
+  | {
+      kind: "static";
+      /** SHA-256 of the bearer token that authenticated the upgrade. */
+      tokenHash: string;
+    }
+  | {
+      kind: "oauth";
+      identityId: string;
+      generation: number;
+      /** Provider client id. Kept for diagnostics; never a secret. */
+      clientId: string;
+      /** Epoch seconds from the verified machine token's `exp`. */
+      expiresAt: number;
+      identityStatus: "pending" | "active";
+    };
+
+export interface AgentWsV2SessionStart extends AgentWsSessionStart {
+  /**
+   * A pending identity may only prove itself with `hello`; until promotion it
+   * does not own the server's session fence.
+   */
+  pending: boolean;
+  /** Lease deadline from the machine token, or `null` for a static token. */
+  expiresAt: number | null;
+  credential: AgentSessionCredential;
+}
+
 /**
  * Starts a WebSocket session and makes it the server's current one in a
  * single UPDATE. A newer handshake therefore replaces an older session's
@@ -218,9 +255,373 @@ export async function startAgentWsSession(
       transportMode: "ws",
       wsConnectedAt: connectedAt,
       wsSessionId: sessionId,
+      wsCredentialKind: "static",
+      wsCredentialIdentityId: null,
+      wsCredentialGeneration: null,
+      wsCredentialExpiresAt: null,
     })
     .where(eq(server.id, serverId));
   return { connectedAt, sessionId };
+}
+
+/**
+ * The credential half of every v2 session fence. A session started with a
+ * static token keeps today's token-hash rotation semantics: the session id is
+ * cleared in the same statement that replaces the hash. An OAuth session is
+ * additionally bound to the active identity generation and the machine token
+ * expiry, so revocation, supersession, or expiry makes every fenced read and
+ * write match nothing even while the socket is still open.
+ */
+function currentAgentCredentialSql() {
+  return sql`(
+    ${server.wsCredentialKind} IS NULL
+    OR ${server.wsCredentialKind} = 'static'
+    OR (
+      ${server.wsCredentialKind} = 'oauth'
+      AND ${server.wsCredentialExpiresAt} > timezone('utc', now())
+      AND EXISTS (
+        SELECT 1
+        FROM agent_identity ai
+        JOIN oauth_client oc ON oc.client_id = ai.oauth_client_id
+        WHERE ai.id = ${server.wsCredentialIdentityId}
+          AND ai.server_id = ${server.id}
+          AND ai.generation = ${server.wsCredentialGeneration}
+          AND ai.status = 'active'
+          AND oc.disabled = false
+          AND EXISTS (
+            SELECT 1 FROM oauth_client_resource r
+            WHERE r.client_id = oc.client_id
+          )
+      )
+    )
+  )`;
+}
+
+/** Fences a write to `serverId`/`sessionId`, including the credential state. */
+export function currentAgentSessionFenceSql(
+  serverId: string,
+  sessionId: string,
+) {
+  return sql`EXISTS (
+    SELECT 1 FROM server
+    WHERE ${server.id} = ${serverId}::text
+      AND ${server.wsSessionId} = ${sessionId}::text
+      AND ${currentAgentCredentialSql()}
+  )`;
+}
+
+function usableOauthIdentitySql(
+  serverId: string,
+  credential: Extract<AgentSessionCredential, { kind: "oauth" }>,
+  statuses: readonly ("pending" | "active")[],
+) {
+  const statusList = sql.raw(
+    statuses.map((status) => `'${status}'`).join(", "),
+  );
+  return sql`EXISTS (
+    SELECT 1
+    FROM agent_identity ai
+    JOIN oauth_client oc ON oc.client_id = ai.oauth_client_id
+    JOIN server s ON s.id = ai.server_id
+    WHERE ai.id = ${credential.identityId}::text
+      AND ai.server_id = ${serverId}::text
+      AND ai.generation = ${credential.generation}::integer
+      AND ai.status IN (${statusList})
+      AND oc.disabled = false
+      AND s.enabled = true
+      AND EXISTS (
+        SELECT 1 FROM oauth_client_resource r
+        WHERE r.client_id = oc.client_id
+      )
+  )`;
+}
+
+function oauthSessionColumns(
+  connectedAt: Date,
+  sessionId: string,
+  credential: Extract<AgentSessionCredential, { kind: "oauth" }>,
+) {
+  return {
+    lastSeenAt: connectedAt,
+    transportMode: "ws" as const,
+    wsConnectedAt: connectedAt,
+    wsSessionId: sessionId,
+    wsCredentialKind: "oauth" as const,
+    wsCredentialIdentityId: credential.identityId,
+    wsCredentialGeneration: credential.generation,
+    wsCredentialExpiresAt: new Date(credential.expiresAt * 1000),
+  };
+}
+
+/**
+ * Starts a v2 session only if the credential that authenticated the upgrade is
+ * still current. A static token is conditional on its unchanged hash. An active
+ * OAuth identity takes the fence immediately. A pending identity gets a
+ * proof-only session: it does not displace the live session until its `hello`
+ * is accepted by {@link promoteAgentV2WsSession}.
+ */
+export async function startAgentV2WsSession(
+  serverId: string,
+  credential: AgentSessionCredential,
+  database: DbHandle = db,
+): Promise<AgentWsV2SessionStart | null> {
+  const connectedAt = new Date();
+  const sessionId = randomUUID();
+  if (credential.kind === "static") {
+    const rows = await database
+      .update(server)
+      .set({
+        lastSeenAt: connectedAt,
+        transportMode: "ws",
+        wsConnectedAt: connectedAt,
+        wsSessionId: sessionId,
+        wsCredentialKind: "static",
+        wsCredentialIdentityId: null,
+        wsCredentialGeneration: null,
+        wsCredentialExpiresAt: null,
+      })
+      .where(
+        and(
+          eq(server.id, serverId),
+          eq(server.agentTokenHash, credential.tokenHash),
+          eq(server.enabled, true),
+        ),
+      )
+      .returning({ id: server.id });
+    return rows.length > 0
+      ? {
+          connectedAt,
+          sessionId,
+          pending: false,
+          expiresAt: null,
+          credential,
+        }
+      : null;
+  }
+
+  if (credential.expiresAt <= Math.floor(Date.now() / 1000)) {
+    return null;
+  }
+
+  const [identity] = await database
+    .select({
+      status: agentIdentity.status,
+      generation: agentIdentity.generation,
+    })
+    .from(agentIdentity)
+    .innerJoin(
+      oauthClient,
+      eq(oauthClient.clientId, agentIdentity.oauthClientId),
+    )
+    .innerJoin(server, eq(server.id, agentIdentity.serverId))
+    .where(
+      and(
+        eq(agentIdentity.id, credential.identityId),
+        eq(agentIdentity.serverId, serverId),
+        eq(agentIdentity.generation, credential.generation),
+        inArray(agentIdentity.status, ["pending", "active"]),
+        eq(oauthClient.disabled, false),
+        eq(server.enabled, true),
+        sql`EXISTS (
+          SELECT 1 FROM oauth_client_resource r
+          WHERE r.client_id = ${oauthClient.clientId}
+        )`,
+      ),
+    )
+    .limit(1);
+  if (!identity) {
+    return null;
+  }
+
+  if (identity.status === "pending") {
+    return {
+      connectedAt,
+      sessionId,
+      pending: true,
+      expiresAt: credential.expiresAt,
+      credential: { ...credential, identityStatus: "pending" },
+    };
+  }
+
+  const rows = await database
+    .update(server)
+    .set(oauthSessionColumns(connectedAt, sessionId, credential))
+    .where(
+      and(
+        eq(server.id, serverId),
+        eq(server.enabled, true),
+        usableOauthIdentitySql(serverId, credential, ["active"]),
+      ),
+    )
+    .returning({ id: server.id });
+  return rows.length > 0
+    ? {
+        connectedAt,
+        sessionId,
+        pending: false,
+        expiresAt: credential.expiresAt,
+        credential: { ...credential, identityStatus: "active" },
+      }
+    : null;
+}
+
+/**
+ * Promotes a pending OAuth identity after its `hello` proved the connection,
+ * then makes that session current. First installation is one conditional
+ * UPDATE. Rotation demotes the old active identity before promoting the pending
+ * one; a crash between those two statements is recovered on the next handshake
+ * because promotion also runs when the server has no active identity. Both
+ * statements are idempotent and work on neon-http's non-interactive driver.
+ */
+export async function promoteAgentV2WsSession(
+  serverId: string,
+  sessionId: string,
+  credential: AgentSessionCredential,
+  database: DbHandle = db,
+): Promise<Server | null> {
+  if (credential.kind !== "oauth") {
+    return null;
+  }
+  if (credential.expiresAt <= Math.floor(Date.now() / 1000)) {
+    return null;
+  }
+
+  const [identity] = await database
+    .select({
+      status: agentIdentity.status,
+      generation: agentIdentity.generation,
+    })
+    .from(agentIdentity)
+    .where(
+      and(
+        eq(agentIdentity.id, credential.identityId),
+        eq(agentIdentity.serverId, serverId),
+        eq(agentIdentity.generation, credential.generation),
+        inArray(agentIdentity.status, ["pending", "active"]),
+      ),
+    )
+    .limit(1);
+  if (
+    !identity ||
+    !(await usableOauthIdentity(serverId, credential, database))
+  ) {
+    return null;
+  }
+
+  if (identity.status === "pending") {
+    const promoted = await database.execute<{ id: string }>(
+      sql`
+        UPDATE agent_identity
+        SET status = 'active',
+            activated_at = timezone('utc', now()),
+            updated_at = timezone('utc', now())
+        WHERE id = ${credential.identityId}::text
+          AND server_id = ${serverId}::text
+          AND generation = ${credential.generation}::integer
+          AND status = 'pending'
+          AND NOT EXISTS (
+            SELECT 1 FROM agent_identity a
+            WHERE a.server_id = ${serverId}::text AND a.status = 'active'
+          )
+        RETURNING id
+      `,
+      "objects",
+    );
+    if (promoted.length === 0) {
+      // A replace grant leaves the previous generation active. Demote it, then
+      // promote this generation; the next handshake repeats this sequence if
+      // the process stops between the two statements.
+      await database.execute(
+        sql`
+          UPDATE agent_identity
+          SET status = 'superseded',
+              updated_at = timezone('utc', now())
+          WHERE server_id = ${serverId}::text
+            AND status = 'active'
+            AND id <> ${credential.identityId}::text
+            AND generation < ${credential.generation}::integer
+        `,
+        "objects",
+      );
+      await database.execute(
+        sql`
+          UPDATE agent_identity
+          SET status = 'active',
+              activated_at = timezone('utc', now()),
+              updated_at = timezone('utc', now())
+          WHERE id = ${credential.identityId}::text
+            AND server_id = ${serverId}::text
+            AND generation = ${credential.generation}::integer
+            AND status = 'pending'
+            AND NOT EXISTS (
+              SELECT 1 FROM agent_identity a
+              WHERE a.server_id = ${serverId}::text AND a.status = 'active'
+            )
+          RETURNING id
+        `,
+        "objects",
+      );
+    }
+  }
+
+  const [row] = await database
+    .update(server)
+    .set(oauthSessionColumns(new Date(), sessionId, credential))
+    .where(
+      and(
+        eq(server.id, serverId),
+        eq(server.enabled, true),
+        usableOauthIdentitySql(serverId, credential, ["active"]),
+      ),
+    )
+    .returning();
+  return row ?? null;
+}
+
+async function usableOauthIdentity(
+  serverId: string,
+  credential: Extract<AgentSessionCredential, { kind: "oauth" }>,
+  database: DbHandle,
+): Promise<boolean> {
+  const [row] = await database
+    .select({ id: agentIdentity.id })
+    .from(agentIdentity)
+    .innerJoin(
+      oauthClient,
+      eq(oauthClient.clientId, agentIdentity.oauthClientId),
+    )
+    .innerJoin(server, eq(server.id, agentIdentity.serverId))
+    .where(
+      and(
+        eq(agentIdentity.id, credential.identityId),
+        eq(agentIdentity.serverId, serverId),
+        eq(agentIdentity.generation, credential.generation),
+        inArray(agentIdentity.status, ["pending", "active"]),
+        eq(oauthClient.disabled, false),
+        eq(server.enabled, true),
+        sql`EXISTS (
+          SELECT 1 FROM oauth_client_resource r
+          WHERE r.client_id = ${oauthClient.clientId}
+        )`,
+      ),
+    )
+    .limit(1);
+  return Boolean(row);
+}
+
+/** Whether a pending proof session still holds an unexpired usable identity. */
+export async function revalidatePendingAgentV2Session(
+  serverId: string,
+  credential: AgentSessionCredential,
+  database: DbHandle = db,
+): Promise<boolean> {
+  if (credential.kind !== "oauth") {
+    return false;
+  }
+  if (credential.expiresAt <= Math.floor(Date.now() / 1000)) {
+    return false;
+  }
+  return usableOauthIdentity(serverId, credential, database);
 }
 
 /**
@@ -243,7 +644,15 @@ export async function markAgentWsDisconnected(
 ): Promise<void> {
   await database
     .update(server)
-    .set({ transportMode: "http", wsConnectedAt: null, wsSessionId: null })
+    .set({
+      transportMode: "http",
+      wsConnectedAt: null,
+      wsSessionId: null,
+      wsCredentialKind: null,
+      wsCredentialIdentityId: null,
+      wsCredentialGeneration: null,
+      wsCredentialExpiresAt: null,
+    })
     .where(and(eq(server.id, serverId), eq(server.wsConnectedAt, connectedAt)));
 }
 
@@ -258,7 +667,15 @@ export async function endAgentWsSession(
 ): Promise<void> {
   await database
     .update(server)
-    .set({ transportMode: "http", wsConnectedAt: null, wsSessionId: null })
+    .set({
+      transportMode: "http",
+      wsConnectedAt: null,
+      wsSessionId: null,
+      wsCredentialKind: null,
+      wsCredentialIdentityId: null,
+      wsCredentialGeneration: null,
+      wsCredentialExpiresAt: null,
+    })
     .where(and(eq(server.id, serverId), eq(server.wsSessionId, sessionId)));
 }
 
@@ -374,21 +791,30 @@ export async function listServerNodeIds(
   return rows.map((row) => row.id);
 }
 
-/** Loads the server row a v2 session reads before it compiles. */
-export async function loadAgentServer(
+/**
+ * Loads the server row for a v2 session, but only while that session is still
+ * current. A replaced session, or one whose credential was rotated (which
+ * clears the marker), gets `null` and must not read or send configuration.
+ */
+export async function loadCurrentAgentServer(
   serverId: string,
+  sessionId: string,
   database: DbHandle = db,
 ): Promise<Server | null> {
   const [row] = await database
     .select()
     .from(server)
-    .where(eq(server.id, serverId));
+    .where(currentSession(serverId, sessionId));
   return row ?? null;
 }
 
 /** The predicate every v2 session write carries: this session is current. */
 function currentSession(serverId: string, sessionId: string) {
-  return and(eq(server.id, serverId), eq(server.wsSessionId, sessionId));
+  return and(
+    eq(server.id, serverId),
+    eq(server.wsSessionId, sessionId),
+    currentAgentCredentialSql(),
+  );
 }
 
 /**
@@ -530,7 +956,9 @@ export async function recordAgentV2ConfigAck(
     sql`
       WITH fenced AS (
         SELECT 1 FROM server
-        WHERE id = ${serverId}::text AND ws_session_id = ${sessionId}::text
+        WHERE id = ${serverId}::text
+          AND ws_session_id = ${sessionId}::text
+          AND ${currentAgentCredentialSql()}
         FOR SHARE
       ),
       advanced AS (
@@ -563,34 +991,51 @@ export async function recordAgentV2ConfigAck(
 }
 
 /**
- * Stores the configuration identifier compiled for the current session. The
- * write is conditional on the sequence still being the one that was compiled,
- * so a compile that raced a change cannot cache a stale identifier.
+ * A configuration identifier compiled from the state read before the compile.
+ * `desiredInputsVersion` is the version the server row carried at that read.
+ */
+export interface CachedDesiredRevision {
+  desiredRevisionSeq: number;
+  desiredInputsVersion: number;
+  desiredRevision: string;
+  /** The identifier may be trusted without recompiling only until this. */
+  validUntil: Date;
+}
+
+/**
+ * Stores the identifier compiled for the current session. The write names the
+ * sequence and inputs version it was compiled from and matches only while both
+ * are unchanged. A compile that raced a publish-gate change or an invalidation,
+ * including one on another instance, therefore cannot cache a stale identifier.
  */
 export async function cacheAgentDesiredRevision(
   serverId: string,
   sessionId: string,
-  desiredRevisionSeq: number,
-  desiredRevision: string,
+  cache: CachedDesiredRevision,
   database: DbHandle = db,
 ): Promise<void> {
   await database
     .update(server)
-    .set({ desiredConfigRevision: desiredRevision })
+    .set({
+      desiredConfigRevision: cache.desiredRevision,
+      desiredConfigValidUntil: cache.validUntil,
+    })
     .where(
       and(
         currentSession(serverId, sessionId),
-        eq(server.desiredRevisionSeq, desiredRevisionSeq),
+        eq(server.desiredRevisionSeq, cache.desiredRevisionSeq),
+        eq(server.desiredInputsVersion, cache.desiredInputsVersion),
       ),
     );
 }
 
 /**
- * Clears cached configuration identifiers so the next v2 status or session
- * recompiles them. Call after a change that alters the compiled configuration
- * without a publish-gate record (for example routing rules), or after a
- * change notification, which may not be delivered. Omit `serverIds` to clear
- * every server.
+ * Discards cached configuration identifiers and bumps their inputs version, so
+ * the next v2 status, hello or snapshot recompiles, and a compile that began
+ * before this call cannot store its identifier. Call it after any mutation of
+ * compiled inputs that no publish-gate record covers (routing rules,
+ * certificates, traffic quota), and after a change notification, which may not
+ * be delivered. Omit `serverIds` to invalidate every server.
  */
 export async function invalidateDesiredConfigRevisions(
   serverIds?: readonly string[],
@@ -601,8 +1046,58 @@ export async function invalidateDesiredConfigRevisions(
   }
   await database
     .update(server)
-    .set({ desiredConfigRevision: null })
+    .set({
+      desiredConfigRevision: null,
+      desiredConfigValidUntil: null,
+      desiredInputsVersion: sql`${server.desiredInputsVersion} + 1`,
+    })
     .where(serverIds ? inArray(server.id, [...serverIds]) : undefined);
+}
+
+/**
+ * Invalidates after a mutation has already committed, so a failure here cannot
+ * fail the caller's operation. A missed invalidation is still bounded by the
+ * cached identifier's deadline.
+ */
+export async function invalidateDesiredConfigRevisionsAfterCommit(
+  serverIds?: readonly string[],
+  database: DbHandle = db,
+): Promise<void> {
+  try {
+    await invalidateDesiredConfigRevisions(serverIds, database);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`agent desired configuration invalidation failed: ${message}`);
+  }
+}
+
+/**
+ * Replaces a server's static agent credential and ends its current v2 session
+ * in the same statement. The old session's fenced writes then match no row and
+ * its configuration reads fail, so it stops at its next frame, and a reconnect
+ * with the old credential is refused at the upgrade.
+ */
+export async function rotateAgentCredential(
+  serverId: string,
+  credential: { hash: string; prefix: string },
+  database: DbHandle = db,
+): Promise<{ id: string } | null> {
+  const [row] = await database
+    .update(server)
+    .set({
+      agentTokenHash: credential.hash,
+      agentTokenPrefix: credential.prefix,
+      transportMode: "http",
+      wsConnectedAt: null,
+      wsSessionId: null,
+      wsCredentialKind: null,
+      wsCredentialIdentityId: null,
+      wsCredentialGeneration: null,
+      wsCredentialExpiresAt: null,
+    })
+    .where(eq(server.id, serverId))
+    .returning({ id: server.id });
+  return row ?? null;
 }
 
 /**
@@ -756,7 +1251,9 @@ export async function recordAgentTraffic(
       ? sql``
       : sql`fence AS (
           SELECT 1 FROM server
-          WHERE id = ${serverId}::text AND ws_session_id = ${sessionId}::text
+          WHERE id = ${serverId}::text
+            AND ws_session_id = ${sessionId}::text
+            AND ${currentAgentCredentialSql()}
           FOR SHARE
         ),`;
   const fenceGuard =

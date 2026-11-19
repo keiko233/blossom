@@ -306,6 +306,7 @@ export async function revokeAgentIdentity(
       ),
     )
     .returning({
+      identityId: agentIdentity.id,
       serverId: agentIdentity.serverId,
       oauthClientId: agentIdentity.oauthClientId,
     });
@@ -314,6 +315,7 @@ export async function revokeAgentIdentity(
   if (!target) {
     [target] = await db
       .select({
+        identityId: agentIdentity.id,
         serverId: agentIdentity.serverId,
         oauthClientId: agentIdentity.oauthClientId,
       })
@@ -339,6 +341,22 @@ export async function revokeAgentIdentity(
         isNull(oauthAccessToken.revoked),
       ),
     );
+
+  // End the live session fence when the revoked identity owns it. The socket
+  // closes at its next lease check or frame; this makes every durable write
+  // fail immediately, even before the socket notices.
+  await db
+    .update(server)
+    .set({
+      transportMode: "http",
+      wsConnectedAt: null,
+      wsSessionId: null,
+      wsCredentialKind: null,
+      wsCredentialIdentityId: null,
+      wsCredentialGeneration: null,
+      wsCredentialExpiresAt: null,
+    })
+    .where(eq(server.wsCredentialIdentityId, target.identityId));
 
   return {
     found: true,

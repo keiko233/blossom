@@ -18,6 +18,10 @@ import {
 import { parseRevisionSeq } from "@blossom/domain/config-revision";
 
 import type { Server } from "@/db/proxy-schema";
+import type {
+  AgentSessionCredential,
+  CachedDesiredRevision,
+} from "@/query/agent";
 
 import { encodeConfigSnapshot } from "./agent-ws-v2-snapshot";
 
@@ -27,6 +31,9 @@ export interface AgentWsV2Peer {
 }
 
 export type AgentWsV2AckOutcome = "applied" | "failed" | "stale" | "replaced";
+
+/** Result of an authoritative lease check for one session. */
+export type AgentWsV2Lease = "ok" | "replaced" | "disabled";
 
 export type AgentWsV2TrafficOutcome =
   | { status: "applied" | "duplicate"; accepted: number; dropped: number }
@@ -40,7 +47,15 @@ export type AgentWsV2TrafficOutcome =
  * was superseded and must stop.
  */
 export interface AgentWsV2Store {
-  loadServer(serverId: string): Promise<Server | null>;
+  /**
+   * The server row, but only while this session is still current. Returns
+   * `null` once the session was replaced or its credential rotated, so no
+   * configuration is read or sent for it.
+   */
+  loadCurrentServer(
+    serverId: string,
+    sessionId: string,
+  ): Promise<Server | null>;
   recordHello(
     serverId: string,
     sessionId: string,
@@ -56,25 +71,49 @@ export interface AgentWsV2Store {
     sessionId: string,
     ack: AgentWsV2ConfigAckPayload,
   ): Promise<AgentWsV2AckOutcome>;
+  /**
+   * Completes a pending OAuth proof after `hello`, promoting the identity and
+   * taking the server fence. Returns `null` if the credential is no longer
+   * usable.
+   */
+  promoteSession(
+    serverId: string,
+    sessionId: string,
+    credential: AgentSessionCredential,
+  ): Promise<Server | null>;
   cacheDesiredRevision(
     serverId: string,
     sessionId: string,
-    desiredRevisionSeq: number,
-    desiredRevision: string,
+    cache: CachedDesiredRevision,
   ): Promise<void>;
   applyCertificateDeployments(
     serverId: string,
+    sessionId: string,
     deployments: AgentWsCertificateDeployment[],
   ): Promise<void>;
+  /**
+   * Re-reads the server and credential state. `pending` sessions are checked
+   * against the still-pending identity rather than the server's session fence.
+   */
+  revalidateSession(
+    serverId: string,
+    sessionId: string,
+    credential: AgentSessionCredential,
+    pending: boolean,
+  ): Promise<AgentWsV2Lease>;
   applyTraffic(
     serverId: string,
     sessionId: string,
     report: AgentWsV2TrafficReportPayload,
   ): Promise<AgentWsV2TrafficOutcome>;
-  /** Compiles the same desired state the v3 HTTP response serves. */
+  /**
+   * Compiles the same desired state the v3 HTTP response serves. `validUntil`
+   * is the instant the identifier must be recompiled by, even with no change.
+   */
   compile(server: Server): Promise<{
     desiredRevision: string;
     document: unknown;
+    validUntil: Date;
   }>;
   endSession(serverId: string, sessionId: string): Promise<void>;
 }
@@ -83,6 +122,13 @@ export interface OpenAgentWsV2SessionOptions {
   serverId: string;
   /** The session id the upgrade handler already made current. */
   sessionId: string;
+  /** The credential that authenticated the upgrade. Never raw token material. */
+  credential: AgentSessionCredential;
+  /**
+   * A pending OAuth identity gets a proof-only session. Its `hello` promotes
+   * the identity and takes the server fence; before that it owns no fence.
+   */
+  pending?: boolean;
   peer: AgentWsV2Peer;
   store: AgentWsV2Store;
   /**
@@ -98,6 +144,10 @@ export interface OpenAgentWsV2SessionOptions {
 export interface AgentWsV2Session {
   /** True once `welcome` has been sent. Pushes are withheld until then. */
   readonly welcomed: boolean;
+  /** True while a pending identity still needs its `hello` promotion. */
+  readonly pending: boolean;
+  /** Re-checks the authoritative lease; closes the session when it fails. */
+  revalidate(): Promise<void>;
   handleText(text: string): Promise<void>;
   close(): Promise<void>;
 }
@@ -140,8 +190,9 @@ function updatePolicyOf(server: Server): AgentWsV2UpdatePolicy {
 export function openAgentWsV2Session(
   options: OpenAgentWsV2SessionOptions,
 ): AgentWsV2Session {
-  const { serverId, sessionId, peer, store } = options;
+  const { serverId, sessionId, peer, store, credential } = options;
   let welcomed = options.welcomed ?? false;
+  let pending = options.pending ?? false;
   let closed = false;
   let snapshotGeneration = 0;
 
@@ -179,11 +230,46 @@ export function openAgentWsV2Session(
     peer.close(4000, code);
   }
 
+  async function revalidate(): Promise<void> {
+    if (closed) {
+      return;
+    }
+    let lease: AgentWsV2Lease;
+    try {
+      lease = await store.revalidateSession(
+        serverId,
+        sessionId,
+        credential,
+        pending,
+      );
+    } catch (error) {
+      logFailure("lease revalidation", error);
+      return;
+    }
+    if (lease === "replaced") {
+      stop("session_replaced", "session is no longer current");
+    } else if (lease === "disabled") {
+      stop("server_disabled", "server is disabled");
+    }
+  }
+
+  /**
+   * The identifier for `server`, the row just read. A cached identifier is
+   * reused only while its sequence matches, its deadline has not passed, and
+   * no invalidation has reset it; otherwise the configuration is compiled and
+   * the result cached against the row's sequence and inputs version.
+   */
   async function currentDesired(
     server: Server,
   ): Promise<AgentWsV2ConfigIdentifier> {
     const marker = server.desiredConfigRevision;
-    if (marker && parseRevisionSeq(marker) === server.desiredRevisionSeq) {
+    const validUntil = server.desiredConfigValidUntil;
+    if (
+      marker &&
+      validUntil &&
+      validUntil.getTime() > Date.now() &&
+      parseRevisionSeq(marker) === server.desiredRevisionSeq
+    ) {
       return {
         desiredRevisionSeq: server.desiredRevisionSeq,
         desiredRevision: marker,
@@ -191,12 +277,12 @@ export function openAgentWsV2Session(
     }
     const compiled = await store.compile(server);
     await safely("cache desired revision", () =>
-      store.cacheDesiredRevision(
-        serverId,
-        sessionId,
-        server.desiredRevisionSeq,
-        compiled.desiredRevision,
-      ),
+      store.cacheDesiredRevision(serverId, sessionId, {
+        desiredRevisionSeq: server.desiredRevisionSeq,
+        desiredInputsVersion: server.desiredInputsVersion,
+        desiredRevision: compiled.desiredRevision,
+        validUntil: compiled.validUntil,
+      }),
     );
     return {
       desiredRevisionSeq: server.desiredRevisionSeq,
@@ -204,10 +290,40 @@ export function openAgentWsV2Session(
     };
   }
 
+  /**
+   * The server row for this session, or `null` after stopping the session when
+   * it is no longer current or the server is disabled. Every configuration
+   * read goes through here.
+   */
+  async function requireCurrentServer(): Promise<Server | null> {
+    const server = await store.loadCurrentServer(serverId, sessionId);
+    if (!server) {
+      stop("session_replaced", "a newer session is active");
+      return null;
+    }
+    if (!server.enabled) {
+      stop("server_disabled", "server is disabled");
+      return null;
+    }
+    return server;
+  }
+
   async function onHello(hello: AgentWsV2HelloPayload, id?: string) {
     if (welcomed) {
       reject("invalid_payload", "hello was already received", "hello");
       return;
+    }
+    if (pending) {
+      const promoted = await store.promoteSession(
+        serverId,
+        sessionId,
+        credential,
+      );
+      if (!promoted) {
+        stop("session_replaced", "the pending credential is no longer current");
+        return;
+      }
+      pending = false;
     }
     const server = await store.recordHello(serverId, sessionId, hello);
     if (!server) {
@@ -222,6 +338,7 @@ export function openAgentWsV2Session(
       await safely("certificate deployments", () =>
         store.applyCertificateDeployments(
           serverId,
+          sessionId,
           hello.certificateDeployments,
         ),
       );
@@ -268,6 +385,7 @@ export function openAgentWsV2Session(
       await safely("certificate deployments", () =>
         store.applyCertificateDeployments(
           serverId,
+          sessionId,
           status.certificateDeployments,
         ),
       );
@@ -286,17 +404,18 @@ export function openAgentWsV2Session(
     // A newer request supersedes an older compile that has not sent yet, so a
     // slow older snapshot can never reach the agent after a newer one.
     const generation = ++snapshotGeneration;
-    const server = await store.loadServer(serverId);
+    const server = await requireCurrentServer();
     if (!server) {
-      send("config.snapshot.error", {
-        requestId,
-        code: "unavailable",
-        message: "server not found",
-      });
       return;
     }
     const compiled = await store.compile(server);
     if (generation !== snapshotGeneration) {
+      return;
+    }
+    // The snapshot carries certificate private keys, so it is sent only if the
+    // session is still current after the compile: a rotation or a replacement
+    // that landed during the compile must not receive it.
+    if (!(await requireCurrentServer())) {
       return;
     }
 
@@ -328,12 +447,12 @@ export function openAgentWsV2Session(
     send("config.snapshot.end", { requestId });
 
     await safely("cache desired revision", () =>
-      store.cacheDesiredRevision(
-        serverId,
-        sessionId,
-        server.desiredRevisionSeq,
-        compiled.desiredRevision,
-      ),
+      store.cacheDesiredRevision(serverId, sessionId, {
+        desiredRevisionSeq: server.desiredRevisionSeq,
+        desiredInputsVersion: server.desiredInputsVersion,
+        desiredRevision: compiled.desiredRevision,
+        validUntil: compiled.validUntil,
+      }),
     );
   }
 
@@ -371,7 +490,17 @@ export function openAgentWsV2Session(
       return welcomed;
     },
 
+    get pending() {
+      return pending;
+    },
+
+    revalidate,
+
     async handleText(text) {
+      if (closed) {
+        return;
+      }
+      await revalidate();
       if (closed) {
         return;
       }

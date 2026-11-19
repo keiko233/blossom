@@ -3,7 +3,7 @@ import { count, desc, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
-import { db } from "@/db";
+import { db, getDatabaseDriver } from "@/db";
 import { node, type Server, server } from "@/db/proxy-schema";
 import { fromInput, fromResult } from "@/lib/admin-audit";
 import { adminAudit } from "@/lib/admin-audit-middleware";
@@ -13,15 +13,18 @@ import {
 } from "@/lib/agent-notifications";
 import { generateAgentToken } from "@/lib/agent-token";
 import { ensureAdmin } from "@/lib/ensure-admin";
+import { supportsInteractiveTransactions } from "@/lib/env-schema";
 import {
   createServerSchema,
   serverIdSchema,
   updateServerSchema,
 } from "@/orpc/proxy/schema";
+import { rotateAgentCredential } from "@/query/agent";
 import {
   countPendingConfigChangesByServer,
   recordConfigChange,
 } from "@/query/config-change";
+import { deleteServerRecord } from "@/query/server-deletion";
 
 /** TanStack Query key for the admin server list. */
 export const SERVERS_QUERY_KEY = ["admin", "servers"] as const;
@@ -199,20 +202,9 @@ export const deleteServer = createServerFn({ method: "POST" })
   .validator(serverIdSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
-
-    const [countRow] = await db
-      .select({ count: count() })
-      .from(node)
-      .where(eq(node.serverId, data.id));
-    if ((countRow?.count ?? 0) > 0) {
-      throw new Error(
-        "Server still has nodes; move or delete them before removing it.",
-      );
-    }
-    const [row] = await db
-      .delete(server)
-      .where(eq(server.id, data.id))
-      .returning();
+    const row = await deleteServerRecord(data.id, {
+      interactive: supportsInteractiveTransactions(getDatabaseDriver()),
+    });
     if (!row) {
       throw new Error("Not found");
     }
@@ -231,16 +223,9 @@ export const regenerateServerToken = createServerFn({ method: "POST" })
     await ensureAdmin();
     const credential = generateAgentToken();
 
-    const [row] = await db
-      .update(server)
-      .set({
-        agentTokenHash: credential.hash,
-        agentTokenPrefix: credential.prefix,
-        transportMode: "http",
-        wsConnectedAt: null,
-      })
-      .where(eq(server.id, data.id))
-      .returning();
+    // The rotation also ends the server's current v2 session, in the same
+    // statement, so the old credential's session cannot keep writing.
+    const row = await rotateAgentCredential(data.id, credential);
 
     if (!row) {
       throw new Error("Not found");

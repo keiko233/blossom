@@ -27,7 +27,7 @@ Established. Know which surface you are on, because they authenticate differentl
 | SSR pages and routes          | `app/src/routes/`                                                      | better-auth session; role checked in `beforeLoad`   | `(admin)` requires `role === "admin"`, `(user)` and `(auth)` have their own groups.                                                    |
 | Server functions              | `app/src/query/*.ts`, `app/src/lib/auth.tsx`                           | session; admin ones call `ensureAdmin()`             | The application API for the UI. All admin CRUD lives here.                                                                             |
 | Agent API (oRPC)              | `app/src/orpc/router/index.ts`, `app/src/orpc/proxy/agent.ts`          | per-server `Authorization: Bearer` token             | The only procedures in the oRPC router: `agent.getConfigV3`, `agent.heartbeat`, `agent.reportTraffic`.                                 |
-| Agent WebSocket               | `app/src/routes/api/agent/ws.ts`                                       | per-server `Authorization: Bearer` token             | One outbound `/api/agent/ws` connection per server; the token is checked before the upgrade.                                           |
+| Agent WebSocket               | `app/src/routes/api/agent/ws.ts`                                       | per-server static token or OAuth machine token       | One outbound `/api/agent/ws` connection per server; the bearer is checked before the upgrade. Static tokens serve v1/v2; OAuth machine tokens serve v2 only. |
 | Admin PTY WebSocket           | `app/src/routes/api/admin/servers/$id/pty/ws.ts`                        | better-auth admin session + same-origin check        | Human-only browser terminal relayed to one enrolled agent; no server function or MCP tool exposes it.                                  |
 | Admin installer download      | `app/src/routes/api/admin/servers/$id/installation/script/$grantId.ts` | better-auth admin session + same-origin check        | Fixed per-server, grant-bound script attachment; never contains the grant and always returns `private, no-store`.                      |
 | oRPC mounts                   | `app/src/routes/api/$.ts` (OpenAPI), `app/src/routes/api/rpc/$.ts` (RPC) | same as above                                      | `/api/*` serves the OpenAPI document (`/api/spec.json`, consumed by the agent codegen); `/api/rpc/*` is the oRPC RPC protocol.         |
@@ -46,8 +46,9 @@ PR #112 under `server-agent/src/ws/`. Clients that offer the
 `blossom-agent.v2` subprotocol use the v2 session protocol on the same route,
 documented in [Agent WebSocket v2](agent-ws-v2.md). The control plane
 implements v2 sessions; the Rust v2 client is a later change. The control plane authenticates the
-upgrade request with the same hashed per-server bearer token as the oRPC agent
-API.
+  upgrade request with either the same hashed per-server bearer token as the
+  oRPC agent API or, on v2, a Better Auth machine token whose active identity
+  maps to exactly one server.
 
 - **Nitro (`node`, `vercel`)** uses Nitro's `crossws` WebSocket support. The
   route returns a `426` response carrying crossws hooks; the Node and Vercel
