@@ -2,6 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { getLocale } from "@/paraglide/runtime";
 
+vi.hoisted(() => {
+  process.env.DATABASE_URL ??=
+    "postgresql://verify:verify@127.0.0.1:5432/verify";
+  process.env.BETTER_AUTH_URL ??= "http://localhost:3000";
+});
+
 vi.mock("@tanstack/react-start/server-entry", () => ({
   default: {
     fetch: async () => {

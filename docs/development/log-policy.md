@@ -34,6 +34,8 @@ The policy is a v2-only message family:
 
 All three are audited admin POST server functions in `app/src/query/server-log-policy.ts`. They authenticate with `ensureAdmin()`, validate with zod, and never touch `recordConfigChange` or the publish gate.
 
+The server entry imports this module explicitly so a production build registers the functions before the Logs tab exists to import them.
+
 ```ts
 type LogPolicySource = "agent" | "sing-box";
 type LogPolicyLevel =
