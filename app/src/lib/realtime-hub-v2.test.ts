@@ -9,6 +9,10 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import type { Server } from "@/db/proxy-schema";
+import type {
+  AgentSessionCredential,
+  AgentWsV2SessionStart,
+} from "@/query/agent";
 
 import type { AgentWsStore } from "./agent-ws-session";
 import type { AgentWsV2HubStore } from "./agent-ws-store";
@@ -22,6 +26,10 @@ import type {
 const SESSION_ID = "22222222-2222-4222-8222-222222222222";
 const REVISION = `7:sha256:${"a".repeat(64)}`;
 const NEXT = `8:sha256:${"b".repeat(64)}`;
+const CREDENTIAL: AgentSessionCredential = {
+  kind: "static",
+  tokenHash: "hash-1",
+};
 
 const server = {
   id: "srv-1",
@@ -79,12 +87,16 @@ function fakeV2Store() {
     startSession: vi.fn(
       async (
         _serverId: string,
-        _expectedTokenHash: string,
-      ): Promise<{ sessionId: string; connectedAt: Date } | null> => ({
+        credential: AgentWsV2SessionStart["credential"],
+      ): Promise<AgentWsV2SessionStart | null> => ({
         sessionId: SESSION_ID,
         connectedAt: new Date("2026-11-19T00:00:00.000Z"),
+        pending: false,
+        expiresAt: null,
+        credential,
       }),
     ),
+    promoteSession: vi.fn(async () => server),
     loadCurrentServer: vi.fn(async () => null),
     recordHello: vi.fn(
       async () =>
@@ -101,6 +113,7 @@ function fakeV2Store() {
     recordConfigAck: vi.fn(async () => "applied" as const),
     cacheDesiredRevision: vi.fn(async () => undefined),
     applyCertificateDeployments: vi.fn(async () => undefined),
+    revalidateSession: vi.fn(async () => "ok" as const),
     applyTraffic: vi.fn(async () => ({
       status: "applied" as const,
       accepted: 0,
@@ -158,6 +171,7 @@ async function acceptV2(hub: NitroRealtimeHub): Promise<Hooks> {
       headers: { upgrade: "websocket" },
     }),
     server,
+    CREDENTIAL,
   );
   return (response as Response & { crossws: Hooks }).crossws;
 }
@@ -200,7 +214,7 @@ describe("NitroRealtimeHub v2 sessions", () => {
     const peer = makePeer("p1");
 
     await hooks.open(peer);
-    expect(v2Store.startSession).toHaveBeenCalledWith("srv-1", "hash-1");
+    expect(v2Store.startSession).toHaveBeenCalledWith("srv-1", CREDENTIAL);
     expect(peer.sent).toEqual([]);
 
     await hooks.message(

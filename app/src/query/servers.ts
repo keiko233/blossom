@@ -3,7 +3,7 @@ import { count, desc, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
-import { db } from "@/db";
+import { db, getDatabaseDriver } from "@/db";
 import { node, type Server, server } from "@/db/proxy-schema";
 import { fromInput, fromResult } from "@/lib/admin-audit";
 import { adminAudit } from "@/lib/admin-audit-middleware";
@@ -13,6 +13,7 @@ import {
 } from "@/lib/agent-notifications";
 import { generateAgentToken } from "@/lib/agent-token";
 import { ensureAdmin } from "@/lib/ensure-admin";
+import { supportsInteractiveTransactions } from "@/lib/env-schema";
 import {
   createServerSchema,
   serverIdSchema,
@@ -23,6 +24,7 @@ import {
   countPendingConfigChangesByServer,
   recordConfigChange,
 } from "@/query/config-change";
+import { deleteServerRecord } from "@/query/server-deletion";
 
 /** TanStack Query key for the admin server list. */
 export const SERVERS_QUERY_KEY = ["admin", "servers"] as const;
@@ -200,20 +202,9 @@ export const deleteServer = createServerFn({ method: "POST" })
   .validator(serverIdSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
-
-    const [countRow] = await db
-      .select({ count: count() })
-      .from(node)
-      .where(eq(node.serverId, data.id));
-    if ((countRow?.count ?? 0) > 0) {
-      throw new Error(
-        "Server still has nodes; move or delete them before removing it.",
-      );
-    }
-    const [row] = await db
-      .delete(server)
-      .where(eq(server.id, data.id))
-      .returning();
+    const row = await deleteServerRecord(data.id, {
+      interactive: supportsInteractiveTransactions(getDatabaseDriver()),
+    });
     if (!row) {
       throw new Error("Not found");
     }

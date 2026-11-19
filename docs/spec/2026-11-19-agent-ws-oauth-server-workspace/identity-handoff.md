@@ -86,27 +86,46 @@ throws `AgentAuthError` with one of these codes:
 The server is always taken from the identity mapping, never from the token. Each
 call reads the database, so a revoked identity fails even for a still-unexpired token.
 
-## Follow-up work (not in this PR)
+## WebSocket identity (Established in Phase 2C)
 
-1. **WebSocket handshake and session (phase 2, session-hardening PR).** Call
-   `verifyAgentAccessToken` with `purpose: "handshake"`. Then promote the first
-   identity with one conditional statement:
-   `UPDATE agent_identity SET status = 'active', activated_at = now() WHERE id = $1 AND status = 'pending' AND NOT EXISTS (SELECT 1 FROM agent_identity a WHERE a.server_id = agent_identity.server_id AND a.status = 'active')`.
-   Session checks run with `purpose: "session"` and re-verify at least every 30 s. Send
-   revocation through the hub. Not implemented here: this PR touches no WebSocket code.
-2. **Rotation promotion.** A `replace` grant creates a generation-n+1 pending
-   identity while the old one stays active. The partial unique index allows only one
-   `active` per server, so the switch cannot be one statement on both drivers. It needs
-   a designed ordering with recovery (demote the old identity to `superseded` only after
-   the new one proves the handshake, and make the promotion idempotent). Not implemented.
-3. **Installer and UI** consume the admin functions above. The installer must treat the
+1. **Upgrade and pending proof.** `GET /api/agent/ws` accepts a static token on
+   v1/v2 and an OAuth machine token on v2 only. OAuth calls
+   `verifyAgentAccessToken` with `purpose: "handshake"` and the exact issuer,
+   audience, and scope. A pending identity gets a proof-only session that owns
+   no fence; its `hello` promotes it with one conditional statement and then
+   takes the session fence. The static token path is unchanged.
+2. **Rotation.** A `replace` grant creates generation n+1 as `pending`. The
+   pending socket proves itself with `hello`; then the old active identity is
+   marked `superseded` and the new one is promoted. The ordering is idempotent
+   and crash-recoverable on both database drivers; a crash between demote and
+   promote is completed by the next handshake. The old session's next read or
+   write matches nothing.
+3. **Lease, expiry and revocation.** A v2 session carries the active identity
+   generation and machine-token expiry in the server fence. Every durable write
+   and sensitive read checks that generation, the client's disabled flag, the
+   resource link, and `exp`. Node re-checks every 30 seconds; the Cloudflare
+   Durable Object schedules an alarm at the same bound or the token deadline.
+   Revocation clears the fence and closes an idle socket at its next lease
+   check.
+4. **Certificate deployments.** V2 certificate-deployment reports are fenced by
+   the session; a replaced, revoked, or expired session cannot write binding
+   state. V1 keeps its historical unfenced behavior.
+5. **Server deletion.** Deleting a server now revokes every identity, disables
+   the clients, removes their links, revokes their tokens, deletes the identity
+   rows and clients, and then deletes the server. Revoked identities no longer
+   block the `restrict` foreign key, and the admin audit trail is preserved.
+
+## Remaining follow-up work
+
+1. **Installer and UI** consume the admin functions above. The installer must treat the
    `egr_` secret as a one-time value (no argv, no URL, no log).
-4. **Rust credential provider** consumes the redeem response. The redeem route is not in
-   `server-agent/openapi/spec.json`, so the Rust side hand-writes its client or the
-   contract is added to the OpenAPI surface in that PR (regenerate per
+2. **Rust credential provider** consumes the redeem response. The exact
+   credential storage, token, WebSocket, pending-proof, rotation, expiry and
+   error contract is in [Rust agent OAuth and WebSocket v2
+   handoff](identity-rust-handoff.md). The redeem route is not in
+   `server-agent/openapi/spec.json`; the Rust side hand-writes that client
+   unless the contract is added to the OpenAPI surface (regenerate per
    [Generated files](../../development/generated-files.md)).
-5. **Server deletion** is now restricted while an identity exists (`agent_identity.server_id`
-   is `restrict`). Revoke identities before deleting a server.
 
 ## Failure cases covered by tests
 

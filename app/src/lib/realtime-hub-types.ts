@@ -7,6 +7,7 @@ import type {
 } from "@blossom/contracts/agent-ws";
 
 import type { Server } from "@/db/proxy-schema";
+import type { AgentSessionCredential } from "@/query/agent";
 
 import type { TelemetryKind, TelemetryResult } from "./agent-telemetry";
 
@@ -24,7 +25,11 @@ export interface RealtimeHub {
    * Completes an upgrade that negotiated the v2 subprotocol. The session is
    * started and welcomed in-band, so no welcome is computed at upgrade time.
    */
-  acceptAgentV2(request: Request, server: Server): Promise<Response>;
+  acceptAgentV2(
+    request: Request,
+    server: Server,
+    credential: AgentSessionCredential,
+  ): Promise<Response>;
   requestTelemetry(
     serverId: string,
     kind: TelemetryKind,
@@ -76,3 +81,12 @@ export const AGENT_WS_INTERNAL_CONNECTED_AT = "x-blossom-agent-connected-at";
 export const AGENT_WS_INTERNAL_WELCOME = "x-blossom-agent-welcome";
 export const AGENT_WS_INTERNAL_PROTOCOL = "x-blossom-agent-protocol";
 export const AGENT_WS_INTERNAL_SESSION_ID = "x-blossom-agent-session-id";
+export const AGENT_WS_INTERNAL_CREDENTIAL_KIND =
+  "x-blossom-agent-credential-kind";
+export const AGENT_WS_INTERNAL_IDENTITY_ID = "x-blossom-agent-identity-id";
+export const AGENT_WS_INTERNAL_IDENTITY_GENERATION =
+  "x-blossom-agent-identity-generation";
+export const AGENT_WS_INTERNAL_SESSION_EXPIRES_AT =
+  "x-blossom-agent-session-expires-at";
+export const AGENT_WS_INTERNAL_SESSION_PENDING =
+  "x-blossom-agent-session-pending";

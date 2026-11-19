@@ -476,7 +476,7 @@ describe.skipIf(!pgUrl).each(drivers)(
     it("a credential rotation ends the current session in the same statement", async () => {
       const session = await startAgentV2WsSession(
         "srv1",
-        "srv1-hash",
+        { kind: "static", tokenHash: "srv1-hash" },
         database,
       );
       expect(session).not.toBeNull();
@@ -527,11 +527,19 @@ describe.skipIf(!pgUrl).each(drivers)(
       );
 
       expect(
-        await startAgentV2WsSession("srv1", "srv1-hash", database),
+        await startAgentV2WsSession(
+          "srv1",
+          { kind: "static", tokenHash: "srv1-hash" },
+          database,
+        ),
       ).toBeNull();
       expect((await row("srv1")).ws_session_id).toBeNull();
       expect(
-        await startAgentV2WsSession("srv1", "srv1-rotated-hash", database),
+        await startAgentV2WsSession(
+          "srv1",
+          { kind: "static", tokenHash: "srv1-rotated-hash" },
+          database,
+        ),
       ).not.toBeNull();
     });
   },
