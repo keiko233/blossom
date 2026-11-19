@@ -3,8 +3,8 @@ import { count, desc, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
-import { db } from "@/db";
-import { node, type Server, server } from "@/db/proxy-schema";
+import { db, getDatabaseDriver } from "@/db";
+import { node, server } from "@/db/proxy-schema";
 import { fromInput, fromResult } from "@/lib/admin-audit";
 import { adminAudit } from "@/lib/admin-audit-middleware";
 import {
@@ -13,28 +13,28 @@ import {
 } from "@/lib/agent-notifications";
 import { generateAgentToken } from "@/lib/agent-token";
 import { ensureAdmin } from "@/lib/ensure-admin";
+import { supportsInteractiveTransactions } from "@/lib/env-schema";
 import {
   createServerSchema,
   serverIdSchema,
   updateServerSchema,
 } from "@/orpc/proxy/schema";
-import { rotateAgentCredential } from "@/query/agent";
+import {
+  disableAgentBackupCredential,
+  enableAgentBackupCredential,
+  rotateAgentCredential,
+} from "@/query/agent";
 import {
   countPendingConfigChangesByServer,
   recordConfigChange,
 } from "@/query/config-change";
+import { deleteServerRecord } from "@/query/server-deletion";
+import { type ServerDTO, toServerDTO } from "@/query/server-dto";
 
 /** TanStack Query key for the admin server list. */
 export const SERVERS_QUERY_KEY = ["admin", "servers"] as const;
 
-/**
- * Server row as served to the admin UI. `agentTokenHash` is deliberately
- * omitted: only the non-secret `prefix` is exposed for display. The plaintext
- * token is returned exactly once on create/reset (see `createServer` /
- * `regenerateServerToken`). Certificate bindings are internal deployment state
- * derived from node use and never carried on the server DTO.
- */
-export type ServerDTO = Omit<Server, "agentTokenHash">;
+export type { ServerDTO } from "@/query/server-dto";
 
 /** Server summary joined with the live child-node count for the list UI. */
 export interface ServerListItem extends ServerDTO {
@@ -46,11 +46,6 @@ export interface ServerListItem extends ServerDTO {
    * is offline — the subscription gate holds back those changes indefinitely.
    */
   pendingConfigChanges: number;
-}
-
-function toDTO(row: Server): ServerDTO {
-  const { agentTokenHash: _agentTokenHash, ...rest } = row;
-  return rest;
 }
 
 export const listServers = createServerFn({ method: "GET" }).handler(
@@ -71,7 +66,7 @@ export const listServers = createServerFn({ method: "GET" }).handler(
       nodeCounts.map((row) => [row.serverId, row.count]),
     );
     const result: ServerListItem[] = servers.map((row) => ({
-      ...toDTO(row),
+      ...toServerDTO(row),
       nodeCount: countByServer.get(row.id) ?? 0,
       pendingConfigChanges: pendingCounts.get(row.id) ?? 0,
     }));
@@ -87,7 +82,7 @@ export const getServer = createServerFn({ method: "GET" })
     if (!row) {
       throw new Error("Not found");
     }
-    return toDTO(row);
+    return toServerDTO(row);
   });
 
 export const createServer = createServerFn({ method: "POST" })
@@ -100,20 +95,21 @@ export const createServer = createServerFn({ method: "POST" })
   .validator(createServerSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
-    const credential = generateAgentToken();
+    const { enableBackupToken, ...serverData } = data;
+    const credential = enableBackupToken ? generateAgentToken() : null;
 
     const [row] = await db
       .insert(server)
       .values({
         id: randomUUID(),
-        ...data,
-        agentTokenHash: credential.hash,
-        agentTokenPrefix: credential.prefix,
+        ...serverData,
+        agentTokenHash: credential?.hash ?? null,
+        agentTokenPrefix: credential?.prefix ?? null,
       })
       .returning();
 
     // Plaintext token is returned once here and never persisted.
-    return { server: toDTO(row!), token: credential.token };
+    return { server: toServerDTO(row!), token: credential?.token ?? null };
   });
 
 export const updateServer = createServerFn({ method: "POST" })
@@ -182,7 +178,7 @@ export const updateServer = createServerFn({ method: "POST" })
         force: true,
       });
     }
-    return toDTO(row);
+    return toServerDTO(row);
   });
 
 /**
@@ -200,20 +196,9 @@ export const deleteServer = createServerFn({ method: "POST" })
   .validator(serverIdSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
-
-    const [countRow] = await db
-      .select({ count: count() })
-      .from(node)
-      .where(eq(node.serverId, data.id));
-    if ((countRow?.count ?? 0) > 0) {
-      throw new Error(
-        "Server still has nodes; move or delete them before removing it.",
-      );
-    }
-    const [row] = await db
-      .delete(server)
-      .where(eq(server.id, data.id))
-      .returning();
+    const row = await deleteServerRecord(data.id, {
+      interactive: supportsInteractiveTransactions(getDatabaseDriver()),
+    });
     if (!row) {
       throw new Error("Not found");
     }
@@ -230,16 +215,76 @@ export const regenerateServerToken = createServerFn({ method: "POST" })
   .validator(serverIdSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
+    return resetBackupToken(data.id);
+  });
+
+/** Backward-compatible alias for the backup-token reset operation. */
+async function resetBackupToken(id: string) {
+  const credential = generateAgentToken();
+  // The rotation also ends a current static v2 session in the same statement,
+  // so the old credential's session cannot keep writing. OAuth is untouched.
+  const row = await rotateAgentCredential(id, credential);
+  if (!row) {
+    throw new Error("Not found");
+  }
+  return { id: row.id, token: credential.token };
+}
+
+export const resetServerBackupToken = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("server.backup_token_reset", {
+      targetType: "server",
+      targetId: fromInput("id"),
+    }),
+  ])
+  .validator(serverIdSchema)
+  .handler(async ({ data }) => {
+    await ensureAdmin();
+    return resetBackupToken(data.id);
+  });
+
+export const enableServerBackupToken = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("server.backup_token_enable", {
+      targetType: "server",
+      targetId: fromInput("id"),
+    }),
+  ])
+  .validator(serverIdSchema)
+  .handler(async ({ data }) => {
+    await ensureAdmin();
     const credential = generateAgentToken();
+    const row = await enableAgentBackupCredential(data.id, credential);
+    if (!row) {
+      const [existing] = await db
+        .select({ id: server.id })
+        .from(server)
+        .where(eq(server.id, data.id));
+      if (!existing) {
+        throw new Error("Not found");
+      }
+      throw new Error(
+        "A static backup token is already enabled; reset it instead.",
+      );
+    }
+    return { id: row.id, token: credential.token };
+  });
 
-    // The rotation also ends the server's current v2 session, in the same
-    // statement, so the old credential's session cannot keep writing.
-    const row = await rotateAgentCredential(data.id, credential);
-
+export const disableServerBackupToken = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("server.backup_token_disable", {
+      targetType: "server",
+      targetId: fromInput("id"),
+    }),
+  ])
+  .validator(serverIdSchema)
+  .handler(async ({ data }) => {
+    await ensureAdmin();
+    const row = await disableAgentBackupCredential(data.id);
     if (!row) {
       throw new Error("Not found");
     }
-    return { id: row.id, token: credential.token };
+    return { id: row.id };
   });
 
 export const checkServerUpdate = createServerFn({ method: "POST" })

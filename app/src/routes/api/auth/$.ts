@@ -1,12 +1,28 @@
 import { createFileRoute } from "@tanstack/react-router";
 
+import { db } from "@/db";
 import { getAuth } from "@/lib/auth";
+import { getServerEnv } from "@/lib/env";
+import { getOAuthResourceIdentifiers } from "@/lib/oauth-provider-config";
+import { ensureMcpResourceLinks } from "@/lib/oauth-resource-links";
+
+// Legacy MCP clients must be linked to the MCP resource before the provider
+// can serve them under per-client resource enforcement. Runs once per process.
+const ensureOAuthReady = () =>
+  ensureMcpResourceLinks(
+    db,
+    getOAuthResourceIdentifiers(getServerEnv().BETTER_AUTH_URL),
+  );
 
 export const Route = createFileRoute("/api/auth/$")({
   server: {
     handlers: {
-      GET: ({ request }) => getAuth().handler(request),
+      GET: async ({ request }) => {
+        await ensureOAuthReady();
+        return getAuth().handler(request);
+      },
       POST: async ({ request }) => {
+        await ensureOAuthReady();
         const url = new URL(request.url);
 
         if (url.pathname === "/api/auth/oauth2/consent") {

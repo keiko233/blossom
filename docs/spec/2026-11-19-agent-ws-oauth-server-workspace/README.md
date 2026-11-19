@@ -28,5 +28,8 @@ This proposal builds on the previous WebSocket, telemetry, PTY, and ACME work. I
 2. [OAuth machine identity and installation](identity-installation.md)
 3. [Server workspace, telemetry, terminal, and logs](server-workspace.md)
 4. [Implementation, migration, and acceptance](rollout.md)
+5. [OAuth identity integration handoff](identity-handoff.md): the exact claims, endpoints, failure codes, and follow-up work of the control-plane identity slice
+6. [Rust agent OAuth and WebSocket v2 handoff](identity-rust-handoff.md): the credential storage, token, pending-proof, rotation, expiry and error contract the Rust agent consumes
+7. [Workspace Connection UI handoff](connection-ui-handoff.md): the backup-token API, DTO state, and compatibility rules for the parallel Connection tab
 
 Prioritize connection and configuration diagnostics, credential rotation and revocation, audit events, and installation progress and recovery. Evaluate alert notifications and centralized log archival later.

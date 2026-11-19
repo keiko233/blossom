@@ -64,7 +64,7 @@ export interface UseServerFormControllerOptions {
    * Called after a successful save. `token` is the one-time plaintext agent
    * token, present only on create; the page reveals it before navigating back.
    */
-  onSuccess: (result: { token?: string }) => void | Promise<void>;
+  onSuccess: (result: { token?: string | null }) => void | Promise<void>;
 }
 
 /**

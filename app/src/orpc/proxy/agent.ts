@@ -1,9 +1,9 @@
 import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 
-import { hashAgentToken, parseBearerToken } from "@/lib/agent-token";
+import { authenticateStaticAgentToken } from "@/lib/agent-static-auth";
+import { parseBearerToken } from "@/lib/agent-token";
 import {
-  findAgentServerByTokenHash,
   TrafficReportConflictError,
   updateAgentHeartbeat,
 } from "@/query/agent";
@@ -33,9 +33,10 @@ function readHeader(
 }
 
 /**
- * Authenticates an agent by its server-level token (Authorization: Bearer
- * <token>). The token is hashed and matched against `server.agentTokenHash`,
- * resolving to exactly one server — the unit this request can read or update.
+ * Authenticates an agent by its optional static backup token
+ * (Authorization: Bearer <token>). The token is hashed and matched against
+ * `server.agentTokenHash`, resolving to exactly one server — the unit this
+ * request can read or update. OAuth machine tokens are never accepted here.
  * This is the sole public surface: no login session, no cross-server access,
  * no admin operations reachable here. Tokens used to live on individual nodes;
  * they were migrated onto the parent server and the shared `address`/heartbeat
@@ -47,12 +48,14 @@ const agentProcedure = base.use(async ({ context, next }) => {
     throw new ORPCError("UNAUTHORIZED");
   }
 
-  const row = await findAgentServerByTokenHash(hashAgentToken(token));
-  if (!row) {
+  const authentication = await authenticateStaticAgentToken(token, {
+    allowDisabled: true,
+  });
+  if (!authentication) {
     throw new ORPCError("UNAUTHORIZED");
   }
 
-  return next({ context: { ...context, server: row } });
+  return next({ context: { ...context, server: authentication.server } });
 });
 
 /**
