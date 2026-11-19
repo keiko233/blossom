@@ -33,6 +33,7 @@ import {
   handlePtyBrowserClose,
   handlePtyBrowserMessage,
   handlePtyConnect,
+  handleAgentV2PtyFrame,
   isPtySessionAuthorized,
   readPtyAttachment,
   revalidatePtySockets,
@@ -52,12 +53,16 @@ interface AgentSessionAttachmentBase {
 interface V1AgentSessionAttachment extends AgentSessionAttachmentBase {
   protocol: "v1";
   welcome: AgentWsWelcomePayload;
+  /** The fence recorded by the v1 handshake; older attachments omit it. */
+  sessionId?: string;
 }
 
 interface V2AgentSessionAttachment extends AgentSessionAttachmentBase {
   protocol: "v2";
   sessionId: string;
   welcomed: boolean;
+  /** A newer v2 connection for the same server exists. */
+  superseded?: boolean;
 }
 
 type AgentSessionAttachment =
@@ -91,6 +96,7 @@ function readAttachment(ws: WebSocket): AgentSessionAttachment | null {
       connectedAt: candidate.connectedAt,
       sessionId: candidate.sessionId,
       welcomed: candidate.welcomed === true,
+      superseded: candidate.superseded === true,
     };
   }
   const welcome = agentWsWelcomePayloadSchema.safeParse(candidate.welcome);
@@ -102,6 +108,9 @@ function readAttachment(ws: WebSocket): AgentSessionAttachment | null {
     serverId: candidate.serverId,
     connectedAt: candidate.connectedAt,
     welcome: welcome.data,
+    ...(typeof candidate.sessionId === "string"
+      ? { sessionId: candidate.sessionId }
+      : {}),
   };
 }
 
@@ -218,7 +227,10 @@ export class AgentSessionDO extends DurableObject {
       if (attachment?.protocol !== target) {
         continue;
       }
-      if (attachment.protocol === "v2" && !attachment.welcomed) {
+      if (
+        attachment.protocol === "v2" &&
+        (!attachment.welcomed || attachment.superseded)
+      ) {
         continue;
       }
       try {
@@ -244,6 +256,7 @@ export class AgentSessionDO extends DurableObject {
       return this.connectV2(request, serverId, connectedAt);
     }
     const welcomeHeader = request.headers.get(AGENT_WS_INTERNAL_WELCOME);
+    const sessionId = request.headers.get(AGENT_WS_INTERNAL_SESSION_ID);
     if (!serverId || !connectedAt || !welcomeHeader) {
       return new Response("Bad Request", { status: 400 });
     }
@@ -266,6 +279,7 @@ export class AgentSessionDO extends DurableObject {
       serverId,
       connectedAt,
       welcome,
+      ...(sessionId ? { sessionId } : {}),
     } satisfies V1AgentSessionAttachment);
 
     return new Response(null, {
@@ -282,6 +296,19 @@ export class AgentSessionDO extends DurableObject {
     const sessionId = request.headers.get(AGENT_WS_INTERNAL_SESSION_ID);
     if (!serverId || !connectedAt || !sessionId) {
       return new Response("Bad Request", { status: 400 });
+    }
+
+    // A newer handshake makes older v2 sockets inert here: their messages and
+    // pushes are ignored until the database fence stops them. Terminal relays
+    // are tied to the exact session, so they never blend across the two.
+    for (const existing of this.ctx.getWebSockets(serverId)) {
+      const attachment = readAttachment(existing);
+      if (attachment?.protocol === "v2" && !attachment.superseded) {
+        existing.serializeAttachment({
+          ...attachment,
+          superseded: true,
+        } satisfies V2AgentSessionAttachment);
+      }
     }
 
     const pair = new WebSocketPair();
@@ -311,6 +338,7 @@ export class AgentSessionDO extends DurableObject {
       serverId: attachment.serverId,
       welcome: attachment.welcome,
       connectedAt: new Date(attachment.connectedAt),
+      ...(attachment.sessionId ? { sessionId: attachment.sessionId } : {}),
       store,
     });
   }
@@ -390,7 +418,17 @@ export class AgentSessionDO extends DurableObject {
     await closePtySocketsForAgent(
       this.ctx,
       attachment.serverId,
-      attachment.connectedAt,
+      attachment.protocol === "v2"
+        ? {
+            protocol: "v2",
+            connectedAt: attachment.connectedAt,
+            agentSessionId: attachment.sessionId,
+          }
+        : {
+            protocol: "v1",
+            connectedAt: attachment.connectedAt,
+            agentSessionId: null,
+          },
       this.recordPtyClose,
     );
     if (attachment.protocol === "v2") {
@@ -419,6 +457,9 @@ export class AgentSessionDO extends DurableObject {
     attachment: V2AgentSessionAttachment,
     raw: string,
   ): Promise<void> {
+    if (attachment.superseded) {
+      return;
+    }
     await this.withDatabase(async (database) => {
       const session = openAgentWsV2Session({
         serverId: attachment.serverId,
@@ -426,6 +467,14 @@ export class AgentSessionDO extends DurableObject {
         peer: ws,
         store: createAgentWsV2Store(database),
         welcomed: attachment.welcomed,
+        onPtyFrame: (frame) =>
+          handleAgentV2PtyFrame(
+            this.ctx,
+            attachment.serverId,
+            attachment.sessionId,
+            frame,
+            this.recordPtyClose,
+          ),
       });
       await session.handleText(raw);
       if (session.welcomed !== attachment.welcomed) {
@@ -454,7 +503,17 @@ export class AgentSessionDO extends DurableObject {
       await closePtySocketsForAgent(
         this.ctx,
         attachment.serverId,
-        attachment.connectedAt,
+        attachment.protocol === "v2"
+          ? {
+              protocol: "v2",
+              connectedAt: attachment.connectedAt,
+              agentSessionId: attachment.sessionId,
+            }
+          : {
+              protocol: "v1",
+              connectedAt: attachment.connectedAt,
+              agentSessionId: null,
+            },
         this.recordPtyClose,
         "io_error",
       );

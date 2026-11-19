@@ -24,6 +24,7 @@ import {
   type AgentWsSessionStart,
   cacheAgentDesiredRevision,
   endAgentWsSession,
+  isAgentWsSessionCurrent,
   loadCurrentAgentServer,
   markAgentWsConnected,
   startAgentV2WsSession,
@@ -34,6 +35,7 @@ import {
   recordAgentV2ConfigAck,
   recordAgentV2Hello,
   recordAgentV2Status,
+  recordAgentV2UpdateStatus,
   TrafficReportConflictError,
 } from "@/query/agent";
 import { applyAgentCertificateDeployments } from "@/query/certificate-agent";
@@ -44,8 +46,8 @@ import type { AgentWsV2Store } from "./agent-ws-v2-session";
 export function createAgentWsStore(database: Database = db): AgentWsStore {
   return {
     markConnected: (serverId) => markAgentWsConnected(serverId, database),
-    markDisconnected: (serverId, connectedAt) =>
-      markAgentWsDisconnected(serverId, connectedAt, database),
+    markDisconnected: (serverId, connectedAt, sessionId) =>
+      markAgentWsDisconnected(serverId, connectedAt, sessionId, database),
     recordHello: (serverId, hello: AgentWsHelloPayload) =>
       recordAgentHello(serverId, hello, database),
     recordConfigAck: (serverId, ack: AgentWsConfigAckPayload) =>
@@ -94,12 +96,35 @@ export function createAgentWsV2Store(
       recordAgentV2Hello(serverId, sessionId, hello, database),
     recordStatus: (serverId, sessionId, status) =>
       recordAgentV2Status(serverId, sessionId, status, database),
+    recordUpdateStatus: (serverId, sessionId, updates) =>
+      recordAgentV2UpdateStatus(serverId, sessionId, updates, database),
     recordConfigAck: (serverId, sessionId, ack) =>
       recordAgentV2ConfigAck(serverId, sessionId, ack, database),
     cacheDesiredRevision: (serverId, sessionId, cache) =>
       cacheAgentDesiredRevision(serverId, sessionId, cache, database),
     applyCertificateDeployments: (serverId, deployments) =>
       applyAgentCertificateDeployments(serverId, deployments, database),
+    handleAcmeDnsPresent: async (serverId, sessionId, payload) => {
+      if (!(await isAgentWsSessionCurrent(serverId, sessionId, database))) {
+        return false;
+      }
+      await handleAcmeDnsPresent(serverId, payload, database);
+      return true;
+    },
+    handleAcmeDnsCleanup: async (serverId, sessionId, payload) => {
+      if (!(await isAgentWsSessionCurrent(serverId, sessionId, database))) {
+        return false;
+      }
+      await handleAcmeDnsCleanup(serverId, payload, database);
+      return true;
+    },
+    handleAcmeResult: async (serverId, sessionId, payload) => {
+      if (!(await isAgentWsSessionCurrent(serverId, sessionId, database))) {
+        return false;
+      }
+      await handleAcmeResult(serverId, payload, database);
+      return true;
+    },
     applyTraffic: async (serverId, sessionId, report) => {
       try {
         const result = await applyAgentTrafficReport(serverId, report, {

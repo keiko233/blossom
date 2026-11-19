@@ -442,6 +442,205 @@
           "digest": "af9157b466198981713afa60dd2b114ba34fbaf78b5d95f5291bc02ababe6fcc"
         }
       }
+    },
+    {
+      "name": "control update.trigger for the agent binary",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "update.trigger",
+        "ts": "2026-11-19T00:02:00.000Z",
+        "payload": {
+          "target": "agent",
+          "desiredAgentVersion": "0.4.1",
+          "desiredSingBoxVersion": null,
+          "force": true
+        }
+      }
+    },
+    {
+      "name": "agent update.status for both binaries",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "update.status",
+        "ts": "2026-11-19T00:02:01.000Z",
+        "payload": {
+          "agent": {
+            "targetVersion": "0.4.1",
+            "state": "applying",
+            "message": "installing"
+          },
+          "singBox": {
+            "state": "up_to_date"
+          }
+        }
+      }
+    },
+    {
+      "name": "control acme.issue for a dns-01 order",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "acme.issue",
+        "ts": "2026-11-19T00:03:00.000Z",
+        "payload": {
+          "jobId": "job-1",
+          "certificateId": "cert-1",
+          "generation": 2,
+          "domains": ["example.com"],
+          "acmeProvider": "letsencrypt",
+          "challengeType": "dns-01",
+          "acmeStaging": true
+        }
+      }
+    },
+    {
+      "name": "agent acme.dns_present for the broker",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "acme.dns_present",
+        "ts": "2026-11-19T00:03:01.000Z",
+        "payload": {
+          "jobId": "job-1",
+          "fqdn": "_acme-challenge.example.com",
+          "txtValue": "challenge-digest"
+        }
+      }
+    },
+    {
+      "name": "control acme.dns_ack for the issuer agent",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "acme.dns_ack",
+        "ts": "2026-11-19T00:03:02.000Z",
+        "payload": {
+          "jobId": "job-1",
+          "fqdn": "_acme-challenge.example.com",
+          "txtValue": "challenge-digest",
+          "accepted": true
+        }
+      }
+    },
+    {
+      "name": "agent acme.result with issued material",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "acme.result",
+        "ts": "2026-11-19T00:03:03.000Z",
+        "payload": {
+          "jobId": "job-1",
+          "certificatePem": "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+          "privateKeyPem": "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----"
+        }
+      }
+    },
+    {
+      "name": "control pty.open for a terminal",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "pty.open",
+        "ts": "2026-11-19T00:04:00.000Z",
+        "payload": {
+          "sessionId": "pty-1",
+          "cols": 80,
+          "rows": 24
+        }
+      }
+    },
+    {
+      "name": "agent pty.started after the local shell starts",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "pty.started",
+        "ts": "2026-11-19T00:04:01.000Z",
+        "payload": {
+          "sessionId": "pty-1",
+          "shell": "/bin/bash",
+          "user": "blossom"
+        }
+      }
+    },
+    {
+      "name": "control pty.data into the shell",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "pty.data",
+        "ts": "2026-11-19T00:04:02.000Z",
+        "payload": {
+          "sessionId": "pty-1",
+          "data": "ls\n"
+        }
+      }
+    },
+    {
+      "name": "agent pty.data out of the shell",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "pty.data",
+        "ts": "2026-11-19T00:04:03.000Z",
+        "payload": {
+          "sessionId": "pty-1",
+          "data": "file.txt\r\n"
+        }
+      }
+    },
+    {
+      "name": "agent pty.exit after the shell ends",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "pty.exit",
+        "ts": "2026-11-19T00:04:04.000Z",
+        "payload": {
+          "sessionId": "pty-1",
+          "reason": "shell_exit",
+          "code": 0
+        }
+      }
+    },
+    {
+      "name": "reject: update.trigger from the agent",
+      "sender": "agent",
+      "expect": "invalid-direction",
+      "frame": {
+        "v": 2,
+        "type": "update.trigger",
+        "ts": "2026-11-19T00:05:00.000Z",
+        "payload": {
+          "target": "agent",
+          "force": false
+        }
+      }
+    },
+    {
+      "name": "reject: acme.issue from the agent",
+      "sender": "agent",
+      "expect": "invalid-direction",
+      "frame": {
+        "v": 2,
+        "type": "acme.issue",
+        "ts": "2026-11-19T00:05:01.000Z",
+        "payload": {}
+      }
     }
   ]
 }

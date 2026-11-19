@@ -21,7 +21,7 @@ shell commands.
 | File               | Responsibility                                                                                                                                                  |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/main.rs`      | CLI (`clap`, flags mirrored by `AGENT_*` env vars), startup from the last-known-good config, the config-poll/heartbeat loops, WebSocket event wiring, shutdown.  |
-| `src/agent_v2.rs`  | Protocol v2 core loop (`--ws-protocol v2`): no HTTP agent API, snapshot apply/rollback, status publication, update policy, and v2 traffic reporting.            |
+| `src/agent_v2.rs`  | Protocol v2 core loop (`--ws-protocol v2`): no HTTP agent API, snapshot apply/rollback, status publication, update/ACME/PTY operations, and v2 traffic reporting. |
 | `src/client.rs`    | Wraps the progenitor-generated client; injects the `Authorization: Bearer` token as a sensitive default header.                                                  |
 | `src/config.rs`    | Fetches the v3 desired state, applies certificate bindings to the base sing-box config, writes candidates, tracks active / last-known-good, reports errors.      |
 | `src/ws/codec.rs`  | Frozen v1 JSON frame envelope (`hello`/`welcome`, `ping`/`pong`, `config.*`, `update.*`) and typed message decoding that ignores unknown frames.                  |
@@ -73,7 +73,7 @@ The agent opens one outbound WebSocket to `<AGENT_URL>/agent/ws` (`https` -> `ws
 - Configuration arrives as bounded, ordered, digest-validated snapshots and only the verified body reaches the ordinary compile, preflight, promote, probation, and rollback path. A partial snapshot is discarded on disconnect; a failed identifier (including a refused snapshot) is held briefly so status reconciliation cannot spin on the same request.
 - `hello` reports the applied identifier or `null`. `welcome` and `agent.status.ack` carry the authoritative identifier, so a missed `config.notify` is recovered on the next status exchange. Deadlines, liveness, proactive `reconnectBeforeSeconds`, and jittered backoff (about 1 s to 60 s) are handled in `src/ws/v2/link.rs`; no HTTP fallback is attempted.
 - Traffic uses the same durable outbox as v1. A report stays on disk until `traffic.ack`; a lost acknowledgement or session resends the identical `reportId` and payload, and the control-plane ledger answers `duplicate`.
-- PTY, ACME, telemetry, update messages, and log-policy messages are not served by v2. The v2 `hello` therefore withholds `pty-v1`, `acme-v1`, and `telemetry-v1`, and version targets arrive only as `updatePolicy`. Promoting v2 to the global default remains a separate change.
+- Updates, ACME, and PTY are served over v2. `update.trigger` and `update.status` use the v1 payloads, while `welcome.updatePolicy` and `agent.status.ack.updatePolicy` still replay the version targets. The v2 `hello` advertises `acme-v1`, and `pty-v2` when local PTY sessions are enabled under a non-root account; it never advertises `pty-v1`. Telemetry and log policy remain v1-only. Promoting v2 to the global default remains a separate change.
 
 ### Agent-executed ACME
 

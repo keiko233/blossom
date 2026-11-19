@@ -12,11 +12,11 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use super::{
-    ApplyOutcome, ApplyResult, CorePorts, CoreStatus, HelloIdentity, SessionEnd, SessionTiming,
-    TrafficOutcome, TrafficPorts, TrafficRequest, Wire, channels, run,
+    ApplyOutcome, ApplyResult, Command, CorePorts, CoreStatus, HelloIdentity, SessionEnd,
+    SessionTiming, TrafficOutcome, TrafficPorts, TrafficRequest, Wire, channels, run,
 };
-use crate::ws::codec::{UpdateStatePayload, UpdateStatusPayload};
-use crate::ws::ports::WsError;
+use crate::ws::codec::{AgentWsFrame, UpdateStatePayload, UpdateStatusPayload, frame_type};
+use crate::ws::ports::{WsCommand, WsError};
 use crate::ws::v2::codec::{
     AckStage, ConfigIdentifier, ConfigState, RuntimeState, TrafficEntry, TrafficReport,
     UpdatePolicy,
@@ -769,6 +769,117 @@ async fn a_refused_snapshot_is_held_across_status_exchanges_and_then_retried() {
     harness.peer.send(Ok(status_ack(D8))).unwrap();
     let retry = expect_type(&mut harness, "config.get").await;
     assert_eq!(retry["reason"], "mismatch");
+}
+
+#[tokio::test(start_paused = true)]
+async fn control_plane_operations_are_forwarded_to_the_core() {
+    let mut harness = start(Some(D7));
+    expect_type(&mut harness, "hello").await;
+    harness.peer.send(Ok(welcome(D7, 30, None))).unwrap();
+
+    harness
+        .peer
+        .send(Ok(peer_frame(
+            "update.trigger",
+            json!({"target": "agent", "desiredAgentVersion": "latest", "force": true}),
+        )))
+        .unwrap();
+    let update = harness.core.commands.recv().await.unwrap();
+    assert!(matches!(update, Command::UpdateTrigger(trigger) if trigger.force));
+
+    harness
+        .peer
+        .send(Ok(peer_frame(
+            "acme.issue",
+            json!({
+                "jobId": "job-1",
+                "certificateId": "cert-1",
+                "generation": 2,
+                "domains": ["example.com"],
+                "acmeProvider": "letsencrypt",
+                "challengeType": "dns-01"
+            }),
+        )))
+        .unwrap();
+    let issue = harness.core.commands.recv().await.unwrap();
+    assert!(matches!(issue, Command::AcmeIssue(issue) if issue.job_id == "job-1"));
+
+    harness
+        .peer
+        .send(Ok(peer_frame(
+            "acme.dns_ack",
+            json!({
+                "jobId": "job-1",
+                "fqdn": "_acme-challenge.example.com",
+                "txtValue": "digest",
+                "accepted": true
+            }),
+        )))
+        .unwrap();
+    let ack = harness.core.commands.recv().await.unwrap();
+    assert!(matches!(ack, Command::AcmeDnsAck(ack) if ack.accepted));
+
+    harness
+        .peer
+        .send(Ok(peer_frame(
+            "pty.open",
+            json!({"sessionId": "pty-1", "cols": 80, "rows": 24}),
+        )))
+        .unwrap();
+    let pty = harness.core.commands.recv().await.unwrap();
+    assert!(matches!(
+        pty,
+        Command::Pty(frame) if frame.frame_type == frame_type::PTY_OPEN
+    ));
+}
+
+#[tokio::test(start_paused = true)]
+async fn core_terminal_frames_are_sent_as_v2_frames() {
+    let mut harness = start(Some(D7));
+    expect_type(&mut harness, "hello").await;
+    harness.peer.send(Ok(welcome(D7, 30, None))).unwrap();
+
+    let frame = AgentWsFrame::new(
+        frame_type::PTY_DATA,
+        json!({"sessionId": "pty-1", "data": "hello"}),
+    )
+    .unwrap();
+    harness
+        .core
+        .outbound
+        .enqueue(WsCommand::Send(frame))
+        .unwrap();
+
+    let sent = expect_type(&mut harness, "pty.data").await;
+    assert_eq!(sent["sessionId"], "pty-1");
+    assert_eq!(sent["data"], "hello");
+}
+
+#[tokio::test(start_paused = true)]
+async fn pty_data_is_accepted_in_both_directions_but_other_types_are_not() {
+    let mut harness = start(Some(D7));
+    expect_type(&mut harness, "hello").await;
+    harness.peer.send(Ok(welcome(D7, 30, None))).unwrap();
+
+    harness
+        .peer
+        .send(Ok(peer_frame(
+            "pty.data",
+            json!({"sessionId": "pty-1", "data": "ls"}),
+        )))
+        .unwrap();
+    let command = harness.core.commands.recv().await.unwrap();
+    assert!(matches!(
+        command,
+        Command::Pty(frame) if frame.frame_type == frame_type::PTY_DATA
+    ));
+
+    harness
+        .peer
+        .send(Ok(peer_frame("pty.exit", json!({"sessionId": "pty-1"}))))
+        .unwrap();
+    let error = expect_type(&mut harness, "error").await;
+    assert_eq!(error["code"], "invalid_direction");
 }
 
 fn report(report_id: &str) -> TrafficReport {

@@ -21,8 +21,15 @@ export interface AgentWsPeer {
  * database or a WebSocket adapter.
  */
 export interface AgentWsStore {
-  markConnected(serverId: string): Promise<Date>;
-  markDisconnected(serverId: string, connectedAt: Date): Promise<void>;
+  markConnected(serverId: string): Promise<{
+    connectedAt: Date;
+    sessionId: string;
+  }>;
+  markDisconnected(
+    serverId: string,
+    connectedAt: Date,
+    sessionId?: string,
+  ): Promise<void>;
   recordHello(serverId: string, hello: AgentWsHelloPayload): Promise<void>;
   recordConfigAck(
     serverId: string,
@@ -54,6 +61,7 @@ export interface AgentWsSession {
   serverId: string;
   welcome: AgentWsWelcomePayload;
   connectedAt: Date;
+  sessionId: string | undefined;
   store: AgentWsStore;
   welcomeSent: boolean;
 }
@@ -64,6 +72,8 @@ export interface OpenAgentWsSessionOptions {
   store: AgentWsStore;
   /** Pre-recorded by a transport adapter that must persist before upgrading. */
   connectedAt?: Date;
+  /** The fence recorded with `connectedAt`, when the transport has it. */
+  sessionId?: string;
 }
 
 function logFailure(operation: string, error: unknown): void {
@@ -75,9 +85,12 @@ export async function openAgentWsSession(
   options: OpenAgentWsSessionOptions,
 ): Promise<AgentWsSession> {
   let connectedAt = options.connectedAt;
+  let sessionId = options.sessionId;
   if (!connectedAt) {
     try {
-      connectedAt = await options.store.markConnected(options.serverId);
+      const started = await options.store.markConnected(options.serverId);
+      connectedAt = started.connectedAt;
+      sessionId = started.sessionId;
     } catch (error) {
       logFailure("connect", error);
       connectedAt = new Date();
@@ -87,6 +100,7 @@ export async function openAgentWsSession(
     serverId: options.serverId,
     welcome: options.welcome,
     connectedAt,
+    sessionId,
     store: options.store,
     welcomeSent: false,
   };
@@ -230,7 +244,11 @@ export async function closeAgentWsSession(
   session: AgentWsSession,
 ): Promise<void> {
   try {
-    await session.store.markDisconnected(session.serverId, session.connectedAt);
+    await session.store.markDisconnected(
+      session.serverId,
+      session.connectedAt,
+      session.sessionId,
+    );
   } catch (error) {
     logFailure("disconnect", error);
   }

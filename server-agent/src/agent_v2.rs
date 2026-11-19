@@ -23,38 +23,55 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
+use crate::acme::solver_dns01::DnsAck;
 use crate::config::{AgentPolicy, ConfigError, ConfigManager};
 use crate::process::{ProcessState, SingBoxManager, resolve_binary, singbox_version};
 use crate::traffic::TrafficReporter;
 use crate::update::{AGENT_RESTART_EXIT_CODE, UpdateManager, supports_singbox_version};
 use crate::ws::RandomJitter;
 use crate::ws::adapters::{SensitiveHeader, WsTransportConfig, ws_url};
+use crate::ws::codec::{AgentWsFrame, frame_type};
+use crate::ws::ports::WsCommand;
 use crate::ws::v2::adapter::V2Connector;
 use crate::ws::v2::codec::{
     AckStage, ConfigIdentifier, ConfigState, RuntimeState, StatusError, UpdatePolicy,
 };
 use crate::ws::v2::link::{self, LinkOptions};
 use crate::ws::v2::session::{
-    self, ApplyJob, ApplyOutcome, ApplyResult, CoreStatus, HelloIdentity, SnapshotRefusal,
+    self, ApplyJob, ApplyOutcome, ApplyResult, Command, CoreStatus, HelloIdentity, SnapshotRefusal,
 };
 use crate::ws::v2::traffic::run_reporter;
 use crate::{
     AGENT_BUILD_ID, AGENT_VERSION, AgentStatus, Args, ReportedError, apply_fetched,
-    certificate_deployment, new_update_manager, reconcile_updates, record_config_error,
+    apply_update_trigger, certificate_deployment, handle_pty_event, handle_pty_frame,
+    new_acme_manager, new_pty_manager, new_update_manager, reconcile_updates, record_config_error,
     shutdown_signal, start_last_known_good, update_status_payload_from,
 };
 
-/// What v2 advertises in `hello`. PTY, ACME, and telemetry are left out
-/// because the v2 peer does not serve them, and `ws-v1` is not spoken on v2.
+/// What v2 advertises in `hello`. Telemetry and log policy remain v1-only, and
+/// `ws-v1` is not spoken on this transport.
 const V2_CAPABILITIES: &[&str] = &[
     "config-v3",
     "managed-tls-v3",
     "certificate-deployments-v1",
     "atomic-config-rollback",
     "connection-stream-traffic",
+    "acme-v1",
     "ws-v2",
     "traffic-v2",
 ];
+const V2_PTY_CAPABILITY: &str = "pty-v2";
+
+fn v2_capabilities(pty_enabled: bool) -> Vec<String> {
+    let mut capabilities: Vec<String> = V2_CAPABILITIES
+        .iter()
+        .map(|capability| (*capability).to_string())
+        .collect();
+    if pty_enabled {
+        capabilities.push(V2_PTY_CAPABILITY.to_string());
+    }
+    capabilities
+}
 const WS_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// How often the core re-reads sing-box's process state, so a crash loop is
 /// published without waiting for an apply.
@@ -121,12 +138,27 @@ pub async fn run(args: &Args) -> Result<()> {
         },
     );
     let mut published = Some(initial);
+    let (pty_event_sender, mut pty_events) = tokio::sync::mpsc::channel(64);
+    let (mut pty_manager, pty_enabled) = new_pty_manager(args, pty_event_sender);
+    let capabilities = v2_capabilities(pty_enabled);
+    {
+        let sink = core.outbound.clone();
+        updates.set_status_observer(std::sync::Arc::new(move |agent, singbox| {
+            if let Ok(frame) = AgentWsFrame::new(
+                frame_type::UPDATE_STATUS,
+                update_status_payload_from(agent, singbox),
+            ) {
+                let _ = sink.enqueue(WsCommand::Send(frame));
+            }
+        }));
+    }
+    let acme = new_acme_manager(args, core.outbound.clone());
 
     let cancel = CancellationToken::new();
     let options = LinkOptions::new(HelloIdentity {
         agent_version: AGENT_VERSION.to_string(),
         agent_build_id: AGENT_BUILD_ID.to_string(),
-        capabilities: V2_CAPABILITIES.iter().map(|c| (*c).to_string()).collect(),
+        capabilities,
     });
     let link_cancel = cancel.clone();
     let link_task = tokio::spawn(async move {
@@ -156,6 +188,9 @@ pub async fn run(args: &Args) -> Result<()> {
     let mut runtime_tick = tokio::time::interval(RUNTIME_SAMPLE);
     runtime_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     runtime_tick.tick().await;
+    let mut pty_tick = tokio::time::interval(Duration::from_secs(15));
+    pty_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    pty_tick.tick().await;
 
     loop {
         tokio::select! {
@@ -201,6 +236,83 @@ pub async fn run(args: &Args) -> Result<()> {
                 };
                 record_refusal(&mut status, refusal);
             }
+            command = core.commands.recv() => {
+                let Some(command) = command else {
+                    break;
+                };
+                match command {
+                    Command::UpdateTrigger(trigger) => {
+                        info!(
+                            target = ?trigger.target,
+                            force = trigger.force,
+                            "update push received on v2; reconciling immediately"
+                        );
+                        let exit = apply_update_trigger(
+                            trigger,
+                            &mut updates,
+                            &mut manager,
+                            &bin,
+                            &mut config,
+                            &mut sing_box_version,
+                            &policy,
+                        )
+                        .await;
+                        if exit {
+                            restart_for_update(manager.take()).await;
+                        }
+                    }
+                    Command::AcmeIssue(issue) => {
+                        info!(
+                            job_id = %issue.job_id,
+                            certificate_id = %issue.certificate_id,
+                            generation = issue.generation,
+                            challenge = %issue.challenge_type,
+                            "ACME issuance job received on v2"
+                        );
+                        if let Err(error) = acme.handle_issue(issue).await {
+                            warn!(
+                                phase = error.phase.as_str(),
+                                "ACME job rejected: {}", error.message
+                            );
+                        }
+                    }
+                    Command::AcmeDnsAck(ack) => {
+                        acme.handle_dns_ack(DnsAck {
+                            job_id: ack.job_id,
+                            fqdn: ack.fqdn,
+                            txt_value: ack.txt_value,
+                            accepted: ack.accepted,
+                            error: ack.error,
+                        })
+                        .await;
+                    }
+                    Command::Pty(frame) => {
+                        handle_pty_frame(frame, &mut pty_manager, core.outbound.as_ref());
+                    }
+                }
+            }
+            event = pty_events.recv() => {
+                if let Some(event) = event {
+                    handle_pty_event(event, &mut pty_manager, core.outbound.as_ref());
+                }
+            }
+            _ = pty_tick.tick() => {
+                for exit in pty_manager.reap_expired(std::time::Instant::now()) {
+                    crate::send_pty_exit(core.outbound.as_ref(), exit);
+                }
+            }
+            online = core.online.changed() => {
+                if online.is_err() {
+                    break;
+                }
+                if !*core.online.borrow() {
+                    for exit in pty_manager.close_all(
+                        crate::pty::PtyExitReason::AgentDisconnected,
+                    ) {
+                        crate::send_pty_exit(core.outbound.as_ref(), exit);
+                    }
+                }
+            }
             _ = runtime_tick.tick() => {}
         }
         publish(
@@ -219,6 +331,10 @@ pub async fn run(args: &Args) -> Result<()> {
     cancel.cancel();
     let _ = link_task.await;
     let _ = traffic_task.await;
+    for exit in pty_manager.close_all(crate::pty::PtyExitReason::AgentDisconnected) {
+        crate::send_pty_exit(core.outbound.as_ref(), exit);
+    }
+    acme.shutdown().await;
     if let Some(manager) = manager {
         manager.shutdown().await;
     }
@@ -423,18 +539,21 @@ async fn restart_for_update(manager: Option<SingBoxManager>) -> ! {
 
 #[cfg(test)]
 mod tests {
-    use super::{V2_CAPABILITIES, bounded, config_state_of, stage_of};
+    use super::{V2_CAPABILITIES, bounded, config_state_of, stage_of, v2_capabilities};
     use crate::ws::v2::codec::{AckStage, ConfigState};
 
     #[test]
     fn v2_advertises_only_what_the_v2_peer_serves() {
-        for withheld in ["pty-v1", "acme-v1", "telemetry-v1", "ws-v1"] {
+        for withheld in ["pty-v1", "telemetry-v1", "ws-v1"] {
             assert!(
                 !V2_CAPABILITIES.contains(&withheld),
                 "{withheld} must not be advertised on v2"
             );
         }
         assert!(V2_CAPABILITIES.contains(&"ws-v2"));
+        assert!(V2_CAPABILITIES.contains(&"acme-v1"));
+        assert!(!v2_capabilities(false).contains(&"pty-v2".to_string()));
+        assert!(v2_capabilities(true).contains(&"pty-v2".to_string()));
     }
 
     #[test]

@@ -19,6 +19,7 @@ import {
   encodeAgentWsV2ConfigNotify,
   openAgentWsV2Session,
   type AgentWsV2Peer,
+  type AgentWsV2PtyFrame,
   type AgentWsV2Store,
 } from "./agent-ws-v2-session";
 
@@ -61,6 +62,7 @@ function makeStore(overrides: Partial<AgentWsV2Store> = {}) {
     recordHello: vi.fn(async () => server()),
     recordStatus: vi.fn(async () => server()),
     recordConfigAck: vi.fn(async () => "applied" as const),
+    recordUpdateStatus: vi.fn(async () => true),
     cacheDesiredRevision: vi.fn(async () => undefined),
     applyCertificateDeployments: vi.fn(async () => undefined),
     applyTraffic: vi.fn(async () => ({
@@ -68,6 +70,9 @@ function makeStore(overrides: Partial<AgentWsV2Store> = {}) {
       accepted: 1,
       dropped: 0,
     })),
+    handleAcmeDnsPresent: vi.fn(async () => true),
+    handleAcmeDnsCleanup: vi.fn(async () => true),
+    handleAcmeResult: vi.fn(async () => true),
     compile: vi.fn(async () => ({
       desiredRevision: REVISION,
       document: { apiVersion: 3, desiredRevision: REVISION },
@@ -472,8 +477,20 @@ const STATUS: AgentWsV2StatusPayload = {
   certificateDeployments: [],
 };
 
-async function welcomed(store: AgentWsV2Store, peer: AgentWsV2Peer) {
-  const session = open(store, peer);
+async function welcomed(
+  store: AgentWsV2Store,
+  peer: AgentWsV2Peer,
+  options: {
+    onPtyFrame?: (frame: AgentWsV2PtyFrame) => boolean | Promise<boolean>;
+  } = {},
+) {
+  const session = openAgentWsV2Session({
+    serverId: SERVER_ID,
+    sessionId: SESSION_ID,
+    peer,
+    store,
+    ...options,
+  });
   await session.handleText(agentFrame("hello", CURRENT_HELLO));
   return session;
 }
@@ -836,5 +853,108 @@ describe("agent WebSocket v2 pushes and teardown", () => {
 
     expect(peer.sent).toHaveLength(count);
     expect(store.loadCurrentServer).not.toHaveBeenCalled();
+  });
+});
+
+describe("agent WebSocket v2 operations parity", () => {
+  it("records update.status and stops a replaced session", async () => {
+    const store = makeStore({
+      recordUpdateStatus: vi.fn(async () => false),
+    });
+    const peer = makePeer();
+    const session = await welcomed(store, peer);
+
+    await session.handleText(
+      agentFrame("update.status", {
+        agent: { state: "applying", targetVersion: "0.4.1" },
+      }),
+    );
+
+    expect(store.recordUpdateStatus).toHaveBeenCalledWith(
+      SERVER_ID,
+      SESSION_ID,
+      expect.objectContaining({ agent: expect.any(Object) }),
+    );
+    expect(received(peer).at(-1)).toMatchObject({
+      kind: "error",
+      payload: { code: "session_replaced" },
+    });
+    expect(peer.close).toHaveBeenCalledWith(4000, "session_replaced");
+  });
+
+  it("passes ACME and terminal results through the fenced store", async () => {
+    const store = makeStore();
+    const onPtyFrame = vi.fn(() => true);
+    const peer = makePeer();
+    const session = await welcomed(store, peer, { onPtyFrame });
+
+    await session.handleText(
+      agentFrame("acme.dns_present", {
+        jobId: "job-1",
+        fqdn: "_acme-challenge.example.com",
+        txtValue: "digest",
+      }),
+    );
+    expect(store.handleAcmeDnsPresent).toHaveBeenCalledWith(
+      SERVER_ID,
+      SESSION_ID,
+      expect.objectContaining({ jobId: "job-1" }),
+    );
+
+    await session.handleText(
+      agentFrame("acme.result", {
+        jobId: "job-1",
+        certificatePem: "certificate",
+        privateKeyPem: "key",
+      }),
+    );
+    expect(store.handleAcmeResult).toHaveBeenCalledWith(
+      SERVER_ID,
+      SESSION_ID,
+      expect.objectContaining({ jobId: "job-1" }),
+    );
+
+    await session.handleText(
+      agentFrame("pty.data", { sessionId: "pty-1", data: "ls\r\n" }),
+    );
+    expect(onPtyFrame).toHaveBeenCalledWith({
+      type: "pty.data",
+      payload: { sessionId: "pty-1", data: "ls\r\n" },
+    });
+  });
+
+  it("closes an orphaned shell when no relay holds its session", async () => {
+    const store = makeStore();
+    const peer = makePeer();
+    const session = await welcomed(store, peer, {
+      onPtyFrame: () => false,
+    });
+
+    await session.handleText(
+      agentFrame("pty.data", { sessionId: "pty-1", data: "ls" }),
+    );
+
+    expect(received(peer).at(-1)).toMatchObject({
+      kind: "pty.close",
+      payload: { sessionId: "pty-1" },
+    });
+  });
+
+  it("rejects a control-plane operation sent by an agent", async () => {
+    const store = makeStore();
+    const peer = makePeer();
+    const session = await welcomed(store, peer);
+
+    await session.handleText(
+      agentFrame("update.trigger", {
+        target: "agent",
+        force: false,
+      }),
+    );
+
+    expect(received(peer).at(-1)).toMatchObject({
+      kind: "error",
+      payload: { code: "invalid_direction", type: "update.trigger" },
+    });
   });
 });

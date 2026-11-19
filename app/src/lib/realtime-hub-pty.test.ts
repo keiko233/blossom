@@ -26,7 +26,10 @@ const welcome: AgentWsWelcomePayload = {
 
 function store(): AgentWsStore {
   return {
-    markConnected: vi.fn(async () => new Date(connectedAt)),
+    markConnected: vi.fn(async () => ({
+      connectedAt: new Date(connectedAt),
+      sessionId: "session-1",
+    })),
     markDisconnected: vi.fn(async () => undefined),
     recordHello: vi.fn(async () => undefined),
     recordConfigAck: vi.fn(async () => undefined),
@@ -72,20 +75,20 @@ describe("NitroRealtimeHub PTY relay", () => {
     };
     await response.crossws.open(peer);
 
-    expect(await hub.hasAgentConnection("srv-1", connectedAt)).toBe(true);
+    const target = {
+      protocol: "v1" as const,
+      connectedAt,
+      agentSessionId: null,
+    };
+    expect(await hub.hasAgentConnection("srv-1", target)).toBe(true);
 
     const handler = vi.fn();
-    const unregister = hub.registerPtyRelay(
-      "srv-1",
-      connectedAt,
-      "pty-1",
-      handler,
-    );
+    const unregister = hub.registerPtyRelay("srv-1", target, "pty-1", handler);
 
     expect(
       await hub.sendPtyFrame(
         "srv-1",
-        connectedAt,
+        target,
         "pty-1",
         encodeAgentWsFrame(
           createAgentWsFrame("pty.open", {
@@ -142,7 +145,12 @@ describe("NitroRealtimeHub PTY relay", () => {
     };
     await response.crossws.open(peer);
     const handler = vi.fn();
-    hub.registerPtyRelay("srv-1", connectedAt, "pty-1", handler);
+    hub.registerPtyRelay(
+      "srv-1",
+      { protocol: "v1", connectedAt, agentSessionId: null },
+      "pty-1",
+      handler,
+    );
 
     await response.crossws.close(peer, {});
     expect(handler).toHaveBeenCalledWith({ type: "agent_disconnected" });

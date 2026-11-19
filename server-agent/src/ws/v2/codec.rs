@@ -16,7 +16,10 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
-use crate::ws::codec::{CertificateDeployment, UpdateStatusPayload};
+use crate::ws::codec::{
+    AcmeDnsAckPayload, AcmeIssuePayload, CertificateDeployment, UpdateStatusPayload,
+    UpdateTriggerPayload,
+};
 
 /// The subprotocol the agent offers and requires to see echoed.
 pub const SUBPROTOCOL: &str = "blossom-agent.v2";
@@ -36,6 +39,13 @@ const AGENT_TYPES: &[&str] = &[
     "config.get",
     "config.ack",
     "traffic.report",
+    "update.status",
+    "acme.dns_present",
+    "acme.dns_cleanup",
+    "acme.result",
+    "pty.started",
+    "pty.data",
+    "pty.exit",
 ];
 const CONTROL_TYPES: &[&str] = &[
     "welcome",
@@ -47,6 +57,13 @@ const CONTROL_TYPES: &[&str] = &[
     "config.snapshot.error",
     "traffic.ack",
     "error",
+    "update.trigger",
+    "acme.issue",
+    "acme.dns_ack",
+    "pty.open",
+    "pty.data",
+    "pty.resize",
+    "pty.close",
 ];
 
 /// The side that produced a frame. The receiver is the other side.
@@ -123,6 +140,13 @@ pub enum Message {
     ConfigGet(ConfigGet),
     ConfigAck(ConfigAck),
     TrafficReport(TrafficReport),
+    UpdateStatus(UpdateStatusPayload),
+    AcmeDnsPresent(AcmeDnsPresent),
+    AcmeDnsCleanup(AcmeDnsCleanup),
+    AcmeResult(AcmeResult),
+    PtyStarted(PtyStarted),
+    PtyData(PtyData),
+    PtyExit(PtyExit),
     Welcome(Welcome),
     StatusAck(StatusAck),
     ConfigNotify(ConfigNotify),
@@ -131,6 +155,12 @@ pub enum Message {
     SnapshotEnd(SnapshotEnd),
     SnapshotError(SnapshotError),
     TrafficAck(TrafficAck),
+    UpdateTrigger(UpdateTriggerPayload),
+    AcmeIssue(AcmeIssuePayload),
+    AcmeDnsAck(AcmeDnsAckPayload),
+    PtyOpen(PtyOpen),
+    PtyResize(PtyResize),
+    PtyClose(PtyClose),
     Error(ErrorFrame),
     /// A well-formed frame of a type this codec does not know. Callers ignore it.
     Unknown(String),
@@ -186,7 +216,7 @@ pub fn decode(text: &str, sender: Sender, max_frame_bytes: usize) -> Result<Deco
     } else {
         Sender::ControlPlane
     };
-    if expected_sender != sender {
+    if msg_type != "pty.data" && expected_sender != sender {
         return Err(DecodeError::InvalidDirection(envelope.msg_type));
     }
 
@@ -202,6 +232,23 @@ pub fn decode(text: &str, sender: Sender, max_frame_bytes: usize) -> Result<Deco
         "traffic.report" => {
             Message::TrafficReport(checked(payload, TrafficReport::check).ok_or_else(invalid)?)
         }
+        "update.status" => {
+            Message::UpdateStatus(checked(payload, UpdateStatusPayload::check).ok_or_else(invalid)?)
+        }
+        "acme.dns_present" => {
+            Message::AcmeDnsPresent(checked(payload, AcmeDnsPresent::check).ok_or_else(invalid)?)
+        }
+        "acme.dns_cleanup" => {
+            Message::AcmeDnsCleanup(checked(payload, AcmeDnsCleanup::check).ok_or_else(invalid)?)
+        }
+        "acme.result" => {
+            Message::AcmeResult(checked(payload, AcmeResult::check).ok_or_else(invalid)?)
+        }
+        "pty.started" => {
+            Message::PtyStarted(checked(payload, PtyStarted::check).ok_or_else(invalid)?)
+        }
+        "pty.data" => Message::PtyData(checked(payload, PtyData::check).ok_or_else(invalid)?),
+        "pty.exit" => Message::PtyExit(checked(payload, PtyExit::check).ok_or_else(invalid)?),
         "welcome" => Message::Welcome(checked(payload, Welcome::check).ok_or_else(invalid)?),
         "agent.status.ack" => {
             Message::StatusAck(checked(payload, StatusAck::check).ok_or_else(invalid)?)
@@ -224,6 +271,18 @@ pub fn decode(text: &str, sender: Sender, max_frame_bytes: usize) -> Result<Deco
         "traffic.ack" => {
             Message::TrafficAck(checked(payload, TrafficAck::check).ok_or_else(invalid)?)
         }
+        "update.trigger" => Message::UpdateTrigger(
+            checked(payload, UpdateTriggerPayload::check).ok_or_else(invalid)?,
+        ),
+        "acme.issue" => {
+            Message::AcmeIssue(checked(payload, AcmeIssuePayload::check).ok_or_else(invalid)?)
+        }
+        "acme.dns_ack" => {
+            Message::AcmeDnsAck(checked(payload, AcmeDnsAckPayload::check).ok_or_else(invalid)?)
+        }
+        "pty.open" => Message::PtyOpen(checked(payload, PtyOpen::check).ok_or_else(invalid)?),
+        "pty.resize" => Message::PtyResize(checked(payload, PtyResize::check).ok_or_else(invalid)?),
+        "pty.close" => Message::PtyClose(checked(payload, PtyClose::check).ok_or_else(invalid)?),
         "error" => Message::Error(checked(payload, ErrorFrame::check).ok_or_else(invalid)?),
         other => Message::Unknown(other.to_string()),
     };
@@ -724,6 +783,241 @@ pub struct SnapshotError {
 impl SnapshotError {
     fn check(&self) -> bool {
         bounded(&self.request_id, 1, 128) && bounded(&self.message, 1, 2048)
+    }
+}
+
+/// `update.status` reuses the v1 per-binary status shape.
+impl UpdateStatusPayload {
+    fn check(&self) -> bool {
+        self.agent.as_ref().is_none_or(update_state_ok)
+            && self.sing_box.as_ref().is_none_or(update_state_ok)
+    }
+}
+
+fn update_state_ok(state: &crate::ws::codec::UpdateStatePayload) -> bool {
+    bounded(&state.state, 1, 64)
+        && state
+            .target_version
+            .as_deref()
+            .is_none_or(|value| bounded(value, 1, 64))
+        && state
+            .message
+            .as_deref()
+            .is_none_or(|value| bounded(value, 1, 4096))
+}
+
+/// `update.trigger` uses the v1 target and optional version strings.
+impl UpdateTriggerPayload {
+    fn check(&self) -> bool {
+        self.desired_agent_version
+            .as_deref()
+            .is_none_or(|value| bounded(value, 1, 64))
+            && self
+                .desired_sing_box_version
+                .as_deref()
+                .is_none_or(|value| bounded(value, 1, 64))
+    }
+}
+
+/// `acme.issue` is the same bounded order v1 carries.
+impl AcmeIssuePayload {
+    fn check(&self) -> bool {
+        bounded(&self.job_id, 1, 128)
+            && bounded(&self.certificate_id, 1, 128)
+            && !self.domains.is_empty()
+            && self.domains.len() <= 100
+            && self.domains.iter().all(|domain| bounded(domain, 1, 253))
+            && matches!(self.acme_provider.as_str(), "letsencrypt" | "zerossl")
+            && matches!(self.challenge_type.as_str(), "dns-01" | "http-01")
+            && self
+                .external_account_binding
+                .as_ref()
+                .is_none_or(|binding| {
+                    bounded(&binding.kid, 1, 256) && bounded(&binding.hmac_key, 1, 1024)
+                })
+    }
+}
+
+/// `acme.dns_ack` answers one exact DNS broker request.
+impl AcmeDnsAckPayload {
+    fn check(&self) -> bool {
+        bounded(&self.job_id, 1, 128)
+            && bounded(&self.fqdn, 1, 253)
+            && bounded(&self.txt_value, 1, 512)
+            && self
+                .error
+                .as_deref()
+                .is_none_or(|value| bounded(value, 1, 2048))
+    }
+}
+
+/// `acme.dns_present` asks the control plane to publish one challenge record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcmeDnsPresent {
+    pub job_id: String,
+    pub fqdn: String,
+    pub txt_value: String,
+}
+
+impl AcmeDnsPresent {
+    fn check(&self) -> bool {
+        bounded(&self.job_id, 1, 128)
+            && bounded(&self.fqdn, 1, 253)
+            && bounded(&self.txt_value, 1, 512)
+    }
+}
+
+/// `acme.dns_cleanup` asks for the same challenge record to be removed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcmeDnsCleanup {
+    pub job_id: String,
+    pub fqdn: String,
+    pub txt_value: String,
+}
+
+impl AcmeDnsCleanup {
+    fn check(&self) -> bool {
+        bounded(&self.job_id, 1, 128)
+            && bounded(&self.fqdn, 1, 253)
+            && bounded(&self.txt_value, 1, 512)
+    }
+}
+
+/// `acme.result` carries either both PEM values or a typed error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcmeResult {
+    pub job_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certificate_pem: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_key_pem: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_phase: Option<String>,
+}
+
+impl AcmeResult {
+    fn check(&self) -> bool {
+        let success = self.certificate_pem.is_some() && self.private_key_pem.is_some();
+        success != self.error.is_some()
+            && bounded(&self.job_id, 1, 128)
+            && self
+                .certificate_pem
+                .as_deref()
+                .is_none_or(|value| bounded(value, 1, 1024 * 1024))
+            && self
+                .private_key_pem
+                .as_deref()
+                .is_none_or(|value| bounded(value, 1, 256 * 1024))
+            && self
+                .error
+                .as_deref()
+                .is_none_or(|value| bounded(value, 1, 16_384))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyOpen {
+    pub session_id: String,
+    pub cols: u32,
+    pub rows: u32,
+}
+
+impl PtyOpen {
+    fn check(&self) -> bool {
+        bounded(&self.session_id, 1, 128)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyStarted {
+    pub session_id: String,
+    pub shell: String,
+    pub user: String,
+}
+
+impl PtyStarted {
+    fn check(&self) -> bool {
+        bounded(&self.session_id, 1, 128)
+            && bounded(&self.shell, 1, 512)
+            && bounded(&self.user, 1, 64)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyData {
+    pub session_id: String,
+    pub data: String,
+}
+
+impl PtyData {
+    fn check(&self) -> bool {
+        bounded(&self.session_id, 1, 128) && self.data.len() <= 1024 * 1024
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyResize {
+    pub session_id: String,
+    pub cols: u32,
+    pub rows: u32,
+}
+
+impl PtyResize {
+    fn check(&self) -> bool {
+        bounded(&self.session_id, 1, 128)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyClose {
+    pub session_id: String,
+}
+
+impl PtyClose {
+    fn check(&self) -> bool {
+        bounded(&self.session_id, 1, 128)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyExit {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+impl PtyExit {
+    fn check(&self) -> bool {
+        bounded(&self.session_id, 1, 128)
+            && self
+                .reason
+                .as_deref()
+                .is_none_or(|value| bounded(value, 1, 64))
+            && self
+                .signal
+                .as_deref()
+                .is_none_or(|value| bounded(value, 0, 64))
+            && self
+                .detail
+                .as_deref()
+                .is_none_or(|value| bounded(value, 0, 256))
     }
 }
 

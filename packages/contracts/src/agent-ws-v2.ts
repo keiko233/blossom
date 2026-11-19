@@ -1,7 +1,19 @@
 import { z } from "zod";
 
 import {
+  agentWsAcmeDnsAckPayloadSchema,
+  agentWsAcmeDnsCleanupPayloadSchema,
+  agentWsAcmeDnsPresentPayloadSchema,
+  agentWsAcmeIssuePayloadSchema,
+  agentWsAcmeResultPayloadSchema,
+  agentWsPtyClosePayloadSchema,
+  agentWsPtyDataPayloadSchema,
+  agentWsPtyExitPayloadSchema,
+  agentWsPtyOpenPayloadSchema,
+  agentWsPtyResizePayloadSchema,
+  agentWsPtyStartedPayloadSchema,
   agentWsUpdateStatusesSchema,
+  agentWsUpdateTriggerPayloadSchema,
   certificateDeploymentSchema,
 } from "./agent-ws";
 
@@ -27,6 +39,13 @@ import {
 export const AGENT_WS_V2_PROTOCOL_VERSION = 2 as const;
 
 export const AGENT_WS_V2_SUBPROTOCOL = "blossom-agent.v2" as const;
+
+/**
+ * A v2 agent advertises this instead of `pty-v1` when local PTY sessions are
+ * enabled. The admin relay selects the frame envelope from this capability,
+ * so an older control plane never sends v1 `pty.*` frames to a v2 socket.
+ */
+export const AGENT_WS_V2_PTY_CAPABILITY = "pty-v2" as const;
 
 /**
  * Bounds enforced on both sides. `maxSnapshotBytes` is a provisional aggregate
@@ -77,6 +96,13 @@ export const AGENT_WS_V2_AGENT_MESSAGE_TYPES = [
   "config.get",
   "config.ack",
   "traffic.report",
+  "update.status",
+  "acme.dns_present",
+  "acme.dns_cleanup",
+  "acme.result",
+  "pty.started",
+  "pty.data",
+  "pty.exit",
 ] as const;
 
 export const AGENT_WS_V2_CONTROL_MESSAGE_TYPES = [
@@ -89,7 +115,23 @@ export const AGENT_WS_V2_CONTROL_MESSAGE_TYPES = [
   "config.snapshot.error",
   "traffic.ack",
   "error",
+  "update.trigger",
+  "acme.issue",
+  "acme.dns_ack",
+  "pty.open",
+  "pty.data",
+  "pty.resize",
+  "pty.close",
 ] as const;
+
+/**
+ * Terminal bytes flow both ways under the same frame type. Every other type
+ * has exactly one sender; direction validation still applies to those.
+ */
+export const AGENT_WS_V2_BIDIRECTIONAL_MESSAGE_TYPES = ["pty.data"] as const;
+
+export type AgentWsV2BidirectionalMessageType =
+  (typeof AGENT_WS_V2_BIDIRECTIONAL_MESSAGE_TYPES)[number];
 
 export type AgentWsV2AgentMessageType =
   (typeof AGENT_WS_V2_AGENT_MESSAGE_TYPES)[number];
@@ -416,6 +458,19 @@ export const agentWsV2PayloadSchemas = {
   "config.get": agentWsV2ConfigGetPayloadSchema,
   "config.ack": agentWsV2ConfigAckPayloadSchema,
   "traffic.report": agentWsV2TrafficReportPayloadSchema,
+  "update.status": agentWsUpdateStatusesSchema,
+  "update.trigger": agentWsUpdateTriggerPayloadSchema,
+  "acme.issue": agentWsAcmeIssuePayloadSchema,
+  "acme.dns_present": agentWsAcmeDnsPresentPayloadSchema,
+  "acme.dns_cleanup": agentWsAcmeDnsCleanupPayloadSchema,
+  "acme.dns_ack": agentWsAcmeDnsAckPayloadSchema,
+  "acme.result": agentWsAcmeResultPayloadSchema,
+  "pty.open": agentWsPtyOpenPayloadSchema,
+  "pty.started": agentWsPtyStartedPayloadSchema,
+  "pty.data": agentWsPtyDataPayloadSchema,
+  "pty.resize": agentWsPtyResizePayloadSchema,
+  "pty.close": agentWsPtyClosePayloadSchema,
+  "pty.exit": agentWsPtyExitPayloadSchema,
   welcome: agentWsV2WelcomePayloadSchema,
   "agent.status.ack": agentWsV2StatusAckPayloadSchema,
   "config.notify": agentWsV2ConfigNotifyPayloadSchema,
@@ -459,6 +514,12 @@ function directionOf(type: AgentWsV2MessageType): AgentWsV2Sender {
   return (AGENT_WS_V2_AGENT_MESSAGE_TYPES as readonly string[]).includes(type)
     ? "agent"
     : "control-plane";
+}
+
+function isBidirectional(type: AgentWsV2MessageType): boolean {
+  return (
+    AGENT_WS_V2_BIDIRECTIONAL_MESSAGE_TYPES as readonly string[]
+  ).includes(type);
 }
 
 function isKnownV2Type(type: string): type is AgentWsV2MessageType {
@@ -508,7 +569,7 @@ export function parseAgentWsV2Frame(
   if (!isKnownV2Type(type)) {
     return { ok: true, frame, message: { kind: "unknown", type } };
   }
-  if (directionOf(type) !== sender) {
+  if (!isBidirectional(type) && directionOf(type) !== sender) {
     return { ok: false, code: "invalid-direction", type };
   }
 

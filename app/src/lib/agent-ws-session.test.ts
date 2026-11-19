@@ -17,6 +17,7 @@ import {
 
 const SERVER_ID = "srv-1";
 const CONNECTED_AT = new Date("2026-11-19T00:00:00.000Z");
+const SESSION_ID = "session-1";
 
 const welcome: AgentWsWelcomePayload = {
   serverId: SERVER_ID,
@@ -38,7 +39,10 @@ const deployment: AgentWsCertificateDeployment = {
 
 function makeStore() {
   return {
-    markConnected: vi.fn(async () => CONNECTED_AT),
+    markConnected: vi.fn(async () => ({
+      connectedAt: CONNECTED_AT,
+      sessionId: SESSION_ID,
+    })),
     markDisconnected: vi.fn(async () => undefined),
     recordHello: vi.fn(async () => undefined),
     recordConfigAck: vi.fn(async () => undefined),
@@ -227,6 +231,7 @@ describe("agent WebSocket session", () => {
     expect(store.markDisconnected).toHaveBeenCalledWith(
       SERVER_ID,
       CONNECTED_AT,
+      SESSION_ID,
     );
   });
 

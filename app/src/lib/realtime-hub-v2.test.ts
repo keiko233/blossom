@@ -1,3 +1,4 @@
+import { parseAgentWsFrame } from "@blossom/contracts/agent-ws";
 import {
   AGENT_WS_V2_SUBPROTOCOL,
   createAgentWsV2Frame,
@@ -99,6 +100,7 @@ function fakeV2Store() {
     ),
     recordStatus: vi.fn(async () => null),
     recordConfigAck: vi.fn(async () => "applied" as const),
+    recordUpdateStatus: vi.fn(async () => true),
     cacheDesiredRevision: vi.fn(async () => undefined),
     applyCertificateDeployments: vi.fn(async () => undefined),
     applyTraffic: vi.fn(async () => ({
@@ -106,6 +108,9 @@ function fakeV2Store() {
       accepted: 0,
       dropped: 0,
     })),
+    handleAcmeDnsPresent: vi.fn(async () => true),
+    handleAcmeDnsCleanup: vi.fn(async () => true),
+    handleAcmeResult: vi.fn(async () => true),
     compile: vi.fn(async () => ({
       desiredRevision: REVISION,
       document: {},
@@ -118,7 +123,10 @@ function fakeV2Store() {
 
 function fakeV1Store(): AgentWsStore {
   return {
-    markConnected: vi.fn(async () => new Date()),
+    markConnected: vi.fn(async () => ({
+      connectedAt: new Date(),
+      sessionId: "session-1",
+    })),
     markDisconnected: vi.fn(async () => undefined),
     recordHello: vi.fn(async () => undefined),
     recordConfigAck: vi.fn(async () => undefined),
@@ -226,8 +234,8 @@ describe("NitroRealtimeHub v2 sessions", () => {
     const hooks = await acceptV2(hub);
     const welcomed = makePeer("welcomed");
     const pending = makePeer("pending");
-    await hooks.open(welcomed);
     await hooks.open(pending);
+    await hooks.open(welcomed);
     await hooks.message(
       welcomed,
       agentFrame("hello", {
@@ -263,6 +271,97 @@ describe("NitroRealtimeHub v2 sessions", () => {
     await hub.notifyUpdateTrigger("srv-1", { target: "agent", force: false });
 
     expect(peer.sent).toEqual([]);
+  });
+
+  it("pushes update and ACME operations with the v2 envelope", async () => {
+    const { hub } = makeHub();
+    const hooks = await acceptV2(hub);
+    const peer = makePeer("p1");
+    await hooks.open(peer);
+    await hooks.message(
+      peer,
+      agentFrame("hello", {
+        agentVersion: "0.4.0",
+        agentBuildId: "build-1",
+        capabilities: ["ws-v2", "acme-v1"],
+        applied: null,
+        certificateDeployments: [],
+      }),
+    );
+
+    await hub.notifyUpdateTrigger("srv-1", {
+      target: "agent",
+      desiredAgentVersion: "latest",
+      force: true,
+    });
+    await hub.notifyAcmeIssue("srv-1", {
+      jobId: "job-1",
+      certificateId: "cert-1",
+      generation: 2,
+      domains: ["example.com"],
+      acmeProvider: "letsencrypt",
+      acmeStaging: false,
+      challengeType: "dns-01",
+    });
+
+    expect(sentTypes(peer).slice(-2)).toEqual(["update.trigger", "acme.issue"]);
+  });
+
+  it("relays terminal frames between a v1 browser frame and the v2 session", async () => {
+    const { hub } = makeHub();
+    const hooks = await acceptV2(hub);
+    const peer = makePeer("p1");
+    await hooks.open(peer);
+    await hooks.message(
+      peer,
+      agentFrame("hello", {
+        agentVersion: "0.4.0",
+        agentBuildId: "build-1",
+        capabilities: ["ws-v2", "pty-v2"],
+        applied: null,
+        certificateDeployments: [],
+      }),
+    );
+
+    const handler = vi.fn();
+    const target = {
+      protocol: "v2" as const,
+      connectedAt: "2026-11-19T00:00:00.000Z",
+      agentSessionId: SESSION_ID,
+    };
+    expect(await hub.hasAgentConnection("srv-1", target)).toBe(true);
+    hub.registerPtyRelay("srv-1", target, "pty-1", handler);
+
+    expect(
+      await hub.sendPtyFrame(
+        "srv-1",
+        target,
+        "pty-1",
+        JSON.stringify({
+          v: 1,
+          type: "pty.open",
+          ts: "2026-11-19T00:00:00.000Z",
+          payload: { sessionId: "pty-1", cols: 80, rows: 24 },
+        }),
+      ),
+    ).toBe(true);
+    expect(sentTypes(peer).at(-1)).toBe("pty.open");
+
+    await hooks.message(
+      peer,
+      agentFrame("pty.data", { sessionId: "pty-1", data: "prompt$ " }),
+    );
+    expect(handler).toHaveBeenCalledWith({
+      type: "frame",
+      frame: expect.any(String),
+    });
+    const firstCall = handler.mock.calls[0] as [{ frame: string }] | undefined;
+    expect(firstCall).toBeDefined();
+    const forwarded = parseAgentWsFrame(firstCall![0].frame);
+    expect(forwarded).toMatchObject({
+      ok: true,
+      message: { kind: "reserved" },
+    });
   });
 
   it("delivers a remote v2 push only to welcomed local sessions", async () => {

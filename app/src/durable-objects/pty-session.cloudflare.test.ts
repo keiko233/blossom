@@ -1,4 +1,5 @@
 import { parseAgentWsFrame } from "@blossom/contracts/agent-ws";
+import { parseAgentWsV2Frame } from "@blossom/contracts/agent-ws-v2";
 import {
   afterEach,
   beforeEach,
@@ -12,6 +13,7 @@ import {
 import type { Database } from "@/db";
 
 import {
+  handleAgentV2PtyFrame,
   handlePtyBrowserMessage,
   handlePtyConnect,
   isPtySessionAuthorized,
@@ -105,6 +107,19 @@ function agentSocket(): FakeSocket {
   return ws;
 }
 
+function v2AgentSocket(sessionId = "agent-session-1"): FakeSocket {
+  const ws = new FakeSocket();
+  ws.tags = ["srv-1"];
+  ws.serializeAttachment({
+    protocol: "v2",
+    serverId: "srv-1",
+    connectedAt: CONNECTED_AT,
+    sessionId,
+    welcomed: true,
+  });
+  return ws;
+}
+
 function shellAttachment(
   overrides: Partial<PtySocketAttachment> = {},
 ): PtySocketAttachment {
@@ -112,6 +127,8 @@ function shellAttachment(
     kind: "pty",
     serverId: "srv-1",
     connectedAt: CONNECTED_AT,
+    agentProtocol: "v1",
+    agentSessionId: null,
     sessionId: "pty-1",
     authSessionId: "auth-session-1",
     actor: {
@@ -218,6 +235,8 @@ describe("PTY storage alarm", () => {
     // Only lifecycle fields are stored: no cookie, bearer or token material.
     const lifecycleKeys = [
       "actor",
+      "agentProtocol",
+      "agentSessionId",
       "authSessionId",
       "closeAudited",
       "closeReason",
@@ -412,6 +431,7 @@ describe("PTY connect", () => {
         upgrade: "websocket",
         "x-blossom-pty-session": "pty-1",
         "x-blossom-pty-connected-at": CONNECTED_AT,
+        "x-blossom-pty-protocol": "v1",
         "x-blossom-pty-started-at": "2026-11-19T00:30:00.000Z",
         "x-blossom-pty-auth-session": "auth-session-1",
         "x-blossom-pty-actor": encodeURIComponent(
@@ -526,6 +546,89 @@ describe("PTY connect", () => {
       string,
     ];
     expect(reason).toBe("agent_disconnected");
+  });
+});
+
+describe("PTY v2 framing", () => {
+  it("routes agent v2 output to the browser as a v1 frame", async () => {
+    const agent = v2AgentSocket();
+    const shell = shellSocket(
+      shellAttachment({
+        agentProtocol: "v2",
+        agentSessionId: "agent-session-1",
+      }),
+    );
+    const ctx = fakeCtx([agent, shell]);
+    const recordClose = recorder();
+
+    await expect(
+      handleAgentV2PtyFrame(
+        ctx,
+        "srv-1",
+        "agent-session-1",
+        {
+          type: "pty.data",
+          payload: { sessionId: "pty-1", data: "prompt$ " },
+        },
+        recordClose,
+      ),
+    ).resolves.toBe(true);
+
+    expect(shell.frames().map((frame) => frame.type)).toEqual(["pty.data"]);
+    expect(shell.frames()[0]?.payload).toMatchObject({
+      sessionId: "pty-1",
+      data: "prompt$ ",
+    });
+  });
+
+  it("converts browser input to v2 and ignores a replaced agent session", async () => {
+    const agent = v2AgentSocket("agent-session-1");
+    const shell = shellSocket(
+      shellAttachment({
+        agentProtocol: "v2",
+        agentSessionId: "agent-session-1",
+      }),
+    );
+    const ctx = fakeCtx([agent, shell]);
+    const recordClose = recorder();
+
+    await handlePtyBrowserMessage(
+      ctx,
+      shell as unknown as WebSocket,
+      shellAttachment({
+        agentProtocol: "v2",
+        agentSessionId: "agent-session-1",
+      }),
+      JSON.stringify({
+        v: 1,
+        type: "pty.data",
+        ts: CONNECTED_AT,
+        payload: { sessionId: "pty-1", data: "ls\n" },
+      }),
+      recordClose,
+    );
+
+    const sent = agent.sent[0]!;
+    expect(parseAgentWsV2Frame(sent, "control-plane")).toMatchObject({
+      ok: true,
+      message: {
+        kind: "pty.data",
+        payload: { sessionId: "pty-1", data: "ls\n" },
+      },
+    });
+
+    const replaced = await handleAgentV2PtyFrame(
+      ctx,
+      "srv-1",
+      "agent-session-2",
+      {
+        type: "pty.data",
+        payload: { sessionId: "pty-1", data: "stale" },
+      },
+      recordClose,
+    );
+    expect(replaced).toBe(false);
+    expect(shell.frames()).toHaveLength(0);
   });
 });
 

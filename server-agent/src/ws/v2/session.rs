@@ -15,6 +15,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -31,8 +32,11 @@ use super::codec::{
     UpdatePolicy,
 };
 use super::snapshot::{SnapshotAssembler, SnapshotError, SnapshotLimits, VerifiedSnapshot};
-use crate::ws::codec::{CertificateDeployment, UpdateStatusPayload};
-use crate::ws::ports::WsError;
+use crate::ws::codec::{
+    AcmeDnsAckPayload, AcmeIssuePayload, AgentWsFrame, CertificateDeployment, ReservedFrame,
+    UpdateStatusPayload, UpdateTriggerPayload, frame_type,
+};
+use crate::ws::ports::{AgentCommandSink, WsCommand, WsError};
 
 /// The text-frame transport a session runs over. [`V2Connection`] implements
 /// it; tests substitute a scripted peer.
@@ -125,6 +129,16 @@ pub struct TrafficRequest {
     pub reply: oneshot::Sender<TrafficOutcome>,
 }
 
+/// A validated control-plane operation for the core. The session never runs
+/// updates, ACME orders, or terminal processes itself.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Command {
+    UpdateTrigger(UpdateTriggerPayload),
+    AcmeIssue(AcmeIssuePayload),
+    AcmeDnsAck(AcmeDnsAckPayload),
+    Pty(ReservedFrame),
+}
+
 /// The identifier the last apply failed on, and when. It lives with the bridge
 /// rather than the connection, so a reconnect does not re-fetch it at once.
 #[derive(Debug, Default)]
@@ -155,6 +169,8 @@ pub struct SessionPorts {
     policy: watch::Sender<UpdatePolicy>,
     refusals: mpsc::Sender<SnapshotRefusal>,
     traffic: mpsc::Receiver<TrafficRequest>,
+    commands: mpsc::Sender<Command>,
+    outbound: mpsc::Receiver<WsCommand>,
     online: watch::Sender<bool>,
     failed: FailedApply,
 }
@@ -166,6 +182,9 @@ pub struct CorePorts {
     pub results: mpsc::Sender<ApplyResult>,
     pub policy: watch::Receiver<UpdatePolicy>,
     pub refusals: mpsc::Receiver<SnapshotRefusal>,
+    pub commands: mpsc::Receiver<Command>,
+    pub outbound: Arc<dyn AgentCommandSink>,
+    pub online: watch::Receiver<bool>,
 }
 
 /// The traffic task's end: it submits reports and watches whether a session
@@ -186,7 +205,10 @@ pub fn channels(
     let (policy_tx, policy_rx) = watch::channel(initial_policy);
     let (refusals_tx, refusals_rx) = mpsc::channel(8);
     let (traffic_tx, traffic_rx) = mpsc::channel(1);
+    let (commands_tx, commands_rx) = mpsc::channel(16);
+    let (outbound_sink, outbound_rx) = crate::ws::ports::command_channel(64);
     let (online_tx, online_rx) = watch::channel(false);
+    let core_online = online_tx.subscribe();
     (
         SessionPorts {
             status: status_rx,
@@ -195,6 +217,8 @@ pub fn channels(
             policy: policy_tx,
             refusals: refusals_tx,
             traffic: traffic_rx,
+            commands: commands_tx,
+            outbound: outbound_rx,
             online: online_tx,
             failed: FailedApply::default(),
         },
@@ -204,6 +228,9 @@ pub fn channels(
             results: results_tx,
             policy: policy_rx,
             refusals: refusals_rx,
+            commands: commands_rx,
+            outbound: Arc::new(outbound_sink),
+            online: core_online,
         },
         TrafficPorts {
             requests: traffic_tx,
@@ -360,6 +387,8 @@ async fn run_connection<W: Wire>(
         policy,
         refusals,
         traffic,
+        commands,
+        outbound,
         online,
         failed,
     } = ports;
@@ -453,6 +482,19 @@ async fn run_connection<W: Wire>(
                     return SessionEnd::Lost { reason, welcomed: true };
                 }
             }
+            frame = outbound.recv(), if state.welcomed => {
+                let Some(command) = frame else {
+                    return SessionEnd::Cancelled;
+                };
+                let WsCommand::Send(frame) = command else {
+                    continue;
+                };
+                if let Some((msg_type, payload)) = v2_outbound(&frame)
+                    && let Err(reason) = send(wire, msg_type, &payload, None).await
+                {
+                    return SessionEnd::Lost { reason, welcomed: true };
+                }
+            }
             received = wire.recv_text() => {
                 let text = match received {
                     Ok(text) => text,
@@ -485,6 +527,7 @@ async fn run_connection<W: Wire>(
                         status,
                         policy,
                         refusals,
+                        commands,
                         online,
                         frame_limit: &mut frame_limit,
                         failed: &mut *failed,
@@ -511,6 +554,7 @@ struct Context<'a, W: Wire> {
     status: &'a mut watch::Receiver<CoreStatus>,
     policy: &'a mut watch::Sender<UpdatePolicy>,
     refusals: &'a mut mpsc::Sender<SnapshotRefusal>,
+    commands: &'a mut mpsc::Sender<Command>,
     online: &'a mut watch::Sender<bool>,
     frame_limit: &'a mut usize,
     failed: &'a mut FailedApply,
@@ -526,6 +570,7 @@ async fn handle<W: Wire>(
         status,
         policy,
         refusals,
+        commands,
         online,
         frame_limit,
         failed,
@@ -664,6 +709,34 @@ async fn handle<W: Wire>(
                 let _ = waiter.send(outcome);
             }
         }
+        Message::UpdateTrigger(trigger) => {
+            require_welcome(state, wire, "update.trigger").await?;
+            let _ = commands.try_send(Command::UpdateTrigger(trigger));
+        }
+        Message::AcmeIssue(issue) => {
+            require_welcome(state, wire, "acme.issue").await?;
+            let _ = commands.try_send(Command::AcmeIssue(issue));
+        }
+        Message::AcmeDnsAck(ack) => {
+            require_welcome(state, wire, "acme.dns_ack").await?;
+            let _ = commands.try_send(Command::AcmeDnsAck(ack));
+        }
+        Message::PtyOpen(open) => {
+            require_welcome(state, wire, "pty.open").await?;
+            forward_pty(commands, frame_type::PTY_OPEN, open)?;
+        }
+        Message::PtyData(data) => {
+            require_welcome(state, wire, "pty.data").await?;
+            forward_pty(commands, frame_type::PTY_DATA, data)?;
+        }
+        Message::PtyResize(resize) => {
+            require_welcome(state, wire, "pty.resize").await?;
+            forward_pty(commands, frame_type::PTY_RESIZE, resize)?;
+        }
+        Message::PtyClose(close) => {
+            require_welcome(state, wire, "pty.close").await?;
+            forward_pty(commands, frame_type::PTY_CLOSE, close)?;
+        }
         Message::Error(frame) => match frame.code {
             ErrorCode::SessionReplaced => return Ok(Flow::End(SessionEnd::Replaced)),
             ErrorCode::ServerDisabled => return Ok(Flow::End(SessionEnd::ServerDisabled)),
@@ -683,9 +756,45 @@ async fn handle<W: Wire>(
         | Message::ConfigGet(_)
         | Message::ConfigAck(_)
         | Message::TrafficReport(_)
+        | Message::UpdateStatus(_)
+        | Message::AcmeDnsPresent(_)
+        | Message::AcmeDnsCleanup(_)
+        | Message::AcmeResult(_)
+        | Message::PtyStarted(_)
+        | Message::PtyExit(_)
         | Message::Unknown(_) => {}
     }
     Ok(Flow::Continue)
+}
+
+fn forward_pty<T: Serialize>(
+    commands: &mpsc::Sender<Command>,
+    msg_type: &'static str,
+    payload: T,
+) -> Result<(), String> {
+    let value = serde_json::to_value(payload)
+        .map_err(|error| format!("could not encode {msg_type}: {error}"))?;
+    let _ = commands.try_send(Command::Pty(ReservedFrame {
+        frame_type: msg_type.to_string(),
+        payload: value,
+    }));
+    Ok(())
+}
+
+/// Converts the core's v1-shaped outbound frames into the v2 frame types the
+/// contract serves. Unsupported types are ignored rather than copied.
+fn v2_outbound(frame: &AgentWsFrame) -> Option<(&'static str, serde_json::Value)> {
+    let msg_type = match frame.msg_type.as_str() {
+        "update.status" => "update.status",
+        "acme.dns_present" => "acme.dns_present",
+        "acme.dns_cleanup" => "acme.dns_cleanup",
+        "acme.result" => "acme.result",
+        "pty.started" => "pty.started",
+        "pty.data" => "pty.data",
+        "pty.exit" => "pty.exit",
+        _ => return None,
+    };
+    Some((msg_type, frame.payload.clone()))
 }
 
 /// Hands a verified body to the core. A job the core has not taken yet is

@@ -1,6 +1,10 @@
 import {
   parseAgentWsFrame,
+  type AgentWsFrame,
+  type AgentWsPtyDataPayload,
+  type AgentWsPtyExitPayload,
   type AgentWsPtyExitReason,
+  type AgentWsPtyStartedPayload,
 } from "@blossom/contracts/agent-ws";
 import { eq } from "drizzle-orm";
 
@@ -8,8 +12,13 @@ import type { Database } from "@/db";
 import { session, user } from "@/db/auth-schema";
 import { server as serverTable } from "@/db/proxy-schema";
 import {
+  encodePtyFrameForAgentV2,
+  v2PtyFrameForBrowser,
+} from "@/lib/agent-ws-v2-pty";
+import {
   isPtyAuthorized,
   type PtyAuthorizationRecord,
+  type PtyProtocol,
 } from "@/lib/pty-authorization";
 import {
   clampPtyDimensions,
@@ -22,6 +31,7 @@ import {
   ptyExitFrame,
   ptyOpenFrame,
 } from "@/lib/pty-protocol";
+import type { AgentPtyTarget } from "@/lib/realtime-hub-types";
 import type { AdminPtyActor } from "@/query/pty-audit";
 
 /**
@@ -47,12 +57,17 @@ export interface PtyDoContext {
 export interface AgentSocketAttachment {
   serverId: string;
   connectedAt: string;
+  protocol: PtyProtocol;
+  /** Present for v2; identifies the exact session the terminal may use. */
+  sessionId: string | null;
 }
 
 export interface PtySocketAttachment {
   kind: "pty";
   serverId: string;
   connectedAt: string;
+  agentProtocol: PtyProtocol;
+  agentSessionId: string | null;
   sessionId: string;
   /** better-auth session row id; the cookie and bearer token are never stored. */
   authSessionId: string;
@@ -91,19 +106,30 @@ export function readAgentAttachment(
   const candidate = attachment as Partial<AgentSocketAttachment> & {
     kind?: string;
     protocol?: string;
+    sessionId?: string;
   };
-  // v2 sockets carry no PTY relay; only v1 agent sockets are addressable.
   if (
     candidate.kind === "pty" ||
-    candidate.protocol === "v2" ||
     typeof candidate.serverId !== "string" ||
     typeof candidate.connectedAt !== "string"
   ) {
     return null;
   }
+  if (candidate.protocol === "v2") {
+    return typeof candidate.sessionId === "string"
+      ? {
+          serverId: candidate.serverId,
+          connectedAt: candidate.connectedAt,
+          protocol: "v2",
+          sessionId: candidate.sessionId,
+        }
+      : null;
+  }
   return {
     serverId: candidate.serverId,
     connectedAt: candidate.connectedAt,
+    protocol: "v1",
+    sessionId: null,
   };
 }
 
@@ -117,6 +143,9 @@ export function readPtyAttachment(ws: WebSocket): PtySocketAttachment | null {
     candidate.kind !== "pty" ||
     typeof candidate.serverId !== "string" ||
     typeof candidate.connectedAt !== "string" ||
+    (candidate.agentProtocol !== "v1" && candidate.agentProtocol !== "v2") ||
+    (candidate.agentProtocol === "v2" &&
+      typeof candidate.agentSessionId !== "string") ||
     typeof candidate.sessionId !== "string" ||
     typeof candidate.authSessionId !== "string" ||
     typeof candidate.startedAt !== "string" ||
@@ -132,11 +161,37 @@ export function readPtyAttachment(ws: WebSocket): PtySocketAttachment | null {
 function findAgentSocket(
   ctx: PtyDoContext,
   serverId: string,
-  connectedAt: string,
+  target: AgentPtyTarget,
 ): WebSocket | undefined {
-  return ctx
-    .getWebSockets(serverId)
-    .find((ws) => readAgentAttachment(ws)?.connectedAt === connectedAt);
+  return ctx.getWebSockets(serverId).find((ws) => {
+    const attachment = readAgentAttachment(ws);
+    return attachment
+      ? attachment.protocol === target.protocol &&
+          (target.protocol === "v2"
+            ? Boolean(
+                target.agentSessionId &&
+                attachment.sessionId === target.agentSessionId,
+              )
+            : attachment.connectedAt === target.connectedAt)
+      : false;
+  });
+}
+
+function targetOf(attachment: PtySocketAttachment): AgentPtyTarget {
+  return {
+    protocol: attachment.agentProtocol,
+    connectedAt: attachment.connectedAt,
+    agentSessionId: attachment.agentSessionId,
+  };
+}
+
+function encodeForAgent(
+  attachment: PtySocketAttachment,
+  frame: AgentWsFrame,
+): string | null {
+  return attachment.agentProtocol === "v2"
+    ? encodePtyFrameForAgentV2(frame)
+    : encodePtyFrame(frame);
 }
 
 function ptySockets(
@@ -187,12 +242,18 @@ export async function handlePtyConnect(
   }
   const sessionId = request.headers.get("x-blossom-pty-session") ?? "";
   const connectedAt = request.headers.get("x-blossom-pty-connected-at") ?? "";
+  const protocolHeader = request.headers.get("x-blossom-pty-protocol");
+  const agentProtocol: PtyProtocol = protocolHeader === "v2" ? "v2" : "v1";
+  const agentSessionId =
+    request.headers.get("x-blossom-pty-agent-session") ?? null;
   const startedAt = request.headers.get("x-blossom-pty-started-at") ?? "";
   const authSessionId = request.headers.get("x-blossom-pty-auth-session") ?? "";
   const actor = parseActor(request.headers.get("x-blossom-pty-actor") ?? "");
   if (
     !isValidPtySessionId(sessionId) ||
     !connectedAt ||
+    (protocolHeader !== "v1" && protocolHeader !== "v2") ||
+    (agentProtocol === "v2" && !agentSessionId) ||
     !authSessionId ||
     Number.isNaN(Date.parse(connectedAt)) ||
     Number.isNaN(Date.parse(startedAt)) ||
@@ -204,7 +265,12 @@ export async function handlePtyConnect(
   if (!serverId) {
     return json(400, { error: "missing_server" });
   }
-  if (!findAgentSocket(ctx, serverId, connectedAt)) {
+  const target: AgentPtyTarget = {
+    protocol: agentProtocol,
+    connectedAt,
+    agentSessionId,
+  };
+  if (!findAgentSocket(ctx, serverId, target)) {
     return json(409, { error: "agent_unavailable" });
   }
 
@@ -230,6 +296,8 @@ export async function handlePtyConnect(
     kind: "pty",
     serverId,
     connectedAt,
+    agentProtocol,
+    agentSessionId,
     sessionId,
     authSessionId,
     actor,
@@ -245,17 +313,20 @@ export async function handlePtyConnect(
   // finds this relay.
   let opened = false;
   try {
-    const agent = findAgentSocket(ctx, serverId, connectedAt);
+    const agent = findAgentSocket(ctx, serverId, target);
     if (agent) {
-      agent.send(
-        encodePtyFrame(
-          ptyOpenFrame(sessionId, {
-            cols: dimensions.cols,
-            rows: dimensions.rows,
-          }),
-        ),
-      );
-      opened = true;
+      const open = ptyOpenFrame(sessionId, {
+        cols: dimensions.cols,
+        rows: dimensions.rows,
+      });
+      const encoded =
+        agentProtocol === "v2"
+          ? encodePtyFrameForAgentV2(open)
+          : encodePtyFrame(open);
+      if (encoded) {
+        agent.send(encoded);
+        opened = true;
+      }
     }
   } catch {
     // The agent socket is closing; the browser is closed below.
@@ -358,11 +429,7 @@ export async function handlePtyBrowserMessage(
     );
     return;
   }
-  const agent = findAgentSocket(
-    ctx,
-    attachment.serverId,
-    attachment.connectedAt,
-  );
+  const agent = findAgentSocket(ctx, attachment.serverId, targetOf(attachment));
   if (!agent) {
     await closePtySocket(ws, attachment, "agent_disconnected", recordClose, {
       closeCode: 1011,
@@ -371,7 +438,11 @@ export async function handlePtyBrowserMessage(
     return;
   }
   try {
-    agent.send(encodePtyFrame(parsed.frame));
+    const encoded = encodeForAgent(attachment, parsed.frame);
+    if (!encoded) {
+      throw new Error("PTY frame could not be encoded for the agent");
+    }
+    agent.send(encoded);
   } catch {
     await closePtySocket(ws, attachment, "agent_disconnected", recordClose, {
       closeCode: 1011,
@@ -406,14 +477,16 @@ export async function handlePtyBrowserClose(
   } catch {
     // The socket is already closed; the audit row still records the session.
   }
-  const agent = findAgentSocket(
-    ctx,
-    attachment.serverId,
-    attachment.connectedAt,
-  );
+  const agent = findAgentSocket(ctx, attachment.serverId, targetOf(attachment));
   if (agent) {
     try {
-      agent.send(encodePtyFrame(ptyCloseFrame(attachment.sessionId)));
+      const encoded = encodeForAgent(
+        attachment,
+        ptyCloseFrame(attachment.sessionId),
+      );
+      if (encoded) {
+        agent.send(encoded);
+      }
     } catch {
       // The agent socket is already closing.
     }
@@ -446,47 +519,26 @@ export async function handleAgentPtyFrame(
   if (!parsed.ok) {
     return true;
   }
-
-  const sessionId = parsed.message.payload.sessionId;
-  const matching = ptySockets(ctx, serverId).filter(
-    ({ attachment }) =>
-      attachment.sessionId === sessionId &&
-      attachment.connectedAt === connectedAt,
+  const delivered = await deliverAgentPtyFrame(
+    ctx,
+    serverId,
+    { protocol: "v1", connectedAt, agentSessionId: null },
+    parsed.message.type,
+    parsed.message.payload,
+    encodePtyFrame(parsed.frame),
+    recordClose,
   );
-  for (const { ws, attachment } of matching) {
-    if (attachment.closeAudited) {
-      continue;
-    }
-    try {
-      ws.send(encodePtyFrame(parsed.frame));
-    } catch {
-      await closePtySocket(ws, attachment, "agent_disconnected", recordClose, {
-        closeCode: 1011,
-        audit: true,
-      });
-      continue;
-    }
-    if (parsed.message.type === "pty.exit") {
-      await closePtySocket(
-        ws,
-        { ...attachment, closeAudited: false },
-        parsed.message.payload.reason ?? "closed",
-        recordClose,
-        {
-          code: parsed.message.payload.code,
-          signal: parsed.message.payload.signal,
-          sendExit: false,
-          audit: true,
-        },
-      );
-    }
-  }
-
-  if (matching.length === 0 && parsed.message.type === "pty.data") {
-    const agent = findAgentSocket(ctx, serverId, connectedAt);
+  if (!delivered && parsed.message.type === "pty.data") {
+    const agent = findAgentSocket(ctx, serverId, {
+      protocol: "v1",
+      connectedAt,
+      agentSessionId: null,
+    });
     if (agent) {
       try {
-        agent.send(encodePtyFrame(ptyCloseFrame(sessionId)));
+        agent.send(
+          encodePtyFrame(ptyCloseFrame(parsed.message.payload.sessionId)),
+        );
       } catch {
         // The agent socket is already gone.
       }
@@ -495,15 +547,112 @@ export async function handleAgentPtyFrame(
   return true;
 }
 
+export type AgentV2PtyMessage =
+  | { type: "pty.started"; payload: AgentWsPtyStartedPayload }
+  | { type: "pty.data"; payload: AgentWsPtyDataPayload }
+  | { type: "pty.exit"; payload: AgentWsPtyExitPayload };
+
+/**
+ * Delivers an agent v2 terminal frame only to browser sockets bound to the
+ * same agent session. The agent's session is the relay's correlation key, so a
+ * replaced session cannot write into a newer terminal.
+ */
+export async function handleAgentV2PtyFrame(
+  ctx: PtyDoContext,
+  serverId: string,
+  agentSessionId: string,
+  message: AgentV2PtyMessage,
+  recordClose: RecordPtyClose,
+): Promise<boolean> {
+  const browserFrame = v2PtyFrameForBrowser(message.type, message.payload);
+  if (!browserFrame) {
+    return true;
+  }
+  return deliverAgentPtyFrame(
+    ctx,
+    serverId,
+    { protocol: "v2", connectedAt: "", agentSessionId },
+    message.type,
+    message.payload,
+    browserFrame,
+    recordClose,
+  );
+}
+
+async function deliverAgentPtyFrame(
+  ctx: PtyDoContext,
+  serverId: string,
+  target: AgentPtyTarget,
+  messageType: "pty.started" | "pty.data" | "pty.exit",
+  payload: {
+    sessionId: string;
+    reason?: string;
+    code?: number;
+    signal?: string;
+  },
+  browserFrame: string,
+  recordClose: RecordPtyClose,
+): Promise<boolean> {
+  const sessionId = payload.sessionId;
+  const matching = ptySockets(ctx, serverId).filter(
+    ({ attachment }) =>
+      attachment.sessionId === sessionId &&
+      attachment.agentProtocol === target.protocol &&
+      (target.protocol === "v2"
+        ? Boolean(
+            target.agentSessionId &&
+            attachment.agentSessionId === target.agentSessionId,
+          )
+        : attachment.connectedAt === target.connectedAt),
+  );
+  for (const { ws, attachment } of matching) {
+    if (attachment.closeAudited) {
+      continue;
+    }
+    try {
+      ws.send(browserFrame);
+    } catch {
+      await closePtySocket(ws, attachment, "agent_disconnected", recordClose, {
+        closeCode: 1011,
+        audit: true,
+      });
+      continue;
+    }
+    if (messageType === "pty.exit") {
+      await closePtySocket(
+        ws,
+        { ...attachment, closeAudited: false },
+        (payload.reason as AgentWsPtyExitReason | undefined) ?? "closed",
+        recordClose,
+        {
+          code: payload.code,
+          signal: payload.signal,
+          sendExit: false,
+          audit: true,
+        },
+      );
+    }
+  }
+
+  return matching.length > 0;
+}
+
 export async function closePtySocketsForAgent(
   ctx: PtyDoContext,
   serverId: string,
-  connectedAt: string,
+  target: AgentPtyTarget,
   recordClose: RecordPtyClose,
   reason: AgentWsPtyExitReason = "agent_disconnected",
 ): Promise<void> {
   const matching = ptySockets(ctx, serverId).filter(
-    ({ attachment }) => attachment.connectedAt === connectedAt,
+    ({ attachment }) =>
+      attachment.agentProtocol === target.protocol &&
+      (target.protocol === "v2"
+        ? Boolean(
+            target.agentSessionId &&
+            attachment.agentSessionId === target.agentSessionId,
+          )
+        : attachment.connectedAt === target.connectedAt),
   );
   await Promise.all(
     matching.map(({ ws, attachment }) =>
@@ -599,7 +748,7 @@ export async function revalidatePtySockets(
     const agent = findAgentSocket(
       ctx,
       attachment.serverId,
-      attachment.connectedAt,
+      targetOf(attachment),
     );
     // Without the agent socket the shell cannot be served, so close it
     // without asking the database.
@@ -608,7 +757,13 @@ export async function revalidatePtySockets(
     }
     if (agent) {
       try {
-        agent.send(encodePtyFrame(ptyCloseFrame(attachment.sessionId)));
+        const encoded = encodeForAgent(
+          attachment,
+          ptyCloseFrame(attachment.sessionId),
+        );
+        if (encoded) {
+          agent.send(encoded);
+        }
       } catch {
         // The agent socket is already closing.
       }
@@ -638,6 +793,7 @@ export async function isPtySessionAuthorized(
       enabled: serverTable.enabled,
       transportMode: serverTable.transportMode,
       wsConnectedAt: serverTable.wsConnectedAt,
+      wsSessionId: serverTable.wsSessionId,
       agentCapabilities: serverTable.agentCapabilities,
     })
     .from(session)
@@ -654,13 +810,16 @@ export async function isPtySessionAuthorized(
           enabled: row.enabled,
           transportMode: row.transportMode,
           wsConnectedAt: row.wsConnectedAt,
+          wsSessionId: row.wsSessionId,
           agentCapabilities: row.agentCapabilities,
         },
       }
     : { sessionUserId: null, sessionExpiresAt: null, role: null, server: null };
   return isPtyAuthorized(record, {
     userId: attachment.actor.id,
+    protocol: attachment.agentProtocol,
     serverConnectedAt: attachment.connectedAt,
+    serverSessionId: attachment.agentSessionId,
     now,
   });
 }

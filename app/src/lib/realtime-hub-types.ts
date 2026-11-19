@@ -54,12 +54,27 @@ export interface RealtimeBackplaneMessage {
   frame: string;
   /** Set for v2 pushes, which only v2 sessions may receive. */
   protocol?: "v2";
+  /** The exact agent session a v2 push or PTY frame is addressed to. */
+  agentSessionId?: string;
   /** Admin PTY frames are routed to one side, not broadcast to agents. */
   ptyTarget?: "agent" | "browser";
   ptySessionId?: string;
   connectedAt?: string;
+  /** Selects the v1 or v2 envelope for a PTY frame. */
+  agentProtocol?: AgentPtyProtocol;
   agentDisconnected?: true;
   telemetryReply?: true;
+}
+
+export type AgentPtyProtocol = "v1" | "v2";
+
+/** Which live agent connection a terminal shell is bound to. */
+export interface AgentPtyTarget {
+  protocol: AgentPtyProtocol;
+  /** `wsConnectedAt`, used by v1. */
+  connectedAt: string;
+  /** `wsSessionId`, used by v2. */
+  agentSessionId: string | null;
 }
 
 export interface RealtimeBackplane {

@@ -15,6 +15,7 @@ function server(overrides: Partial<PtyServerRecord> = {}): PtyServerRecord {
     enabled: true,
     transportMode: "ws",
     wsConnectedAt: CONNECTED_AT,
+    wsSessionId: null,
     agentCapabilities: ["pty-v1"],
     ...overrides,
   };
@@ -34,7 +35,9 @@ function record(
 
 const expected = {
   userId: "admin-1",
+  protocol: "v1" as const,
   serverConnectedAt: CONNECTED_AT.toISOString(),
+  serverSessionId: null,
   now: NOW,
 };
 
@@ -47,6 +50,22 @@ describe("ptyAvailability", () => {
     expect(ptyAvailability(server({ agentCapabilities: ["ws-v1"] }))).toBe(
       "unsupported",
     );
+    expect(
+      ptyAvailability(
+        server({
+          wsSessionId: "session-1",
+          agentCapabilities: ["ws-v2", "pty-v2"],
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      ptyAvailability(
+        server({
+          wsSessionId: null,
+          agentCapabilities: ["ws-v2", "pty-v2"],
+        }),
+      ),
+    ).toBe("unsupported");
   });
 });
 
@@ -86,6 +105,33 @@ describe("isPtyAuthorized", () => {
     expect(isPtyAuthorized(record({ sessionUserId: "user-2" }), expected)).toBe(
       false,
     );
+  });
+
+  it("binds a v2 shell to the exact agent session and revokes a replacement", () => {
+    const v2Server = server({
+      wsSessionId: "session-1",
+      agentCapabilities: ["ws-v2", "pty-v2"],
+    });
+    const v2Expected = {
+      ...expected,
+      protocol: "v2" as const,
+      serverSessionId: "session-1",
+    };
+    expect(isPtyAuthorized(record({ server: v2Server }), v2Expected)).toBe(
+      true,
+    );
+    expect(
+      isPtyAuthorized(
+        record({ server: { ...v2Server, wsSessionId: "session-2" } }),
+        v2Expected,
+      ),
+    ).toBe(false);
+    expect(
+      isPtyAuthorized(
+        record({ server: { ...v2Server, agentCapabilities: ["ws-v2"] } }),
+        v2Expected,
+      ),
+    ).toBe(false);
   });
 
   it("revokes when the user has lost the admin role", () => {

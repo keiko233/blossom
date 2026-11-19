@@ -7,6 +7,10 @@ import {
   type AgentWsUpdateTriggerPayload,
   type AgentWsWelcomePayload,
 } from "@blossom/contracts/agent-ws";
+import {
+  createAgentWsV2Frame,
+  encodeAgentWsV2Frame,
+} from "@blossom/contracts/agent-ws-v2";
 import { env } from "cloudflare:workers";
 
 import type { Server } from "@/db/proxy-schema";
@@ -47,8 +51,11 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     welcome: AgentWsWelcomePayload,
   ): Promise<Response> {
     let connectedAt = new Date();
+    let sessionId: string | null = null;
     try {
-      connectedAt = await markAgentWsConnected(server.id);
+      const started = await markAgentWsConnected(server.id);
+      connectedAt = started.connectedAt;
+      sessionId = started.sessionId;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`agent websocket connect metadata failed: ${message}`);
@@ -59,6 +66,9 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     headers.delete("cookie");
     headers.set(AGENT_WS_INTERNAL_SERVER_ID, server.id);
     headers.set(AGENT_WS_INTERNAL_CONNECTED_AT, connectedAt.toISOString());
+    if (sessionId) {
+      headers.set(AGENT_WS_INTERNAL_SESSION_ID, sessionId);
+    }
     headers.set(
       AGENT_WS_INTERNAL_WELCOME,
       encodeURIComponent(JSON.stringify(welcome)),
@@ -72,11 +82,19 @@ export class CloudflareRealtimeHub implements RealtimeHub {
         }),
       );
       if (response.status !== 101) {
-        await markAgentWsDisconnected(server.id, connectedAt).catch(() => {});
+        await markAgentWsDisconnected(
+          server.id,
+          connectedAt,
+          sessionId ?? undefined,
+        ).catch(() => {});
       }
       return response;
     } catch (error) {
-      await markAgentWsDisconnected(server.id, connectedAt).catch(() => {});
+      await markAgentWsDisconnected(
+        server.id,
+        connectedAt,
+        sessionId ?? undefined,
+      ).catch(() => {});
       throw error;
     }
   }
@@ -171,6 +189,11 @@ export class CloudflareRealtimeHub implements RealtimeHub {
       serverId,
       encodeAgentWsFrame(createAgentWsFrame("update.trigger", payload)),
     );
+    await this.sendFrame(
+      serverId,
+      encodeAgentWsV2Frame(createAgentWsV2Frame("update.trigger", payload)),
+      "v2",
+    );
   }
 
   async notifyAcmeIssue(
@@ -181,6 +204,11 @@ export class CloudflareRealtimeHub implements RealtimeHub {
       serverId,
       encodeAgentWsFrame(createAgentWsFrame("acme.issue", payload)),
     );
+    await this.sendFrame(
+      serverId,
+      encodeAgentWsV2Frame(createAgentWsV2Frame("acme.issue", payload)),
+      "v2",
+    );
   }
 
   async notifyAcmeDnsAck(
@@ -190,6 +218,11 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     await this.sendFrame(
       serverId,
       encodeAgentWsFrame(createAgentWsFrame("acme.dns_ack", payload)),
+    );
+    await this.sendFrame(
+      serverId,
+      encodeAgentWsV2Frame(createAgentWsV2Frame("acme.dns_ack", payload)),
+      "v2",
     );
   }
 
