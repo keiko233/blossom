@@ -166,6 +166,46 @@ function persist(ws: WebSocket, attachment: LogSocketAttachment): void {
   }
 }
 
+/**
+ * Events for one browser socket run one at a time. A Durable Object may start
+ * the next WebSocket event while an earlier effect is still awaiting an audit
+ * write; both would then persist their own copy of the attachment and the
+ * later write would erase the earlier one. The queue makes each event read the
+ * latest attachment after the previous one has persisted.
+ */
+const relayQueues = new WeakMap<WebSocket, Promise<void>>();
+
+async function enqueueRelay(
+  ws: WebSocket,
+  run: () => Promise<void>,
+): Promise<void> {
+  const previous = relayQueues.get(ws) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(run);
+  relayQueues.set(ws, next);
+  try {
+    await next;
+  } finally {
+    if (relayQueues.get(ws) === next) {
+      relayQueues.delete(ws);
+    }
+  }
+}
+
+async function applyQueuedEvent(
+  ctx: LogsDoContext,
+  ws: WebSocket,
+  event: LogRelayEvent,
+  dependencies: LogsRelayDependencies,
+): Promise<void> {
+  await enqueueRelay(ws, async () => {
+    const latest = readLogSocketAttachment(ws);
+    if (!latest || latest.closed || latest.state.closed) {
+      return;
+    }
+    await applyEvent(ctx, ws, latest, event, dependencies);
+  });
+}
+
 function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_, reject) => {
@@ -416,10 +456,9 @@ export async function handleLogsBrowserMessage(
     return;
   }
   const now = dependencies.now();
-  await applyEvent(
+  await applyQueuedEvent(
     ctx,
     ws,
-    attachment,
     { type: "browser", text, nowMs: now },
     dependencies,
   );
@@ -436,10 +475,9 @@ export async function handleLogsBrowserClose(
     return;
   }
   const now = dependencies.now();
-  await applyEvent(
+  await applyQueuedEvent(
     ctx,
     ws,
-    attachment,
     { type: "browserClosed", nowMs: now },
     dependencies,
   );
@@ -455,18 +493,19 @@ export async function handleAgentLogFrame(
   dependencies: LogsRelayDependencies,
 ): Promise<void> {
   const now = dependencies.now();
-  for (const { ws, attachment } of logsSockets(ctx, serverId)) {
+  for (const { ws } of logsSockets(ctx, serverId)) {
+    const attachment = readLogSocketAttachment(ws);
     if (
+      !attachment ||
       attachment.agentSessionId !== agentSessionId ||
       attachment.closed ||
       attachment.state.closed
     ) {
       continue;
     }
-    await applyEvent(
+    await applyQueuedEvent(
       ctx,
       ws,
-      attachment,
       { type: "agent", serverId, sessionId: agentSessionId, text, nowMs: now },
       dependencies,
     );
@@ -482,7 +521,11 @@ export async function closeLogSocketsForAgent(
   dependencies: LogsRelayDependencies,
 ): Promise<void> {
   const now = dependencies.now();
-  for (const { ws, attachment } of logsSockets(ctx, serverId)) {
+  for (const { ws } of logsSockets(ctx, serverId)) {
+    const attachment = readLogSocketAttachment(ws);
+    if (!attachment) {
+      continue;
+    }
     const superseded =
       reason === "session_replaced"
         ? attachment.agentSessionId !== agentSessionId
@@ -490,10 +533,9 @@ export async function closeLogSocketsForAgent(
     if (!superseded || attachment.closed || attachment.state.closed) {
       continue;
     }
-    await applyEvent(
+    await applyQueuedEvent(
       ctx,
       ws,
-      attachment,
       { type: "agentGone", reason, nowMs: now },
       dependencies,
     );
@@ -514,63 +556,63 @@ export async function revalidateLogSockets(
   const now = dependencies.now();
   // Re-arm first, so an unexpected error cannot leave relays unchecked.
   await scheduleLogAlarm(ctx, now);
-  for (const { ws, attachment } of ctx.getWebSockets().flatMap((socket) => {
-    const read = readLogSocketAttachment(socket);
-    return read ? [{ ws: socket, attachment: read }] : [];
-  })) {
-    if (attachment.closed || attachment.state.closed) {
-      continue;
-    }
-    await applyEvent(
-      ctx,
-      ws,
-      attachment,
-      { type: "tick", nowMs: now },
-      dependencies,
-    );
-    if (attachment.closed || attachment.state.closed) {
-      continue;
-    }
-    if (
-      !findV2AgentSocket(ctx, attachment.serverId, attachment.agentSessionId)
-    ) {
+  for (const ws of ctx.getWebSockets()) {
+    await enqueueRelay(ws, async () => {
+      const attachment = readLogSocketAttachment(ws);
+      if (!attachment || attachment.closed || attachment.state.closed) {
+        return;
+      }
       await applyEvent(
         ctx,
         ws,
         attachment,
-        {
-          type: "agentGone",
-          reason: "agent_disconnected",
-          nowMs: now,
-        },
+        { type: "tick", nowMs: now },
         dependencies,
       );
-      continue;
-    }
-    if (now - attachment.lastRevalidatedAt < LOGS_REVALIDATE_INTERVAL_MS) {
-      continue;
-    }
-    let reason: LogRelayRevocation | null = "forbidden";
-    try {
-      reason = await withDeadline(
-        dependencies.revalidate(attachment),
-        LOGS_REVALIDATE_TIMEOUT_MS,
-      );
-    } catch {
-      reason = "forbidden";
-    }
-    attachment.lastRevalidatedAt = now;
-    if (reason) {
-      await applyEvent(
-        ctx,
-        ws,
-        attachment,
-        { type: "revoked", reason, nowMs: now },
-        dependencies,
-      );
-    } else {
-      persist(ws, attachment);
-    }
+      if (attachment.closed || attachment.state.closed) {
+        return;
+      }
+      if (
+        !findV2AgentSocket(ctx, attachment.serverId, attachment.agentSessionId)
+      ) {
+        await applyEvent(
+          ctx,
+          ws,
+          attachment,
+          {
+            type: "agentGone",
+            reason: "agent_disconnected",
+            nowMs: now,
+          },
+          dependencies,
+        );
+        return;
+      }
+      if (now - attachment.lastRevalidatedAt < LOGS_REVALIDATE_INTERVAL_MS) {
+        return;
+      }
+      let reason: LogRelayRevocation | null = "forbidden";
+      try {
+        reason = await withDeadline(
+          dependencies.revalidate(attachment),
+          LOGS_REVALIDATE_TIMEOUT_MS,
+        );
+      } catch {
+        reason = "forbidden";
+      }
+      attachment.lastRevalidatedAt = now;
+      if (reason) {
+        await applyEvent(
+          ctx,
+          ws,
+          attachment,
+          { type: "revoked", reason, nowMs: now },
+          dependencies,
+        );
+      } else {
+        persist(ws, attachment);
+      }
+    });
   }
   await scheduleLogAlarm(ctx, now);
 }
