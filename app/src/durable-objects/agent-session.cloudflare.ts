@@ -17,6 +17,7 @@ import {
 } from "@/lib/agent-ws-session";
 import { createAgentWsStore, createAgentWsV2Store } from "@/lib/agent-ws-store";
 import { openAgentWsV2Session } from "@/lib/agent-ws-v2-session";
+import { revalidateLogRelay } from "@/lib/logs-authority";
 import {
   AGENT_WS_INTERNAL_CONNECTED_AT,
   AGENT_WS_INTERNAL_PROTOCOL,
@@ -25,8 +26,20 @@ import {
   AGENT_WS_INTERNAL_WELCOME,
 } from "@/lib/realtime-hub-types";
 import { endAgentWsSession } from "@/query/agent";
+import { recordLogRelayAudit } from "@/query/log-audit";
+import { createLogAuthorityStore } from "@/query/log-authority";
 import { recordPtySessionClose } from "@/query/pty-audit";
 
+import {
+  closeLogSocketsForAgent,
+  handleAgentLogFrame,
+  handleLogsBrowserClose,
+  handleLogsBrowserMessage,
+  handleLogsConnect,
+  readLogSocketAttachment,
+  revalidateLogSockets,
+  type LogsRelayDependencies,
+} from "./logs-session.cloudflare";
 import {
   closePtySocketsForAgent,
   handleAgentPtyFrame,
@@ -157,8 +170,30 @@ export class AgentSessionDO extends DurableObject {
     }
   }
 
+  private logDependencies(database: Database): LogsRelayDependencies {
+    return {
+      now: () => Date.now(),
+      newId: () => crypto.randomUUID(),
+      recordAudit: (serverId, actor, record) =>
+        recordLogRelayAudit({ serverId, actor, record }, database),
+      revalidate: (attachment) =>
+        revalidateLogRelay(createLogAuthorityStore(database), {
+          serverId: attachment.serverId,
+          sessionId: attachment.agentSessionId,
+          authSessionId: attachment.authSessionId,
+          now: new Date(),
+        }),
+    };
+  }
+
   async fetch(request: Request): Promise<Response> {
     const pathname = new URL(request.url).pathname;
+    if (pathname === "/internal/logs/connect") {
+      return handleLogsConnect(this.ctx, request, {
+        now: () => Date.now(),
+        newId: () => crypto.randomUUID(),
+      });
+    }
     if (pathname === "/internal/pty/connect") {
       return handlePtyConnect(this.ctx, request);
     }
@@ -228,7 +263,7 @@ export class AgentSessionDO extends DurableObject {
     return new Response(null, { status: 204 });
   }
 
-  private connect(request: Request): Response {
+  private async connect(request: Request): Promise<Response> {
     if (!isWebSocketUpgrade(request)) {
       return new Response("WebSocket upgrade required", {
         status: 426,
@@ -272,14 +307,29 @@ export class AgentSessionDO extends DurableObject {
     } as ResponseInit & { webSocket: WebSocket });
   }
 
-  private connectV2(
+  private async connectV2(
     request: Request,
     serverId: string | null,
     connectedAt: string | null,
-  ): Response {
+  ): Promise<Response> {
     const sessionId = request.headers.get(AGENT_WS_INTERNAL_SESSION_ID);
     if (!serverId || !connectedAt || !sessionId) {
       return new Response("Bad Request", { status: 400 });
+    }
+
+    // The database already made this session current. Every relay bound to an
+    // older session is now non-authoritative; end it before accepting the new
+    // agent socket so no tail survives across the fence.
+    if (this.ctx.getWebSockets(`logs:${serverId}`).length > 0) {
+      await this.withDatabase((database) =>
+        closeLogSocketsForAgent(
+          this.ctx,
+          serverId,
+          sessionId,
+          "session_replaced",
+          this.logDependencies(database),
+        ),
+      );
     }
 
     const pair = new WebSocketPair();
@@ -317,13 +367,27 @@ export class AgentSessionDO extends DurableObject {
     ws: WebSocket,
     message: string | ArrayBuffer,
   ): Promise<void> {
+    const raw = decodeMessage(message);
+    const logs = readLogSocketAttachment(ws);
+    if (logs) {
+      await this.withDatabase((database) =>
+        handleLogsBrowserMessage(
+          this.ctx,
+          ws,
+          logs,
+          raw,
+          this.logDependencies(database),
+        ),
+      );
+      return;
+    }
     const pty = readPtyAttachment(ws);
     if (pty) {
       await handlePtyBrowserMessage(
         this.ctx,
         ws,
         pty,
-        decodeMessage(message),
+        raw,
         this.recordPtyClose,
       );
       return;
@@ -333,7 +397,6 @@ export class AgentSessionDO extends DurableObject {
       ws.close(1008, "missing session attachment");
       return;
     }
-    const raw = decodeMessage(message);
     if (attachment.protocol === "v2") {
       await this.handleV2Message(ws, attachment, raw);
       return;
@@ -367,6 +430,18 @@ export class AgentSessionDO extends DurableObject {
     _reason: string,
     _wasClean: boolean,
   ): Promise<void> {
+    const logs = readLogSocketAttachment(ws);
+    if (logs) {
+      await this.withDatabase((database) =>
+        handleLogsBrowserClose(
+          this.ctx,
+          ws,
+          logs,
+          this.logDependencies(database),
+        ),
+      );
+      return;
+    }
     const pty = readPtyAttachment(ws);
     if (pty) {
       await handlePtyBrowserClose(this.ctx, ws, pty, this.recordPtyClose);
@@ -383,9 +458,20 @@ export class AgentSessionDO extends DurableObject {
       this.recordPtyClose,
     );
     if (attachment.protocol === "v2") {
-      await this.withDatabase((database) =>
-        endAgentWsSession(attachment.serverId, attachment.sessionId, database),
-      );
+      await this.withDatabase(async (database) => {
+        await closeLogSocketsForAgent(
+          this.ctx,
+          attachment.serverId,
+          attachment.sessionId,
+          "agent_disconnected",
+          this.logDependencies(database),
+        );
+        await endAgentWsSession(
+          attachment.serverId,
+          attachment.sessionId,
+          database,
+        );
+      });
       return;
     }
     await this.withDatabase(async (database) => {
@@ -395,6 +481,17 @@ export class AgentSessionDO extends DurableObject {
       );
       await closeAgentWsSession(session);
     });
+  }
+
+  /**
+   * Hibernation drops timers but keeps the storage alarm. One alarm serves all
+   * log relays of this server: it expires request deadlines and re-checks the
+   * admin, the server and the current v2 session fence.
+   */
+  async alarm(): Promise<void> {
+    await this.withDatabase((database) =>
+      revalidateLogSockets(this.ctx, this.logDependencies(database)),
+    );
   }
 
   /**
@@ -409,12 +506,21 @@ export class AgentSessionDO extends DurableObject {
     raw: string,
   ): Promise<void> {
     await this.withDatabase(async (database) => {
+      const logs = this.logDependencies(database);
       const session = openAgentWsV2Session({
         serverId: attachment.serverId,
         sessionId: attachment.sessionId,
         peer: ws,
         store: createAgentWsV2Store(database),
         welcomed: attachment.welcomed,
+        onLogFrame: (text) =>
+          handleAgentLogFrame(
+            this.ctx,
+            attachment.serverId,
+            attachment.sessionId,
+            text,
+            logs,
+          ),
       });
       await session.handleText(raw);
       if (session.welcomed !== attachment.welcomed) {
@@ -427,6 +533,18 @@ export class AgentSessionDO extends DurableObject {
   }
 
   async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
+    const logs = readLogSocketAttachment(ws);
+    if (logs) {
+      await this.withDatabase((database) =>
+        handleLogsBrowserClose(
+          this.ctx,
+          ws,
+          logs,
+          this.logDependencies(database),
+        ),
+      ).catch(() => undefined);
+      return;
+    }
     const pty = readPtyAttachment(ws);
     if (pty) {
       await handlePtyBrowserClose(

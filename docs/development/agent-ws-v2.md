@@ -92,9 +92,75 @@ The contract and its fixtures were imported from PR #137 (`d9426331f54ef9cc67565
 These remain v1-only and are never sent to v2 sessions:
 
 - `update.trigger` and `update.status`, and the `acme.*` messages. The control plane does not push them to v2 sessions.
-- `telemetry.*`, `pty.*`, and the remote log-level policy messages (`log-policy-v1`). Live tail and retained search are served; changing a source's level remains a separate change.
+- `telemetry.*`, `pty.*`, and the remote log-level policy messages (`log-policy-v1`). Log tail, retained search and context lookup are part of v2; see [Admin log relay](#admin-log-relay). Changing a source's level remains a separate change.
 
 Until the PTY moves to v2, a v2 agent **must not advertise `pty-v1`** in `hello.capabilities`. The admin terminal would otherwise offer a session that cannot start.
+
+## Admin log relay
+
+**Established (control plane).** The admin browser reaches logs through a
+same-origin WebSocket at `/api/admin/servers/$id/logs/ws`. The upgrade requires:
+
+- an `Origin` whose host equals the request host;
+- a live admin session read with `disableRefresh`, so the 101 response is never
+  rebuilt to apply a refreshed cookie;
+- an enabled server whose current transport is a v2 WebSocket session; and
+- an agent that advertised `logs-tail-v1` or `logs-search-v1` (see
+  `AGENT_WS_V2_LOGS_TAIL_CAPABILITY` and
+  `AGENT_WS_V2_LOGS_SEARCH_CAPABILITY` in
+  `packages/contracts/src/agent-ws-v2-logs.ts`).
+
+The control plane admits the relay against the server's current
+`wsSessionId` and then rewrites every id: `subscriptionId` and `requestId` on
+the agent wire are relay-generated, and the browser only ever sees its own
+ids. A response for an unknown id, another server or a replaced session is
+dropped.
+
+| Browser request | Agent request | Agent result | Browser result |
+| --- | --- | --- | --- |
+| `logs.subscribe` | `logs.subscribe` | `logs.batch` / `logs.gap` | `logs.batch` / `logs.gap` |
+| `logs.unsubscribe` | `logs.unsubscribe` | — | — |
+| `logs.search` | `logs.search` | `logs.search.result` / `logs.error` | `logs.search.result` / `logs.error` |
+| `logs.search.cancel` | `logs.search.cancel` | late result, dropped | — |
+| `logs.context` | `logs.context` | `logs.context.result` / `logs.error` | `logs.context.result` / `logs.error` |
+
+Bounds:
+
+- One live tail per relay, two searches and four context lookups in flight.
+- Every agent request has a 10 s deadline; a timeout sends `timeout` to the
+  browser and cancels a search, and a late reply is dropped.
+- Tail delivery is paced at 256 KiB/s with a 1 MiB burst. A batch that does not
+  fit becomes a `dropped` gap, and the tail continues.
+- Batch, search, context, text and browser-frame limits come from
+  `AGENT_WS_V2_LOGS_LIMITS`.
+
+The relay re-checks authority every 30 s: the admin session row, the server's
+enabled flag, the current `wsSessionId`, and the log capability. A newer agent
+handshake also ends older relays immediately. Browser close codes in the 4000
+range identify the state: `4001` forbidden, `4002` server disabled, `4003`
+session replaced, `4004` offline, `4005` unsupported; `1000`, `1008` and `1009`
+are normal close, malformed frame and oversized frame.
+
+Audit rows carry metadata only: operator, server, source, level, UTC bounds,
+limit, whether text was searched, outcome, counts and gap. Search text, records
+and cursors never reach the audit log.
+
+On Nitro and Vercel the relay lives in the in-process hub; Redis carries
+control frames to the instance that owns the agent socket and log results back.
+Redis delivery is best effort. In the Cloudflare `AgentSessionDO` each relay's
+plain-JSON state lives in its WebSocket attachment, and one storage alarm ticks
+request deadlines and runs the authority checks while the object hibernates.
+The agent's `logs.*` frames reach the relay only through the current v2 session
+that was current at admission.
+
+Known limits:
+
+- A lost Redis publish is recovered by the next agent batch or by reconnect;
+  the relay does not replay control frames.
+- The Cloudflare alarm is the only idle authority check; the object cannot run
+  an in-memory timer across hibernation.
+- The Rust agent has not implemented the log messages yet, so it must not
+  advertise the capabilities. The route then refuses with `unsupported`.
 
 ## Limits
 
@@ -146,10 +212,10 @@ Each target is listed separately. "Not run" means the change has no evidence on 
 - **Automated, no database.** Contract schemas, direction and size checks, and both sides of the wire fixtures (`packages/contracts`). Session state machine, snapshot chunking, deadline expiry, fenced snapshots, disabled servers and hub routing, including the token-bound start (`app/src/lib/agent-ws-v2-*.test.ts`, `app/src/lib/realtime-hub-v2.test.ts`).
 - **Disposable PostgreSQL, node-postgres and neon-http.** Fenced acknowledgements, status and traffic, the version fence on cached identifiers, token rotation and the token-bound start (`app/src/query/agent-ws-v2-state.integration.test.ts`). Convergence through the real store adapter and compiler: a routing-rule change with no notification is recovered by the status exchange after the deadline, an invalidated change is reported on the next status, and a rotated credential, a disabled server and a snapshot each stop or serve as specified (`app/src/query/agent-ws-v2-convergence.integration.test.ts`). The neon-http runs use a local `/sql` proxy in front of the same database, not Neon's hosted service.
 - **Rust agent, unit and process lifecycle.** Contract fixtures are decoded by `server-agent/src/ws/v2/codec.rs`; retained tail, search, context, gaps and session reset are unit-tested against the real in-memory buffer. `server-agent/tests/ws_v2_lifecycle.rs` runs the real agent binary against a local v2 WebSocket control plane and a fake sing-box with disposable state. It covers a cold multi-chunk snapshot apply, an unacknowledged traffic report replayed byte-for-byte under the same id, missed-notification recovery through `agent.status.ack`, a failed candidate rolling back to the last-known-good config, and an offline restart from that config. It also streams the fake sing-box's synthetic stdout and stderr through `logs.subscribe`, asserts that a redacted credential never reaches the wire, checks that a reconnect drops the old tail, and drives paginated search and context over the retained buffer. The test control plane records and fails every plain HTTP agent API request, and the test asserts none occurred.
-- **Admin log relay, fakes.** The relay state machine and both runtime adapters are unit-tested with stand-in agents: tail, resume, gap, search, cancellation, pagination, context, backpressure, permission loss and replaced sessions.
+- **Admin log relay, fakes.** The reducer, route admission, Nitro relay, hub Redis routing and Cloudflare attachment/alarm relay are unit-tested with stand-in agents: tail, resume, gap, search, cancellation, pagination, context, backpressure, permission loss and replaced sessions.
 - **Node server, built and run locally.** Against the built Node target, with PostgreSQL through node-postgres: the subprotocol echo, `hello` and `welcome`, a status acknowledgement, a snapshot whose length and digest verify, a credential rotation during a live session (a `config.get` then sends no snapshot, the session stops with `session_replaced` and close 4000), the old token refused with `401`, and the new token welcomed. Checked on 2026-11-19 with a scratch client that is not committed; the built-server handshake recorded in `adc180c` and the v1 route are not re-run here.
 - **Cloudflare, local workerd.** `wrangler dev --local` (Wrangler 4.164) running a copy of the Cloudflare build, with a local Hyperdrive connection string to the same disposable PostgreSQL. Checked on 2026-11-19 with the same scratch client: the same sequence as the Node run, which covers the Durable Object's upgrade, its message path and its fenced close. A session welcomed, then left idle for 70 seconds, still accepted a status, and disabling the server stopped the next status with `server_disabled` and close 4000. Workerd does not report hibernation, so the idle run shows that the welcomed flag survived the idle period, not that the object hibernated. The `401` on the Cloudflare upgrade for a credential that rotates after authentication is covered only by the unit and database tests, not by a race on workerd.
 - **Cloudflare, hibernation.** Not verified. Hibernation was not observed, and timer behaviour and the `4000`-series close after a real wake were not run in any environment. Check them against a deployment before relying on them.
 - **Cloudflare, hosted.** Not verified. Nothing was deployed, and hosted Hyperdrive and the `Sec-WebSocket-Protocol` response through the platform were not exercised.
 - **Vercel.** Built only. Connection lifetime, `reconnectBeforeSeconds` and cross-instance Redis delivery are not verified.
-- **Rust log surface through the admin relay.** Not exercised through the Node relay or under workerd in this change; the control plane side is covered by the shared contract fixtures and the relay tests.
+- **Rust log surface through the admin relay and workerd.** Not exercised by this change's automated suite; the control plane side is covered by the shared contract fixtures and the relay tests.

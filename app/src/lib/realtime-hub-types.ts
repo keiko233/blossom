@@ -9,6 +9,7 @@ import type {
 import type { Server } from "@/db/proxy-schema";
 
 import type { TelemetryKind, TelemetryResult } from "./agent-telemetry";
+import type { AdminLogsAcceptContext } from "./logs-relay-types";
 
 export interface RealtimeHub {
   /**
@@ -25,6 +26,15 @@ export interface RealtimeHub {
    * started and welcomed in-band, so no welcome is computed at upgrade time.
    */
   acceptAgentV2(request: Request, server: Server): Promise<Response>;
+  /**
+   * Completes an already-authenticated, same-origin admin log upgrade. The
+   * context names the server and the current v2 agent session the relay binds
+   * to; both runtimes deliver agent log frames only for that session.
+   */
+  acceptAdminLogs(
+    request: Request,
+    context: AdminLogsAcceptContext,
+  ): Promise<Response>;
   requestTelemetry(
     serverId: string,
     kind: TelemetryKind,
@@ -57,6 +67,13 @@ export interface RealtimeBackplaneMessage {
   /** Admin PTY frames are routed to one side, not broadcast to agents. */
   ptyTarget?: "agent" | "browser";
   ptySessionId?: string;
+  /** Admin log frames cross instances by session, never by browser id. */
+  logTarget?: "agent" | "browser";
+  logSessionId?: string;
+  /** A newer agent session replaced every relay bound to an older one. */
+  logSuperseded?: true;
+  /** The agent session that relays are bound to has disconnected. */
+  logAgentGone?: true;
   connectedAt?: string;
   agentDisconnected?: true;
   telemetryReply?: true;
@@ -76,3 +93,10 @@ export const AGENT_WS_INTERNAL_CONNECTED_AT = "x-blossom-agent-connected-at";
 export const AGENT_WS_INTERNAL_WELCOME = "x-blossom-agent-welcome";
 export const AGENT_WS_INTERNAL_PROTOCOL = "x-blossom-agent-protocol";
 export const AGENT_WS_INTERNAL_SESSION_ID = "x-blossom-agent-session-id";
+export const AGENT_LOGS_INTERNAL_SERVER_ID = "x-blossom-agent-logs-server-id";
+export const AGENT_LOGS_INTERNAL_SESSION_ID = "x-blossom-agent-logs-session-id";
+export const AGENT_LOGS_INTERNAL_AUTH_SESSION_ID =
+  "x-blossom-agent-logs-auth-session-id";
+export const AGENT_LOGS_INTERNAL_RELAY_ID = "x-blossom-agent-logs-relay-id";
+export const AGENT_LOGS_INTERNAL_ACTOR = "x-blossom-agent-logs-actor";
+export const AGENT_LOGS_INTERNAL_STARTED_AT = "x-blossom-agent-logs-started-at";
