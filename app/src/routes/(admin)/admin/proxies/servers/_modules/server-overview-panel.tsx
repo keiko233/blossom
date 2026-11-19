@@ -6,6 +6,7 @@ import { serverWorkspaceStatus } from "@/lib/server-workspace";
 import { m } from "@/paraglide/messages";
 import type { ServerDTO } from "@/query/servers";
 
+import { ServerHistoryPanel } from "./server-history-panel";
 import { ServerLivePanel } from "./server-live-panel";
 import { updateStateLabel } from "./server-status";
 
@@ -55,6 +56,7 @@ export function ServerOverviewPanel({
       </section>
 
       <ServerLivePanel serverId={server.id} />
+      <ServerHistoryPanel serverId={server.id} />
       <TrafficTrend serverId={server.id} />
     </div>
   );
