@@ -4,11 +4,8 @@ import { db } from "@/db";
 import { server } from "@/db/proxy-schema";
 import { getAuth } from "@/lib/auth";
 import { getClientIp } from "@/lib/client-ip";
-import {
-  clampPtyDimensions,
-  isValidPtySessionId,
-  PTY_CAPABILITY,
-} from "@/lib/pty-protocol";
+import { ptyAvailability } from "@/lib/pty-authorization";
+import { clampPtyDimensions, isValidPtySessionId } from "@/lib/pty-protocol";
 import { acceptAdminPty } from "@/lib/pty-relay";
 import type { AdminPtyAcceptContext } from "@/lib/pty-relay-types";
 import {
@@ -94,19 +91,6 @@ function plain(status: number, message: string): Response {
   });
 }
 
-function availability(row: AdminPtyServerState): string | null {
-  if (!row.enabled) {
-    return "disabled";
-  }
-  if (row.transportMode !== "ws" || !row.wsConnectedAt) {
-    return "offline";
-  }
-  if (!row.agentCapabilities.includes(PTY_CAPABILITY)) {
-    return "unsupported";
-  }
-  return null;
-}
-
 async function loadAuthorizedServer(
   request: Request,
   serverId: string,
@@ -144,7 +128,7 @@ export async function handleAdminPtyStatus(
   if (!loaded.ok) {
     return loaded.response;
   }
-  const unavailable = availability(loaded.row);
+  const unavailable = ptyAvailability(loaded.row);
   return Response.json(
     unavailable
       ? { available: false, reason: unavailable }
@@ -179,7 +163,7 @@ export async function handleAdminPtyRequest(
     return loaded.response;
   }
   const { auth, row } = loaded;
-  const unavailable = availability(row);
+  const unavailable = ptyAvailability(row);
   if (unavailable) {
     return Response.json(
       { error: unavailable },
@@ -222,6 +206,7 @@ export async function handleAdminPtyRequest(
       cols: dimensions.cols,
       rows: dimensions.rows,
       session,
+      authSessionId: auth.session.id,
       isAuthorized: async () => {
         const current = await loadAuthorizedServer(
           request,
@@ -230,7 +215,7 @@ export async function handleAdminPtyRequest(
         );
         return (
           current.ok &&
-          availability(current.row) === null &&
+          ptyAvailability(current.row) === null &&
           current.row.wsConnectedAt?.toISOString() === connectedAt
         );
       },

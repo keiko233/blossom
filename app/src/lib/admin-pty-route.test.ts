@@ -52,7 +52,7 @@ function dependencies(
             email: "admin@example.com",
             role: "admin",
           },
-          session: { impersonatedBy: null },
+          session: { id: "auth-session-1", impersonatedBy: null },
         }) as unknown as AdminPtyAuthSession,
     ),
     loadServer: vi.fn(async () => row()),
@@ -168,6 +168,7 @@ describe("admin PTY upgrade", () => {
     const deps = dependencies({ accept });
     await handleAdminPtyRequest(request(), { serverId: "srv-1" }, deps);
     const context = accept.mock.calls[0]?.[1];
+    expect(context?.authSessionId).toBe("auth-session-1");
     expect(await context?.isAuthorized()).toBe(true);
 
     deps.authenticate = vi.fn(async () => null);
