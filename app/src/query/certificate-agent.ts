@@ -11,12 +11,18 @@ import { advanceCertificateIssuance } from "@/lib/certificate-issuance";
 import { BINDING_GENERATION_RESET_WRITE } from "@/lib/node-certificate-binding";
 import { decideCertificateDeployment } from "@/orpc/proxy/singbox";
 
-export async function getCertificateAgentContext(serverId: string) {
+export async function getCertificateAgentContext(
+  serverId: string,
+  options: { database?: Database; advanceIssuance?: boolean } = {},
+) {
+  const database = options.database ?? db;
   // Serverless runtimes have no resident scheduler. Any agent config poll is a
   // wake-up signal for the global, lease-protected server-side issuer; the
   // calling agent never performs issuance or handles DNS credentials.
-  await advanceCertificateIssuance();
-  const rows = await db
+  if (options.advanceIssuance ?? true) {
+    await advanceCertificateIssuance();
+  }
+  const rows = await database
     .select({ certificate: managedCertificate, binding: certificateServer })
     .from(certificateServer)
     .innerJoin(
@@ -42,7 +48,7 @@ export async function getCertificateAgentContext(serverId: string) {
         }
       | undefined;
     if (activeVersion !== null) {
-      const [stored] = await db
+      const [stored] = await database
         .select()
         .from(certificateMaterial)
         .where(

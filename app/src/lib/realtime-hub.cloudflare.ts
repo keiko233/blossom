@@ -10,12 +10,20 @@ import {
 import { env } from "cloudflare:workers";
 
 import type { Server } from "@/db/proxy-schema";
-import { markAgentWsConnected, markAgentWsDisconnected } from "@/query/agent";
+import {
+  markAgentWsConnected,
+  markAgentWsDisconnected,
+  endAgentWsSession,
+} from "@/query/agent";
 
 import type { TelemetryKind, TelemetryResult } from "./agent-telemetry";
+import { createAgentWsV2Store } from "./agent-ws-store";
+import { encodeAgentWsV2ConfigNotify } from "./agent-ws-v2-session";
 import {
   AGENT_WS_INTERNAL_CONNECTED_AT,
+  AGENT_WS_INTERNAL_PROTOCOL,
   AGENT_WS_INTERNAL_SERVER_ID,
+  AGENT_WS_INTERNAL_SESSION_ID,
   AGENT_WS_INTERNAL_WELCOME,
   type RealtimeHub,
 } from "./realtime-hub-types";
@@ -73,6 +81,47 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     }
   }
 
+  async acceptAgentV2(request: Request, server: Server): Promise<Response> {
+    const started = await createAgentWsV2Store().startSession(
+      server.id,
+      server.agentTokenHash,
+    );
+    if (!started) {
+      // The credential changed after the upgrade was authenticated.
+      return new Response("Unauthorized", {
+        status: 401,
+        headers: { "cache-control": "no-store" },
+      });
+    }
+
+    const headers = new Headers(request.headers);
+    headers.delete("authorization");
+    headers.delete("cookie");
+    headers.set(AGENT_WS_INTERNAL_SERVER_ID, server.id);
+    headers.set(
+      AGENT_WS_INTERNAL_CONNECTED_AT,
+      started.connectedAt.toISOString(),
+    );
+    headers.set(AGENT_WS_INTERNAL_PROTOCOL, "v2");
+    headers.set(AGENT_WS_INTERNAL_SESSION_ID, started.sessionId);
+
+    try {
+      const response = await durableObjectStub(server.id).fetch(
+        new Request(new URL("/internal/connect", request.url), {
+          method: "GET",
+          headers,
+        }),
+      );
+      if (response.status !== 101) {
+        await endAgentWsSession(server.id, started.sessionId).catch(() => {});
+      }
+      return response;
+    } catch (error) {
+      await endAgentWsSession(server.id, started.sessionId).catch(() => {});
+      throw error;
+    }
+  }
+
   async requestTelemetry(
     serverId: string,
     kind: TelemetryKind,
@@ -100,6 +149,17 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     await this.sendFrame(
       serverId,
       encodeAgentWsFrame(createAgentWsFrame("config.notify", payload)),
+    );
+    await this.sendFrame(
+      serverId,
+      encodeAgentWsV2ConfigNotify({
+        desired: {
+          desiredRevisionSeq: payload.desiredRevisionSeq,
+          desiredRevision: payload.desiredRevision,
+        },
+        ...(payload.reason ? { reason: payload.reason } : {}),
+      }),
+      "v2",
     );
   }
 
@@ -133,13 +193,17 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     );
   }
 
-  private async sendFrame(serverId: string, frame: string): Promise<void> {
+  private async sendFrame(
+    serverId: string,
+    frame: string,
+    protocol?: "v2",
+  ): Promise<void> {
     try {
       const response = await durableObjectStub(serverId).fetch(
         new Request("https://agent-session.internal/internal/notify", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ frame }),
+          body: JSON.stringify({ frame, ...(protocol ? { protocol } : {}) }),
         }),
       );
       if (!response.ok) {

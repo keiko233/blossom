@@ -16,6 +16,7 @@ Forward-looking proposals and phased execution plans live under [docs/spec/](../
 | `server-agent/` architecture, OpenAPI client, sing-box supervision, updates       | [Server agent](server-agent.md)                          |
 | Generated files and how to regenerate them                                        | [Generated files](generated-files.md)                    |
 | Which tests and checks to run                                                     | [Testing and verification](testing.md)                   |
+| Agent WebSocket v2: negotiation, handshake, snapshots, status, traffic            | [Agent WebSocket v2](agent-ws-v2.md)                     |
 | Commands, CI, workflows, worktrees, git hooks, commits                            | [Workflow](workflow.md)                                  |
 
 ## How to read these guides

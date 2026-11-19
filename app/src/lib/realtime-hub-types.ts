@@ -20,6 +20,11 @@ export interface RealtimeHub {
     server: Server,
     welcome: AgentWsWelcomePayload,
   ): Promise<Response>;
+  /**
+   * Completes an upgrade that negotiated the v2 subprotocol. The session is
+   * started and welcomed in-band, so no welcome is computed at upgrade time.
+   */
+  acceptAgentV2(request: Request, server: Server): Promise<Response>;
   requestTelemetry(
     serverId: string,
     kind: TelemetryKind,
@@ -47,6 +52,8 @@ export interface RealtimeBackplaneMessage {
   origin: string;
   serverId: string;
   frame: string;
+  /** Set for v2 pushes, which only v2 sessions may receive. */
+  protocol?: "v2";
   /** Admin PTY frames are routed to one side, not broadcast to agents. */
   ptyTarget?: "agent" | "browser";
   ptySessionId?: string;
@@ -67,3 +74,5 @@ export const REALTIME_BACKPLANE_CHANNEL = "blossom:agent-ws:v1";
 export const AGENT_WS_INTERNAL_SERVER_ID = "x-blossom-agent-server-id";
 export const AGENT_WS_INTERNAL_CONNECTED_AT = "x-blossom-agent-connected-at";
 export const AGENT_WS_INTERNAL_WELCOME = "x-blossom-agent-welcome";
+export const AGENT_WS_INTERNAL_PROTOCOL = "x-blossom-agent-protocol";
+export const AGENT_WS_INTERNAL_SESSION_ID = "x-blossom-agent-session-id";

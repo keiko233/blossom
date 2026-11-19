@@ -9,6 +9,7 @@ import {
   type AgentWsUpdateTriggerPayload,
   type AgentWsWelcomePayload,
 } from "@blossom/contracts/agent-ws";
+import { AGENT_WS_V2_SUBPROTOCOL } from "@blossom/contracts/agent-ws-v2";
 import Redis from "ioredis";
 
 import type { Server } from "@/db/proxy-schema";
@@ -26,7 +27,16 @@ import {
   type AgentWsPeer,
   type AgentWsSession,
 } from "./agent-ws-session";
-import { createAgentWsStore } from "./agent-ws-store";
+import {
+  createAgentWsStore,
+  createAgentWsV2Store,
+  type AgentWsV2HubStore,
+} from "./agent-ws-store";
+import {
+  encodeAgentWsV2ConfigNotify,
+  openAgentWsV2Session,
+  type AgentWsV2Session,
+} from "./agent-ws-v2-session";
 import {
   REALTIME_BACKPLANE_CHANNEL,
   type RealtimeBackplane,
@@ -44,6 +54,8 @@ interface CrosswsPeer extends AgentWsPeer {
 }
 
 interface CrosswsHooks {
+  /** Chooses the subprotocol echoed on the upgrade response, if any. */
+  upgrade?(request: Request): { protocol: string };
   open(peer: CrosswsPeer): void | Promise<void>;
   message(peer: CrosswsPeer, message: CrosswsMessage): void | Promise<void>;
   close(
@@ -71,13 +83,22 @@ export function attachCrosswsHooks(
   return response;
 }
 
+/** Vercel bounds a function's lifetime, so agents reconnect before it ends. */
+const VERCEL_RECONNECT_BEFORE_SECONDS = 240;
+
 export function withRuntimeReconnectHint(
   welcome: AgentWsWelcomePayload,
   runtime: { vercel?: boolean } = {
     vercel: Boolean(process.env.VERCEL),
   },
 ): AgentWsWelcomePayload {
-  return runtime.vercel ? { ...welcome, reconnectBeforeSeconds: 240 } : welcome;
+  return runtime.vercel
+    ? { ...welcome, reconnectBeforeSeconds: VERCEL_RECONNECT_BEFORE_SECONDS }
+    : welcome;
+}
+
+function reconnectBeforeSecondsForRuntime(): number | undefined {
+  return process.env.VERCEL ? VERCEL_RECONNECT_BEFORE_SECONDS : undefined;
 }
 
 class RedisBackplane implements RealtimeBackplane {
@@ -124,6 +145,12 @@ type LocalConnection = {
   session: Promise<AgentWsSession>;
 };
 
+type LocalV2Connection = {
+  peer: CrosswsPeer;
+  /** `null` when the credential changed before the session could start. */
+  session: Promise<AgentWsV2Session | null>;
+};
+
 export type PtyRelayEvent =
   | { type: "frame"; frame: string }
   | { type: "agent_disconnected" };
@@ -138,9 +165,11 @@ interface LocalPtyRelay {
 export class NitroRealtimeHub implements RealtimeHub {
   readonly id = crypto.randomUUID();
   private readonly connections = new Map<string, Set<LocalConnection>>();
+  private readonly v2Connections = new Map<string, Set<LocalV2Connection>>();
   private readonly ptyRelays = new Map<string, Map<string, LocalPtyRelay>>();
   private readonly backplane: RealtimeBackplane | undefined;
   private readonly store: ReturnType<typeof createAgentWsStore>;
+  private readonly v2Store: AgentWsV2HubStore;
   private readonly telemetry = new TelemetryRequests();
   private backplaneReady: Promise<void> | undefined;
 
@@ -148,10 +177,12 @@ export class NitroRealtimeHub implements RealtimeHub {
     options: {
       backplane?: RealtimeBackplane;
       store?: ReturnType<typeof createAgentWsStore>;
+      v2Store?: AgentWsV2HubStore;
     } = {},
   ) {
     this.backplane = options.backplane ?? defaultBackplane();
     this.store = options.store ?? createAgentWsStore();
+    this.v2Store = options.v2Store ?? createAgentWsV2Store();
   }
 
   async acceptAgent(
@@ -169,6 +200,134 @@ export class NitroRealtimeHub implements RealtimeHub {
       request,
       hooks,
     );
+  }
+
+  async acceptAgentV2(request: Request, server: Server): Promise<Response> {
+    return attachCrosswsHooks(
+      new Response(null, {
+        status: 426,
+        headers: { Connection: "Upgrade", Upgrade: "websocket" },
+      }),
+      request,
+      this.createV2Hooks(server.id, server.agentTokenHash),
+    );
+  }
+
+  private createV2Hooks(serverId: string, tokenHash: string): CrosswsHooks {
+    return {
+      upgrade: () => ({ protocol: AGENT_WS_V2_SUBPROTOCOL }),
+      open: async (peer) => {
+        const session = (async () => {
+          const started = await this.v2Store.startSession(serverId, tokenHash);
+          if (!started) {
+            return null;
+          }
+          return openAgentWsV2Session({
+            serverId,
+            sessionId: started.sessionId,
+            peer,
+            store: this.v2Store,
+            reconnectBeforeSeconds: reconnectBeforeSecondsForRuntime(),
+          });
+        })();
+        let peers = this.v2Connections.get(serverId);
+        if (!peers) {
+          peers = new Set();
+          this.v2Connections.set(serverId, peers);
+        }
+        const connection: LocalV2Connection = { peer, session };
+        peers.add(connection);
+        this.startBackplane();
+        try {
+          if (!(await session)) {
+            this.removeV2Connection(serverId, peer);
+            peer.close(1008, "credential changed");
+          }
+        } catch (error) {
+          this.removeV2Connection(serverId, peer);
+          const message =
+            error instanceof Error ? error.message : String(error);
+          console.warn(`agent websocket v2 open failed: ${message}`);
+          peer.close(1011, "session unavailable");
+        }
+      },
+      message: async (peer, message) => {
+        const connection = this.findV2Connection(serverId, peer);
+        if (!connection) {
+          return;
+        }
+        const session = await connection.session;
+        await session?.handleText(message.text());
+      },
+      close: async (peer) => {
+        const connection = this.removeV2Connection(serverId, peer);
+        if (!connection) {
+          return;
+        }
+        const session = await connection.session.catch(() => undefined);
+        await session?.close();
+      },
+      error: (peer, error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `agent websocket v2 error for ${serverId} (${peer.id}): ${message}`,
+        );
+      },
+    };
+  }
+
+  private findV2Connection(
+    serverId: string,
+    peer: CrosswsPeer,
+  ): LocalV2Connection | undefined {
+    return [...(this.v2Connections.get(serverId) ?? [])].find(
+      (connection) => connection.peer === peer,
+    );
+  }
+
+  private removeV2Connection(
+    serverId: string,
+    peer: CrosswsPeer,
+  ): LocalV2Connection | undefined {
+    const peers = this.v2Connections.get(serverId);
+    const connection = this.findV2Connection(serverId, peer);
+    if (connection) {
+      peers?.delete(connection);
+      if (peers?.size === 0) {
+        this.v2Connections.delete(serverId);
+      }
+    }
+    return connection;
+  }
+
+  /**
+   * Delivers a v2 push to every welcomed session of the server on this
+   * instance. A session that has not been welcomed reconciles through hello,
+   * so it must not receive pushes that could precede its configuration.
+   */
+  private deliverV2(serverId: string, frame: string): void {
+    for (const connection of this.v2Connections.get(serverId) ?? []) {
+      void connection.session
+        .then((session) => {
+          if (session?.welcomed) {
+            connection.peer.send(frame);
+          }
+        })
+        .catch(() => undefined);
+    }
+  }
+
+  private publishV2(serverId: string, frame: string): void {
+    this.deliverV2(serverId, frame);
+    const backplane = this.backplane;
+    if (!backplane) return;
+    const ready = this.startBackplane();
+    const relay = () =>
+      backplane.publish({ origin: this.id, serverId, frame, protocol: "v2" });
+    void (ready ? ready.then(relay) : relay()).catch((error: unknown) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.warn(`realtime backplane publish failed: ${reason}`);
+    });
   }
 
   private createHooks(
@@ -463,6 +622,10 @@ export class NitroRealtimeHub implements RealtimeHub {
         if (message.origin === this.id) {
           return;
         }
+        if (message.protocol === "v2") {
+          this.deliverV2(message.serverId, message.frame);
+          return;
+        }
         if (message.agentDisconnected) {
           this.closePtyRelays(message.serverId, message.connectedAt ?? "");
           return;
@@ -598,6 +761,16 @@ export class NitroRealtimeHub implements RealtimeHub {
     this.publish(
       serverId,
       encodeAgentWsFrame(createAgentWsFrame("config.notify", payload)),
+    );
+    this.publishV2(
+      serverId,
+      encodeAgentWsV2ConfigNotify({
+        desired: {
+          desiredRevisionSeq: payload.desiredRevisionSeq,
+          desiredRevision: payload.desiredRevision,
+        },
+        ...(payload.reason ? { reason: payload.reason } : {}),
+      }),
     );
   }
 

@@ -12,6 +12,12 @@ import type { RealtimeHub } from "./realtime-hub-types";
 export interface AgentNotificationDependencies {
   loadServer(serverId: string): Promise<Server | null>;
   loadDesiredRevision(server: Server): Promise<string>;
+  /**
+   * Clears the server's cached v2 configuration identifier. The push below may
+   * never arrive, so the next v2 status exchange must recompile instead of
+   * trusting a cache that predates this change.
+   */
+  invalidateDesiredRevision?(serverId: string): Promise<void>;
   hub: Pick<
     RealtimeHub,
     "acceptAgent" | "notifyConfigChanged" | "notifyUpdateTrigger"
@@ -32,6 +38,10 @@ const defaultDependencies: AgentNotificationDependencies = {
     const { buildAgentDesiredState } =
       await import("@/orpc/proxy/agent-desired-state");
     return (await buildAgentDesiredState(row)).desiredRevision;
+  },
+  invalidateDesiredRevision: async (serverId) => {
+    const { invalidateDesiredConfigRevisions } = await import("@/query/agent");
+    await invalidateDesiredConfigRevisions([serverId]);
   },
   hub: {
     acceptAgent: async (...args) =>
@@ -66,6 +76,7 @@ export async function notifyAgentConfigChanged(
 ): Promise<void> {
   for (const serverId of new Set(serverIds)) {
     try {
+      await dependencies.invalidateDesiredRevision?.(serverId);
       const row = await dependencies.loadServer(serverId);
       if (!row) {
         continue;

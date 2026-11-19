@@ -76,6 +76,10 @@ export const server = pgTable(
       .default("http")
       .notNull(),
     wsConnectedAt: timestamp("ws_connected_at"),
+    // Identity of the current agent WebSocket session (v1 or v2). Each
+    // handshake replaces it in one UPDATE, and every durable write from a
+    // session is conditional on it, so a replaced connection cannot write.
+    wsSessionId: text("ws_session_id"),
     agentVersion: text("agent_version"),
     // Build identity and capability surface reported by the agent on every
     // heartbeat. `agentBuildId` is a stable build tag; `agentCapabilities`
@@ -134,6 +138,21 @@ export const server = pgTable(
     // owning server's applied seq (see `@/lib/publish-gate`).
     desiredRevisionSeq: integer("desired_revision_seq").default(0).notNull(),
     appliedRevisionSeq: integer("applied_revision_seq").default(0).notNull(),
+    // Cached full configuration identifier ("<seq>:sha256:<hex>") served on v2
+    // status acknowledgments without compiling. Null means "not compiled since
+    // the last change"; the next reader compiles and stores it again.
+    desiredConfigRevision: text("desired_config_revision"),
+    // Bumped by every invalidation of the cached identifier. Inputs that no
+    // publish-gate sequence covers (certificates, routing rules) change the
+    // identifier without moving `desiredRevisionSeq`, so a cache write names the
+    // version it was compiled at and is refused if an invalidation raced it.
+    desiredInputsVersion: integer("desired_inputs_version")
+      .default(0)
+      .notNull(),
+    // The cached identifier is trusted only until this instant. It bounds how
+    // long an input with no change record (a subscription that expires with
+    // the clock, a temporary ban) can stay unreflected in the identifier.
+    desiredConfigValidUntil: timestamp("desired_config_valid_until"),
     activeNodeIds: jsonb("active_node_ids")
       .$type<string[]>()
       .default([])

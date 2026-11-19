@@ -14,6 +14,7 @@ import {
   ruleIdSchema,
   updateRuleSchema,
 } from "@/orpc/rule/schema";
+import { invalidateDesiredConfigRevisions } from "@/query/agent";
 
 /** TanStack Query key for the admin routing rule list. */
 export const RULES_QUERY_KEY = ["admin", "rules"] as const;
@@ -61,6 +62,7 @@ export const createRule = createServerFn({ method: "POST" })
       .insert(routingRule)
       .values({ id: randomUUID(), ...data, sortOrder })
       .returning();
+    await invalidateDesiredConfigRevisions();
     return row;
   });
 
@@ -100,6 +102,7 @@ export const updateRule = createServerFn({ method: "POST" })
     if (!row) {
       throw new Error("Not found");
     }
+    await invalidateDesiredConfigRevisions();
     return row;
   });
 
@@ -120,6 +123,7 @@ export const deleteRule = createServerFn({ method: "POST" })
     if (!row) {
       throw new Error("Not found");
     }
+    await invalidateDesiredConfigRevisions();
     return { id: row.id };
   });
 
@@ -144,5 +148,6 @@ export const reorderRules = createServerFn({ method: "POST" })
         sortOrder: sql`CASE ${routingRule.id} ${sql.join(cases, sql` `)} END`,
       })
       .where(inArray(routingRule.id, data.ids));
+    await invalidateDesiredConfigRevisions();
     return { count: data.ids.length };
   });
