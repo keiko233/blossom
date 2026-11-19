@@ -25,3 +25,4 @@ permissions:
     skills: true
   drizzle-kit:
     skills: true
+minimumReleaseAge: 0
