@@ -3,8 +3,13 @@ import type {
   AgentWsHelloPayload,
   AgentWsUpdateStatuses,
 } from "@blossom/contracts/agent-ws";
+import type {
+  AgentWsV2ConfigAckPayload,
+  AgentWsV2HelloPayload,
+  AgentWsV2StatusPayload,
+} from "@blossom/contracts/agent-ws-v2";
 import { parseRevisionSeq } from "@blossom/domain/config-revision";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { createHash, randomUUID } from "node:crypto";
 import type { z } from "zod";
 
@@ -361,6 +366,237 @@ export async function listServerNodeIds(serverId: string): Promise<string[]> {
     .from(node)
     .where(eq(node.serverId, serverId));
   return rows.map((row) => row.id);
+}
+
+/** Loads the server row a v2 session reads before it compiles. */
+export async function loadAgentServer(
+  serverId: string,
+  database: DbHandle = db,
+): Promise<Server | null> {
+  const [row] = await database
+    .select()
+    .from(server)
+    .where(eq(server.id, serverId));
+  return row ?? null;
+}
+
+/** The predicate every v2 session write carries: this session is current. */
+function currentSession(serverId: string, sessionId: string) {
+  return and(eq(server.id, serverId), eq(server.wsSessionId, sessionId));
+}
+
+/**
+ * The applied-revision columns for a revision the agent reports. The string
+ * follows the sequence: it changes only when the report is at least as new as
+ * what is already recorded, so an older report never rewinds the gate.
+ */
+function appliedRevisionColumns(revision: string, seq: number) {
+  return {
+    appliedRevision: sql<string>`CASE WHEN ${server.appliedRevisionSeq} <= ${seq}::integer THEN ${revision}::text ELSE ${server.appliedRevision} END`,
+    appliedRevisionSeq: sql<number>`GREATEST(${server.appliedRevisionSeq}, ${seq}::integer)`,
+  };
+}
+
+/**
+ * Records a v2 `hello` for the current session. Returns the server row, or
+ * `null` when the session has been replaced so the caller must stop.
+ */
+export async function recordAgentV2Hello(
+  serverId: string,
+  sessionId: string,
+  hello: AgentWsV2HelloPayload,
+  database: DbHandle = db,
+): Promise<Server | null> {
+  const now = new Date();
+  const applied = hello.applied;
+  const [row] = await database
+    .update(server)
+    .set({
+      lastSeenAt: now,
+      agentVersion: hello.agentVersion,
+      agentBuildId: hello.agentBuildId,
+      agentCapabilities: hello.capabilities,
+      ...(applied
+        ? appliedRevisionColumns(
+            applied.desiredRevision,
+            applied.desiredRevisionSeq,
+          )
+        : {}),
+      ...(hello.updates
+        ? { ...updateStatusColumns(hello.updates), statusReportedAt: now }
+        : {}),
+    })
+    .where(currentSession(serverId, sessionId))
+    .returning();
+  if (row && applied) {
+    await pruneAppliedConfigChanges(
+      serverId,
+      applied.desiredRevisionSeq,
+      database,
+    );
+  }
+  return row ?? null;
+}
+
+/**
+ * Records a v2 `agent.status` for the current session. Only fields the agent
+ * sent change; `error: null` clears the last error. Returns the updated row
+ * (carrying the authoritative identifiers), or `null` when the session is
+ * no longer current.
+ */
+export async function recordAgentV2Status(
+  serverId: string,
+  sessionId: string,
+  status: AgentWsV2StatusPayload,
+  database: DbHandle = db,
+): Promise<Server | null> {
+  const now = new Date();
+  const error = status.error;
+  const [row] = await database
+    .update(server)
+    .set({
+      lastSeenAt: now,
+      statusReportedAt: now,
+      ...(status.runtimeState ? { runtimeState: status.runtimeState } : {}),
+      ...(status.configState ? { configState: status.configState } : {}),
+      ...(status.singBoxVersion
+        ? { singBoxVersion: status.singBoxVersion }
+        : {}),
+      ...(status.activeNodeIds ? { activeNodeIds: status.activeNodeIds } : {}),
+      ...(status.updates ? updateStatusColumns(status.updates) : {}),
+      ...(error === undefined
+        ? {}
+        : error === null
+          ? {
+              lastErrorPhase: null,
+              lastErrorCode: null,
+              lastErrorMessage: null,
+              lastErrorNodeId: null,
+              lastErrorAt: null,
+            }
+          : {
+              lastErrorPhase: error.phase,
+              lastErrorCode: error.code,
+              lastErrorMessage: sanitizeAgentMessage(error.message),
+              lastErrorNodeId: error.nodeId ?? null,
+              lastErrorAt: error.occurredAt ? new Date(error.occurredAt) : now,
+            }),
+    })
+    .where(currentSession(serverId, sessionId))
+    .returning();
+  return row ?? null;
+}
+
+/**
+ * Records a v2 `config.ack`. A success advances the applied revision in the
+ * same statement that checks the session fence, and only when the acknowledged
+ * sequence is not older than the recorded one. A stale or replayed success
+ * therefore cannot reopen or rewind the publish gate. A failure records the
+ * failed stage and leaves the applied revision untouched.
+ */
+export async function recordAgentV2ConfigAck(
+  serverId: string,
+  sessionId: string,
+  ack: AgentWsV2ConfigAckPayload,
+  database: DbHandle = db,
+): Promise<"replaced" | "applied" | "failed" | "stale"> {
+  const now = new Date();
+  if (ack.outcome === "failed") {
+    const rows = await database
+      .update(server)
+      .set({
+        lastSeenAt: now,
+        statusReportedAt: now,
+        configState: "apply_failed",
+        lastErrorPhase: "config",
+        lastErrorCode: `config_${ack.stage ?? "unknown"}`,
+        lastErrorMessage: sanitizeAgentMessage(ack.error ?? "config failed"),
+        lastErrorNodeId: null,
+        lastErrorAt: now,
+      })
+      .where(currentSession(serverId, sessionId))
+      .returning({ id: server.id });
+    return rows.length > 0 ? "failed" : "replaced";
+  }
+
+  const seq = ack.desired.desiredRevisionSeq;
+  const [outcome] = await database.execute<{ fenced: number; applied: number }>(
+    sql`
+      WITH fenced AS (
+        SELECT 1 FROM server
+        WHERE id = ${serverId}::text AND ws_session_id = ${sessionId}::text
+        FOR SHARE
+      ),
+      advanced AS (
+        UPDATE server SET
+          applied_revision = ${ack.desired.desiredRevision}::text,
+          applied_revision_seq = ${seq}::integer,
+          config_state = 'applied',
+          last_applied_at = timezone('utc', now()),
+          last_seen_at = timezone('utc', now()),
+          status_reported_at = timezone('utc', now())
+        WHERE id = ${serverId}::text
+          AND EXISTS (SELECT 1 FROM fenced)
+          AND applied_revision_seq <= ${seq}::integer
+          AND desired_revision_seq >= ${seq}::integer
+        RETURNING id
+      )
+      SELECT (SELECT count(*) FROM fenced)::int AS fenced,
+             (SELECT count(*) FROM advanced)::int AS applied
+    `,
+    "objects",
+  );
+  if (!outcome || Number(outcome.fenced) === 0) {
+    return "replaced";
+  }
+  if (Number(outcome.applied) === 0) {
+    return "stale";
+  }
+  await pruneAppliedConfigChanges(serverId, seq, database);
+  return "applied";
+}
+
+/**
+ * Stores the configuration identifier compiled for the current session. The
+ * write is conditional on the sequence still being the one that was compiled,
+ * so a compile that raced a change cannot cache a stale identifier.
+ */
+export async function cacheAgentDesiredRevision(
+  serverId: string,
+  sessionId: string,
+  desiredRevisionSeq: number,
+  desiredRevision: string,
+  database: DbHandle = db,
+): Promise<void> {
+  await database
+    .update(server)
+    .set({ desiredConfigRevision: desiredRevision })
+    .where(
+      and(
+        currentSession(serverId, sessionId),
+        eq(server.desiredRevisionSeq, desiredRevisionSeq),
+      ),
+    );
+}
+
+/**
+ * Clears cached configuration identifiers so the next v2 status or session
+ * recompiles them. Call after a change that alters the compiled configuration
+ * without a publish-gate record (for example routing rules), or after a
+ * change notification, which may not be delivered. Omit `serverIds` to clear
+ * every server.
+ */
+export async function invalidateDesiredConfigRevisions(
+  serverIds?: readonly string[],
+  database: DbHandle = db,
+): Promise<void> {
+  if (serverIds && serverIds.length === 0) {
+    return;
+  }
+  await database
+    .update(server)
+    .set({ desiredConfigRevision: null })
+    .where(serverIds ? inArray(server.id, [...serverIds]) : undefined);
 }
 
 /**

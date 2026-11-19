@@ -154,6 +154,10 @@ export const agentWsV2HelloPayloadSchema = z.object({
   agentBuildId: z.string().min(1).max(256),
   capabilities: z.array(z.string().min(1).max(128)).max(1024).default([]),
   applied: agentWsV2ConfigIdentifierSchema.nullable(),
+  certificateDeployments: z
+    .array(certificateDeploymentSchema)
+    .max(10_000)
+    .default([]),
   updates: agentWsUpdateStatusesSchema.optional(),
 });
 

@@ -67,7 +67,7 @@ import {
 } from "./agent";
 
 type Driver = "node-postgres" | "neon-http";
-const drivers: Driver[] = pgUrl ? ["node-postgres"] : [];
+const drivers: Driver[] = ["node-postgres"];
 if (pgUrl && neonUrl && neonEndpoint) drivers.push("neon-http");
 
 const admin = new pg.Pool({ connectionString: pgUrl, max: 4 });
@@ -134,7 +134,7 @@ async function usedBytes() {
   return rows[0].used as number;
 }
 
-describe.skipIf(drivers.length === 0).each(drivers)(
+describe.skipIf(!pgUrl).each(drivers)(
   "agent WebSocket session fencing on %s",
   (driver) => {
     let database: Awaited<ReturnType<typeof useDriver>>["database"];
