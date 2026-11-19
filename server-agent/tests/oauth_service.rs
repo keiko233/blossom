@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -35,13 +36,17 @@ struct TestDir(PathBuf);
 
 impl TestDir {
     fn new() -> Self {
+        static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("blossom-oauth-{}-{nanos}", std::process::id()));
-        fs::create_dir_all(&path).unwrap();
+        let sequence = NEXT_DIR.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "blossom-oauth-{}-{nanos}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir(&path).unwrap();
         Self(path)
     }
 
