@@ -15,6 +15,7 @@ import {
   type AgentWsV2UpdatePolicy,
   type AgentWsV2ControlMessageType,
 } from "@blossom/contracts/agent-ws-v2";
+import { AGENT_WS_V2_LOGS_AGENT_MESSAGE_TYPES } from "@blossom/contracts/agent-ws-v2-logs";
 import { parseRevisionSeq } from "@blossom/domain/config-revision";
 
 import type { Server } from "@/db/proxy-schema";
@@ -93,13 +94,31 @@ export interface OpenAgentWsV2SessionOptions {
   welcomed?: boolean;
   /** Advertised early reconnect deadline (Vercel function lifetime). */
   reconnectBeforeSeconds?: number;
+  /**
+   * Receives the raw text of an `agent`-direction log frame after direction,
+   * envelope and payload validation. The admin log relay owns these frames;
+   * a session without a relay simply ignores them.
+   */
+  onLogFrame?: (text: string) => void | Promise<void>;
 }
 
 export interface AgentWsV2Session {
   /** True once `welcome` has been sent. Pushes are withheld until then. */
   readonly welcomed: boolean;
+  readonly sessionId: string;
   handleText(text: string): Promise<void>;
+  /**
+   * Sends an already-encoded log control frame to the agent. Returns false
+   * before `welcome`, after close, or when the socket refuses the frame.
+   */
+  sendLogFrame(text: string): boolean;
   close(): Promise<void>;
+}
+
+const LOG_AGENT_TYPES: readonly string[] = AGENT_WS_V2_LOGS_AGENT_MESSAGE_TYPES;
+
+function isLogAgentType(type: string): boolean {
+  return LOG_AGENT_TYPES.includes(type);
 }
 
 /** Encodes a `config.notify` frame for welcomed v2 sessions. */
@@ -371,6 +390,22 @@ export function openAgentWsV2Session(
       return welcomed;
     },
 
+    get sessionId() {
+      return sessionId;
+    },
+
+    sendLogFrame(text) {
+      if (closed || !welcomed) {
+        return false;
+      }
+      try {
+        peer.send(text);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+
     async handleText(text) {
       if (closed) {
         return;
@@ -401,6 +436,12 @@ export function openAgentWsV2Session(
       }
 
       try {
+        // Log frames are the admin relay's traffic. Everything else in v2 is
+        // the desired-state protocol this session already owns.
+        if (isLogAgentType(message.kind)) {
+          await options.onLogFrame?.(text);
+          return;
+        }
         switch (message.kind) {
           case "hello":
             await onHello(message.payload, frame.id);

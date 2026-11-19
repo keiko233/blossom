@@ -14,6 +14,8 @@ import Redis from "ioredis";
 
 import type { Server } from "@/db/proxy-schema";
 import { getServerEnv } from "@/lib/env";
+import { recordLogRelayAudit, type AdminLogsActor } from "@/query/log-audit";
+import { createLogAuthorityStore } from "@/query/log-authority";
 
 import {
   telemetryReply,
@@ -37,6 +39,13 @@ import {
   openAgentWsV2Session,
   type AgentWsV2Session,
 } from "./agent-ws-v2-session";
+import type { LogAuthorityStore } from "./logs-authority";
+import type { LogRelayAuditRecord } from "./logs-relay";
+import type {
+  AdminLogsAcceptContext,
+  AgentLogRelayHandler,
+} from "./logs-relay-types";
+import { NitroAdminLogRelay } from "./logs-relay.nitro";
 import {
   REALTIME_BACKPLANE_CHANNEL,
   type RealtimeBackplane,
@@ -147,7 +156,8 @@ type LocalConnection = {
 
 type LocalV2Connection = {
   peer: CrosswsPeer;
-  session: Promise<AgentWsV2Session>;
+  sessionId: string;
+  session: AgentWsV2Session;
 };
 
 export type PtyRelayEvent =
@@ -161,14 +171,26 @@ interface LocalPtyRelay {
   handler: PtyRelayHandler;
 }
 
+interface LocalLogRelay {
+  sessionId: string;
+  handler: AgentLogRelayHandler;
+}
+
 export class NitroRealtimeHub implements RealtimeHub {
   readonly id = crypto.randomUUID();
   private readonly connections = new Map<string, Set<LocalConnection>>();
   private readonly v2Connections = new Map<string, Set<LocalV2Connection>>();
   private readonly ptyRelays = new Map<string, Map<string, LocalPtyRelay>>();
+  private readonly logRelays = new Map<string, Map<string, LocalLogRelay>>();
   private readonly backplane: RealtimeBackplane | undefined;
   private readonly store: ReturnType<typeof createAgentWsStore>;
   private readonly v2Store: AgentWsV2HubStore;
+  private readonly logAuthority: LogAuthorityStore;
+  private readonly logAudit: (
+    serverId: string,
+    actor: AdminLogsActor,
+    record: LogRelayAuditRecord,
+  ) => Promise<void>;
   private readonly telemetry = new TelemetryRequests();
   private backplaneReady: Promise<void> | undefined;
 
@@ -177,11 +199,22 @@ export class NitroRealtimeHub implements RealtimeHub {
       backplane?: RealtimeBackplane;
       store?: ReturnType<typeof createAgentWsStore>;
       v2Store?: AgentWsV2HubStore;
+      logAuthority?: LogAuthorityStore;
+      logAudit?: (
+        serverId: string,
+        actor: AdminLogsActor,
+        record: LogRelayAuditRecord,
+      ) => Promise<void>;
     } = {},
   ) {
     this.backplane = options.backplane ?? defaultBackplane();
     this.store = options.store ?? createAgentWsStore();
     this.v2Store = options.v2Store ?? createAgentWsV2Store();
+    this.logAuthority = options.logAuthority ?? createLogAuthorityStore();
+    this.logAudit =
+      options.logAudit ??
+      ((serverId, actor, record) =>
+        recordLogRelayAudit({ serverId, actor, record }));
   }
 
   async acceptAgent(
@@ -212,53 +245,135 @@ export class NitroRealtimeHub implements RealtimeHub {
     );
   }
 
+  async acceptAdminLogs(
+    request: Request,
+    context: AdminLogsAcceptContext,
+  ): Promise<Response> {
+    let relay: NitroAdminLogRelay | undefined;
+    let unregister: (() => void) | undefined;
+    const forget = () => {
+      unregister?.();
+      unregister = undefined;
+    };
+    return attachCrosswsHooks(
+      new Response(null, {
+        status: 426,
+        headers: { Connection: "Upgrade", Upgrade: "websocket" },
+      }),
+      request,
+      {
+        open: (peer) => {
+          relay = new NitroAdminLogRelay({
+            context,
+            authority: this.logAuthority,
+            audit: (record) =>
+              this.logAudit(context.serverId, context.actor, record),
+            port: {
+              sendToBrowser: (frame) => {
+                peer.send(frame);
+              },
+              sendToAgent: (frame) =>
+                this.sendLogFrame(
+                  context.serverId,
+                  context.agentSessionId,
+                  frame,
+                ),
+              close: (code, reason) => {
+                forget();
+                peer.close(code, reason);
+              },
+            },
+          });
+          unregister = this.registerLogRelay(
+            context.serverId,
+            context.agentSessionId,
+            context.relayId,
+            (event) => {
+              if (event.type === "frame") {
+                relay?.handleAgentFrame(event.frame);
+                return;
+              }
+              relay?.handleAgentGone(event.reason);
+            },
+          );
+          relay.start();
+        },
+        message: (_peer, message) => {
+          relay?.handleBrowser(message.text());
+        },
+        close: () => {
+          forget();
+          relay?.handleBrowserClosed();
+        },
+        error: (peer, error) => {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          console.warn(
+            `admin log websocket error for ${context.serverId} (${peer.id}): ${message}`,
+          );
+        },
+      },
+    );
+  }
+
   private createV2Hooks(serverId: string): CrosswsHooks {
     return {
       upgrade: () => ({ protocol: AGENT_WS_V2_SUBPROTOCOL }),
       open: async (peer) => {
-        const session = (async () => {
-          const started = await this.v2Store.startSession(serverId);
-          return openAgentWsV2Session({
-            serverId,
-            sessionId: started.sessionId,
-            peer,
-            store: this.v2Store,
-            reconnectBeforeSeconds: reconnectBeforeSecondsForRuntime(),
-          });
-        })();
+        let started: Awaited<ReturnType<AgentWsV2HubStore["startSession"]>>;
+        try {
+          started = await this.v2Store.startSession(serverId);
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          console.warn(`agent websocket v2 open failed: ${message}`);
+          peer.close(1011, "session unavailable");
+          return;
+        }
+        this.supersedeLogRelays(serverId, started.sessionId);
+        const session = openAgentWsV2Session({
+          serverId,
+          sessionId: started.sessionId,
+          peer,
+          store: this.v2Store,
+          reconnectBeforeSeconds: reconnectBeforeSecondsForRuntime(),
+          onLogFrame: (text) =>
+            this.deliverLogAgentFrame(serverId, started.sessionId, text),
+        });
         let peers = this.v2Connections.get(serverId);
         if (!peers) {
           peers = new Set();
           this.v2Connections.set(serverId, peers);
         }
-        const connection: LocalV2Connection = { peer, session };
-        peers.add(connection);
+        peers.add({ peer, sessionId: started.sessionId, session });
         this.startBackplane();
-        try {
-          await session;
-        } catch (error) {
-          this.removeV2Connection(serverId, peer);
-          const message =
-            error instanceof Error ? error.message : String(error);
-          console.warn(`agent websocket v2 open failed: ${message}`);
-          peer.close(1011, "session unavailable");
-        }
       },
       message: async (peer, message) => {
         const connection = this.findV2Connection(serverId, peer);
         if (!connection) {
           return;
         }
-        const session = await connection.session;
-        await session.handleText(message.text());
+        await connection.session.handleText(message.text());
       },
       close: async (peer) => {
         const connection = this.removeV2Connection(serverId, peer);
         if (!connection) {
           return;
         }
-        const session = await connection.session.catch(() => undefined);
-        await session?.close();
+        this.closeLogRelays(
+          serverId,
+          connection.sessionId,
+          "agent_disconnected",
+        );
+        this.publishBackplane(() => ({
+          origin: this.id,
+          serverId,
+          frame: "",
+          logTarget: "browser",
+          logSessionId: connection.sessionId,
+          logAgentGone: true,
+        }));
+        await connection.session.close();
       },
       error: (peer, error) => {
         const message = error instanceof Error ? error.message : String(error);
@@ -300,13 +415,14 @@ export class NitroRealtimeHub implements RealtimeHub {
    */
   private deliverV2(serverId: string, frame: string): void {
     for (const connection of this.v2Connections.get(serverId) ?? []) {
-      void connection.session
-        .then((session) => {
-          if (session.welcomed) {
-            connection.peer.send(frame);
-          }
-        })
-        .catch(() => undefined);
+      if (!connection.session.welcomed) {
+        continue;
+      }
+      try {
+        connection.peer.send(frame);
+      } catch {
+        // A stale peer is removed by its close hook.
+      }
     }
   }
 
@@ -606,6 +722,219 @@ export class NitroRealtimeHub implements RealtimeHub {
     }
   }
 
+  /**
+   * Binds one browser-side log relay to the agent session it was admitted
+   * against. The returned function removes it; a closed relay calls it before
+   * closing the browser socket.
+   */
+  registerLogRelay(
+    serverId: string,
+    sessionId: string,
+    relayId: string,
+    handler: AgentLogRelayHandler,
+  ): () => void {
+    let relays = this.logRelays.get(serverId);
+    if (!relays) {
+      relays = new Map();
+      this.logRelays.set(serverId, relays);
+    }
+    const relay: LocalLogRelay = { sessionId, handler };
+    relays.set(relayId, relay);
+    // Agent frames arrive from the instance that owns the agent socket even
+    // when this browser is alone on its own instance, so subscribe eagerly.
+    this.startBackplane();
+    return () => {
+      const current = this.logRelays.get(serverId);
+      if (current?.get(relayId) === relay) {
+        current.delete(relayId);
+        if (current.size === 0) {
+          this.logRelays.delete(serverId);
+        }
+      }
+    };
+  }
+
+  /**
+   * Sends one encoded control frame to the agent session named at admission.
+   * A missing local session falls back to the Redis backplane; without one,
+   * the relay reports the agent as offline.
+   */
+  sendLogFrame(serverId: string, sessionId: string, frame: string): boolean {
+    const connection = [...(this.v2Connections.get(serverId) ?? [])].find(
+      (candidate) => candidate.sessionId === sessionId,
+    );
+    if (connection) {
+      if (!connection.session.welcomed) {
+        return false;
+      }
+      try {
+        connection.peer.send(frame);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    if (!this.backplane) {
+      return false;
+    }
+    const backplane = this.backplane;
+    this.publishBackplane(() => ({
+      origin: this.id,
+      serverId,
+      frame,
+      logTarget: "agent",
+      logSessionId: sessionId,
+    }));
+    return Boolean(backplane);
+  }
+
+  /** Routes an agent log frame to local relays and to other instances. */
+  private deliverLogAgentFrame(
+    serverId: string,
+    sessionId: string,
+    frame: string,
+  ): void {
+    this.deliverLocalLogAgentFrame(serverId, sessionId, frame);
+    this.publishBackplane(() => ({
+      origin: this.id,
+      serverId,
+      frame,
+      logTarget: "browser",
+      logSessionId: sessionId,
+    }));
+  }
+
+  private deliverLocalLogAgentFrame(
+    serverId: string,
+    sessionId: string,
+    frame: string,
+  ): void {
+    for (const relay of this.logRelays.get(serverId)?.values() ?? []) {
+      if (relay.sessionId !== sessionId) {
+        continue;
+      }
+      try {
+        relay.handler({ type: "frame", frame });
+      } catch {
+        // A broken browser relay closes itself through its own hook.
+      }
+    }
+  }
+
+  /** Ends every local relay bound to a session that is no longer authoritative. */
+  private closeLogRelays(
+    serverId: string,
+    sessionId: string,
+    reason: "agent_disconnected" | "session_replaced",
+  ): void {
+    const relays = this.logRelays.get(serverId);
+    if (!relays) {
+      return;
+    }
+    for (const [relayId, relay] of relays) {
+      if (relay.sessionId !== sessionId) {
+        continue;
+      }
+      relays.delete(relayId);
+      try {
+        relay.handler({ type: "agentGone", reason });
+      } catch {
+        // The relay is being discarded anyway.
+      }
+    }
+    if (relays.size === 0) {
+      this.logRelays.delete(serverId);
+    }
+  }
+
+  /**
+   * A new agent handshake makes older sessions non-authoritative in the same
+   * database statement, so relays bound to them end immediately instead of
+   * waiting for the next authority check.
+   */
+  private supersedeLogRelays(serverId: string, newSessionId: string): void {
+    const relays = this.logRelays.get(serverId);
+    if (relays) {
+      for (const [relayId, relay] of relays) {
+        if (relay.sessionId === newSessionId) {
+          continue;
+        }
+        relays.delete(relayId);
+        try {
+          relay.handler({ type: "agentGone", reason: "session_replaced" });
+        } catch {
+          // The relay is being discarded anyway.
+        }
+      }
+      if (relays.size === 0) {
+        this.logRelays.delete(serverId);
+      }
+    }
+    this.publishBackplane(() => ({
+      origin: this.id,
+      serverId,
+      frame: "",
+      logTarget: "browser",
+      logSessionId: newSessionId,
+      logSuperseded: true,
+    }));
+  }
+
+  private closeSupersededRemoteRelays(
+    serverId: string,
+    newSessionId: string,
+  ): void {
+    const relays = this.logRelays.get(serverId);
+    if (!relays) {
+      return;
+    }
+    for (const [relayId, relay] of relays) {
+      if (relay.sessionId === newSessionId) {
+        continue;
+      }
+      relays.delete(relayId);
+      try {
+        relay.handler({ type: "agentGone", reason: "session_replaced" });
+      } catch {
+        // The relay is being discarded anyway.
+      }
+    }
+    if (relays.size === 0) {
+      this.logRelays.delete(serverId);
+    }
+  }
+
+  private sendLocalLogFrame(
+    serverId: string,
+    sessionId: string,
+    frame: string,
+  ): void {
+    const connection = [...(this.v2Connections.get(serverId) ?? [])].find(
+      (candidate) => candidate.sessionId === sessionId,
+    );
+    if (!connection?.session.welcomed) {
+      return;
+    }
+    try {
+      connection.peer.send(frame);
+    } catch {
+      // The agent close hook ends the relays bound to this session.
+    }
+  }
+
+  private publishBackplane(message: () => RealtimeBackplaneMessage): void {
+    const backplane = this.backplane;
+    if (!backplane) {
+      return;
+    }
+    const ready = this.startBackplane();
+    const send = () => backplane.publish(message());
+    void (ready ? ready.then(send) : send()).catch((error: unknown) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.warn(`realtime backplane publish failed: ${reason}`);
+    });
+  }
+
   private startBackplane(): Promise<void> | undefined {
     if (!this.backplane || this.backplaneReady) {
       return this.backplaneReady;
@@ -613,6 +942,37 @@ export class NitroRealtimeHub implements RealtimeHub {
     this.backplaneReady = this.backplane
       .subscribe((message) => {
         if (message.origin === this.id) {
+          return;
+        }
+        if (message.logTarget === "browser" && message.logSessionId) {
+          if (message.logSuperseded) {
+            this.closeSupersededRemoteRelays(
+              message.serverId,
+              message.logSessionId,
+            );
+            return;
+          }
+          if (message.logAgentGone) {
+            this.closeLogRelays(
+              message.serverId,
+              message.logSessionId,
+              "agent_disconnected",
+            );
+            return;
+          }
+          this.deliverLocalLogAgentFrame(
+            message.serverId,
+            message.logSessionId,
+            message.frame,
+          );
+          return;
+        }
+        if (message.logTarget === "agent" && message.logSessionId) {
+          this.sendLocalLogFrame(
+            message.serverId,
+            message.logSessionId,
+            message.frame,
+          );
           return;
         }
         if (message.protocol === "v2") {

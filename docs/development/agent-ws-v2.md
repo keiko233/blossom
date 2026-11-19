@@ -76,9 +76,75 @@ Discard a partial snapshot on disconnect and request a new one after reconnect. 
 These remain v1-only and are never sent to v2 sessions:
 
 - `update.trigger` and `update.status`, and the `acme.*` messages. The control plane does not push them to v2 sessions.
-- `telemetry.*`, `pty.*`, and the log policy messages.
+- `telemetry.*`, `pty.*`, and the log level policy messages. Log tail, retained search and context lookup are part of v2; see [Admin log relay](#admin-log-relay).
 
 Until the PTY moves to v2, a v2 agent **must not advertise `pty-v1`** in `hello.capabilities`. The admin terminal would otherwise offer a session that cannot start.
+
+## Admin log relay
+
+**Established (control plane).** The admin browser reaches logs through a
+same-origin WebSocket at `/api/admin/servers/$id/logs/ws`. The upgrade requires:
+
+- an `Origin` whose host equals the request host;
+- a live admin session read with `disableRefresh`, so the 101 response is never
+  rebuilt to apply a refreshed cookie;
+- an enabled server whose current transport is a v2 WebSocket session; and
+- an agent that advertised `logs-tail-v1` or `logs-search-v1` (see
+  `AGENT_WS_V2_LOGS_TAIL_CAPABILITY` and
+  `AGENT_WS_V2_LOGS_SEARCH_CAPABILITY` in
+  `packages/contracts/src/agent-ws-v2-logs.ts`).
+
+The control plane admits the relay against the server's current
+`wsSessionId` and then rewrites every id: `subscriptionId` and `requestId` on
+the agent wire are relay-generated, and the browser only ever sees its own
+ids. A response for an unknown id, another server or a replaced session is
+dropped.
+
+| Browser request | Agent request | Agent result | Browser result |
+| --- | --- | --- | --- |
+| `logs.subscribe` | `logs.subscribe` | `logs.batch` / `logs.gap` | `logs.batch` / `logs.gap` |
+| `logs.unsubscribe` | `logs.unsubscribe` | — | — |
+| `logs.search` | `logs.search` | `logs.search.result` / `logs.error` | `logs.search.result` / `logs.error` |
+| `logs.search.cancel` | `logs.search.cancel` | late result, dropped | — |
+| `logs.context` | `logs.context` | `logs.context.result` / `logs.error` | `logs.context.result` / `logs.error` |
+
+Bounds:
+
+- One live tail per relay, two searches and four context lookups in flight.
+- Every agent request has a 10 s deadline; a timeout sends `timeout` to the
+  browser and cancels a search, and a late reply is dropped.
+- Tail delivery is paced at 256 KiB/s with a 1 MiB burst. A batch that does not
+  fit becomes a `dropped` gap, and the tail continues.
+- Batch, search, context, text and browser-frame limits come from
+  `AGENT_WS_V2_LOGS_LIMITS`.
+
+The relay re-checks authority every 30 s: the admin session row, the server's
+enabled flag, the current `wsSessionId`, and the log capability. A newer agent
+handshake also ends older relays immediately. Browser close codes in the 4000
+range identify the state: `4001` forbidden, `4002` server disabled, `4003`
+session replaced, `4004` offline, `4005` unsupported; `1000`, `1008` and `1009`
+are normal close, malformed frame and oversized frame.
+
+Audit rows carry metadata only: operator, server, source, level, UTC bounds,
+limit, whether text was searched, outcome, counts and gap. Search text, records
+and cursors never reach the audit log.
+
+On Nitro and Vercel the relay lives in the in-process hub; Redis carries
+control frames to the instance that owns the agent socket and log results back.
+Redis delivery is best effort. In the Cloudflare `AgentSessionDO` each relay's
+plain-JSON state lives in its WebSocket attachment, and one storage alarm ticks
+request deadlines and runs the authority checks while the object hibernates.
+The agent's `logs.*` frames reach the relay only through the current v2 session
+that was current at admission.
+
+Known limits:
+
+- A lost Redis publish is recovered by the next agent batch or by reconnect;
+  the relay does not replay control frames.
+- The Cloudflare alarm is the only idle authority check; the object cannot run
+  an in-memory timer across hibernation.
+- The Rust agent has not implemented the log messages yet, so it must not
+  advertise the capabilities. The route then refuses with `unsupported`.
 
 ## Limits
 
@@ -104,3 +170,6 @@ The control plane advertises these values in `welcome.limits`. The agent must en
 - The built Node server: a real v2 session (hello, welcome, snapshot with digest, applied ack, status, traffic and its replay, direction error, fenced disconnect) and the v1 handshake on the same route.
 - Cloudflare Durable Object: built, not run under workerd in this change. The state machine is the same, but hibernation rehydration, the `Sec-WebSocket-Protocol` response header, and the 4000-series close are unverified on Cloudflare and must be checked before deployment.
 - Vercel: built only.
+- Admin log relay: reducer, route admission, Nitro relay, hub Redis routing and
+  Cloudflare attachment/alarm relay are unit-tested with stand-in agents.
+  Workerd hibernation and a real browser client remain unverified.

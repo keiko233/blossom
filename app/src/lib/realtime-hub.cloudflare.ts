@@ -19,7 +19,14 @@ import {
 import type { TelemetryKind, TelemetryResult } from "./agent-telemetry";
 import { createAgentWsV2Store } from "./agent-ws-store";
 import { encodeAgentWsV2ConfigNotify } from "./agent-ws-v2-session";
+import type { AdminLogsAcceptContext } from "./logs-relay-types";
 import {
+  AGENT_LOGS_INTERNAL_ACTOR,
+  AGENT_LOGS_INTERNAL_AUTH_SESSION_ID,
+  AGENT_LOGS_INTERNAL_RELAY_ID,
+  AGENT_LOGS_INTERNAL_SERVER_ID,
+  AGENT_LOGS_INTERNAL_SESSION_ID,
+  AGENT_LOGS_INTERNAL_STARTED_AT,
   AGENT_WS_INTERNAL_CONNECTED_AT,
   AGENT_WS_INTERNAL_PROTOCOL,
   AGENT_WS_INTERNAL_SERVER_ID,
@@ -110,6 +117,33 @@ export class CloudflareRealtimeHub implements RealtimeHub {
       await endAgentWsSession(server.id, started.sessionId).catch(() => {});
       throw error;
     }
+  }
+
+  async acceptAdminLogs(
+    request: Request,
+    context: AdminLogsAcceptContext,
+  ): Promise<Response> {
+    const headers = new Headers(request.headers);
+    headers.delete("authorization");
+    headers.delete("cookie");
+    headers.set(AGENT_LOGS_INTERNAL_SERVER_ID, context.serverId);
+    headers.set(AGENT_LOGS_INTERNAL_SESSION_ID, context.agentSessionId);
+    headers.set(AGENT_LOGS_INTERNAL_AUTH_SESSION_ID, context.authSessionId);
+    headers.set(AGENT_LOGS_INTERNAL_RELAY_ID, context.relayId);
+    headers.set(
+      AGENT_LOGS_INTERNAL_STARTED_AT,
+      context.startedAt.toISOString(),
+    );
+    headers.set(
+      AGENT_LOGS_INTERNAL_ACTOR,
+      encodeURIComponent(JSON.stringify(context.actor)),
+    );
+    return durableObjectStub(context.serverId).fetch(
+      new Request(new URL("/internal/logs/connect", request.url), {
+        method: "GET",
+        headers,
+      }),
+    );
   }
 
   async requestTelemetry(

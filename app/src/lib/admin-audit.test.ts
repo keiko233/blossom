@@ -25,6 +25,11 @@ const ACTION_RE = /^[a-z]+\.[a-z]+(_[a-z]+)*$/;
 const ROUTE_AUDIT_ACTIONS: readonly string[] = [
   "server.pty_open",
   "server.pty_close",
+  "server.logs_open",
+  "server.logs_subscribe",
+  "server.logs_search",
+  "server.logs_context",
+  "server.logs_close",
 ];
 
 describe("ADMIN_AUDIT_ACTIONS", () => {
@@ -128,11 +133,12 @@ describe("every admin POST server function is audited", () => {
     expect([...seen].sort()).toEqual([...serverFunctionActions].sort());
   });
 
-  it("emits route-only audit actions from the PTY audit helper", () => {
-    const source = readFileSync(
-      fileURLToPath(new URL("../query/pty-audit.ts", import.meta.url)),
-      "utf8",
-    );
+  it("emits route-only audit actions from the terminal and log audit helpers", () => {
+    const source = ["../query/pty-audit.ts", "../query/log-audit.ts"]
+      .map((path) =>
+        readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8"),
+      )
+      .join("\n");
     for (const action of ROUTE_AUDIT_ACTIONS) {
       expect(source, action).toContain(`"${action}"`);
     }
