@@ -1951,4 +1951,72 @@ mod tests {
             std::env::temp_dir().join(format!("blossom-hello-downloads-{}", std::process::id())),
         );
     }
+
+    fn pty_open_frame(session_id: &str) -> crate::ws::codec::ReservedFrame {
+        crate::ws::codec::ReservedFrame {
+            frame_type: "pty.open".to_owned(),
+            payload: serde_json::json!({ "sessionId": session_id, "cols": 80, "rows": 24 }),
+        }
+    }
+
+    fn pty_manager(shell: Option<&str>, limit: usize) -> crate::pty::PtyManager {
+        let (events, _pty_events) = tokio::sync::mpsc::channel(8);
+        let factory = crate::pty::session::PortablePtyFactory::new(
+            events,
+            crate::pty::launch::LaunchConfig {
+                shell: shell.map(std::path::PathBuf::from),
+                working_dir: std::path::PathBuf::from("/"),
+            },
+            "tester".to_owned(),
+        );
+        crate::pty::PtyManager::new(
+            crate::pty::PtyLimits::new(
+                true,
+                limit,
+                crate::pty::DEFAULT_IDLE_TIMEOUT,
+                crate::pty::DEFAULT_MAX_SESSION,
+            ),
+            "tester".to_owned(),
+            Box::new(factory),
+        )
+    }
+
+    #[tokio::test]
+    async fn pty_open_answers_with_started_or_a_typed_exit() {
+        use crate::ws::ports::{WsCommand, command_channel};
+
+        let (sink, mut commands) = command_channel(8);
+        let sink = std::sync::Arc::new(sink);
+        let mut manager = pty_manager(Some("/bin/sh"), 1);
+
+        super::handle_pty_frame(pty_open_frame("pty-1"), &mut manager, &sink);
+        let Some(WsCommand::Send(started)) = commands.recv().await else {
+            panic!("expected pty.started");
+        };
+        assert_eq!(started.msg_type, "pty.started");
+        assert_eq!(started.payload["sessionId"], "pty-1");
+        assert_eq!(started.payload["shell"], "/bin/sh");
+        assert_eq!(started.payload["user"], "tester");
+
+        super::handle_pty_frame(pty_open_frame("pty-2"), &mut manager, &sink);
+        let Some(WsCommand::Send(refused)) = commands.recv().await else {
+            panic!("expected pty.exit for the session limit");
+        };
+        assert_eq!(refused.msg_type, "pty.exit");
+        assert_eq!(refused.payload["reason"], "session_limit");
+        assert_eq!(refused.payload["sessionId"], "pty-2");
+
+        let mut missing = pty_manager(Some("/nonexistent/blossom-shell"), 1);
+        super::handle_pty_frame(pty_open_frame("pty-3"), &mut missing, &sink);
+        let Some(WsCommand::Send(failed)) = commands.recv().await else {
+            panic!("expected pty.exit for the missing shell");
+        };
+        assert_eq!(failed.msg_type, "pty.exit");
+        assert_eq!(failed.payload["reason"], "shell_unavailable");
+        assert!(
+            failed.payload["detail"]
+                .as_str()
+                .is_some_and(|detail| detail.contains("/nonexistent/blossom-shell"))
+        );
+    }
 }
