@@ -14,7 +14,7 @@
     "email:dev": "email dev --dir src/templates/emails",
     "test": "paraglide-js compile --project ./project.inlang --outdir ./src/paraglide && vitest run",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
+    "db:migrate": "node ./scripts/db-migrate.mjs",
     "db:push": "drizzle-kit push",
     "db:pull": "drizzle-kit pull",
     "db:studio": "drizzle-kit studio",
