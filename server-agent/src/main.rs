@@ -8,6 +8,7 @@
 
 mod accountant;
 mod acme;
+mod agent_v2;
 mod certificate;
 mod client;
 mod config;
@@ -168,6 +169,32 @@ struct Args {
     )]
     ws_enabled: bool,
 
+    /// Agent WebSocket protocol. `legacy` keeps the v1 WebSocket with the HTTP
+    /// config poll, heartbeat, and traffic reports. `v2` carries configuration,
+    /// status, and traffic over `blossom-agent.v2` and makes no HTTP requests.
+    #[arg(long, value_enum, default_value_t = WsProtocol::Legacy, env = "AGENT_WS_PROTOCOL")]
+    ws_protocol: WsProtocol,
+
+    /// Probation before a v2 candidate config is committed. A test harness knob.
+    #[arg(
+        long,
+        hide = true,
+        default_value_t = 11_000,
+        env = "AGENT_V2_PROBATION_MS",
+        value_parser = clap::value_parser!(u64).range(100..=60_000)
+    )]
+    v2_probation_ms: u64,
+
+    /// How often v2 flushes sealed traffic reports. A test harness knob.
+    #[arg(
+        long,
+        hide = true,
+        default_value_t = 60,
+        env = "AGENT_V2_TRAFFIC_INTERVAL_SECONDS",
+        value_parser = clap::value_parser!(u64).range(1..=3_600)
+    )]
+    v2_traffic_interval_seconds: u64,
+
     /// Address the ephemeral HTTP-01 responder binds while an http-01 job is
     /// active. It is closed again as soon as the order finishes.
     #[arg(long, default_value = "0.0.0.0:80", env = "AGENT_ACME_HTTP_BIND")]
@@ -221,6 +248,36 @@ struct Args {
     pty_max_session_seconds: u64,
 }
 
+/// The agent WebSocket protocol selected at start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum WsProtocol {
+    /// The v1 WebSocket with HTTP config poll, heartbeat, and traffic (the shipped default).
+    Legacy,
+    /// Protocol v2: WebSocket-only, with no HTTP agent API calls.
+    V2,
+}
+
+fn new_update_manager(args: &Args, sing_box_version: Option<String>) -> Result<UpdateManager> {
+    let state_dir = args.state_dir.clone();
+    UpdateManager::new(
+        UpdateConfig {
+            state_dir: state_dir.clone(),
+            download_dir: args
+                .download_dir
+                .clone()
+                .unwrap_or_else(|| state_dir.join("downloads")),
+            github_api: args.github_api.clone(),
+            agent_repo: args.release_repo.clone(),
+            singbox_repo: args.sing_box_release_repo.clone(),
+            github_token: args.github_token.clone(),
+            self_update: args.self_update,
+            retry_after: Duration::from_secs(args.update_retry_seconds),
+        },
+        AGENT_VERSION.to_string(),
+        sing_box_version,
+    )
+}
+
 fn parse_level(level: &str) -> tracing::Level {
     match level.to_lowercase().as_str() {
         "trace" => tracing::Level::TRACE,
@@ -238,10 +295,13 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_max_level(parse_level(&args.log_level))
         .init();
+    if args.ws_protocol == WsProtocol::V2 {
+        return agent_v2::run(&args).await;
+    }
 
     let client = client::new_client(&args.url, &args.token)?;
 
-    let bin = resolve_binary(args.sing_box_path);
+    let bin = resolve_binary(args.sing_box_path.clone());
     let mut sing_box_version = singbox_version(&bin).await;
     if let Some(version) = sing_box_version.as_deref()
         && !supports_singbox_version(version)
@@ -253,23 +313,7 @@ async fn main() -> Result<()> {
     let state_dir = args.state_dir.clone();
     let traffic_dir = state_dir.join("traffic");
     let mut config = ConfigManager::new(client.clone(), state_dir.clone())?;
-    let mut updates = UpdateManager::new(
-        UpdateConfig {
-            state_dir: state_dir.clone(),
-            download_dir: args
-                .download_dir
-                .clone()
-                .unwrap_or_else(|| state_dir.join("downloads")),
-            github_api: args.github_api.clone(),
-            agent_repo: args.release_repo.clone(),
-            singbox_repo: args.sing_box_release_repo.clone(),
-            github_token: args.github_token.clone(),
-            self_update: args.self_update,
-            retry_after: Duration::from_secs(args.update_retry_seconds),
-        },
-        AGENT_VERSION.to_string(),
-        sing_box_version.clone(),
-    )?;
+    let mut updates = new_update_manager(&args, sing_box_version.clone())?;
     let (mut manager, startup_error) = start_last_known_good(&mut config, &bin).await;
     let api_endpoint = config.api_endpoint().clone();
     let mut reporter = match TrafficReporter::new(

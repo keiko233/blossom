@@ -143,7 +143,9 @@ struct Envelope {
     id: Option<String>,
     #[serde(rename = "type")]
     msg_type: String,
-    ts: DateTime<Utc>,
+    // Required by the contract and validated by deserialization; not read.
+    #[serde(rename = "ts")]
+    _ts: DateTime<Utc>,
     #[serde(default)]
     payload: Value,
 }

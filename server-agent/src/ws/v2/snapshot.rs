@@ -37,14 +37,6 @@ impl SnapshotLimits {
             max_bytes,
         }
     }
-
-    pub fn chunk_bytes(&self) -> usize {
-        self.chunk_bytes
-    }
-
-    pub fn max_bytes(&self) -> usize {
-        self.max_bytes
-    }
 }
 
 /// A transfer failure. The variants name what the contract's `config.ack`
@@ -260,6 +252,7 @@ impl SnapshotAssembler {
     }
 
     /// The request whose snapshot is being received, if any.
+    #[cfg(test)]
     pub fn in_flight(&self) -> Option<&str> {
         self.pending
             .as_ref()
