@@ -41,7 +41,10 @@ An isomorphic oRPC client and TanStack Query utilities exist in `app/src/orpc/cl
 
 Established. The frozen v1 envelope and payload schemas live in
 `packages/contracts/src/agent-ws.ts`; the matching Rust client is added by
-PR #112 under `server-agent/src/ws/`. The control plane authenticates the
+PR #112 under `server-agent/src/ws/`. Clients that offer the
+`blossom-agent.v2` subprotocol use the v2 session protocol on the same route,
+documented in [Agent WebSocket v2](agent-ws-v2.md). The control plane
+implements v2 sessions; the Rust v2 client is a later change. The control plane authenticates the
 upgrade request with the same hashed per-server bearer token as the oRPC agent
 API.
 
