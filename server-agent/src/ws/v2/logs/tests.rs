@@ -9,9 +9,9 @@ use tokio_util::sync::CancellationToken;
 use super::{Command, Session};
 use crate::logs::{LogLevel, LogSource, LogStore, RingLimits};
 use crate::ws::v2::codec::{
-    LogCursor, LogErrorCode, LogFilter, LogGap, LogGapReason, LogGeneration, LogLevel as WireLevel,
-    LogQuery, LogSearchCursor, LogSource as WireSource, LogsBatch, LogsContext, LogsError, LogsGap,
-    LogsSearch, LogsSubscribe, MAX_FRAME_BYTES, Message, Sender,
+    LogCursor, LogErrorCode, LogFilter, LogGap, LogGapReason, LogGeneration, LogQuery,
+    LogSearchCursor, LogSource as WireSource, LogsBatch, LogsContext, LogsError, LogsGap,
+    LogsLevel as WireLevel, LogsSearch, LogsSubscribe, MAX_FRAME_BYTES, Message, Sender,
 };
 
 fn at(seconds: i64) -> DateTime<Utc> {

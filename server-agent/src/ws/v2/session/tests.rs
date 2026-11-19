@@ -20,10 +20,8 @@ use crate::ws::codec::{AgentWsFrame, UpdateStatePayload, UpdateStatusPayload, fr
 use crate::ws::ports::{WsCommand, WsError};
 use crate::ws::v2::codec::{
     AckStage, ConfigIdentifier, ConfigState, LogLevel, LogPolicyAck, LogPolicyDesired,
-    LogPolicySource, RuntimeState, TrafficEntry, TrafficReport, UpdatePolicy,
-    TelemetryEnvironment,
-    TelemetryInterface, TelemetryListener, TelemetryProtocol, TelemetryUsage, TrafficEntry,
-    TrafficReport, UpdatePolicy,
+    LogPolicySource, RuntimeState, TelemetryEnvironment, TelemetryInterface, TelemetryListener,
+    TelemetryProtocol, TelemetryUsage, TrafficEntry, TrafficReport, UpdatePolicy,
 };
 use crate::ws::v2::telemetry::{HostSampler, Inspection, Measurement};
 

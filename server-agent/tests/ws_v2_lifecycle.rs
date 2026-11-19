@@ -774,10 +774,12 @@ async fn check_tail(socket: &mut WebSocket) {
                 );
                 return;
             }
-            "agent.status" | "traffic.report" | "config.get" => {}
+            "agent.status" | "traffic.report" | "config.get" | "log.policy.ack" => {}
             other => panic!("unexpected frame while tailing logs: {other}: {frame}"),
         }
     }
+}
+
 fn telemetry_subscribe(subscription_id: &str, purpose: &str, interval_ms: u64) -> Value {
     json!({
         "v": 2,

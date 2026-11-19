@@ -21,8 +21,8 @@ use tracing::{debug, info, warn};
 
 use super::adapter::V2Connector;
 use super::session::{self, HelloIdentity, SessionEnd, SessionPorts, SessionTiming, Wire};
-use crate::logs::LogStore;
 use super::telemetry;
+use crate::logs::LogStore;
 use crate::ws::Jitter;
 use crate::ws::ports::WsError;
 

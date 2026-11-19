@@ -395,13 +395,13 @@ pub(super) fn source(source: LogSource) -> codec::LogSource {
     }
 }
 
-pub(super) fn level(level: LogLevel) -> codec::LogLevel {
+pub(super) fn level(level: LogLevel) -> codec::LogsLevel {
     match level {
-        LogLevel::Trace => codec::LogLevel::Trace,
-        LogLevel::Debug => codec::LogLevel::Debug,
-        LogLevel::Info => codec::LogLevel::Info,
-        LogLevel::Warn => codec::LogLevel::Warn,
-        LogLevel::Error => codec::LogLevel::Error,
+        LogLevel::Trace => codec::LogsLevel::Trace,
+        LogLevel::Debug => codec::LogsLevel::Debug,
+        LogLevel::Info => codec::LogsLevel::Info,
+        LogLevel::Warn => codec::LogsLevel::Warn,
+        LogLevel::Error => codec::LogsLevel::Error,
     }
 }
 
@@ -465,11 +465,11 @@ pub(super) fn filter(value: &codec::LogFilter) -> (Option<LogSource>, Option<Log
         codec::LogSource::SingBox => LogSource::SingBox,
     });
     let level = value.min_level.map(|level| match level {
-        codec::LogLevel::Trace => LogLevel::Trace,
-        codec::LogLevel::Debug => LogLevel::Debug,
-        codec::LogLevel::Info => LogLevel::Info,
-        codec::LogLevel::Warn => LogLevel::Warn,
-        codec::LogLevel::Error => LogLevel::Error,
+        codec::LogsLevel::Trace => LogLevel::Trace,
+        codec::LogsLevel::Debug => LogLevel::Debug,
+        codec::LogsLevel::Info => LogLevel::Info,
+        codec::LogsLevel::Warn => LogLevel::Warn,
+        codec::LogsLevel::Error => LogLevel::Error,
     });
     (source, level)
 }

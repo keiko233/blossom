@@ -29,18 +29,17 @@ use super::codec::{
     self, AckOutcome, AckStage, ConfigAck, ConfigGet, ConfigIdentifier, ConfigNotify, ConfigState,
     DecodeError, ErrorCode, ErrorFrame, GetReason, Hello, Limits, LogPolicyAck, LogPolicyDesired,
     LogPolicyGet, LogPolicyNotify, MAX_FRAME_BYTES, Message, RuntimeState, Sender, StatusError,
-    StatusReason, StatusReport, TrafficReport, TrafficResult, UpdatePolicy,
-    TelemetrySubscribe,
+    StatusReason, StatusReport, TelemetrySubscribe, TrafficReport, TrafficResult, UpdatePolicy,
 };
 use super::logs;
 use super::snapshot::{SnapshotAssembler, SnapshotError, SnapshotLimits, VerifiedSnapshot};
+use super::telemetry::{self, Command as TelemetryCommand, HostSampler, Output as TelemetryOutput};
+use crate::logs::LogStore;
 use crate::ws::codec::{
     AcmeDnsAckPayload, AcmeIssuePayload, AgentWsFrame, CertificateDeployment, ReservedFrame,
     UpdateStatusPayload, UpdateTriggerPayload, frame_type,
 };
 use crate::ws::ports::{AgentCommandSink, WsCommand, WsError};
-use crate::logs::LogStore;
-use super::telemetry::{self, Command as TelemetryCommand, HostSampler, Output as TelemetryOutput};
 
 /// The text-frame transport a session runs over. [`V2Connection`] implements
 /// it; tests substitute a scripted peer.

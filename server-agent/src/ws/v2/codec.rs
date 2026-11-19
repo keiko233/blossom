@@ -1050,7 +1050,7 @@ pub enum LogSource {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum LogLevel {
+pub enum LogsLevel {
     Trace,
     Debug,
     Info,
@@ -1094,7 +1094,7 @@ pub struct LogRecord {
     pub seq: u64,
     pub time: DateTime<Utc>,
     pub source: LogSource,
-    pub level: LogLevel,
+    pub level: LogsLevel,
     pub process_generation: u64,
     pub text: String,
     pub truncated: bool,
@@ -1115,7 +1115,7 @@ pub struct LogFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<LogSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub min_level: Option<LogLevel>,
+    pub min_level: Option<LogsLevel>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1126,7 +1126,7 @@ pub struct LogQuery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<LogSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub min_level: Option<LogLevel>,
+    pub min_level: Option<LogsLevel>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub since: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2273,7 +2273,7 @@ mod tests {
             seq: 9,
             time: Utc::now(),
             source: LogSource::SingBox,
-            level: LogLevel::Warn,
+            level: LogsLevel::Warn,
             process_generation: 2,
             text: "dial tcp refused".to_string(),
             truncated: false,

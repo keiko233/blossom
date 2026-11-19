@@ -202,13 +202,13 @@ fn source(source: codec::LogSource) -> LogSource {
     }
 }
 
-fn level(level: codec::LogLevel) -> LogLevel {
+fn level(level: codec::LogsLevel) -> LogLevel {
     match level {
-        codec::LogLevel::Trace => LogLevel::Trace,
-        codec::LogLevel::Debug => LogLevel::Debug,
-        codec::LogLevel::Info => LogLevel::Info,
-        codec::LogLevel::Warn => LogLevel::Warn,
-        codec::LogLevel::Error => LogLevel::Error,
+        codec::LogsLevel::Trace => LogLevel::Trace,
+        codec::LogsLevel::Debug => LogLevel::Debug,
+        codec::LogsLevel::Info => LogLevel::Info,
+        codec::LogsLevel::Warn => LogLevel::Warn,
+        codec::LogsLevel::Error => LogLevel::Error,
     }
 }
 

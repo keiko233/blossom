@@ -40,9 +40,8 @@ use crate::ws::codec::{AgentWsFrame, frame_type};
 use crate::ws::ports::WsCommand;
 use crate::ws::v2::adapter::V2Connector;
 use crate::ws::v2::codec::{
-    AckStage, ConfigIdentifier, ConfigState, LogPolicyAck, RuntimeState, StatusError, UpdatePolicy,
-    LOGS_SEARCH_CAPABILITY, LOGS_TAIL_CAPABILITY,
-    RuntimeState, StatusError, UpdatePolicy,
+    AckStage, ConfigIdentifier, ConfigState, LOGS_SEARCH_CAPABILITY, LOGS_TAIL_CAPABILITY,
+    LogPolicyAck, RuntimeState, StatusError, UpdatePolicy,
 };
 use crate::ws::v2::link::{self, LinkOptions};
 use crate::ws::v2::session::{
@@ -53,9 +52,9 @@ use crate::ws::v2::telemetry;
 use crate::ws::v2::traffic::run_reporter;
 use crate::{
     AGENT_BUILD_ID, AGENT_VERSION, AgentStatus, Args, AuthMode, ReportedError, ServiceStartup,
-    apply_fetched, apply_update_trigger, certificate_deployment, handle_pty_event, handle_pty_frame,
-    new_acme_manager, new_pty_manager, new_update_manager, reconcile_updates, record_config_error,
-    shutdown_signal, start_last_known_good, update_status_payload_from,
+    apply_fetched, apply_update_trigger, certificate_deployment, handle_pty_event,
+    handle_pty_frame, new_acme_manager, new_pty_manager, new_update_manager, reconcile_updates,
+    record_config_error, shutdown_signal, start_last_known_good, update_status_payload_from,
 };
 
 /// What v2 advertises in `hello`; `ws-v1` is not spoken on this transport.
@@ -700,7 +699,6 @@ async fn restart_for_update(manager: Option<SingBoxManager>) -> ! {
 #[cfg(test)]
 mod tests {
     use super::{V2_CAPABILITIES, bounded, config_state_of, stage_of, v2_capabilities};
-    use crate::ws::v2::codec::{AckStage, ConfigState};
     use crate::ws::v2::codec::{
         AckStage, ConfigState, LOGS_SEARCH_CAPABILITY, LOGS_TAIL_CAPABILITY,
     };
