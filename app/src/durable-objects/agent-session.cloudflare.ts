@@ -2,7 +2,11 @@ import {
   agentWsWelcomePayloadSchema,
   type AgentWsWelcomePayload,
 } from "@blossom/contracts/agent-ws";
-import { AGENT_WS_V2_SUBPROTOCOL } from "@blossom/contracts/agent-ws-v2";
+import {
+  AGENT_WS_V2_SUBPROTOCOL,
+  createAgentWsV2Frame,
+  encodeAgentWsV2Frame,
+} from "@blossom/contracts/agent-ws-v2";
 import { DurableObject, env } from "cloudflare:workers";
 import { drizzle } from "drizzle-orm/node-postgres";
 
@@ -118,6 +122,44 @@ function decodeMessage(message: string | ArrayBuffer): string {
   return typeof message === "string"
     ? message
     : new TextDecoder().decode(message);
+}
+
+/**
+ * A newer v2 handshake ends the old sockets. Marking them superseded alone
+ * would ignore the old agent's next frame, so the database fence would never
+ * run and a terminal bound to that session could stay open until the agent's
+ * liveness deadline. The contract instead requires an error frame and close
+ * 4000, which also lets `webSocketClose` close the bound PTY sockets.
+ */
+function supersedeV2Socket(
+  ws: WebSocket,
+  attachment: V2AgentSessionAttachment,
+): void {
+  try {
+    ws.serializeAttachment({
+      ...attachment,
+      superseded: true,
+    } satisfies V2AgentSessionAttachment);
+  } catch {
+    // The socket may already be closing; the close below still ends it.
+  }
+  try {
+    ws.send(
+      encodeAgentWsV2Frame(
+        createAgentWsV2Frame("error", {
+          code: "session_replaced",
+          message: "a newer session is active",
+        }),
+      ),
+    );
+  } catch {
+    // A failed send is covered by the close.
+  }
+  try {
+    ws.close(4000, "session_replaced");
+  } catch {
+    // Already closed.
+  }
 }
 
 export class AgentSessionDO extends DurableObject {
@@ -298,16 +340,13 @@ export class AgentSessionDO extends DurableObject {
       return new Response("Bad Request", { status: 400 });
     }
 
-    // A newer handshake makes older v2 sockets inert here: their messages and
-    // pushes are ignored until the database fence stops them. Terminal relays
-    // are tied to the exact session, so they never blend across the two.
+    // A newer handshake ends older v2 sockets with the contract's
+    // `session_replaced` error and close 4000. Terminal relays are tied to the
+    // exact session, so they never blend across the two.
     for (const existing of this.ctx.getWebSockets(serverId)) {
       const attachment = readAttachment(existing);
       if (attachment?.protocol === "v2" && !attachment.superseded) {
-        existing.serializeAttachment({
-          ...attachment,
-          superseded: true,
-        } satisfies V2AgentSessionAttachment);
+        supersedeV2Socket(existing, attachment);
       }
     }
 
