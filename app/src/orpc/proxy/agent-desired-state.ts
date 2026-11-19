@@ -20,12 +20,25 @@ import {
 } from "./singbox";
 import { buildInboundUser } from "./singbox-users";
 
+/**
+ * The longest a cached identifier may be trusted without recompiling. Inputs
+ * with no change record (a temporary user ban clearing, a missed invalidation)
+ * are then reflected within this bound, whether or not a push arrives.
+ */
+export const AGENT_DESIRED_CONFIG_MAX_AGE_MS = 120_000;
+
 export interface AgentDesiredState {
   config: ReturnType<typeof compileServerConfig>;
   materializedNodeIds: string[];
   managedTlsBindings: ReturnType<typeof buildManagedTlsBindings>;
   certificateArtifacts: ReturnType<typeof buildCertificateArtifacts>;
   desiredRevision: string;
+  /**
+   * The identifier stays correct until this instant even with no change
+   * record: the earliest expiry of a subscription in the compiled state, capped
+   * at `AGENT_DESIRED_CONFIG_MAX_AGE_MS` after the reads began.
+   */
+  validUntil: Date;
 }
 
 async function compileAgentServerConfig(
@@ -37,9 +50,13 @@ async function compileAgentServerConfig(
     enabled ? listEnabledServerNodes(serverId, database) : [],
     listEnabledRules(database),
   ]);
+  const expiries: number[] = [];
   const perNodeUsers = await Promise.all(
     nodes.map(async (node) => {
       const subscriptions = await getNodeActiveSubscriptions(node.id, database);
+      for (const subscription of subscriptions) {
+        expiries.push(subscription.expiresAt.getTime());
+      }
       return subscriptions
         .map((subscription) => buildInboundUser(node, subscription))
         .filter((user): user is NonNullable<typeof user> => user !== null);
@@ -58,6 +75,11 @@ async function compileAgentServerConfig(
     config,
     materializedNodes: materialized.map(({ node }) => node),
     materializedNodeIds: materialized.map(({ node }) => node.id),
+    earliestExpiryMs: expiries.reduce<number | null>(
+      (earliest, expiry) =>
+        earliest === null || expiry < earliest ? expiry : earliest,
+      null,
+    ),
   };
 }
 
@@ -82,8 +104,9 @@ export async function buildAgentDesiredState(
   server: Pick<Server, "id" | "enabled" | "desiredRevisionSeq">,
   options: AgentDesiredStateOptions = {},
 ): Promise<AgentDesiredState> {
+  const checkedAt = Date.now();
   const [
-    { config, materializedNodes, materializedNodeIds },
+    { config, materializedNodes, materializedNodeIds, earliestExpiryMs },
     certificateContext,
   ] = await Promise.all([
     compileAgentServerConfig(server.id, server.enabled, options.database),
@@ -116,6 +139,12 @@ export async function buildAgentDesiredState(
         managedTlsBindings,
         certificateArtifacts,
         materializedNodeIds,
+      ),
+    ),
+    validUntil: new Date(
+      Math.min(
+        checkedAt + AGENT_DESIRED_CONFIG_MAX_AGE_MS,
+        earliestExpiryMs ?? Number.POSITIVE_INFINITY,
       ),
     ),
   };
