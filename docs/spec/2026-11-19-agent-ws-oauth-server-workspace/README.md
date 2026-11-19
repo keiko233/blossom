@@ -31,5 +31,6 @@ This proposal builds on the previous WebSocket, telemetry, PTY, and ACME work. I
 5. [OAuth identity integration handoff](identity-handoff.md): the exact claims, endpoints, failure codes, and follow-up work of the control-plane identity slice
 6. [Rust agent OAuth and WebSocket v2 handoff](identity-rust-handoff.md): the credential storage, token, pending-proof, rotation, expiry and error contract the Rust agent consumes
 7. [Workspace Connection UI handoff](connection-ui-handoff.md): the backup-token API, DTO state, and compatibility rules consumed by the Connection tab
+8. [Cumulative integration ledger](integration-ledger.md): sibling sources, absorbed commits, reconciliation decisions, and residual gaps
 
 Prioritize connection and configuration diagnostics, credential rotation and revocation, audit events, and installation progress and recovery. Evaluate alert notifications and centralized log archival later.
