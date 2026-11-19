@@ -290,6 +290,40 @@ describe("agent WebSocket contract", () => {
     expect(parseAgentWsPtyMessage("config.notify", {})).toBeNull();
   });
 
+  it("parses the shell-started payload and the startup failure reasons", () => {
+    expect(
+      parseAgentWsPtyMessage("pty.started", {
+        sessionId: "term-1",
+        shell: "/bin/sh",
+        user: "blossom",
+      }),
+    ).toEqual({
+      ok: true,
+      message: {
+        type: "pty.started",
+        payload: { sessionId: "term-1", shell: "/bin/sh", user: "blossom" },
+      },
+    });
+    expect(
+      parseAgentWsPtyMessage("pty.started", {
+        sessionId: "term-1",
+        shell: "",
+        user: "blossom",
+      }),
+    ).toEqual({ ok: false, type: "pty.started" });
+
+    for (const reason of [
+      "shell_unavailable",
+      "pty_unavailable",
+      "relay_timeout",
+      "authorization_revoked",
+    ] as const) {
+      expect(
+        parseAgentWsPtyMessage("pty.exit", { sessionId: "term-1", reason }),
+      ).toMatchObject({ ok: true, message: { payload: { reason } } });
+    }
+  });
+
   it("reports malformed known payloads without throwing", () => {
     expect(
       parseAgentWsFrame(JSON.stringify({ v: 1, type: "welcome", payload: {} })),

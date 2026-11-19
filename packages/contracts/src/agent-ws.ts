@@ -35,6 +35,7 @@ export const AGENT_WS_RESERVED_MESSAGE_TYPES = [
   "telemetry.inspect",
   "telemetry.snapshot",
   "pty.open",
+  "pty.started",
   "pty.data",
   "pty.resize",
   "pty.close",
@@ -286,6 +287,17 @@ export const agentWsPtyClosePayloadSchema = z.object({
 export const AGENT_WS_PTY_CAPABILITY = "pty-v1" as const;
 export const AGENT_WS_PTY_MAX_DATA_BYTES = 1024 * 1024;
 
+/**
+ * Sent by the agent once the local shell has been spawned. The browser shows
+ * the terminal as connected only after this frame, so a startup failure is
+ * reported as `pty.exit` instead of a connected session that never prints.
+ */
+export const agentWsPtyStartedPayloadSchema = z.object({
+  sessionId: z.string().min(1).max(128),
+  shell: z.string().min(1).max(512),
+  user: z.string().min(1).max(64),
+});
+
 export const AGENT_WS_PTY_EXIT_REASONS = [
   "closed",
   "idle_timeout",
@@ -301,6 +313,10 @@ export const AGENT_WS_PTY_EXIT_REASONS = [
   "disabled",
   "session_expired",
   "shell_exit",
+  "pty_unavailable",
+  "shell_unavailable",
+  "relay_timeout",
+  "authorization_revoked",
 ] as const;
 
 export type AgentWsPtyExitReason = (typeof AGENT_WS_PTY_EXIT_REASONS)[number];
@@ -346,6 +362,7 @@ const acmeDomainSchema = z
 /** `acme.issue` (control plane -> designated issuer agent). */
 export const AGENT_WS_PTY_MESSAGE_TYPES = [
   "pty.open",
+  "pty.started",
   "pty.data",
   "pty.resize",
   "pty.close",
@@ -356,12 +373,16 @@ export type AgentWsPtyMessageType = (typeof AGENT_WS_PTY_MESSAGE_TYPES)[number];
 
 export type AgentWsPtyMessage =
   | { type: "pty.open"; payload: AgentWsPtyOpenPayload }
+  | { type: "pty.started"; payload: AgentWsPtyStartedPayload }
   | { type: "pty.data"; payload: AgentWsPtyDataPayload }
   | { type: "pty.resize"; payload: AgentWsPtyResizePayload }
   | { type: "pty.close"; payload: AgentWsPtyClosePayload }
   | { type: "pty.exit"; payload: AgentWsPtyExitPayload };
 
 export type AgentWsPtyOpenPayload = z.infer<typeof agentWsPtyOpenPayloadSchema>;
+export type AgentWsPtyStartedPayload = z.infer<
+  typeof agentWsPtyStartedPayloadSchema
+>;
 export type AgentWsPtyDataPayload = z.infer<typeof agentWsPtyDataPayloadSchema>;
 export type AgentWsPtyResizePayload = z.infer<
   typeof agentWsPtyResizePayloadSchema
@@ -537,6 +558,7 @@ export const agentWsPayloadSchemas = {
 
 export const agentWsPtyPayloadSchemas = {
   "pty.open": agentWsPtyOpenPayloadSchema,
+  "pty.started": agentWsPtyStartedPayloadSchema,
   "pty.data": agentWsPtyDataPayloadSchema,
   "pty.resize": agentWsPtyResizePayloadSchema,
   "pty.close": agentWsPtyClosePayloadSchema,
