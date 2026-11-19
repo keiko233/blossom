@@ -35,6 +35,7 @@ import { LogContextDialog } from "./log-context-dialog";
 import { logErrorMessage } from "./log-error-message";
 import { LogLineText } from "./log-line-text";
 import { LogViewer } from "./log-viewer";
+import { ServerLogPolicyPanel } from "./server-log-policy-panel";
 import { useServerList } from "./use-server-list";
 import { useServerLogs, type LogConnectionPhase } from "./use-server-logs";
 
@@ -447,6 +448,8 @@ export function ServerLogsPanel({
           {m.agent_logs_filter_note()}
         </p>
       </div>
+
+      <ServerLogPolicyPanel server={live} />
 
       {availability.kind === "available" &&
       controller.tail.entries.length > 0 ? (
