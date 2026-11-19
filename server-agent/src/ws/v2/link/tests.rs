@@ -8,6 +8,7 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use super::{Connector, LinkOptions, ReconnectBackoff, run};
+use crate::logs::{LogStore, RingLimits};
 use crate::ws::Jitter;
 use crate::ws::codec::UpdateStatusPayload;
 use crate::ws::ports::WsError;
@@ -151,6 +152,7 @@ async fn drive(plans: Vec<Plan>, jitter: f64, run_for: Duration) -> Vec<Duration
     );
     let cancel = CancellationToken::new();
     let task_cancel = cancel.clone();
+    let store = LogStore::new(RingLimits::default());
     let task = tokio::spawn(async move {
         run(
             &connector,
@@ -158,6 +160,7 @@ async fn drive(plans: Vec<Plan>, jitter: f64, run_for: Duration) -> Vec<Duration
             &options(),
             &FixedJitter(jitter),
             &task_cancel,
+            &store,
         )
         .await;
     });
@@ -260,6 +263,7 @@ async fn cancellation_stops_the_loop_during_a_backoff() {
     );
     let cancel = CancellationToken::new();
     let task_cancel = cancel.clone();
+    let store = LogStore::new(RingLimits::default());
     let task = tokio::spawn(async move {
         run(
             &connector,
@@ -267,6 +271,7 @@ async fn cancellation_stops_the_loop_during_a_backoff() {
             &options(),
             &FixedJitter(0.0),
             &task_cancel,
+            &store,
         )
         .await;
     });

@@ -15,6 +15,7 @@ use super::{
     ApplyOutcome, ApplyResult, CorePorts, CoreStatus, HelloIdentity, SessionEnd, SessionTiming,
     TrafficOutcome, TrafficPorts, TrafficRequest, Wire, channels, run,
 };
+use crate::logs::{LogStore, RingLimits};
 use crate::ws::codec::{UpdateStatePayload, UpdateStatusPayload};
 use crate::ws::ports::WsError;
 use crate::ws::v2::codec::{
@@ -102,6 +103,7 @@ fn start(applied: Option<&str>) -> Harness {
     let (outbound, sent) = mpsc::unbounded_channel();
     let cancel = CancellationToken::new();
     let task_cancel = cancel.clone();
+    let store = LogStore::new(RingLimits::default());
     let task = tokio::spawn(async move {
         let mut wire = ScriptedWire { inbound, outbound };
         run(
@@ -110,6 +112,7 @@ fn start(applied: Option<&str>) -> Harness {
             &identity(),
             &SessionTiming::default(),
             &task_cancel,
+            &store,
         )
         .await
     });
@@ -201,6 +204,69 @@ async fn expect_type(harness: &mut Harness, kind: &str) -> Value {
         assert_eq!(frame["type"], kind, "{frame}");
         return frame["payload"].clone();
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn log_requests_are_answered_over_the_session() {
+    let mut harness = start(Some(D7));
+    assert_eq!(
+        expect_type(&mut harness, "hello").await["agentVersion"],
+        "1.3.0"
+    );
+    harness.peer.send(Ok(welcome(D7, 30, None))).unwrap();
+    harness
+        .peer
+        .send(Ok(peer_frame(
+            "logs.subscribe",
+            json!({
+                "subscriptionId": "tail-1",
+                "filter": {},
+                "resume": null,
+                "limit": 10,
+            }),
+        )))
+        .unwrap();
+    let batch = expect_type(&mut harness, "logs.batch").await;
+    assert_eq!(batch["subscriptionId"], "tail-1", "{batch}");
+    assert!(batch["records"].as_array().unwrap().is_empty(), "{batch}");
+    let generation = batch["next"]["generation"].clone();
+
+    harness
+        .peer
+        .send(Ok(peer_frame(
+            "logs.search",
+            json!({
+                "requestId": "search-1",
+                "query": {},
+                "cursor": null,
+                "limit": 10,
+            }),
+        )))
+        .unwrap();
+    let result = expect_type(&mut harness, "logs.search.result").await;
+    assert_eq!(result["requestId"], "search-1", "{result}");
+    assert!(result["matches"].as_array().unwrap().is_empty(), "{result}");
+    assert!(result["next"].is_null(), "{result}");
+
+    harness
+        .peer
+        .send(Ok(peer_frame(
+            "logs.context",
+            json!({
+                "requestId": "ctx-1",
+                "generation": generation,
+                "seq": 1,
+                "before": 0,
+                "after": 0,
+            }),
+        )))
+        .unwrap();
+    let error = expect_type(&mut harness, "logs.error").await;
+    assert_eq!(error["requestId"], "ctx-1", "{error}");
+    assert_eq!(error["code"], "not_found", "{error}");
+
+    harness.cancel.cancel();
+    let _ = harness.task.await;
 }
 
 async fn expect_silence(harness: &mut Harness) {

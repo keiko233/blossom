@@ -38,14 +38,14 @@ There is no application-level heartbeat. Use WebSocket ping and pong to detect h
 
 ## Desired-state synchronization
 
-| Frame | Direction | Notes |
-| --- | --- | --- |
-| `config.get` `{requestId, reason}` | agent to control plane | `reason` is `initial`, `mismatch`, or `notify`. A newer request supersedes an older one that has not been sent yet. |
-| `config.snapshot.begin` `{requestId, desired, contentType, totalBytes, chunkCount, digest}` | control plane to agent | `desired` names the version actually compiled, which may differ from a notification. `digest` is the lowercase SHA-256 of the complete body bytes. |
-| `config.snapshot.chunk` `{requestId, index, data}` | control plane to agent | Chunks arrive in order. `data` is standard base64 of at most 64 KiB raw bytes. |
-| `config.snapshot.end` `{requestId}` | control plane to agent | The agent verifies `chunkCount`, `totalBytes`, and `digest`, then validates the complete body before it applies anything. |
-| `config.snapshot.error` `{requestId, code, message}` | control plane to agent | `snapshot_too_large` means the compiled configuration exceeds the limit. The agent keeps its applied configuration and reports the refusal. |
-| `config.ack` `{requestId?, desired, outcome, stage?, error?}` | agent to control plane | `applied` names what was applied, after validation, durable storage, and sing-box application. `failed` names the stage (`receive`, `validate`, `store`, or `apply`). A failed ack never moves the applied identifier. |
+| Frame                                                                                       | Direction              | Notes                                                                                                                                                                                                                  |
+| ------------------------------------------------------------------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config.get` `{requestId, reason}`                                                          | agent to control plane | `reason` is `initial`, `mismatch`, or `notify`. A newer request supersedes an older one that has not been sent yet.                                                                                                    |
+| `config.snapshot.begin` `{requestId, desired, contentType, totalBytes, chunkCount, digest}` | control plane to agent | `desired` names the version actually compiled, which may differ from a notification. `digest` is the lowercase SHA-256 of the complete body bytes.                                                                     |
+| `config.snapshot.chunk` `{requestId, index, data}`                                          | control plane to agent | Chunks arrive in order. `data` is standard base64 of at most 64 KiB raw bytes.                                                                                                                                         |
+| `config.snapshot.end` `{requestId}`                                                         | control plane to agent | The agent verifies `chunkCount`, `totalBytes`, and `digest`, then validates the complete body before it applies anything.                                                                                              |
+| `config.snapshot.error` `{requestId, code, message}`                                        | control plane to agent | `snapshot_too_large` means the compiled configuration exceeds the limit. The agent keeps its applied configuration and reports the refusal.                                                                            |
+| `config.ack` `{requestId?, desired, outcome, stage?, error?}`                               | agent to control plane | `applied` names what was applied, after validation, durable storage, and sing-box application. `failed` names the stage (`receive`, `validate`, `store`, or `apply`). A failed ack never moves the applied identifier. |
 
 The body is the HTTP `GET /agent/config/v3` document, byte for byte. A JSON `apiVersion: 3` object with `desiredRevision` equal to the identifier that `begin` advertises.
 
@@ -71,22 +71,38 @@ Discard a partial snapshot on disconnect and request a new one after reconnect. 
 - No `traffic.ack` means the session was replaced. The write did not happen. Resend the **same** `reportId` and payload on the new session, and the ledger will deduplicate it.
 - Keep the report queue on disk until its `traffic.ack` arrives. Traffic collection must not wait on the socket.
 
+## Logs
+
+The Rust agent serves the retained redacted log buffer over v2 when it advertises:
+
+- `logs-tail-v1`: `logs.subscribe`, `logs.unsubscribe`, `logs.batch` and `logs.gap`.
+- `logs-search-v1`: `logs.search`, `logs.search.cancel`, `logs.context`, `logs.search.result`, `logs.context.result` and `logs.error`.
+
+The contract and its fixtures were imported from PR #137 (`d9426331f54ef9cc67565f41ae6eca2f4a4df9e0`; contract commit `0fe9488946fec717ecd549a037de98a0d2622cd5`) without modification. The Rust codec decodes `packages/contracts/fixtures/agent-ws-v2-logs.frames.json` for the agent wire.
+
+- **Source.** Every outbound record comes from the bounded, already-redacted retained buffer. Tail, search and context never format process output, tracing directly, or the local log file.
+- **Tail.** `resume: null` returns the newest retained records that match the source and minimum-level filter. A cursor replays sequence-exact records after it. A generation change reports `restarted`; eviction reports an `overwritten` range. An open tail checks for new records every 500 ms and coalesces them into `logs.batch`, up to 200 records.
+- **Search.** Matching is case-insensitive ASCII literal text over the retained buffer, with optional source, minimum severity and UTC `since`/`until` bounds. Pages are newest first, at most 100 records, and carry the pinned sequence, eviction floor and a continuation cursor. A cursor that lost coverage reports the gap instead of skipping records.
+- **Context.** `logs.context` returns the target plus up to 50 same-source, same-process-run neighbours before and after it. A changed generation, eviction or missing sequence is a typed `logs.error`.
+- **Bounds and deadlines.** One connection serves at most 16 tails, two searches and eight context lookups. Requests queue on a bounded channel; overflow is `busy`. Searches and context lookups run on blocking workers with an 8 s deadline and a cancellation token, so the v2 socket loop keeps handling status and configuration.
+- **Session scope.** The worker and all of its tails and requests belong to one WebSocket connection. A reconnect, replacement or close cancels them, so a late result can never answer the next session. Request and subscription ids are echoed exactly.
+
 ## Not in v2 yet
 
 These remain v1-only and are never sent to v2 sessions:
 
 - `update.trigger` and `update.status`, and the `acme.*` messages. The control plane does not push them to v2 sessions.
-- `telemetry.*`, `pty.*`, and the log policy messages.
+- `telemetry.*`, `pty.*`, and the remote log-level policy messages (`log-policy-v1`). Live tail and retained search are served; changing a source's level remains a separate change.
 
 Until the PTY moves to v2, a v2 agent **must not advertise `pty-v1`** in `hello.capabilities`. The admin terminal would otherwise offer a session that cannot start.
 
 ## Limits
 
-| Limit | Value | Notes |
-| --- | --- | --- |
-| `maxFrameBytes` | 4 MiB | Enforced on both sides. |
-| `snapshotChunkBytes` | 64 KiB raw | Base64 expands this by about a third. |
-| `maxSnapshotBytes` | 8 MiB | Provisional. Raise it only after measuring real compiled sizes, including certificate artifacts, on each deploy target. |
+| Limit                | Value      | Notes                                                                                                                   |
+| -------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `maxFrameBytes`      | 4 MiB      | Enforced on both sides.                                                                                                 |
+| `snapshotChunkBytes` | 64 KiB raw | Base64 expands this by about a third.                                                                                   |
+| `maxSnapshotBytes`   | 8 MiB      | Provisional. Raise it only after measuring real compiled sizes, including certificate artifacts, on each deploy target. |
 
 The control plane advertises these values in `welcome.limits`. The agent must enforce the values it received.
 
@@ -100,7 +116,10 @@ The control plane advertises these values in `welcome.limits`. The agent must en
 
 - Contract schemas, direction and size checks, and both sides of the wire fixtures: unit-tested. `server-agent/src/ws/v2/codec.rs` includes and decodes the shared fixture file directly.
 - Session state machine, snapshot chunking, and hub delivery: unit-tested with fakes.
+- Retained tail, search, context, gaps and session reset: unit-tested against the real in-memory buffer and the shared log fixtures.
 - Rust lifecycle: `server-agent/tests/ws_v2_lifecycle.rs` runs the real agent binary against a local v2 WebSocket control plane and a fake sing-box with disposable state. It covers a cold multi-chunk snapshot apply, an unacknowledged traffic report replayed byte-for-byte under the same id, missed-notification recovery through `agent.status.ack`, a failed candidate rolling back to the last-known-good config, and an offline restart from that config. The control plane records and fails every plain HTTP agent API request; the test asserts none occurred.
+- The same lifecycle test streams the fake sing-box's synthetic stdout and stderr through `logs.subscribe`, asserts that a redacted credential never reaches the wire, checks that a reconnect drops the old tail, and drives paginated search and context over the retained buffer.
+- The Rust log surface was not exercised through the Node relay or under workerd in this change. The control plane side remains covered by the shared contract fixtures and the PR #137 relay tests.
 - Session and traffic fencing, configuration acknowledgement, and status writes: exercised against a disposable PostgreSQL through node-postgres and neon-http (the latter through a loopback `/sql` shim).
 - The built Node server: a real v2 session (hello, welcome, snapshot with digest, applied ack, status, traffic and its replay, direction error, fenced disconnect) and the v1 handshake on the same route.
 - Cloudflare Durable Object: built, not run under workerd in this change. The state machine is the same, but hibernation rehydration, the `Sec-WebSocket-Protocol` response header, and the 4000-series close are unverified on Cloudflare and must be checked before deployment.

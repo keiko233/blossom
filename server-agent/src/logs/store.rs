@@ -73,6 +73,10 @@ impl LogStore {
         }
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "asserted by the log store tests")
+    )]
     pub(crate) fn generation(&self) -> Result<u64, StoreError> {
         Ok(self.lock()?.generation())
     }

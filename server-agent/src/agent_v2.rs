@@ -34,7 +34,8 @@ use crate::ws::RandomJitter;
 use crate::ws::adapters::{SensitiveHeader, WsTransportConfig, ws_url};
 use crate::ws::v2::adapter::V2Connector;
 use crate::ws::v2::codec::{
-    AckStage, ConfigIdentifier, ConfigState, RuntimeState, StatusError, UpdatePolicy,
+    AckStage, ConfigIdentifier, ConfigState, LOGS_SEARCH_CAPABILITY, LOGS_TAIL_CAPABILITY,
+    RuntimeState, StatusError, UpdatePolicy,
 };
 use crate::ws::v2::link::{self, LinkOptions};
 use crate::ws::v2::session::{
@@ -57,6 +58,8 @@ const V2_CAPABILITIES: &[&str] = &[
     "connection-stream-traffic",
     "ws-v2",
     "traffic-v2",
+    LOGS_TAIL_CAPABILITY,
+    LOGS_SEARCH_CAPABILITY,
 ];
 const WS_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// How often the core re-reads sing-box's process state, so a crash loop is
@@ -134,6 +137,7 @@ pub async fn run(args: &Args, logs: LogStore, log_policy: Arc<LogPolicy>) -> Res
         capabilities: V2_CAPABILITIES.iter().map(|c| (*c).to_string()).collect(),
     });
     let link_cancel = cancel.clone();
+    let link_logs = logs.clone();
     let link_task = tokio::spawn(async move {
         link::run(
             &transport,
@@ -141,6 +145,7 @@ pub async fn run(args: &Args, logs: LogStore, log_policy: Arc<LogPolicy>) -> Res
             &options,
             &RandomJitter,
             &link_cancel,
+            &link_logs,
         )
         .await;
     });
@@ -442,7 +447,9 @@ async fn restart_for_update(manager: Option<SingBoxManager>) -> ! {
 #[cfg(test)]
 mod tests {
     use super::{V2_CAPABILITIES, bounded, config_state_of, stage_of};
-    use crate::ws::v2::codec::{AckStage, ConfigState};
+    use crate::ws::v2::codec::{
+        AckStage, ConfigState, LOGS_SEARCH_CAPABILITY, LOGS_TAIL_CAPABILITY,
+    };
 
     #[test]
     fn v2_advertises_only_what_the_v2_peer_serves() {
@@ -453,6 +460,16 @@ mod tests {
             );
         }
         assert!(V2_CAPABILITIES.contains(&"ws-v2"));
+        for served in [LOGS_TAIL_CAPABILITY, LOGS_SEARCH_CAPABILITY] {
+            assert!(
+                V2_CAPABILITIES.contains(&served),
+                "{served} must be advertised"
+            );
+        }
+        assert!(
+            !V2_CAPABILITIES.contains(&"log-policy-v1"),
+            "the remote log-level protocol is a separate change"
+        );
     }
 
     #[test]

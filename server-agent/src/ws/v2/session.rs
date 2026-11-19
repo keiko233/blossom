@@ -30,7 +30,9 @@ use super::codec::{
     RuntimeState, Sender, StatusError, StatusReason, StatusReport, TrafficReport, TrafficResult,
     UpdatePolicy,
 };
+use super::logs;
 use super::snapshot::{SnapshotAssembler, SnapshotError, SnapshotLimits, VerifiedSnapshot};
+use crate::logs::LogStore;
 use crate::ws::codec::{CertificateDeployment, UpdateStatusPayload};
 use crate::ws::ports::WsError;
 
@@ -308,8 +310,12 @@ pub async fn run<W: Wire>(
     identity: &HelloIdentity,
     timing: &SessionTiming,
     cancel: &CancellationToken,
+    store: &LogStore,
 ) -> SessionEnd {
-    let end = run_connection(wire, ports, identity, timing, cancel).await;
+    let mut logs = logs::Session::start(store.clone(), cancel.child_token());
+    let end = run_connection(wire, ports, identity, timing, cancel, &mut logs).await;
+    // The connection owns every tail and request; none may reach the next one.
+    logs.shutdown().await;
     // The session is over, so the traffic reports awaiting acknowledgement and
     // any queued apply belong to this connection and are dropped with it.
     let _ = ports.online.send(false);
@@ -323,7 +329,9 @@ async fn run_connection<W: Wire>(
     identity: &HelloIdentity,
     timing: &SessionTiming,
     cancel: &CancellationToken,
+    logs: &mut logs::Session,
 ) -> SessionEnd {
+    let log_handle = logs.handle();
     let hello = build_hello(identity, &ports.status.borrow());
     if let Err(reason) = send(wire, "hello", &hello, None).await {
         return SessionEnd::Lost {
@@ -411,6 +419,14 @@ async fn run_connection<W: Wire>(
                     return SessionEnd::Lost { reason, welcomed: true };
                 }
             }
+            reply = logs.recv() => {
+                let Some(text) = reply else {
+                    return SessionEnd::Cancelled;
+                };
+                if let Err(reason) = send_raw(wire, text).await {
+                    return SessionEnd::Lost { reason, welcomed: state.welcomed };
+                }
+            }
             changed = status.changed(), if state.welcomed => {
                 if changed.is_err() {
                     return SessionEnd::Cancelled;
@@ -488,6 +504,7 @@ async fn run_connection<W: Wire>(
                         online,
                         frame_limit: &mut frame_limit,
                         failed: &mut *failed,
+                        logs: &log_handle,
                     },
                 )
                 .await;
@@ -514,6 +531,7 @@ struct Context<'a, W: Wire> {
     online: &'a mut watch::Sender<bool>,
     frame_limit: &'a mut usize,
     failed: &'a mut FailedApply,
+    logs: &'a logs::Handle,
 }
 
 async fn handle<W: Wire>(
@@ -529,8 +547,29 @@ async fn handle<W: Wire>(
         online,
         frame_limit,
         failed,
+        logs,
     } = context;
     match message {
+        Message::LogsSubscribe(request) => {
+            require_welcome(state, wire, "logs.subscribe").await?;
+            admit(wire, logs, logs::Command::Subscribe(request)).await?;
+        }
+        Message::LogsUnsubscribe(request) => {
+            require_welcome(state, wire, "logs.unsubscribe").await?;
+            admit(wire, logs, logs::Command::Unsubscribe(request)).await?;
+        }
+        Message::LogsSearch(request) => {
+            require_welcome(state, wire, "logs.search").await?;
+            admit(wire, logs, logs::Command::Search(request)).await?;
+        }
+        Message::LogsSearchCancel(request) => {
+            require_welcome(state, wire, "logs.search.cancel").await?;
+            admit(wire, logs, logs::Command::CancelSearch(request.request_id)).await?;
+        }
+        Message::LogsContext(request) => {
+            require_welcome(state, wire, "logs.context").await?;
+            admit(wire, logs, logs::Command::Context(request)).await?;
+        }
         Message::Welcome(welcome) => {
             if state.welcomed {
                 send_error(
@@ -683,6 +722,11 @@ async fn handle<W: Wire>(
         | Message::ConfigGet(_)
         | Message::ConfigAck(_)
         | Message::TrafficReport(_)
+        | Message::LogsBatch(_)
+        | Message::LogsGap(_)
+        | Message::LogsSearchResult(_)
+        | Message::LogsContextResult(_)
+        | Message::LogsError(_)
         | Message::Unknown(_) => {}
     }
     Ok(Flow::Continue)
@@ -747,6 +791,17 @@ async fn require_welcome<W: Wire>(
     )
     .await;
     Err(format!("{message_type} arrived before welcome"))
+}
+
+async fn admit<W: Wire>(
+    wire: &mut W,
+    logs: &logs::Handle,
+    command: logs::Command,
+) -> Result<(), String> {
+    if let Err(error) = logs.admit(command) {
+        send(wire, "logs.error", &error, None).await?;
+    }
+    Ok(())
 }
 
 /// Requests a snapshot when `desired` differs from the applied identifier. A
@@ -820,6 +875,10 @@ async fn send<W: Wire, P: Serialize>(
     id: Option<&str>,
 ) -> Result<(), String> {
     let text = codec::encode(message_type, payload, id).map_err(|error| error.to_string())?;
+    send_raw(wire, text).await
+}
+
+async fn send_raw<W: Wire>(wire: &mut W, text: String) -> Result<(), String> {
     wire.send_text(text).await.map_err(|error| error.describe())
 }
 

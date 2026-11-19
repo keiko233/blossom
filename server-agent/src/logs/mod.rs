@@ -5,16 +5,6 @@
 //! stripped and length is capped. A fixed byte, line and age budget bounds
 //! memory. Local logging is unchanged.
 
-// Tail, search and context reads have no caller inside the binary until the
-// WebSocket log binding lands; the lint is suppressed only for non-test builds.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "query APIs are consumed by the WebSocket log binding in a follow-up change"
-    )
-)]
-
 mod layer;
 mod model;
 mod ring;
@@ -24,8 +14,12 @@ mod text;
 
 pub(crate) use layer::{CaptureLayer, SING_BOX_OUTPUT_TARGET};
 #[cfg(test)]
-pub(crate) use model::LogCursor;
-pub(crate) use model::{LogLevel, LogSource};
+pub(crate) use model::RingLimits;
+pub(crate) use model::{
+    GapReason, LogCursor, LogGap, LogLevel, LogRecord, LogSource, SearchCursor,
+};
+pub(crate) use ring::ContextError;
+pub(crate) use search::{LogQuery, SearchError, SearchPage, SearchRequest};
 pub(crate) use store::LogStore;
 pub(crate) use text::{PrivateKeyBlock, SecretRegistryFull, SecretScope, strip_ansi};
 

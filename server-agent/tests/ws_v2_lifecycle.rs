@@ -150,6 +150,9 @@ case "$1" in
     ;;
   run)
     echo "run $3" >> "$FAKE_SINGBOX_LOG"
+    echo "synthetic-alpha INFO agent ready"
+    echo "synthetic-warn WARN dial tcp refused" >&2
+    echo "synthetic-secret ERROR authorization=Bearer topsecret-value" >&2
     if grep -q "node-runtime-fail" "$3"; then
       echo "ERROR the failing test inbound cannot start" >&2
       exit 1
@@ -494,9 +497,64 @@ async fn run_first_session(socket: &mut WebSocket) -> Value {
             other => panic!("unexpected frame in the first session: {other}: {frame}"),
         }
     }
+    check_tail(socket).await;
     // Close without acknowledging the report: the durable queue must resend it
     // under the same id on the next session.
     traffic.unwrap()
+}
+
+async fn check_tail(socket: &mut WebSocket) {
+    send(
+        socket,
+        &json!({
+            "v": 2,
+            "type": "logs.subscribe",
+            "ts": chrono::Utc::now().to_rfc3339(),
+            "payload": {
+                "subscriptionId": "tail-1",
+                "filter": {"source": "sing-box", "minLevel": "info"},
+                "resume": null,
+                "limit": 50,
+            },
+        }),
+    )
+    .await;
+    loop {
+        let frame = receive(socket).await;
+        match frame["type"].as_str().unwrap() {
+            "logs.batch" => {
+                assert_eq!(frame["payload"]["subscriptionId"], "tail-1", "{frame}");
+                let records = frame["payload"]["records"].as_array().unwrap();
+                let texts: Vec<_> = records
+                    .iter()
+                    .map(|record| record["text"].as_str().unwrap())
+                    .collect();
+                assert!(
+                    texts.iter().any(|text| text.contains("synthetic-alpha")),
+                    "the tail did not return the retained sing-box output: {frame}"
+                );
+                assert!(
+                    texts.iter().any(|text| text.contains("dial tcp refused")),
+                    "the tail did not return the warning line: {frame}"
+                );
+                assert!(
+                    texts.iter().any(|text| text.contains("[REDACTED]")),
+                    "the retained secret was not redacted: {frame}"
+                );
+                assert!(
+                    texts.iter().all(|text| !text.contains("topsecret-value")),
+                    "the retained secret reached the wire: {frame}"
+                );
+                assert!(
+                    records.iter().all(|record| record["source"] == "sing-box"),
+                    "the tail filter leaked another source: {frame}"
+                );
+                return;
+            }
+            "agent.status" | "traffic.report" | "config.get" => {}
+            other => panic!("unexpected frame while tailing logs: {other}: {frame}"),
+        }
+    }
 }
 
 async fn run_second_session(socket: &mut WebSocket, first_traffic: Value) {
@@ -566,6 +624,149 @@ async fn run_second_session(socket: &mut WebSocket, first_traffic: Value) {
             Ok(Some(Err(error))) => panic!("websocket error: {error}"),
             Ok(None) => break,
             Err(_) => {}
+        }
+    }
+
+    // The reconnect must not inherit the first session's tail subscription.
+    let quiet = tokio::time::Instant::now() + Duration::from_secs(1);
+    while tokio::time::Instant::now() < quiet {
+        match timeout(Duration::from_millis(200), socket.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                let frame: Value = serde_json::from_str(text.as_str()).unwrap();
+                assert!(
+                    !frame["type"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .starts_with("logs."),
+                    "a log subscription survived the reconnect: {frame}"
+                );
+            }
+            Ok(Some(Ok(Message::Ping(payload)))) => {
+                socket.send(Message::Pong(payload)).await.unwrap();
+            }
+            Ok(Some(Ok(_))) => {}
+            Ok(Some(Err(error))) => panic!("websocket error: {error}"),
+            Ok(None) => break,
+            Err(_) => {}
+        }
+    }
+    check_search_and_context(socket).await;
+}
+
+fn logs_frame(kind: &str, payload: Value) -> Value {
+    json!({
+        "v": 2,
+        "type": kind,
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "payload": payload,
+    })
+}
+
+async fn search_result(
+    socket: &mut WebSocket,
+    request_id: &str,
+    query: Value,
+    cursor: Value,
+) -> Value {
+    send(
+        socket,
+        &logs_frame(
+            "logs.search",
+            json!({
+                "requestId": request_id,
+                "query": query,
+                "cursor": cursor,
+                "limit": 1,
+            }),
+        ),
+    )
+    .await;
+    loop {
+        let frame = receive(socket).await;
+        match frame["type"].as_str().unwrap() {
+            "logs.search.result" => {
+                assert_eq!(
+                    frame["payload"]["requestId"], request_id,
+                    "a search reply must echo its request id: {frame}"
+                );
+                return frame;
+            }
+            "logs.error" => panic!("the agent refused a search: {frame}"),
+            "agent.status" | "agent.status.ack" | "config.get" | "logs.batch" | "logs.gap" => {}
+            other => panic!("unexpected frame while searching: {other}: {frame}"),
+        }
+    }
+}
+
+async fn check_search_and_context(socket: &mut WebSocket) {
+    let query = json!({
+        "text": "synthetic",
+        "source": "sing-box",
+        "minLevel": "info",
+    });
+    let first = search_result(socket, "search-1", query.clone(), Value::Null).await;
+    let payload = &first["payload"];
+    assert_eq!(
+        payload["matches"].as_array().unwrap().len(),
+        1,
+        "the page must honor its limit: {first}"
+    );
+    assert!(
+        payload["coverage"]["gap"].is_null(),
+        "the search lost coverage: {first}"
+    );
+    assert!(
+        payload["coverage"]["searchableFrom"].is_string(),
+        "the search did not report its range: {first}"
+    );
+    let continuation = payload["next"].clone();
+    assert!(
+        continuation.is_object(),
+        "a further match must offer a continuation: {first}"
+    );
+
+    let second = search_result(socket, "search-2", query, continuation).await;
+    assert_eq!(
+        second["payload"]["matches"].as_array().unwrap().len(),
+        1,
+        "the continuation must return the next match: {second}"
+    );
+    assert_ne!(
+        first["payload"]["matches"][0]["seq"], second["payload"]["matches"][0]["seq"],
+        "pagination must not repeat a record"
+    );
+
+    let target = &second["payload"]["matches"][0];
+    let generation = second["payload"]["generation"].clone();
+    send(
+        socket,
+        &logs_frame(
+            "logs.context",
+            json!({
+                "requestId": "ctx-1",
+                "generation": generation,
+                "seq": target["seq"],
+                "before": 2,
+                "after": 2,
+            }),
+        ),
+    )
+    .await;
+    loop {
+        let frame = receive(socket).await;
+        match frame["type"].as_str().unwrap() {
+            "logs.context.result" => {
+                assert_eq!(frame["payload"]["requestId"], "ctx-1", "{frame}");
+                assert_eq!(frame["payload"]["target"]["seq"], target["seq"], "{frame}");
+                assert_eq!(
+                    frame["payload"]["target"]["text"], target["text"],
+                    "{frame}"
+                );
+                return;
+            }
+            "logs.error" => panic!("the agent refused the context lookup: {frame}"),
+            "agent.status" | "logs.batch" | "logs.gap" => {}
+            other => panic!("unexpected frame while loading context: {other}: {frame}"),
         }
     }
 }

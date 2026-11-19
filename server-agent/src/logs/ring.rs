@@ -43,6 +43,10 @@ pub(crate) struct LogResume {
 pub(crate) struct SearchSnapshot {
     pub(crate) generation: u64,
     pub(crate) pinned_seq: u64,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "asserted by the search-snapshot tests")
+    )]
     pub(crate) before: u64,
     pub(crate) floor: u64,
     /// Set when coverage is lost. `records` is empty in that case.
@@ -88,6 +92,10 @@ impl LogRing {
         }
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "asserted by the log store tests")
+    )]
     pub(crate) fn generation(&self) -> u64 {
         self.generation
     }
