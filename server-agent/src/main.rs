@@ -155,6 +155,8 @@ struct Args {
     #[arg(
         long,
         default_value_t = false,
+        num_args = 0..=1,
+        default_missing_value = "true",
         env = "AGENT_SELF_UPDATE",
         value_parser = clap::builder::BoolishValueParser::new()
     )]
@@ -2488,5 +2490,19 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn the_installer_self_update_value_is_accepted() {
+        let parse = |arguments: &[&str]| {
+            let mut argv = vec!["server-agent"];
+            argv.extend_from_slice(arguments);
+            Cli::try_parse_from(argv).expect("CLI parses")
+        };
+
+        assert!(!parse(&[]).service.self_update);
+        assert!(!parse(&["--self-update=false"]).service.self_update);
+        assert!(parse(&["--self-update=true"]).service.self_update);
+        assert!(parse(&["--self-update"]).service.self_update);
     }
 }

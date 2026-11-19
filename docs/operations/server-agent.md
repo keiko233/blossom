@@ -112,7 +112,7 @@ The approved binary must implement this exact issuance interface. The installer 
 The client:
 
 1. Reads the `egr_...` grant from the one-line file (mode `0600`) and never accepts it as a positional argument, flag, environment value, URL component or stdin prompt.
-2. POSTs `{ "enrollmentGrant": "..." }` to `<url>/enrollment/redeem` with `Content-Type: application/json`.
+2. POSTs `{ "enrollmentGrant": "..." }` to `<url>/agent/enrollment/redeem` with `Content-Type: application/json`.
 3. Writes the successful response body atomically to `--credentials-file` with mode `0600`, and writes no secret to stdout, stderr or logs.
 4. Exits non-zero without writing credentials on any non-200 response. A lost response is not retried for a secret; an administrator revokes the grant/pending identity and issues a fresh grant.
 

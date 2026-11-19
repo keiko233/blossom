@@ -41,7 +41,7 @@ pub(crate) struct EnrollArgs {
 pub(crate) async fn run_enroll(args: &EnrollArgs) -> anyhow::Result<()> {
     let base = parse_base_url(&args.url)?;
     let grant = read_grant(&args.grant_file)?;
-    let redeem_url = endpoint(&base, "enrollment/redeem")?;
+    let redeem_url = endpoint(&base, "agent/enrollment/redeem")?;
 
     let payload = serde_json::to_vec(&serde_json::json!({ "enrollmentGrant": grant }))
         .context("cannot encode the enrollment request")?;

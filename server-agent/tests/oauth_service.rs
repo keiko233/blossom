@@ -143,7 +143,7 @@ async fn serve_http(mut stream: TcpStream, state: Arc<Mutex<ServerState>>, base:
         return;
     };
     match (method.as_str(), path.as_str()) {
-        ("POST", "/api/enrollment/redeem") => {
+        ("POST", "/api/agent/enrollment/redeem") => {
             let status = {
                 let mut state = state.lock().unwrap();
                 state.redeem_requests.push(body);
@@ -476,6 +476,11 @@ async fn enroll_writes_the_response_verbatim_without_printing_secrets() {
     );
     let server = state.lock().unwrap();
     assert_eq!(server.redeem_requests.len(), 1);
+    assert!(
+        server.other_http.is_empty(),
+        "enrollment must use the /api/agent/enrollment/redeem route: {:?}",
+        server.other_http
+    );
     assert_eq!(
         server.redeem_requests[0],
         serde_json::to_vec(&json!({
