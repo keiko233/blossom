@@ -201,6 +201,17 @@ export interface AgentWsSessionStart {
 }
 
 /**
+ * A handshake timestamp is an identity, never a wall-clock reading. Two
+ * handshakes in the same millisecond would otherwise share it, and a v1
+ * disconnect could clear the marker of a v2 session that replaced it. The
+ * database advances the stored value by at least 1 ms per handshake.
+ */
+function nextConnectedAt(connectedAt: Date) {
+  const value = connectedAt.toISOString();
+  return sql<Date>`GREATEST(${value}::timestamp, COALESCE(${server.wsConnectedAt}, ${value}::timestamp) + interval '1 millisecond')`;
+}
+
+/**
  * Starts a WebSocket session and makes it the server's current one in a
  * single UPDATE. A newer handshake therefore replaces an older session's
  * marker atomically; the older session's later writes match nothing.
@@ -211,16 +222,17 @@ export async function startAgentWsSession(
 ): Promise<AgentWsSessionStart> {
   const connectedAt = new Date();
   const sessionId = randomUUID();
-  await database
+  const rows = await database
     .update(server)
     .set({
-      lastSeenAt: connectedAt,
+      lastSeenAt: nextConnectedAt(connectedAt),
       transportMode: "ws",
-      wsConnectedAt: connectedAt,
+      wsConnectedAt: nextConnectedAt(connectedAt),
       wsSessionId: sessionId,
     })
-    .where(eq(server.id, serverId));
-  return { connectedAt, sessionId };
+    .where(eq(server.id, serverId))
+    .returning({ connectedAt: server.wsConnectedAt });
+  return { connectedAt: rows[0]?.connectedAt ?? connectedAt, sessionId };
 }
 
 /**
@@ -239,9 +251,9 @@ export async function startAgentV2WsSession(
   const rows = await database
     .update(server)
     .set({
-      lastSeenAt: connectedAt,
+      lastSeenAt: nextConnectedAt(connectedAt),
       transportMode: "ws",
-      wsConnectedAt: connectedAt,
+      wsConnectedAt: nextConnectedAt(connectedAt),
       wsSessionId: sessionId,
     })
     .where(
@@ -250,8 +262,11 @@ export async function startAgentV2WsSession(
         eq(server.agentTokenHash, expectedTokenHash),
       ),
     )
-    .returning({ id: server.id });
-  return rows.length > 0 ? { connectedAt, sessionId } : null;
+    .returning({ connectedAt: server.wsConnectedAt });
+  const row = rows[0];
+  return row
+    ? { connectedAt: row.connectedAt ?? connectedAt, sessionId }
+    : null;
 }
 
 /**
