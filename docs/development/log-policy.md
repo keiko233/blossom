@@ -114,7 +114,7 @@ Audit actions are `server.log_policy_read`, `server.log_policy_write` and `serve
 - Admin role, conflict and reset behavior: `app/src/query/server-log-policy.test.ts` and the structural `app/src/lib/admin-audit.test.ts`.
 - Session reconciliation and stale snapshots: `server-agent/src/ws/v2/session/tests.rs`, `app/src/lib/agent-ws-v2-session.test.ts`, `app/src/lib/realtime-hub-v2.test.ts`. The Nitro and Cloudflare hub paths are covered by `realtime-hub-v2.test.ts` and `realtime-hub-cloudflare-log-policy.test.ts`; both hubs share the same store adapter, so the fenced ACK behavior is the same.
 - Real agent over v2 with no HTTP agent API: `server-agent/tests/ws_v2_lifecycle.rs`, including a notification, snapshot acknowledgement and status-ack recovery.
-- Logs tab controls: `app/src/lib/log-policy-view.test.ts` covers the per-source status cues, Restore now/installed-default distinction and bounded duration conversion; typecheck and the app build cover the panel and hook wiring.
+- Logs tab controls: `app/src/lib/log-policy-view.test.ts` covers the per-source status cues and bounded duration conversion; `server-log-policy.test.ts` covers Restore now versus restore-default. Typecheck and the app build cover the panel and hook wiring.
 - Not verified in this change: a browser focus/keyboard run or a live mutation against a seeded agent, live tail/search rendering, Shiki, hosted Cloudflare hibernation and a hosted deployment.
 
 ## Sibling integration
