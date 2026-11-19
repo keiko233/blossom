@@ -373,6 +373,12 @@ impl ConfigManager {
         self.needs_reapply = true;
     }
 
+    /// True while the committed config must be re-applied before it is trusted
+    /// again (startup preflight or launch failed).
+    pub fn needs_reapply(&self) -> bool {
+        self.needs_reapply
+    }
+
     pub fn deployments(&self) -> &[DeploymentRecord] {
         &self.persisted.deployments
     }
@@ -439,7 +445,43 @@ impl ConfigManager {
                 None,
             )
         })?;
-        let document = response.into_inner();
+        self.compile_document(response.into_inner())
+    }
+
+    /// Compiles a v3 document received as a verified WebSocket snapshot. The
+    /// caller has checked the body's digest. This also checks that the document
+    /// is the revision the snapshot announced, so a mismatched body stages nothing.
+    pub fn compile_snapshot(
+        &mut self,
+        body: &[u8],
+        expected_revision: &str,
+    ) -> Result<FetchStatus, ConfigError> {
+        let document: types::GetAgentConfigV3Response =
+            serde_json::from_slice(body).map_err(|error| {
+                ConfigError::new(
+                    "receive",
+                    "SNAPSHOT_INVALID",
+                    format!("snapshot is not a v3 document: {error}"),
+                    None,
+                )
+            })?;
+        if document.desired_revision.to_string() != expected_revision {
+            return Err(ConfigError::new(
+                "receive",
+                "SNAPSHOT_REVISION_MISMATCH",
+                "snapshot revision does not match the announced revision",
+                None,
+            ));
+        }
+        self.compile_document(document)
+    }
+
+    /// Compiles one v3 document into the candidate or skips it when the active
+    /// config already matches. Shared by the HTTP poll and the WebSocket path.
+    fn compile_document(
+        &mut self,
+        document: types::GetAgentConfigV3Response,
+    ) -> Result<FetchStatus, ConfigError> {
         let policy = AgentPolicy {
             config_poll_interval_seconds: document
                 .agent

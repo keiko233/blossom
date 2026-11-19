@@ -14,6 +14,7 @@
 pub mod adapters;
 pub mod codec;
 pub mod ports;
+pub mod v2;
 
 use std::time::Duration;
 
