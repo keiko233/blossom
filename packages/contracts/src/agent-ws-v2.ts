@@ -22,6 +22,11 @@ import {
   logPolicyNotifyPayloadSchema,
   logPolicySnapshotPayloadSchema,
 } from "./log-policy";
+import {
+  AGENT_WS_V2_LOGS_AGENT_MESSAGE_TYPES,
+  AGENT_WS_V2_LOGS_CONTROL_MESSAGE_TYPES,
+  agentWsV2LogsPayloadSchemas,
+} from "./agent-ws-v2-logs";
 
 /**
  * Agent WebSocket protocol v2: WebSocket-first desired-state sync, status, and
@@ -111,6 +116,7 @@ export const AGENT_WS_V2_AGENT_MESSAGE_TYPES = [
   "pty.exit",
   "log.policy.get",
   "log.policy.ack",
+  ...AGENT_WS_V2_LOGS_AGENT_MESSAGE_TYPES,
 ] as const;
 
 export const AGENT_WS_V2_CONTROL_MESSAGE_TYPES = [
@@ -132,6 +138,7 @@ export const AGENT_WS_V2_CONTROL_MESSAGE_TYPES = [
   "pty.data",
   "pty.resize",
   "pty.close",
+  ...AGENT_WS_V2_LOGS_CONTROL_MESSAGE_TYPES,
 ] as const;
 
 /**
@@ -500,6 +507,7 @@ export const agentWsV2PayloadSchemas = {
   "config.snapshot.error": agentWsV2SnapshotErrorPayloadSchema,
   "traffic.ack": agentWsV2TrafficAckPayloadSchema,
   error: agentWsV2ErrorPayloadSchema,
+  ...agentWsV2LogsPayloadSchemas,
 } as const satisfies Record<AgentWsV2MessageType, z.ZodType>;
 
 export type AgentWsV2PayloadOf<T extends AgentWsV2MessageType> = z.infer<

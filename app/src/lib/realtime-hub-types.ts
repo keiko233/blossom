@@ -11,6 +11,7 @@ import type { Server } from "@/db/proxy-schema";
 import type { AgentSessionCredential } from "@/query/agent";
 
 import type { TelemetryKind, TelemetryResult } from "./agent-telemetry";
+import type { AdminLogsAcceptContext } from "./logs-relay-types";
 
 export interface RealtimeHub {
   /**
@@ -30,6 +31,16 @@ export interface RealtimeHub {
     request: Request,
     server: Server,
     credential: AgentSessionCredential,
+  ): Promise<Response>;
+  /**
+   * Completes an already-authenticated, same-origin admin log upgrade. The
+   * context names the server and the current v2 agent session the relay binds
+   * to; both runtimes deliver agent log frames only for that session.
+   */
+  acceptAdminLogs(
+    request: Request,
+    context: AdminLogsAcceptContext,
+  ): Promise<Response>;
   ): Promise<Response>;
   requestTelemetry(
     serverId: string,
@@ -70,6 +81,13 @@ export interface RealtimeBackplaneMessage {
   /** Admin PTY frames are routed to one side, not broadcast to agents. */
   ptyTarget?: "agent" | "browser";
   ptySessionId?: string;
+  /** Admin log frames cross instances by session, never by browser id. */
+  logTarget?: "agent" | "browser";
+  logSessionId?: string;
+  /** A newer agent session replaced every relay bound to an older one. */
+  logSuperseded?: true;
+  /** The agent session that relays are bound to has disconnected. */
+  logAgentGone?: true;
   connectedAt?: string;
   /** Selects the v1 or v2 envelope for a PTY frame. */
   agentProtocol?: AgentPtyProtocol;
@@ -111,3 +129,10 @@ export const AGENT_WS_INTERNAL_SESSION_EXPIRES_AT =
   "x-blossom-agent-session-expires-at";
 export const AGENT_WS_INTERNAL_SESSION_PENDING =
   "x-blossom-agent-session-pending";
+export const AGENT_LOGS_INTERNAL_SERVER_ID = "x-blossom-agent-logs-server-id";
+export const AGENT_LOGS_INTERNAL_SESSION_ID = "x-blossom-agent-logs-session-id";
+export const AGENT_LOGS_INTERNAL_AUTH_SESSION_ID =
+  "x-blossom-agent-logs-auth-session-id";
+export const AGENT_LOGS_INTERNAL_RELAY_ID = "x-blossom-agent-logs-relay-id";
+export const AGENT_LOGS_INTERNAL_ACTOR = "x-blossom-agent-logs-actor";
+export const AGENT_LOGS_INTERNAL_STARTED_AT = "x-blossom-agent-logs-started-at";
