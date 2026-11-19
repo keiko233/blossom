@@ -7,4 +7,6 @@ export interface AdminPtyAcceptContext {
   cols: number;
   rows: number;
   session: AdminPtySession;
+  /** Re-reads the admin session and agent connection for an open shell. */
+  isAuthorized: () => Promise<boolean>;
 }
