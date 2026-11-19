@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 use super::model::{GapReason, LogCursor, LogLevel, LogSource, RingLimits, SearchCursor};
 use super::search::{LogQuery, SearchRequest};
 use super::store::LogStore;
+use super::text::SecretScope;
 
 fn text_request(text: &str, cursor: Option<SearchCursor>, limit: usize) -> SearchRequest {
     SearchRequest {
@@ -79,7 +80,7 @@ fn search_reaches_records_beyond_the_live_tail() {
 fn redacted_secret_in_any_form_is_not_searchable() {
     let store = LogStore::new(RingLimits::default());
     let secret = "agt_hunter2 with+space/";
-    store.register_secret(secret);
+    store.replace_secrets(SecretScope::Agent, [secret]).unwrap();
     store.record(
         LogSource::SingBox,
         LogLevel::Error,

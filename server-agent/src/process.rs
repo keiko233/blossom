@@ -551,7 +551,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn supervised_output_is_captured_by_source_and_shuts_down_cleanly() {
-        use crate::logs::{LogLevel, LogSource, LogStore};
+        use crate::logs::{LogLevel, LogSource, LogStore, SecretScope};
 
         let dir = scratch_dir("supervise");
         let pid_file = dir.join("pid");
@@ -566,7 +566,8 @@ mod tests {
             ),
         );
         let logs = LogStore::default();
-        logs.register_secret("hunter2-secret-token");
+        logs.replace_secrets(SecretScope::Agent, ["hunter2-secret-token"])
+            .unwrap();
         let manager = SingBoxManager::start_with_logs(bin, dir.join("config.json"), logs.clone())
             .await
             .unwrap();

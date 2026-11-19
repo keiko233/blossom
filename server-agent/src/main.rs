@@ -44,7 +44,7 @@ use crate::acme::instant_backend::InstantAcmeBackend;
 use crate::acme::ports::DEFAULT_CHALLENGE_TIMEOUT;
 use crate::acme::solver_dns01::DnsAck;
 use crate::config::{AgentPolicy, CandidateConfig, ConfigManager, FetchStatus};
-use crate::logs::{CaptureLayer, LogStore};
+use crate::logs::{CaptureLayer, LogStore, SecretScope};
 use crate::process::{ProcessState, SingBoxManager, check_config, resolve_binary, singbox_version};
 use crate::traffic::TrafficReporter;
 use crate::update::{
@@ -247,10 +247,10 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer().with_filter(level))
         .with(CaptureLayer::new(logs.clone()).with_filter(level))
         .init();
-    logs.register_secret(&args.token);
-    if let Some(github_token) = args.github_token.as_deref() {
-        logs.register_secret(github_token);
-    }
+    let agent_secrets: Vec<&str> = std::iter::once(args.token.as_str())
+        .chain(args.github_token.as_deref())
+        .collect();
+    logs.replace_secrets(SecretScope::Agent, agent_secrets)?;
 
     let client = client::new_client(&args.url, &args.token)?;
 
@@ -266,9 +266,7 @@ async fn main() -> Result<()> {
     let state_dir = args.state_dir.clone();
     let traffic_dir = state_dir.join("traffic");
     let mut config = ConfigManager::new(client.clone(), state_dir.clone())?;
-    if let Some(secret) = config.api_endpoint().secret.as_deref() {
-        logs.register_secret(secret);
-    }
+    logs.replace_secrets(SecretScope::StatsApi, config.api_endpoint().secret.iter())?;
     let mut updates = UpdateManager::new(
         UpdateConfig {
             state_dir: state_dir.clone(),

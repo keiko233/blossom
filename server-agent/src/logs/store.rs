@@ -17,7 +17,7 @@ use super::model::{
 };
 use super::ring::{ContextError, LogContext, LogResume, LogRing};
 use super::search::{SearchError, SearchPage, SearchRequest, scan_page};
-use super::text::{SecretRedactor, sanitize};
+use super::text::{SecretRedactor, SecretRegistryFull, SecretScope, sanitize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StoreError {
@@ -75,9 +75,19 @@ impl LogStore {
         Ok(self.lock()?.generation())
     }
 
-    /// Registers a credential whose value must never appear in captured text.
-    pub(crate) fn register_secret(&self, secret: &str) {
-        self.inner.redactor.register(secret);
+    /// Makes `secrets` the complete set for `scope`. Call it before a credential
+    /// is first sent, logged or written, and again whenever the set changes.
+    /// Fails without changing anything if the registry bound would be exceeded.
+    pub(crate) fn replace_secrets<I>(
+        &self,
+        scope: SecretScope,
+        secrets: I,
+    ) -> Result<(), SecretRegistryFull>
+    where
+        I: IntoIterator,
+        I::Item: AsRef<str>,
+    {
+        self.inner.redactor.replace(scope, secrets)
     }
 
     /// Starts a new sing-box process run and returns its generation number.
@@ -225,7 +235,9 @@ mod tests {
     #[test]
     fn recorded_text_is_redacted_before_it_is_stored() {
         let store = store();
-        store.register_secret("agt_secret_value");
+        store
+            .replace_secrets(SecretScope::Agent, ["agt_secret_value"])
+            .unwrap();
         store.record(
             LogSource::Agent,
             LogLevel::Info,
