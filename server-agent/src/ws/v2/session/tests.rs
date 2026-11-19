@@ -465,6 +465,35 @@ async fn a_conflicting_traffic_replay_is_reported_and_not_retried_by_the_session
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_refused_traffic_payload_releases_its_report_as_rejected() {
+    let mut harness = start(Some(D7));
+    expect_type(&mut harness, "hello").await;
+    harness.peer.send(Ok(welcome(D7, 30, None))).unwrap();
+    let (reply, outcome) = oneshot::channel();
+    harness
+        .traffic
+        .requests
+        .send(TrafficRequest {
+            report: report("report-0004"),
+            reply,
+        })
+        .await
+        .unwrap();
+    expect_type(&mut harness, "traffic.report").await;
+    harness
+        .peer
+        .send(Ok(peer_frame(
+            "error",
+            json!({"code": "invalid_payload", "type": "traffic.report", "message": "frame rejected"}),
+        )))
+        .unwrap();
+    assert_eq!(
+        outcome.await.unwrap(),
+        TrafficOutcome::Rejected("frame rejected".to_string())
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_report_without_an_acknowledgement_is_released_when_the_session_ends() {
     let mut harness = start(Some(D7));
     expect_type(&mut harness, "hello").await;

@@ -113,6 +113,8 @@ pub enum TrafficOutcome {
     Accepted,
     /// The report id was already used with different content, so nothing was applied.
     Conflict(String),
+    /// The control plane refused the report's payload. Retrying cannot help.
+    Rejected(String),
 }
 
 /// One traffic report to send. The reply channel closes without a value when
@@ -621,6 +623,13 @@ async fn handle<W: Wire>(
         Message::Error(frame) => match frame.code {
             ErrorCode::SessionReplaced => return Ok(Flow::End(SessionEnd::Replaced)),
             ErrorCode::ServerDisabled => return Ok(Flow::End(SessionEnd::ServerDisabled)),
+            // The error names no report id. Reports are sent one at a time, so
+            // every waiter is the report that was refused.
+            ErrorCode::InvalidPayload if frame.r#type.as_deref() == Some("traffic.report") => {
+                for (_, waiter) in state.waiters.drain() {
+                    let _ = waiter.send(TrafficOutcome::Rejected(frame.message.clone()));
+                }
+            }
             other => {
                 warn!(code = ?other, "control plane rejected an agent frame: {}", frame.message)
             }
