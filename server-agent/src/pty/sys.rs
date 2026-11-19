@@ -41,3 +41,46 @@ pub fn user_name(uid: u32) -> Option<String> {
     let name = unsafe { CStr::from_ptr((*result).pw_name) };
     name.to_str().ok().map(str::to_owned)
 }
+
+/// SIGKILLs every process in the session whose leader is `session_leader`,
+/// including the leader while it is alive. Interactive jobs run in their own
+/// process groups inside the session, so signalling only the shell's group
+/// would leave background work running.
+pub fn kill_session(session_leader: i32) {
+    if session_leader <= 0 {
+        return;
+    }
+    for pid in session_members(session_leader) {
+        // SAFETY: kill(2) has no memory preconditions. The pid came from /proc
+        // as a member of this session. A process that exits first makes the
+        // call fail with ESRCH; a pid recycled inside the microseconds between
+        // the scan and the signal is the residual race this design accepts.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+    }
+}
+
+fn session_members(session_leader: i32) -> Vec<i32> {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().to_str()?.parse::<i32>().ok())
+        .filter(|pid| session_of(*pid) == Some(session_leader))
+        .collect()
+}
+
+/// The session id from `/proc/<pid>/stat`. The command name is parenthesised
+/// and may contain spaces or parentheses, so parsing starts after the last
+/// `)`; the remaining fields are state, ppid, pgrp, then session.
+fn session_of(pid: i32) -> Option<i32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(3)?
+        .parse()
+        .ok()
+}

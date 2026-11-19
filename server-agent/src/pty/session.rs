@@ -7,6 +7,8 @@
 
 use std::io::{Read, Write};
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::thread;
 
@@ -82,6 +84,10 @@ impl PtyFactory for PortablePtyFactory {
             }
         };
         let mut killer = child.clone_killer();
+        // The shell is a session leader (portable-pty calls setsid), so its pid
+        // names the session that owns every job it starts.
+        let leader = child.process_id().and_then(|pid| i32::try_from(pid).ok());
+        let exited = Arc::new(AtomicBool::new(false));
         let writer_queue = match spawn_writer(session_id, writer) {
             Ok(queue) => queue,
             Err(error) => {
@@ -137,25 +143,33 @@ impl PtyFactory for PortablePtyFactory {
         let wait_events = self.events.clone();
         let wait_session = session_id.to_string();
         let mut wait_killer = child.clone_killer();
+        let wait_exited = exited.clone();
         let wait_thread = thread::Builder::new()
             .name(format!("pty-wait-{session_id}"))
-            .spawn(move || match child.wait() {
-                Ok(status) => {
-                    debug!(session = %wait_session, "pty shell exited");
-                    let _ = wait_events.blocking_send(PtyEvent::Exited {
-                        session_id: wait_session,
-                        code: Some(status.exit_code()),
-                        signal: status.signal().map(str::to_owned),
-                    });
-                }
-                Err(error) => {
-                    warn!(
-                        session = %wait_session,
-                        "pty waiter stopped: {error}"
-                    );
-                    let _ = wait_events.blocking_send(PtyEvent::ReadError {
-                        session_id: wait_session,
-                    });
+            .spawn(move || {
+                let outcome = child.wait();
+                // Mark the leader gone before sweeping, so a concurrent close
+                // cannot signal a pid the kernel may already have reused.
+                wait_exited.store(true, Ordering::SeqCst);
+                kill_session_members(leader);
+                match outcome {
+                    Ok(status) => {
+                        debug!(session = %wait_session, "pty shell exited");
+                        let _ = wait_events.blocking_send(PtyEvent::Exited {
+                            session_id: wait_session,
+                            code: Some(status.exit_code()),
+                            signal: status.signal().map(str::to_owned),
+                        });
+                    }
+                    Err(error) => {
+                        warn!(
+                            session = %wait_session,
+                            "pty waiter stopped: {error}"
+                        );
+                        let _ = wait_events.blocking_send(PtyEvent::ReadError {
+                            session_id: wait_session,
+                        });
+                    }
                 }
             });
         if let Err(error) = wait_thread {
@@ -174,6 +188,8 @@ impl PtyFactory for PortablePtyFactory {
                 master,
                 writer: writer_queue,
                 killer,
+                leader,
+                exited,
             }),
             shell: shell.to_string_lossy().into_owned(),
         })
@@ -234,7 +250,31 @@ struct PortablePtyProcess {
     master: Box<dyn MasterPty + Send>,
     writer: SyncSender<Vec<u8>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
+    leader: Option<i32>,
+    exited: Arc<AtomicBool>,
 }
+
+impl PortablePtyProcess {
+    /// Stops the shell and everything it started. Once the waiter has reaped the
+    /// leader, the sweep already ran, so the pid is no longer signalled.
+    fn terminate(&mut self) {
+        if self.exited.load(Ordering::SeqCst) {
+            return;
+        }
+        let _ = self.killer.kill();
+        kill_session_members(self.leader);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn kill_session_members(leader: Option<i32>) {
+    if let Some(leader) = leader {
+        super::sys::kill_session(leader);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn kill_session_members(_leader: Option<i32>) {}
 
 impl PtyProcess for PortablePtyProcess {
     fn write(&mut self, data: &[u8]) -> Result<(), PtyError> {
@@ -253,13 +293,13 @@ impl PtyProcess for PortablePtyProcess {
     }
 
     fn kill(&mut self) {
-        let _ = self.killer.kill();
+        self.terminate();
     }
 }
 
 impl Drop for PortablePtyProcess {
     fn drop(&mut self) {
-        let _ = self.killer.kill();
+        self.terminate();
     }
 }
 
@@ -392,6 +432,101 @@ mod tests {
             .expect_err("non-executable shell must fail");
         let _ = std::fs::remove_file(&plain);
         assert!(matches!(error, PtyError::ShellUnavailable(_)), "{error:?}");
+    }
+
+    /// Reads output until the shell prints `bg-<pid>` and returns the pid. The
+    /// echoed command also contains `bg-`, so the last marker is used.
+    async fn background_pid(events: &mut mpsc::Receiver<PtyEvent>, output: &mut String) -> i32 {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                if let Some(index) = output.rfind("bg-") {
+                    let tail = &output[index + 3..];
+                    if let Some(end) = tail.find('\n') {
+                        let digits: String =
+                            tail[..end].chars().filter(char::is_ascii_digit).collect();
+                        if let Ok(pid) = digits.parse() {
+                            return pid;
+                        }
+                    }
+                }
+                match events.recv().await {
+                    Some(PtyEvent::Data { data, .. }) => output.push_str(&data),
+                    other => panic!("waiting for a background pid, got {other:?}"),
+                }
+            }
+        })
+        .await
+        .expect("shell reports a background job")
+    }
+
+    /// True while the process exists and is not a zombie. A killed job reparented
+    /// to an init that does not reap still counts as stopped.
+    fn process_is_running(pid: i32) -> bool {
+        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stat) => stat
+                .rsplit_once(')')
+                .and_then(|(_, rest)| rest.trim_start().chars().next())
+                .is_some_and(|state| state != 'Z' && state != 'X'),
+            Err(_) => false,
+        }
+    }
+
+    async fn assert_stopped(pid: i32) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while process_is_running(pid) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("background job {pid} survived the session"));
+    }
+
+    #[tokio::test]
+    async fn closing_the_session_stops_background_jobs() {
+        let (mut manager, mut events) = new_manager(Some("/bin/sh"), "/");
+        manager
+            .open("pty-close", PtyDimensions::clamped(80, 24))
+            .expect("shell starts");
+        let mut output = String::new();
+        manager
+            .write("pty-close", b"trap '' HUP\nsleep 300 &\necho bg-$!\n")
+            .expect("input accepted");
+        let pid = background_pid(&mut events, &mut output).await;
+        assert!(process_is_running(pid), "job {pid} should be running");
+
+        manager
+            .close("pty-close", PtyExitReason::Closed)
+            .expect("session closes");
+        assert_stopped(pid).await;
+    }
+
+    #[tokio::test]
+    async fn shell_exit_stops_background_jobs_it_left_behind() {
+        let (mut manager, mut events) = new_manager(Some("/bin/sh"), "/");
+        manager
+            .open("pty-exit", PtyDimensions::clamped(80, 24))
+            .expect("shell starts");
+        let mut output = String::new();
+        manager
+            .write(
+                "pty-exit",
+                b"trap '' HUP\nsleep 300 &\necho bg-$!\nexit 0\n",
+            )
+            .expect("input accepted");
+        let pid = background_pid(&mut events, &mut output).await;
+
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                match events.recv().await {
+                    Some(PtyEvent::Exited { .. }) => break,
+                    Some(PtyEvent::Data { .. }) => continue,
+                    other => panic!("expected the shell to exit, got {other:?}"),
+                }
+            }
+        })
+        .await
+        .expect("shell exits");
+        assert_stopped(pid).await;
     }
 
     #[tokio::test]
