@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   ensureAdmin: vi.fn(),
   read: vi.fn(),
   write: vi.fn(),
+  restore: vi.fn(),
   notify: vi.fn(),
 }));
 
@@ -47,6 +48,7 @@ vi.mock("@/query/log-policy", async (importActual) => ({
   ...(await importActual<typeof import("./log-policy")>()),
   readServerLogPolicy: mocks.read,
   writeServerLogPolicy: mocks.write,
+  restoreServerLogPolicy: mocks.restore,
 }));
 
 import {
@@ -61,6 +63,7 @@ const sourceView = (
   source,
   present: true,
   desiredRevision: 2,
+  desiredBaseline: level === "debug" ? "warn" : level,
   desiredLevel: level,
   desiredDeadline: null,
   expired: false,
@@ -88,6 +91,7 @@ beforeEach(() => {
   mocks.ensureAdmin.mockReset();
   mocks.read.mockReset().mockResolvedValue(policy());
   mocks.write.mockReset().mockResolvedValue({ revision: 2 });
+  mocks.restore.mockReset().mockResolvedValue({ revision: 2 });
   mocks.notify.mockReset().mockResolvedValue(undefined);
 });
 
@@ -145,6 +149,7 @@ describe("server log policy functions", () => {
       expect.objectContaining({
         serverId: "srv-1",
         source: "agent",
+        baseline: "warn",
         level: "warn",
         actorId: "admin-1",
         expectedRevision: 1,
@@ -153,13 +158,52 @@ describe("server log policy functions", () => {
     expect(mocks.notify).toHaveBeenCalledWith("srv-1", 2, "agent");
   });
 
-  it("resets to default with no deadline", async () => {
+  it("restores the configured baseline for Restore now", async () => {
     mocks.ensureAdmin.mockResolvedValue({ user: { id: "admin-1" } });
     await resetServerLogPolicy({
       data: { serverId: "srv-1", source: "agent", expectedRevision: 1 },
     });
+    expect(mocks.restore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serverId: "srv-1",
+        source: "agent",
+        mode: "restore-baseline",
+        expectedRevision: 1,
+      }),
+    );
+  });
+
+  it("restores the installed default without clearing it implicitly", async () => {
+    mocks.ensureAdmin.mockResolvedValue({ user: { id: "admin-1" } });
+    await resetServerLogPolicy({
+      data: {
+        serverId: "srv-1",
+        source: "agent",
+        expectedRevision: 1,
+        mode: "restore-default",
+      },
+    });
+    expect(mocks.restore).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "restore-default" }),
+    );
+  });
+
+  it("keeps the configured baseline when applying a temporary override", async () => {
+    mocks.ensureAdmin.mockResolvedValue({ user: { id: "admin-1" } });
+    await updateServerLogPolicy({
+      data: {
+        serverId: "srv-1",
+        source: "agent",
+        level: "debug",
+        temporarySeconds: 60,
+        expectedRevision: 1,
+      },
+    });
     expect(mocks.write).toHaveBeenCalledWith(
-      expect.objectContaining({ level: "default", deadline: null }),
+      expect.objectContaining({
+        baseline: "warn",
+        level: "debug",
+      }),
     );
   });
 

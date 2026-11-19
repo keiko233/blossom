@@ -57,6 +57,7 @@ import {
   loadAgentLogPolicySnapshot,
   readServerLogPolicy,
   recordAgentLogPolicyAck,
+  restoreServerLogPolicy,
   writeServerLogPolicy,
 } from "./log-policy";
 
@@ -96,7 +97,7 @@ async function serverRow(serverId: string) {
 
 async function policyRow(serverId: string, source: string) {
   const { rows } = await admin.query(
-    `select desired_revision, desired_level, desired_deadline,
+    `select desired_revision, desired_baseline, desired_level, desired_deadline,
             effective_revision, effective_level, effective_baseline, effective_error,
             effective_pending
        from server_log_policy where server_id = $1 and source = $2`,
@@ -151,6 +152,7 @@ describe.skipIf(!pgUrl).each(drivers)("server log policy on %s", (driver) => {
       {
         serverId: "srv1",
         source: "agent",
+        baseline: "warn",
         level: "warn",
         deadline: null,
         actorId: "admin-1",
@@ -164,6 +166,7 @@ describe.skipIf(!pgUrl).each(drivers)("server log policy on %s", (driver) => {
       {
         serverId: "srv1",
         source: "agent",
+        baseline: "error",
         level: "error",
         deadline: null,
         actorId: "admin-2",
@@ -174,6 +177,7 @@ describe.skipIf(!pgUrl).each(drivers)("server log policy on %s", (driver) => {
     expect(conflict).toBeNull();
     expect(await policyRow("srv1", "agent")).toMatchObject({
       desired_revision: 1,
+      desired_baseline: "warn",
       desired_level: "warn",
     });
 
@@ -181,6 +185,7 @@ describe.skipIf(!pgUrl).each(drivers)("server log policy on %s", (driver) => {
       {
         serverId: "srv1",
         source: "sing-box",
+        baseline: "info",
         level: "debug",
         deadline: new Date(Date.now() + 900_000),
         actorId: "admin-1",
@@ -204,6 +209,7 @@ describe.skipIf(!pgUrl).each(drivers)("server log policy on %s", (driver) => {
       {
         serverId: "srv1",
         source: "sing-box",
+        baseline: "info",
         level: "trace",
         deadline: expiredDeadline,
         actorId: "admin-1",
@@ -219,7 +225,12 @@ describe.skipIf(!pgUrl).each(drivers)("server log policy on %s", (driver) => {
     );
     expect(
       snapshot?.sources.find((source) => source.source === "sing-box"),
-    ).toMatchObject({ revision: 1, level: "default", deadline: null });
+    ).toMatchObject({
+      revision: 1,
+      baseline: "info",
+      level: "default",
+      deadline: null,
+    });
     await recordAgentLogPolicyAck(
       "srv1",
       session.sessionId,
@@ -237,10 +248,217 @@ describe.skipIf(!pgUrl).each(drivers)("server log policy on %s", (driver) => {
     expect(view?.sources["sing-box"]).toMatchObject({
       desiredLevel: "trace",
       expired: true,
-      targetLevel: "default",
+      targetLevel: "info",
       effectiveLevel: "debug",
       effectiveBaseline: "info",
       pending: true,
+    });
+  });
+
+  it("keeps a warn baseline through a debug override, offline expiry and a fresh agent", async () => {
+    await writeServerLogPolicy(
+      {
+        serverId: "srv1",
+        source: "agent",
+        baseline: "warn",
+        level: "warn",
+        deadline: null,
+        actorId: "admin-1",
+        expectedRevision: 0,
+      },
+      database,
+    );
+    const deadline = new Date(Date.now() + 900_000);
+    await writeServerLogPolicy(
+      {
+        serverId: "srv1",
+        source: "agent",
+        baseline: "warn",
+        level: "debug",
+        deadline,
+        actorId: "admin-1",
+        expectedRevision: 1,
+      },
+      database,
+    );
+    expect(await policyRow("srv1", "agent")).toMatchObject({
+      desired_revision: 2,
+      desired_baseline: "warn",
+      desired_level: "debug",
+    });
+
+    // The first agent disconnects before the deadline and reconnects after it.
+    const offline = await startAgentWsSession("srv1", database);
+    const expired = await loadAgentLogPolicySnapshot(
+      "srv1",
+      offline.sessionId,
+      database,
+      new Date(deadline.getTime() + 1_000),
+    );
+    expect(
+      expired?.sources.find((source) => source.source === "agent"),
+    ).toMatchObject({
+      revision: 2,
+      baseline: "warn",
+      level: "default",
+      deadline: null,
+    });
+    expect(expired?.revision).toBe(2);
+
+    // A newly enrolled agent sees the same baseline even though the override
+    // expired while no agent was connected.
+    const fresh = await startAgentWsSession("srv1", database);
+    const freshSnapshot = await loadAgentLogPolicySnapshot(
+      "srv1",
+      fresh.sessionId,
+      database,
+      new Date(deadline.getTime() + 2_000),
+    );
+    expect(freshSnapshot?.sources).toEqual(expired?.sources);
+    await expect(
+      recordAgentLogPolicyAck(
+        "srv1",
+        fresh.sessionId,
+        ack("agent", 2, {
+          requested: "default",
+          baseline: "warn",
+          effective: "warn",
+          pending: false,
+        }),
+        database,
+      ),
+    ).resolves.toBe("recorded");
+    expect(await policyRow("srv1", "agent")).toMatchObject({
+      desired_baseline: "warn",
+      effective_revision: 2,
+      effective_level: "warn",
+      effective_baseline: "warn",
+    });
+  });
+
+  it("distinguishes Restore now from restoring the installed default", async () => {
+    await writeServerLogPolicy(
+      {
+        serverId: "srv1",
+        source: "sing-box",
+        baseline: "warn",
+        level: "warn",
+        deadline: null,
+        actorId: "admin-1",
+        expectedRevision: 0,
+      },
+      database,
+    );
+    await writeServerLogPolicy(
+      {
+        serverId: "srv1",
+        source: "sing-box",
+        baseline: "warn",
+        level: "debug",
+        deadline: new Date(Date.now() + 900_000),
+        actorId: "admin-1",
+        expectedRevision: 1,
+      },
+      database,
+    );
+
+    expect(
+      await restoreServerLogPolicy(
+        {
+          serverId: "srv1",
+          source: "sing-box",
+          mode: "restore-baseline",
+          actorId: "admin-1",
+          expectedRevision: 2,
+        },
+        database,
+      ),
+    ).toEqual({ revision: 3 });
+    expect(await policyRow("srv1", "sing-box")).toMatchObject({
+      desired_baseline: "warn",
+      desired_level: "warn",
+      desired_deadline: null,
+    });
+    let view = await readServerLogPolicy("srv1", database);
+    expect(view?.sources["sing-box"]).toMatchObject({
+      desiredBaseline: "warn",
+      targetLevel: "warn",
+      expired: false,
+    });
+
+    expect(
+      await restoreServerLogPolicy(
+        {
+          serverId: "srv1",
+          source: "sing-box",
+          mode: "restore-default",
+          actorId: "admin-1",
+          expectedRevision: 3,
+        },
+        database,
+      ),
+    ).toEqual({ revision: 4 });
+    expect(await policyRow("srv1", "sing-box")).toMatchObject({
+      desired_baseline: "default",
+      desired_level: "default",
+      desired_deadline: null,
+    });
+    view = await readServerLogPolicy("srv1", database);
+    expect(view?.sources["sing-box"]).toMatchObject({
+      desiredBaseline: "default",
+      targetLevel: "default",
+    });
+  });
+
+  it("keeps temporary overrides independent per source", async () => {
+    await writeServerLogPolicy(
+      {
+        serverId: "srv1",
+        source: "agent",
+        baseline: "warn",
+        level: "warn",
+        deadline: null,
+        actorId: "admin-1",
+        expectedRevision: 0,
+      },
+      database,
+    );
+    await writeServerLogPolicy(
+      {
+        serverId: "srv1",
+        source: "sing-box",
+        baseline: "error",
+        level: "error",
+        deadline: null,
+        actorId: "admin-1",
+        expectedRevision: 1,
+      },
+      database,
+    );
+    await writeServerLogPolicy(
+      {
+        serverId: "srv1",
+        source: "agent",
+        baseline: "warn",
+        level: "trace",
+        deadline: new Date(Date.now() + 900_000),
+        actorId: "admin-1",
+        expectedRevision: 2,
+      },
+      database,
+    );
+
+    const view = await readServerLogPolicy("srv1", database);
+    expect(view?.sources.agent).toMatchObject({
+      desiredBaseline: "warn",
+      desiredLevel: "trace",
+      targetLevel: "trace",
+    });
+    expect(view?.sources["sing-box"]).toMatchObject({
+      desiredRevision: 2,
+      desiredBaseline: "error",
+      desiredLevel: "error",
+      targetLevel: "error",
     });
   });
 
@@ -249,6 +467,7 @@ describe.skipIf(!pgUrl).each(drivers)("server log policy on %s", (driver) => {
       {
         serverId: "srv1",
         source: "agent",
+        baseline: "warn",
         level: "warn",
         deadline: null,
         actorId: "admin-1",
@@ -320,6 +539,7 @@ describe.skipIf(!pgUrl).each(drivers)("server log policy on %s", (driver) => {
       {
         serverId: "srv1",
         source: "sing-box",
+        baseline: "info",
         level: "debug",
         deadline: new Date(Date.now() + 900_000),
         actorId: "admin-1",
@@ -355,6 +575,7 @@ describe.skipIf(!pgUrl).each(drivers)("server log policy on %s", (driver) => {
       {
         serverId: "srv1",
         source: "agent",
+        baseline: "warn",
         level: "warn",
         deadline: null,
         actorId: "admin-1",
@@ -371,6 +592,7 @@ describe.skipIf(!pgUrl).each(drivers)("server log policy on %s", (driver) => {
       {
         serverId: "srv1",
         source: "agent",
+        baseline: "error",
         level: "error",
         deadline: null,
         actorId: "admin-1",

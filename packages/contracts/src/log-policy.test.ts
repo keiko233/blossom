@@ -23,6 +23,7 @@ describe("log policy contract", () => {
       logPolicyDesiredSourceSchema.safeParse({
         source: "sing-box",
         revision: 4,
+        baseline: "info",
         level: "debug",
         deadline: DEADLINE,
       }).success,
@@ -31,6 +32,7 @@ describe("log policy contract", () => {
       logPolicyDesiredSourceSchema.safeParse({
         source: "sing-box",
         revision: 4,
+        baseline: "info",
         level: "debug",
         deadline: null,
       }).success,
@@ -39,6 +41,7 @@ describe("log policy contract", () => {
       logPolicyDesiredSourceSchema.safeParse({
         source: "agent",
         revision: 5,
+        baseline: "info",
         level: "warn",
         deadline: DEADLINE,
       }).success,
@@ -47,10 +50,40 @@ describe("log policy contract", () => {
       logPolicyDesiredSourceSchema.safeParse({
         source: "agent",
         revision: 5,
+        baseline: "info",
         level: "debug",
         deadline: "2026-11-19T00:15:00.000+00:00",
       }).success,
     ).toBe(true);
+  });
+
+  it("carries the configured baseline separately from an expired override", () => {
+    expect(
+      logPolicyDesiredSourceSchema.safeParse({
+        source: "sing-box",
+        revision: 4,
+        baseline: "warn",
+        level: "default",
+        deadline: null,
+      }).success,
+    ).toBe(true);
+    expect(
+      logPolicyDesiredSourceSchema.safeParse({
+        source: "sing-box",
+        revision: 4,
+        baseline: "debug",
+        level: "default",
+        deadline: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      logPolicyDesiredSourceSchema.safeParse({
+        source: "sing-box",
+        revision: 4,
+        level: "default",
+        deadline: null,
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects a snapshot that names one source twice", () => {
@@ -59,8 +92,20 @@ describe("log policy contract", () => {
         requestId: "log-get-1",
         revision: 5,
         sources: [
-          { source: "agent", revision: 4, level: "info", deadline: null },
-          { source: "agent", revision: 5, level: "warn", deadline: null },
+          {
+            source: "agent",
+            revision: 4,
+            baseline: "info",
+            level: "info",
+            deadline: null,
+          },
+          {
+            source: "agent",
+            revision: 5,
+            baseline: "info",
+            level: "warn",
+            deadline: null,
+          },
         ],
       }).success,
     ).toBe(false);

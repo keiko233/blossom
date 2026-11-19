@@ -116,12 +116,14 @@ function fakeV2Store() {
         {
           source: "agent" as const,
           revision: 0,
+          baseline: "default" as const,
           level: "default" as const,
           deadline: null,
         },
         {
           source: "sing-box" as const,
           revision: 0,
+          baseline: "default" as const,
           level: "default" as const,
           deadline: null,
         },

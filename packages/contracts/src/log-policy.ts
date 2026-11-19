@@ -64,13 +64,18 @@ export function isLogPolicyTemporaryLevel(
 
 /**
  * One source of a `log.policy.snapshot`. `revision` is scoped to that source
- * and increases only when that source's desired state changes. A temporary
- * level always carries its absolute deadline; a baseline level never does.
+ * and increases only when that source's desired state changes. `baseline` is
+ * the configured baseline that survives an override; `default` means the
+ * installed or generated default of the agent. `level` is the currently
+ * requested level: a temporary override carries its absolute deadline, and a
+ * baseline request never does. An expired override is serialized as `default`
+ * at the same revision so a reconnect cannot revive it.
  */
 export const logPolicyDesiredSourceSchema = z
   .object({
     source: logPolicySourceSchema,
     revision: z.number().int().min(0),
+    baseline: logPolicyBaselineLevelSchema,
     level: logPolicyLevelSchema,
     deadline: timestampSchema.nullable(),
   })

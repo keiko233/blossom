@@ -1,4 +1,7 @@
-import type { LogPolicySource } from "@blossom/contracts/log-policy";
+import {
+  isLogPolicyTemporaryLevel,
+  type LogPolicySource,
+} from "@blossom/contracts/log-policy";
 import { createServerFn } from "@tanstack/react-start";
 
 import { fromInput, type AuditTargetContext } from "@/lib/admin-audit";
@@ -7,6 +10,7 @@ import { notifyAgentLogPolicyChanged } from "@/lib/agent-notifications";
 import { ensureAdmin } from "@/lib/ensure-admin";
 import {
   readServerLogPolicy,
+  restoreServerLogPolicy,
   resolveLogPolicyDeadline,
   serverLogPolicyReadSchema,
   serverLogPolicyResetSchema,
@@ -85,9 +89,15 @@ export const updateServerLogPolicy = createServerFn({ method: "POST" })
       data.level,
       data.temporarySeconds,
     );
+    // A temporary level changes only the override; the configured baseline
+    // stays until the admin explicitly replaces or clears it.
+    const baseline = isLogPolicyTemporaryLevel(data.level)
+      ? before.sources[data.source].desiredBaseline
+      : data.level;
     const written = await writeServerLogPolicy({
       serverId: data.serverId,
       source: data.source,
+      baseline,
       level: data.level,
       deadline,
       actorId: session.user.id,
@@ -114,7 +124,11 @@ export const updateServerLogPolicy = createServerFn({ method: "POST" })
     };
   });
 
-/** Restores one source's generated or local baseline (`default`). */
+/**
+ * Restore now clears the temporary override and keeps the configured baseline.
+ * `mode: "restore-default"` also clears the configured baseline, returning to
+ * the agent's installed or generated default. The two are distinct actions.
+ */
 export const resetServerLogPolicy = createServerFn({ method: "POST" })
   .middleware([
     adminAudit("server.log_policy_reset", {
@@ -127,11 +141,10 @@ export const resetServerLogPolicy = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<ServerLogPolicyMutationResult> => {
     const session = await ensureAdmin();
     const before = await requirePolicy(data.serverId);
-    const written = await writeServerLogPolicy({
+    const written = await restoreServerLogPolicy({
       serverId: data.serverId,
       source: data.source,
-      level: "default",
-      deadline: null,
+      mode: data.mode,
       actorId: session.user.id,
       expectedRevision: data.expectedRevision,
     });

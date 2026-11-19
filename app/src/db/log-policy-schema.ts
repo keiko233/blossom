@@ -21,6 +21,11 @@ import { server } from "./proxy-schema";
  * `server.logPolicyRevision` fences admin compare-and-swap writes and reaches
  * the agent through `welcome` / `agent.status.ack`; it never participates in
  * the configuration publish gate.
+ *
+ * `desiredBaseline` is the configured baseline and `desiredLevel` is the
+ * currently requested level. A temporary override changes only the latter, so
+ * expiry and Restore now return to the configured baseline instead of losing
+ * it. `default` in either column means the installed or generated default.
  */
 export const serverLogPolicy = pgTable(
   "server_log_policy",
@@ -30,6 +35,10 @@ export const serverLogPolicy = pgTable(
       .references(() => server.id, { onDelete: "cascade" }),
     source: text("source").$type<LogPolicySource>().notNull(),
     desiredRevision: integer("desired_revision").default(0).notNull(),
+    desiredBaseline: text("desired_baseline")
+      .$type<LogPolicyLevel>()
+      .default("default")
+      .notNull(),
     desiredLevel: text("desired_level")
       .$type<LogPolicyLevel>()
       .default("default")

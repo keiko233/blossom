@@ -251,12 +251,14 @@
             {
               "source": "agent",
               "revision": 2,
+              "baseline": "warn",
               "level": "warn",
               "deadline": null
             },
             {
               "source": "sing-box",
               "revision": 3,
+              "baseline": "info",
               "level": "debug",
               "deadline": "2026-11-19T00:15:00.000Z"
             }
@@ -546,6 +548,7 @@
             {
               "source": "agent",
               "revision": 2,
+              "baseline": "info",
               "level": "trace",
               "deadline": null
             }
@@ -568,12 +571,14 @@
             {
               "source": "agent",
               "revision": 2,
+              "baseline": "info",
               "level": "info",
               "deadline": null
             },
             {
               "source": "agent",
               "revision": 3,
+              "baseline": "warn",
               "level": "warn",
               "deadline": null
             }

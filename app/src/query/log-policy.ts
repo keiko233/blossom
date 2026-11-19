@@ -3,6 +3,7 @@ import {
   LOG_POLICY_MAX_TEMPORARY_SECONDS,
   LOG_POLICY_SOURCES,
   type LogPolicyAckPayload,
+  type LogPolicyBaselineLevel,
   type LogPolicyDesiredSource,
   type LogPolicyLevel,
   type LogPolicySource,
@@ -45,6 +46,14 @@ export const serverLogPolicyResetSchema = z.object({
   serverId: z.string().min(1),
   source: logPolicySourceSchema,
   expectedRevision: z.number().int().min(0),
+  /**
+   * `restore-baseline` is Restore now: clear the temporary override and keep
+   * the configured baseline. `restore-default` also clears the configured
+   * baseline, returning to the agent's installed or generated default.
+   */
+  mode: z
+    .enum(["restore-baseline", "restore-default"])
+    .default("restore-baseline"),
 });
 
 export type ServerLogPolicyWriteInput = z.infer<
@@ -59,11 +68,17 @@ export interface ServerLogPolicySourceView {
   /** Whether a durable row exists; absent rows are the implicit default. */
   present: boolean;
   desiredRevision: number;
+  /** The configured baseline; `default` means the installed/generated one. */
+  desiredBaseline: LogPolicyBaselineLevel;
+  /** The requested level, including a temporary override that may have expired. */
   desiredLevel: LogPolicyLevel;
   desiredDeadline: Date | null;
   /** True when a temporary override's deadline has passed. */
   expired: boolean;
-  /** `default` means "restore the agent's generated or local baseline". */
+  /**
+   * The level the agent should currently apply: an active override, the
+   * requested baseline, or the configured baseline after expiry.
+   */
   targetLevel: LogPolicyLevel;
   effectiveRevision: number | null;
   effectiveLevel: LogPolicyLevel | null;
@@ -107,6 +122,7 @@ interface PolicyRow {
   [key: string]: unknown;
   source: string | null;
   desired_revision: number | string | null;
+  desired_baseline: string | null;
   desired_level: string | null;
   desired_deadline: Date | string | null;
   effective_revision: number | string | null;
@@ -150,6 +166,21 @@ function toLevel(
   }
 }
 
+function toBaselineLevel(
+  value: string | null | undefined,
+  fallback: LogPolicyBaselineLevel = "default",
+): LogPolicyBaselineLevel {
+  switch (value) {
+    case "default":
+    case "error":
+    case "warn":
+    case "info":
+      return value;
+    default:
+      return fallback;
+  }
+}
+
 function toSource(value: string | null): LogPolicySource | null {
   return value === "agent" || value === "sing-box" ? value : null;
 }
@@ -159,11 +190,10 @@ function normalizeDesired(
   deadline: Date | null,
   now: Date,
 ): { level: LogPolicyLevel; deadline: Date | null; expired: boolean } {
-  if (
-    isLogPolicyTemporaryLevel(level) &&
-    deadline !== null &&
-    deadline.getTime() <= now.getTime()
-  ) {
+  if (!isLogPolicyTemporaryLevel(level)) {
+    return { level, deadline: null, expired: false };
+  }
+  if (deadline !== null && deadline.getTime() <= now.getTime()) {
     return { level: "default", deadline: null, expired: true };
   }
   return { level, deadline, expired: false };
@@ -196,6 +226,7 @@ function emptySourceView(source: LogPolicySource): ServerLogPolicySourceView {
     source,
     present: false,
     desiredRevision: 0,
+    desiredBaseline: "default",
     desiredLevel: "default",
     desiredDeadline: null,
     expired: false,
@@ -217,6 +248,7 @@ function sourceView(
   now: Date,
 ): ServerLogPolicySourceView {
   const desiredLevel = toLevel(row.desired_level);
+  const desiredBaseline = toBaselineLevel(row.desired_baseline);
   const rawDeadline = toDate(row.desired_deadline);
   const normalized = normalizeDesired(desiredLevel, rawDeadline, now);
   const desiredRevision = toNumber(row.desired_revision);
@@ -227,9 +259,7 @@ function sourceView(
   const effectiveBaseline =
     row.effective_baseline === null ? null : toLevel(row.effective_baseline);
   const targetLevel =
-    normalized.level === "default"
-      ? (effectiveBaseline ?? "default")
-      : normalized.level;
+    normalized.level === "default" ? desiredBaseline : normalized.level;
   const pending =
     desiredRevision > 0 &&
     (effectiveRevision !== desiredRevision || targetLevel !== effectiveLevel);
@@ -237,10 +267,11 @@ function sourceView(
     source,
     present: true,
     desiredRevision,
+    desiredBaseline,
     desiredLevel,
     desiredDeadline: rawDeadline,
     expired: normalized.expired,
-    targetLevel: normalized.level,
+    targetLevel,
     effectiveRevision,
     effectiveLevel,
     effectiveBaseline,
@@ -276,6 +307,7 @@ function selectPolicySql(serverId: string, sessionId?: string) {
     SELECT s.log_policy_revision AS revision,
            p.source,
            p.desired_revision,
+           p.desired_baseline,
            p.desired_level,
            p.desired_deadline,
            p.effective_revision,
@@ -339,11 +371,11 @@ export async function loadAgentLogPolicySnapshot(
       return {
         source,
         revision: entry.desiredRevision,
-        level: entry.targetLevel,
-        deadline:
-          entry.targetLevel === "default"
-            ? null
-            : (entry.desiredDeadline?.toISOString() ?? null),
+        baseline: entry.desiredBaseline,
+        level: entry.expired ? "default" : entry.desiredLevel,
+        deadline: entry.expired
+          ? null
+          : (entry.desiredDeadline?.toISOString() ?? null),
       };
     }),
   };
@@ -359,6 +391,8 @@ export async function writeServerLogPolicy(
   input: {
     serverId: string;
     source: LogPolicySource;
+    /** The configured baseline this request keeps or replaces. */
+    baseline: LogPolicyBaselineLevel;
     level: LogPolicyLevel;
     deadline: Date | null;
     actorId: string | null;
@@ -377,16 +411,80 @@ export async function writeServerLogPolicy(
         RETURNING log_policy_revision
       )
       INSERT INTO server_log_policy (
-        server_id, source, desired_revision, desired_level, desired_deadline,
-        desired_updated_at, desired_updated_by, updated_at
+        server_id, source, desired_revision, desired_baseline, desired_level,
+        desired_deadline, desired_updated_at, desired_updated_by, updated_at
       )
       SELECT ${input.serverId}, ${input.source}, bumped.log_policy_revision,
-             ${input.level}, ${input.deadline}, now(), ${input.actorId}, now()
+             ${input.baseline}, ${input.level}, ${input.deadline}, now(),
+             ${input.actorId}, now()
         FROM bumped
       ON CONFLICT (server_id, source) DO UPDATE SET
         desired_revision = EXCLUDED.desired_revision,
+        desired_baseline = EXCLUDED.desired_baseline,
         desired_level = EXCLUDED.desired_level,
         desired_deadline = EXCLUDED.desired_deadline,
+        desired_updated_at = now(),
+        desired_updated_by = EXCLUDED.desired_updated_by,
+        updated_at = now()
+      RETURNING desired_revision AS revision
+    `,
+    "objects",
+  );
+  const row = Array.isArray(rows) ? rows[0] : undefined;
+  return row ? { revision: toNumber(row.revision) } : null;
+}
+
+export type LogPolicyResetMode = "restore-baseline" | "restore-default";
+
+/**
+ * Clears one source's temporary override in the same statement that bumps the
+ * server revision. `restore-baseline` keeps the configured baseline (Restore
+ * now); `restore-default` also clears it so the agent returns to its installed
+ * or generated default. An absent row restores `default`.
+ */
+export async function restoreServerLogPolicy(
+  input: {
+    serverId: string;
+    source: LogPolicySource;
+    mode: LogPolicyResetMode;
+    actorId: string | null;
+    expectedRevision: number;
+  },
+  database: DbHandle = db,
+): Promise<{ revision: number } | null> {
+  const rows = await database.execute<{ revision: number | string }>(
+    sql`
+      WITH bumped AS (
+        UPDATE server
+           SET log_policy_revision = log_policy_revision + 1,
+               updated_at = now()
+         WHERE id = ${input.serverId}
+           AND log_policy_revision = ${input.expectedRevision}
+        RETURNING log_policy_revision
+      ),
+      restored AS (
+        SELECT bumped.log_policy_revision AS revision,
+               CASE
+                 WHEN ${input.mode} = 'restore-default' THEN 'default'
+                 ELSE COALESCE(p.desired_baseline, 'default')
+               END AS baseline
+          FROM bumped
+          LEFT JOIN server_log_policy p
+            ON p.server_id = ${input.serverId} AND p.source = ${input.source}
+      )
+      INSERT INTO server_log_policy (
+        server_id, source, desired_revision, desired_baseline, desired_level,
+        desired_deadline, desired_updated_at, desired_updated_by, updated_at
+      )
+      SELECT ${input.serverId}, ${input.source}, restored.revision,
+             restored.baseline, restored.baseline, NULL, now(),
+             ${input.actorId}, now()
+        FROM restored
+      ON CONFLICT (server_id, source) DO UPDATE SET
+        desired_revision = EXCLUDED.desired_revision,
+        desired_baseline = EXCLUDED.desired_baseline,
+        desired_level = EXCLUDED.desired_level,
+        desired_deadline = NULL,
         desired_updated_at = now(),
         desired_updated_by = EXCLUDED.desired_updated_by,
         updated_at = now()
@@ -452,13 +550,14 @@ export async function recordAgentLogPolicyAck(
       ),
       inserted AS (
         INSERT INTO server_log_policy (
-          server_id, source, desired_revision, desired_level, desired_deadline,
-          desired_updated_at, desired_updated_by,
+          server_id, source, desired_revision, desired_baseline,
+          desired_level, desired_deadline, desired_updated_at,
+          desired_updated_by,
           effective_revision, effective_level, effective_baseline,
           effective_deadline, effective_error, effective_pending,
           effective_at, updated_at
         )
-        SELECT ${serverId}, ${ack.source}, 0, 'default', NULL,
+        SELECT ${serverId}, ${ack.source}, 0, 'default', 'default', NULL,
                now(), NULL, ${ack.sourceRevision}, ${ack.effective},
                ${ack.baseline}, ${ack.deadline}, ${error}, ${ack.pending},
                now(), now()

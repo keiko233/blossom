@@ -77,12 +77,14 @@ function makeStore(overrides: Partial<AgentWsV2Store> = {}) {
         {
           source: "agent" as const,
           revision: 0,
+          baseline: "default" as const,
           level: "default" as const,
           deadline: null,
         },
         {
           source: "sing-box" as const,
           revision: 0,
+          baseline: "default" as const,
           level: "default" as const,
           deadline: null,
         },
@@ -322,12 +324,14 @@ describe("agent WebSocket v2 log policy", () => {
           {
             source: "agent" as const,
             revision: 2,
+            baseline: "warn" as const,
             level: "warn" as const,
             deadline: null,
           },
           {
             source: "sing-box" as const,
             revision: 3,
+            baseline: "info" as const,
             level: "debug" as const,
             deadline: "2026-11-19T00:15:00.000Z",
           },
@@ -353,10 +357,17 @@ describe("agent WebSocket v2 log policy", () => {
         requestId: "log-get-1",
         revision: 3,
         sources: [
-          { source: "agent", revision: 2, level: "warn", deadline: null },
+          {
+            source: "agent",
+            revision: 2,
+            baseline: "warn",
+            level: "warn",
+            deadline: null,
+          },
           {
             source: "sing-box",
             revision: 3,
+            baseline: "info",
             level: "debug",
             deadline: "2026-11-19T00:15:00.000Z",
           },
