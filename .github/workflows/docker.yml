@@ -6,13 +6,30 @@ on:
   push:
     tags: ["v*", "server-agent-v*"]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      app-tag:
+        description: App release tag (e.g. v1.4.0)
+        required: false
+        type: string
+        default: ""
+      agent-tag:
+        description: Server agent release tag (e.g. server-agent-v1.4.0)
+        required: false
+        type: string
+        default: ""
+      commit-sha:
+        description: Commit SHA for the release
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
   packages: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: docker-${{ inputs.app-tag || inputs.agent-tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -23,32 +40,52 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       targets: ${{ steps.targets.outputs.targets }}
+      commit-sha: ${{ steps.targets.outputs.commit-sha }}
     steps:
       - id: targets
         env:
           EVENT_NAME: ${{ github.event_name }}
           TAG_NAME: ${{ github.event.release.tag_name || github.ref_name }}
+          INPUT_APP_TAG: ${{ inputs.app-tag }}
+          INPUT_AGENT_TAG: ${{ inputs.agent-tag }}
+          INPUT_COMMIT_SHA: ${{ inputs.commit-sha }}
         run: |
           build_app=false
           build_agent=false
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+          app_tag=""
+          agent_tag=""
+          if [ "$EVENT_NAME" = "workflow_call" ]; then
+            if [ -n "$INPUT_APP_TAG" ]; then
+              build_app=true
+              app_tag="$INPUT_APP_TAG"
+            fi
+            if [ -n "$INPUT_AGENT_TAG" ]; then
+              build_agent=true
+              agent_tag="$INPUT_AGENT_TAG"
+            fi
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             build_app=true
             build_agent=true
           elif [[ "$TAG_NAME" == server-agent-v* ]]; then
             build_agent=true
+            agent_tag="$TAG_NAME"
           elif [[ "$TAG_NAME" == v* ]]; then
             build_app=true
+            app_tag="$TAG_NAME"
           fi
 
           targets=$(jq -cn \
             --arg repo "ghcr.io/$GITHUB_REPOSITORY" \
             --arg app "$build_app" \
-            --arg agent "$build_agent" '
+            --arg agent "$build_agent" \
+            --arg app_tag "$app_tag" \
+            --arg agent_tag "$agent_tag" '
             []
             + (if $app == "true" then [{
                 name: "app",
                 context: ".",
                 image: $repo,
+                tag: $app_tag,
                 "cache-path": "pnpm-store",
                 "cache-map": {"pnpm-store": "/pnpm/store"}
               }] else [] end)
@@ -56,10 +93,12 @@ jobs:
                 name: "server-agent",
                 context: "./server-agent",
                 image: ($repo + "/server-agent"),
+                tag: $agent_tag,
                 "cache-path": "",
                 "cache-map": {}
               }] else [] end)')
           echo "targets=$targets" >> "$GITHUB_OUTPUT"
+          echo "commit-sha=${INPUT_COMMIT_SHA:-$GITHUB_SHA}" >> "$GITHUB_OUTPUT"
           echo "building: $(jq -r 'map(.name) | join(", ") | if . == "" then "(nothing)" else . end' <<< "$targets")"
 
   # Build each image natively per architecture (no QEMU emulation) and push
@@ -79,6 +118,8 @@ jobs:
     runs-on: ${{ matrix.platform.runner }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.target.tag || github.ref }}
 
       - uses: docker/setup-buildx-action@v4
 
@@ -118,7 +159,7 @@ jobs:
           # Bake the OCI revision (commit sha) into the agent binary as its
           # build ID; harmless for the app image which ignores it.
           build-args: |
-            BUILD_ID=${{ github.sha }}
+            BUILD_ID=${{ needs.prepare.outputs.commit-sha }}
 
       - name: Export digest
         run: |
@@ -158,6 +199,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - id: meta
+        if: github.event_name != 'workflow_call'
         uses: docker/metadata-action@v6
         with:
           images: ${{ matrix.target.image }}
@@ -168,12 +210,39 @@ jobs:
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
 
+      - id: resolve-tags
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TARGET_NAME: ${{ matrix.target.name }}
+          IMAGE: ${{ matrix.target.image }}
+          TAG: ${{ matrix.target.tag }}
+          COMMIT_SHA: ${{ needs.prepare.outputs.commit-sha }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_call" ]; then
+            short_sha="${COMMIT_SHA:0:7}"
+            if [ "$TARGET_NAME" = "app" ]; then
+              version="${TAG#v}"
+              minor="${version%.*}"
+              tag_flags="-t ${IMAGE}:${version} -t ${IMAGE}:${minor} -t ${IMAGE}:latest -t ${IMAGE}:sha-${short_sha}"
+              first_tag="${IMAGE}:${version}"
+            else
+              version="${TAG#server-agent-v}"
+              tag_flags="-t ${IMAGE}:${version} -t ${IMAGE}:sha-${short_sha}"
+              first_tag="${IMAGE}:${version}"
+            fi
+          else
+            tag_flags="$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
+            first_tag="$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
+          fi
+          echo "tag-flags=$tag_flags" >> "$GITHUB_OUTPUT"
+          echo "first-tag=$first_tag" >> "$GITHUB_OUTPUT"
+
       - name: Create manifest list and push
         working-directory: /tmp/digests
         run: |
           docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            ${{ steps.resolve-tags.outputs.tag-flags }} \
             $(printf '${{ matrix.target.image }}@sha256:%s ' *)
 
       - name: Inspect
-        run: docker buildx imagetools inspect "$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
+        run: docker buildx imagetools inspect "${{ steps.resolve-tags.outputs.first-tag }}"

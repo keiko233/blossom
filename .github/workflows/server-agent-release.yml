@@ -4,6 +4,12 @@ on:
   push:
     tags: ["server-agent-v*"]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      tag:
+        description: Server agent release tag (e.g. server-agent-v1.4.0)
+        required: true
+        type: string
 
 # This workflow publishes static `server-agent` binaries (not Docker images)
 # as GitHub Release assets for a bootstrap script to download. It is separate
@@ -17,13 +23,13 @@ on:
 # `.../releases/download/<tag>/server-agent-linux-amd64` stays stable.
 #
 # workflow_dispatch only builds and checks (assets stay as workflow artifacts);
-# a release is created only for `server-agent-v*` tag pushes.
+# a release is created for `server-agent-v*` tag pushes and `workflow_call`.
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: server-agent-release-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -33,14 +39,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Verify tag matches server-agent/Cargo.toml version
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_call'
+        env:
+          TAG_NAME: ${{ inputs.tag || github.ref_name }}
         run: |
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' server-agent/Cargo.toml | head -n1)"
           expected="server-agent-v${version}"
-          if [ "${GITHUB_REF_NAME}" != "${expected}" ]; then
-            echo "tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${version} (expected ${expected})" >&2
+          if [ "${TAG_NAME}" != "${expected}" ]; then
+            echo "tag ${TAG_NAME} does not match Cargo.toml version ${version} (expected ${expected})" >&2
             exit 1
           fi
 
@@ -80,6 +90,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       # Build inside `rust:alpine` (like stage 2 of server-agent/Dockerfile) so
       # the binary is a fully static musl build without cross-compilation. The
@@ -91,7 +103,7 @@ jobs:
         run: |
           docker run --rm \
             -v "${GITHUB_WORKSPACE}/server-agent:/app" -w /app \
-            -e AGENT_BUILD_ID="${GITHUB_SHA}" \
+            -e AGENT_BUILD_ID="$(git rev-parse HEAD)" \
             -e OPENSSL_STATIC=1 -e OPENSSL_NO_VENDOR=1 -e PKG_CONFIG_ALL_STATIC=1 \
             rust:alpine sh -euc '
               apk add --no-cache musl-dev build-base openssl-dev openssl-libs-static pkgconf binutils
@@ -114,12 +126,14 @@ jobs:
 
   release:
     needs: build
-    if: github.ref_type == 'tag'
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_call'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: actions/download-artifact@v8
         with:
@@ -134,9 +148,11 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ inputs.tag || github.ref_name }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            --title "server-agent ${GITHUB_REF_NAME#server-agent-v}" \
+          gh release create "${TAG_NAME}" \
+            --verify-tag \
+            --title "server-agent ${TAG_NAME#server-agent-v}" \
             --notes "Static server-agent binaries. Verify checksums against SHA256SUMS." \
             --latest=false \
             release-assets/*

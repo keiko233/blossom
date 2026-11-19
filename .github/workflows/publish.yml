@@ -22,7 +22,7 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
+  packages: write
 
 concurrency:
   group: release-${{ inputs.target }}
@@ -30,14 +30,13 @@ concurrency:
 
 jobs:
   prepare:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    env:
-      RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
-      RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
     outputs:
       version: ${{ steps.plan.outputs.version }}
-      branch: ${{ steps.plan.outputs.branch }}
       commit-sha: ${{ steps.commit.outputs.sha }}
+      app-tag: ${{ steps.commit.outputs.app-tag }}
+      agent-tag: ${{ steps.commit.outputs.agent-tag }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -66,7 +65,6 @@ jobs:
             --dry-run > release-plan.json
           version="$(node -p "JSON.parse(require('node:fs').readFileSync('release-plan.json', 'utf8')).version")"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "branch=release/prepare-${TARGET}-${version}" >> "$GITHUB_OUTPUT"
 
       - name: Apply version
         env:
@@ -100,21 +98,10 @@ jobs:
               --prepend server-agent/CHANGELOG.md
           fi
 
-      - name: Create GitHub App token
-        id: app-token
-        if: env.RELEASE_APP_ID != '' && env.RELEASE_APP_PRIVATE_KEY != ''
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-
       - id: commit
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           TARGET: ${{ inputs.target }}
           VERSION: ${{ steps.plan.outputs.version }}
-          BRANCH: ${{ steps.plan.outputs.branch }}
-          USE_APP_TOKEN: ${{ steps.app-token.outputs.token != '' }}
         run: |
           set -euo pipefail
           if [[ "$TARGET" == "app" ]]; then
@@ -125,68 +112,74 @@ jobs:
             files=(package.json app/package.json CHANGELOG.md server-agent/Cargo.toml server-agent/Cargo.lock server-agent/CHANGELOG.md)
           fi
 
-          if [[ "$USE_APP_TOKEN" == "true" ]]; then
-            owner="${GITHUB_REPOSITORY%%/*}"
-            repo="${GITHUB_REPOSITORY#*/}"
-            base_oid="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
-            node scripts/src/create-commit-on-branch.mjs \
-              "$owner" "$repo" "$base_oid" "chore(release): prepare ${TARGET} v${VERSION}" "${files[@]}" \
-              > graphql-request.json
-            commit_oid="$(gh api graphql --input graphql-request.json --jq '.data.createCommitOnBranch.commit.oid')"
-            echo "sha=${commit_oid}" >> "$GITHUB_OUTPUT"
-          else
-            git config user.name "blossom-release-bot"
-            git config user.email "blossom-release-bot@users.noreply.github.com"
-            git checkout -b "$BRANCH"
-            git add "${files[@]}"
-            git commit -m "chore(release): prepare ${TARGET} v${VERSION}"
-            gh auth setup-git
-            git push --force-with-lease origin "$BRANCH"
-            gh pr create \
-              --base main \
-              --head "$BRANCH" \
-              --title "chore(release): prepare ${TARGET} v${VERSION}" \
-              --body "Automated release preparation for ${TARGET} v${VERSION}. Merge this PR and tag main once checks pass."
-            echo "::notice::Release PR opened on branch ${BRANCH}; skipping tag/release creation until merged to main."
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${files[@]}"
+          git commit -m "chore(release): prepare ${TARGET} v${VERSION}"
+
+          app_tag=""
+          agent_tag=""
+          tags_to_push=()
+          if [[ "$TARGET" == "app" || "$TARGET" == "both" ]]; then
+            app_tag="v${VERSION}"
+            git tag -a "$app_tag" -m "Blossom ${app_tag}"
+            tags_to_push+=("$app_tag")
           fi
+          if [[ "$TARGET" == "server-agent" || "$TARGET" == "both" ]]; then
+            agent_tag="server-agent-v${VERSION}"
+            git tag -a "$agent_tag" -m "server-agent v${VERSION}"
+            tags_to_push+=("$agent_tag")
+          fi
+
+          git push origin HEAD:main
+          git push origin "${tags_to_push[@]}"
+
+          commit_sha="$(git rev-parse HEAD)"
+          echo "sha=${commit_sha}" >> "$GITHUB_OUTPUT"
+          echo "app-tag=${app_tag}" >> "$GITHUB_OUTPUT"
+          echo "agent-tag=${agent_tag}" >> "$GITHUB_OUTPUT"
 
   release:
     needs: prepare
-    if: needs.prepare.outputs.commit-sha != ''
+    if: needs.prepare.outputs.app-tag != ''
     runs-on: ubuntu-latest
-    env:
-      RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
-      RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
-
-      - name: Create GitHub App token
-        id: app-token
-        if: env.RELEASE_APP_ID != '' && env.RELEASE_APP_PRIVATE_KEY != ''
-        uses: actions/create-github-app-token@v1
         with:
-          app-id: ${{ secrets.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          ref: ${{ needs.prepare.outputs.app-tag }}
 
-      - name: Create app release and server-agent tag
+      - name: Create app release
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
-          TARGET: ${{ inputs.target }}
+          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.prepare.outputs.version }}
-          COMMIT_SHA: ${{ needs.prepare.outputs.commit-sha }}
+          APP_TAG: ${{ needs.prepare.outputs.app-tag }}
         run: |
           set -euo pipefail
-          if [[ "$TARGET" == "app" || "$TARGET" == "both" ]]; then
-            gh release create "v${VERSION}" \
-              --target "$COMMIT_SHA" \
-              --title "Blossom v${VERSION}" \
-              --generate-notes
-          fi
-          if [[ "$TARGET" == "server-agent" || "$TARGET" == "both" ]]; then
-            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
-              -f ref="refs/tags/server-agent-v${VERSION}" \
-              -f sha="$COMMIT_SHA"
-            echo "::notice::Pushed server-agent-v${VERSION}; its release workflow will publish the binaries."
-          fi
+          gh release create "$APP_TAG" \
+            --verify-tag \
+            --title "Blossom v${VERSION}" \
+            --generate-notes
+
+  docker:
+    needs: prepare
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker.yml
+    with:
+      app-tag: ${{ needs.prepare.outputs.app-tag }}
+      agent-tag: ${{ needs.prepare.outputs.agent-tag }}
+      commit-sha: ${{ needs.prepare.outputs.commit-sha }}
+    secrets: inherit
+
+  server-agent-release:
+    needs: prepare
+    if: needs.prepare.outputs.agent-tag != ''
+    permissions:
+      contents: write
+    uses: ./.github/workflows/server-agent-release.yml
+    with:
+      tag: ${{ needs.prepare.outputs.agent-tag }}
+    secrets: inherit
