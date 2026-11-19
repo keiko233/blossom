@@ -39,8 +39,12 @@ export interface AdminPtyRouteDependencies {
 
 const defaultDependencies: AdminPtyRouteDependencies = {
   async authenticate(request) {
+    // Read-only: a rolling refresh would set a cookie on the upgrade response,
+    // and TanStack rebuilds that response to apply it, which workerd rejects
+    // for a 101 without its WebSocket. The session still needs to be live.
     const session = await getAuth().api.getSession({
       headers: request.headers,
+      query: { disableRefresh: true },
     });
     return session?.user.role === "admin" ? session : null;
   },
