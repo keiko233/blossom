@@ -104,6 +104,15 @@ are handled in memory (and relayed over Redis when a Nitro backplane is
 configured). They do not write to PostgreSQL. Agents without
 `telemetry-v1` continue using their existing transport and update policy.
 
+Host history is the only telemetry that reaches PostgreSQL. Samples are written
+to `server_metric_minute` only through `recordServerMetricMinute`
+(`app/src/query/server-metric-store.ts`), which matches the session marker
+`server.wsConnectedAt` in the same statement as the upsert, so a replaced or
+disabled socket cannot write. Until the WebSocket telemetry branch calls it, the
+table stays empty and the Overview history charts show their empty state. Each
+write also removes one bounded batch of minutes older than the 30-day retention.
+No scheduled cleanup runs on any deploy target yet.
+
 ## Runtimes and deploy targets
 
 Established. `app/vite.config.ts` selects the target from `DEPLOY_TARGET` (`cloudflare` default, `vercel`, `node`). The same source must build and run on all of them, so avoid APIs that exist on only one runtime.
