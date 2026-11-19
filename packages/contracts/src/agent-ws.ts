@@ -58,7 +58,7 @@ export const agentWsEnvelopeSchema = z.object({
 
 export type AgentWsFrame = z.infer<typeof agentWsEnvelopeSchema>;
 
-const certificateDeploymentSchema = z.object({
+export const certificateDeploymentSchema = z.object({
   certificateId: z.string().min(1),
   generation: z.number().int().min(1),
   fingerprintSha256: z.string().min(1).max(256),

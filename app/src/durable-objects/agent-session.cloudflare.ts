@@ -2,6 +2,7 @@ import {
   agentWsWelcomePayloadSchema,
   type AgentWsWelcomePayload,
 } from "@blossom/contracts/agent-ws";
+import { AGENT_WS_V2_SUBPROTOCOL } from "@blossom/contracts/agent-ws-v2";
 import { DurableObject, env } from "cloudflare:workers";
 import { drizzle } from "drizzle-orm/node-postgres";
 
@@ -14,12 +15,16 @@ import {
   type AgentWsSession,
   type AgentWsStore,
 } from "@/lib/agent-ws-session";
-import { createAgentWsStore } from "@/lib/agent-ws-store";
+import { createAgentWsStore, createAgentWsV2Store } from "@/lib/agent-ws-store";
+import { openAgentWsV2Session } from "@/lib/agent-ws-v2-session";
 import {
   AGENT_WS_INTERNAL_CONNECTED_AT,
+  AGENT_WS_INTERNAL_PROTOCOL,
   AGENT_WS_INTERNAL_SERVER_ID,
+  AGENT_WS_INTERNAL_SESSION_ID,
   AGENT_WS_INTERNAL_WELCOME,
 } from "@/lib/realtime-hub-types";
+import { endAgentWsSession } from "@/query/agent";
 import { recordPtySessionClose } from "@/query/pty-audit";
 
 import {
@@ -35,11 +40,29 @@ import {
   type RecordPtyClose,
 } from "./pty-session.cloudflare";
 
-interface AgentSessionAttachment {
+interface AgentSessionAttachmentBase {
   serverId: string;
   connectedAt: string;
+}
+
+/**
+ * Per-socket state that survives hibernation. Attachments written before v2
+ * carry no `protocol` field and are read as v1.
+ */
+interface V1AgentSessionAttachment extends AgentSessionAttachmentBase {
+  protocol: "v1";
   welcome: AgentWsWelcomePayload;
 }
+
+interface V2AgentSessionAttachment extends AgentSessionAttachmentBase {
+  protocol: "v2";
+  sessionId: string;
+  welcomed: boolean;
+}
+
+type AgentSessionAttachment =
+  | V1AgentSessionAttachment
+  | V2AgentSessionAttachment;
 
 function isWebSocketUpgrade(request: Request): boolean {
   return request.headers.get("upgrade")?.toLowerCase() === "websocket";
@@ -50,18 +73,32 @@ function readAttachment(ws: WebSocket): AgentSessionAttachment | null {
   if (!attachment || typeof attachment !== "object") {
     return null;
   }
-  const candidate = attachment as Partial<AgentSessionAttachment>;
+  const candidate = attachment as Partial<V1AgentSessionAttachment> &
+    Partial<V2AgentSessionAttachment>;
   if (
     typeof candidate.serverId !== "string" ||
     typeof candidate.connectedAt !== "string"
   ) {
     return null;
   }
+  if (candidate.protocol === "v2") {
+    if (typeof candidate.sessionId !== "string") {
+      return null;
+    }
+    return {
+      protocol: "v2",
+      serverId: candidate.serverId,
+      connectedAt: candidate.connectedAt,
+      sessionId: candidate.sessionId,
+      welcomed: candidate.welcomed === true,
+    };
+  }
   const welcome = agentWsWelcomePayloadSchema.safeParse(candidate.welcome);
   if (!welcome.success) {
     return null;
   }
   return {
+    protocol: "v1",
     serverId: candidate.serverId,
     connectedAt: candidate.connectedAt,
     welcome: welcome.data,
@@ -133,12 +170,13 @@ export class AgentSessionDO extends DurableObject {
       const connectedAt = params.get("connectedAt");
       const ws =
         connectedAt &&
-        this.ctx
-          .getWebSockets()
-          .find(
-            (candidate) =>
-              readAttachment(candidate)?.connectedAt === connectedAt,
+        this.ctx.getWebSockets().find((candidate) => {
+          const attachment = readAttachment(candidate);
+          return (
+            attachment?.protocol === "v1" &&
+            attachment.connectedAt === connectedAt
           );
+        });
       if (!connectedAt || !ws || (kind !== "sample" && kind !== "snapshot")) {
         return new Response(null, { status: 204 });
       }
@@ -162,12 +200,25 @@ export class AgentSessionDO extends DurableObject {
     if (request.method !== "POST") {
       return new Response("Method Not Allowed", { status: 405 });
     }
-    const body = (await request.json()) as { frame?: unknown };
+    const body = (await request.json()) as {
+      frame?: unknown;
+      protocol?: unknown;
+    };
     if (typeof body.frame !== "string") {
       return new Response("Bad Request", { status: 400 });
     }
+    // A v1 frame goes only to v1 sockets, and a v2 push only to welcomed v2
+    // sockets. Neither is ever sent across the other protocol.
+    const target = body.protocol === "v2" ? "v2" : "v1";
     for (const ws of this.ctx.getWebSockets()) {
       if (readPtyAttachment(ws)) {
+        continue;
+      }
+      const attachment = readAttachment(ws);
+      if (attachment?.protocol !== target) {
+        continue;
+      }
+      if (attachment.protocol === "v2" && !attachment.welcomed) {
         continue;
       }
       try {
@@ -189,6 +240,9 @@ export class AgentSessionDO extends DurableObject {
 
     const serverId = request.headers.get(AGENT_WS_INTERNAL_SERVER_ID);
     const connectedAt = request.headers.get(AGENT_WS_INTERNAL_CONNECTED_AT);
+    if (request.headers.get(AGENT_WS_INTERNAL_PROTOCOL) === "v2") {
+      return this.connectV2(request, serverId, connectedAt);
+    }
     const welcomeHeader = request.headers.get(AGENT_WS_INTERNAL_WELCOME);
     if (!serverId || !connectedAt || !welcomeHeader) {
       return new Response("Bad Request", { status: 400 });
@@ -208,10 +262,11 @@ export class AgentSessionDO extends DurableObject {
     const server = pair[1];
     this.ctx.acceptWebSocket(server, [serverId]);
     server.serializeAttachment({
+      protocol: "v1",
       serverId,
       connectedAt,
       welcome,
-    } satisfies AgentSessionAttachment);
+    } satisfies V1AgentSessionAttachment);
 
     return new Response(null, {
       status: 101,
@@ -219,8 +274,37 @@ export class AgentSessionDO extends DurableObject {
     } as ResponseInit & { webSocket: WebSocket });
   }
 
+  private connectV2(
+    request: Request,
+    serverId: string | null,
+    connectedAt: string | null,
+  ): Response {
+    const sessionId = request.headers.get(AGENT_WS_INTERNAL_SESSION_ID);
+    if (!serverId || !connectedAt || !sessionId) {
+      return new Response("Bad Request", { status: 400 });
+    }
+
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
+    this.ctx.acceptWebSocket(server, [serverId]);
+    server.serializeAttachment({
+      protocol: "v2",
+      serverId,
+      connectedAt,
+      sessionId,
+      welcomed: false,
+    } satisfies V2AgentSessionAttachment);
+
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+      headers: { "Sec-WebSocket-Protocol": AGENT_WS_V2_SUBPROTOCOL },
+    } as ResponseInit & { webSocket: WebSocket });
+  }
+
   private session(
-    attachment: AgentSessionAttachment,
+    attachment: V1AgentSessionAttachment,
     store: AgentWsStore,
   ): Promise<AgentWsSession> {
     return openAgentWsSession({
@@ -261,6 +345,10 @@ export class AgentSessionDO extends DurableObject {
       return;
     }
     const raw = decodeMessage(message);
+    if (attachment.protocol === "v2") {
+      await this.handleV2Message(ws, attachment, raw);
+      return;
+    }
     if (
       await handleAgentPtyFrame(
         this.ctx,
@@ -305,12 +393,47 @@ export class AgentSessionDO extends DurableObject {
       attachment.connectedAt,
       this.recordPtyClose,
     );
+    if (attachment.protocol === "v2") {
+      await this.withDatabase((database) =>
+        endAgentWsSession(attachment.serverId, attachment.sessionId, database),
+      );
+      return;
+    }
     await this.withDatabase(async (database) => {
       const session = await this.session(
         attachment,
         createAgentWsStore(database),
       );
       await closeAgentWsSession(session);
+    });
+  }
+
+  /**
+   * Each v2 message rebuilds the session from the attachment, so `welcomed` is
+   * written back to the socket and survives hibernation. The database work
+   * runs inside the message handler, which Durable Object input gates keep
+   * ordered per server.
+   */
+  private async handleV2Message(
+    ws: WebSocket,
+    attachment: V2AgentSessionAttachment,
+    raw: string,
+  ): Promise<void> {
+    await this.withDatabase(async (database) => {
+      const session = openAgentWsV2Session({
+        serverId: attachment.serverId,
+        sessionId: attachment.sessionId,
+        peer: ws,
+        store: createAgentWsV2Store(database),
+        welcomed: attachment.welcomed,
+      });
+      await session.handleText(raw);
+      if (session.welcomed !== attachment.welcomed) {
+        ws.serializeAttachment({
+          ...attachment,
+          welcomed: session.welcomed,
+        } satisfies V2AgentSessionAttachment);
+      }
     });
   }
 

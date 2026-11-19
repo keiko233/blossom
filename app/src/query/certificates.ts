@@ -47,6 +47,7 @@ import {
   createImportedCertificateSchema,
   replaceImportedCertificateMaterialSchema,
 } from "@/orpc/proxy/schema";
+import { invalidateDesiredConfigRevisionsAfterCommit } from "@/query/agent";
 
 export const CERTIFICATES_QUERY_KEY = ["admin", "certificates"] as const;
 export const CERTIFICATE_CAPABILITY_QUERY_KEY = [
@@ -367,19 +368,22 @@ type ManagedCertificateRow = typeof managedCertificate.$inferSelect;
 async function withCertificateTransaction<T>(
   callback: (tx: typeof db, rowLock: boolean) => Promise<T>,
 ): Promise<T> {
-  if (supportsInteractiveTransactions(getDatabaseDriver())) {
-    return (
-      db as unknown as {
-        transaction: <Result>(
-          run: (tx: typeof db) => Promise<Result>,
-        ) => Promise<Result>;
-      }
-    ).transaction((tx) => callback(tx, true));
-  }
-  // neon-http exposes transaction() in Drizzle's common surface, but calling
-  // it throws at runtime. Keep the same parent-first, reference-safe ordering
-  // used by the other multi-statement mutations in this app.
-  return callback(db, false);
+  const result = supportsInteractiveTransactions(getDatabaseDriver())
+    ? await (
+        db as unknown as {
+          transaction: <Result>(
+            run: (tx: typeof db) => Promise<Result>,
+          ) => Promise<Result>;
+        }
+      ).transaction((tx) => callback(tx, true))
+    : // neon-http exposes transaction() in Drizzle's common surface, but calling
+      // it throws at runtime. Keep the same parent-first, reference-safe ordering
+      // used by the other multi-statement mutations in this app.
+      await callback(db, false);
+  // Invalidate only after the commit: an invalidation before it would let a
+  // concurrent compile cache the old material under the new inputs version.
+  await invalidateDesiredConfigRevisionsAfterCommit();
+  return result;
 }
 
 async function lockCertificate(
