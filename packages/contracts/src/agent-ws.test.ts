@@ -322,6 +322,22 @@ describe("agent WebSocket contract", () => {
         parseAgentWsPtyMessage("pty.exit", { sessionId: "term-1", reason }),
       ).toMatchObject({ ok: true, message: { payload: { reason } } });
     }
+    expect(
+      parseAgentWsPtyMessage("pty.exit", {
+        sessionId: "term-1",
+        reason: "shell_unavailable",
+        detail: "/bin/bash is not executable",
+      }),
+    ).toMatchObject({
+      ok: true,
+      message: { payload: { detail: "/bin/bash is not executable" } },
+    });
+    expect(
+      parseAgentWsPtyMessage("pty.exit", {
+        sessionId: "term-1",
+        detail: "x".repeat(257),
+      }),
+    ).toEqual({ ok: false, type: "pty.exit" });
   });
 
   it("reports malformed known payloads without throwing", () => {

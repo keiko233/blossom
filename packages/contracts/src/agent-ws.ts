@@ -328,6 +328,8 @@ export const agentWsPtyExitPayloadSchema = z.object({
   code: z.number().int().optional(),
   signal: z.string().max(64).optional(),
   reason: agentWsPtyExitReasonSchema.optional(),
+  /** Short, agent-sanitized explanation for startup failures. */
+  detail: z.string().max(256).optional(),
 });
 
 /**
