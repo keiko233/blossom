@@ -8,9 +8,12 @@
 
 mod accountant;
 mod acme;
+mod agent_v2;
 mod certificate;
 mod client;
 mod config;
+mod log_policy;
+mod logs;
 mod process;
 mod pty;
 mod stats;
@@ -33,12 +36,21 @@ use tokio::signal;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
+use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::reload;
+use tracing_subscriber::util::SubscriberInitExt as _;
 
 use crate::acme::AcmeManager;
 use crate::acme::instant_backend::InstantAcmeBackend;
 use crate::acme::ports::DEFAULT_CHALLENGE_TIMEOUT;
 use crate::acme::solver_dns01::DnsAck;
-use crate::config::{AgentPolicy, CandidateConfig, ConfigManager, FetchStatus};
+use crate::config::{AgentPolicy, CandidateConfig, ConfigError, ConfigManager, FetchStatus};
+use crate::log_policy::{
+    AgentFilter, DecisionReason, Level as PolicyLevel, LogOverlay, LogPolicy, PolicyAction,
+    PolicyStatus, Source as PolicySource,
+};
+use crate::logs::{CaptureLayer, LogStore, SecretScope};
 use crate::process::{ProcessState, SingBoxManager, check_config, resolve_binary, singbox_version};
 use crate::traffic::TrafficReporter;
 use crate::update::{
@@ -168,6 +180,32 @@ struct Args {
     )]
     ws_enabled: bool,
 
+    /// Agent WebSocket protocol. `legacy` keeps the v1 WebSocket with the HTTP
+    /// config poll, heartbeat, and traffic reports. `v2` carries configuration,
+    /// status, and traffic over `blossom-agent.v2` and makes no HTTP requests.
+    #[arg(long, value_enum, default_value_t = WsProtocol::Legacy, env = "AGENT_WS_PROTOCOL")]
+    ws_protocol: WsProtocol,
+
+    /// Probation before a v2 candidate config is committed. A test harness knob.
+    #[arg(
+        long,
+        hide = true,
+        default_value_t = 11_000,
+        env = "AGENT_V2_PROBATION_MS",
+        value_parser = clap::value_parser!(u64).range(100..=60_000)
+    )]
+    v2_probation_ms: u64,
+
+    /// How often v2 flushes sealed traffic reports. A test harness knob.
+    #[arg(
+        long,
+        hide = true,
+        default_value_t = 60,
+        env = "AGENT_V2_TRAFFIC_INTERVAL_SECONDS",
+        value_parser = clap::value_parser!(u64).range(1..=3_600)
+    )]
+    v2_traffic_interval_seconds: u64,
+
     /// Address the ephemeral HTTP-01 responder binds while an http-01 job is
     /// active. It is closed again as soon as the order finishes.
     #[arg(long, default_value = "0.0.0.0:80", env = "AGENT_ACME_HTTP_BIND")]
@@ -221,39 +259,18 @@ struct Args {
     pty_max_session_seconds: u64,
 }
 
-fn parse_level(level: &str) -> tracing::Level {
-    match level.to_lowercase().as_str() {
-        "trace" => tracing::Level::TRACE,
-        "debug" => tracing::Level::DEBUG,
-        "warn" => tracing::Level::WARN,
-        "error" => tracing::Level::ERROR,
-        _ => tracing::Level::INFO,
-    }
+/// The agent WebSocket protocol selected at start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum WsProtocol {
+    /// The v1 WebSocket with HTTP config poll, heartbeat, and traffic (the shipped default).
+    Legacy,
+    /// Protocol v2: WebSocket-only, with no HTTP agent API calls.
+    V2,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let args = Args::parse();
-    tracing_subscriber::fmt()
-        .with_max_level(parse_level(&args.log_level))
-        .init();
-
-    let client = client::new_client(&args.url, &args.token)?;
-
-    let bin = resolve_binary(args.sing_box_path);
-    let mut sing_box_version = singbox_version(&bin).await;
-    if let Some(version) = sing_box_version.as_deref()
-        && !supports_singbox_version(version)
-    {
-        warn!(
-            "sing-box {version} is too old for connection-stream traffic; set a desired sing-box version >= 1.14"
-        );
-    }
+fn new_update_manager(args: &Args, sing_box_version: Option<String>) -> Result<UpdateManager> {
     let state_dir = args.state_dir.clone();
-    let traffic_dir = state_dir.join("traffic");
-    let mut config = ConfigManager::new(client.clone(), state_dir.clone())?;
-    let mut updates = UpdateManager::new(
+    UpdateManager::new(
         UpdateConfig {
             state_dir: state_dir.clone(),
             download_dir: args
@@ -268,29 +285,109 @@ async fn main() -> Result<()> {
             retry_after: Duration::from_secs(args.update_retry_seconds),
         },
         AGENT_VERSION.to_string(),
-        sing_box_version.clone(),
+        sing_box_version,
+    )
+}
+
+fn parse_level(level: &str) -> tracing::Level {
+    match level.to_lowercase().as_str() {
+        "trace" => tracing::Level::TRACE,
+        "debug" => tracing::Level::DEBUG,
+        "warn" => tracing::Level::WARN,
+        "error" => tracing::Level::ERROR,
+        _ => tracing::Level::INFO,
+    }
+}
+
+fn policy_level(level: &str) -> PolicyLevel {
+    match parse_level(level) {
+        tracing::Level::TRACE => PolicyLevel::Trace,
+        tracing::Level::DEBUG => PolicyLevel::Debug,
+        tracing::Level::WARN => PolicyLevel::Warn,
+        tracing::Level::ERROR => PolicyLevel::Error,
+        _ => PolicyLevel::Info,
+    }
+}
+
+fn tracing_level(level: PolicyLevel) -> tracing::Level {
+    match level {
+        PolicyLevel::Trace => tracing::Level::TRACE,
+        PolicyLevel::Debug => tracing::Level::DEBUG,
+        PolicyLevel::Warn => tracing::Level::WARN,
+        PolicyLevel::Error => tracing::Level::ERROR,
+        // `default` is resolved to a concrete baseline before it reaches a
+        // filter, so `info` is only a defensive fallback.
+        PolicyLevel::Default | PolicyLevel::Info => tracing::Level::INFO,
+    }
+}
+
+struct ReloadingFilter {
+    handle: reload::Handle<LevelFilter, tracing_subscriber::Registry>,
+}
+
+impl AgentFilter for ReloadingFilter {
+    fn set_level(&self, level: PolicyLevel) -> Result<(), String> {
+        self.handle
+            .reload(LevelFilter::from_level(tracing_level(level)))
+            .map_err(|error| error.to_string())
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let args = Args::parse();
+    let logs = LogStore::shared();
+    let agent_baseline = policy_level(&args.log_level);
+    let (level_filter, level_handle) =
+        reload::Layer::new(LevelFilter::from_level(parse_level(&args.log_level)));
+    tracing_subscriber::registry()
+        .with(level_filter)
+        .with(tracing_subscriber::fmt::layer())
+        .with(CaptureLayer::new(logs.clone()))
+        .init();
+    let (log_policy, policy_warnings) = LogPolicy::load(
+        &args.state_dir,
+        agent_baseline,
+        Arc::new(ReloadingFilter {
+            handle: level_handle,
+        }),
+        Utc::now(),
+    );
+    let log_policy = Arc::new(log_policy);
+    for warning in policy_warnings {
+        warn!("{warning}");
+    }
+    let agent_secrets: Vec<&str> = std::iter::once(args.token.as_str())
+        .chain(args.github_token.as_deref())
+        .collect();
+    logs.replace_secrets(SecretScope::Agent, agent_secrets)?;
+    if args.ws_protocol == WsProtocol::V2 {
+        return agent_v2::run(&args, logs.clone(), log_policy).await;
+    }
+
+    let client = client::new_client(&args.url, &args.token)?;
+
+    let bin = resolve_binary(args.sing_box_path.clone());
+    let mut sing_box_version = singbox_version(&bin).await;
+    if let Some(version) = sing_box_version.as_deref()
+        && !supports_singbox_version(version)
+    {
+        warn!(
+            "sing-box {version} is too old for connection-stream traffic; set a desired sing-box version >= 1.14"
+        );
+    }
+    let state_dir = args.state_dir.clone();
+    let traffic_dir = state_dir.join("traffic");
+    let mut config = ConfigManager::new(
+        client.clone(),
+        state_dir.clone(),
+        logs.clone(),
+        log_policy.clone(),
     )?;
-    let (mut manager, startup_error) = if config.has_active_config() {
-        match check_config(&bin, config.config_path()).await {
-            Ok(()) => {
-                match SingBoxManager::start(bin.clone(), config.config_path().clone()).await {
-                    Ok(manager) => (Some(manager), config.startup_error().map(str::to_owned)),
-                    Err(error) => {
-                        error!("failed to start last-known-good config: {error}");
-                        config.mark_needs_reapply();
-                        (None, Some(error.to_string()))
-                    }
-                }
-            }
-            Err(error) => {
-                error!("last-known-good config failed startup preflight: {error}");
-                config.mark_needs_reapply();
-                (None, Some(error.to_string()))
-            }
-        }
-    } else {
-        (None, config.startup_error().map(str::to_owned))
-    };
+    logs.replace_secrets(SecretScope::StatsApi, config.api_endpoint().secret.iter())?;
+    let mut updates = new_update_manager(&args, sing_box_version.clone())?;
+    let (mut manager, startup_error) = start_last_known_good(&mut config, &bin).await;
     let api_endpoint = config.api_endpoint().clone();
     let mut reporter = match TrafficReporter::new(
         api_endpoint.addr.clone(),
@@ -444,6 +541,9 @@ async fn main() -> Result<()> {
     let mut pty_tick = tokio::time::interval(Duration::from_secs(15));
     pty_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     pty_tick.tick().await;
+    let mut log_policy_tick = tokio::time::interval(Duration::from_secs(5));
+    log_policy_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    log_policy_tick.tick().await;
 
     loop {
         let ws_event = async {
@@ -453,6 +553,16 @@ async fn main() -> Result<()> {
             }
         };
         tokio::select! {
+            _ = log_policy_tick.tick() => {
+                log_policy_maintenance(
+                    &log_policy,
+                    &mut config,
+                    &mut manager,
+                    &bin,
+                    RUNTIME_PROBATION,
+                )
+                .await;
+            }
             _ = pty_tick.tick() => {
                 for exit in pty_manager.reap_expired(Instant::now()) {
                     send_pty_exit(&command_sink, exit);
@@ -630,6 +740,126 @@ impl AgentStatus {
     }
 }
 
+/// Runs the local half of the log-level policy: expires temporary overrides,
+/// retries failed applications with a bound, and applies agent filter changes.
+/// The v1 supervision loop and the v2 core both call it from their single
+/// select loop, so it is serialized with configuration reconciliation.
+async fn log_policy_maintenance(
+    policy: &Arc<LogPolicy>,
+    config: &mut ConfigManager,
+    manager: &mut Option<SingBoxManager>,
+    bin: &Path,
+    probation: Duration,
+) {
+    let now = Utc::now();
+    let mut decisions = policy.expire(now);
+    decisions.extend(policy.retry_due(now));
+    if decisions.is_empty() {
+        return;
+    }
+    // Apply one source at a time. A sing-box reload awaits probation, and the
+    // policy timestamps must reflect the world when that reload finishes.
+    for decision in decisions {
+        let Some(action) = decision.action.as_ref() else {
+            continue;
+        };
+        match action {
+            PolicyAction::Agent(level) => {
+                if let Some(status) = policy.apply_agent(*level, Utc::now()) {
+                    report_policy_status(&status, decision.reason);
+                }
+            }
+            PolicyAction::SingBox(overlay) => {
+                if !config.has_active_config() {
+                    // There is nothing to overlay yet. Keep the request pending
+                    // until a validated configuration exists.
+                    continue;
+                }
+                let result =
+                    apply_singbox_log_overlay(config, manager, bin, *overlay, probation).await;
+                match policy.record(PolicySource::SingBox, overlay.effective, result, Utc::now()) {
+                    Some(status) => report_policy_status(&status, decision.reason),
+                    None => warn!("log policy changed while the sing-box overlay applied"),
+                }
+            }
+        }
+    }
+}
+
+fn report_policy_status(status: &PolicyStatus, reason: DecisionReason) {
+    match &status.error {
+        Some(error) => warn!(
+            source = status.source.as_str(),
+            requested = status.requested.as_str(),
+            effective = status.effective.as_str(),
+            ?reason,
+            "log policy application failed: {error}"
+        ),
+        None => info!(
+            source = status.source.as_str(),
+            requested = status.requested.as_str(),
+            effective = status.effective.as_str(),
+            ?reason,
+            "log policy applied"
+        ),
+    }
+}
+
+/// Applies one log-only sing-box change through the same preflight, promotion,
+/// process replacement, probation and rollback path as a configuration apply.
+/// The desired revision is untouched; only the local `log.level` overlay moves.
+async fn apply_singbox_log_overlay(
+    config: &mut ConfigManager,
+    manager: &mut Option<SingBoxManager>,
+    bin: &Path,
+    overlay: LogOverlay,
+    probation: Duration,
+) -> Result<(), String> {
+    if !config.has_active_config() {
+        return Err("no active sing-box configuration to overlay".to_string());
+    }
+    if manager.is_some() {
+        warn!(
+            level = overlay.effective.as_str(),
+            "applying a sing-box log level; the process restarts briefly"
+        );
+    }
+    config
+        .stage_log_overlay(overlay)
+        .map_err(|error| error.to_string())?;
+    if let Err(error) = check_config(bin, config.candidate_path()).await {
+        return Err(error.to_string());
+    }
+    config
+        .promote_candidate()
+        .map_err(|error| error.to_string())?;
+
+    if let Some(current) = manager.take() {
+        current.shutdown().await;
+    }
+    match SingBoxManager::start(bin.to_path_buf(), config.config_path().clone()).await {
+        Ok(started) => *manager = Some(started),
+        Err(error) => {
+            let rolled_back = config.rollback().unwrap_or(false);
+            restore_runtime(manager, bin, config, rolled_back, probation).await;
+            return Err(error.to_string());
+        }
+    }
+
+    tokio::time::sleep(probation).await;
+    if manager.as_ref().map(SingBoxManager::state) == Some(ProcessState::Running) {
+        config
+            .commit_log_overlay()
+            .map_err(|error| error.to_string())?;
+        config.set_runtime_confirmed(true);
+        Ok(())
+    } else {
+        let rolled_back = config.rollback().unwrap_or(false);
+        restore_runtime(manager, bin, config, rolled_back, probation).await;
+        Err("sing-box did not become healthy with the new log level".to_string())
+    }
+}
+
 async fn sync_config(
     config: &mut ConfigManager,
     manager: &mut Option<SingBoxManager>,
@@ -637,17 +867,66 @@ async fn sync_config(
     status: &mut AgentStatus,
 ) -> Result<AgentPolicy> {
     let fetched = config.fetch().await.map_err(|error| {
-        status.config_state = "apply_failed";
-        status.observed_revision = config.observed_revision().map(str::to_owned);
-        status.error = Some(ReportedError {
-            phase: error.phase,
-            code: error.code,
-            message: error.message.clone(),
-            node_id: error.node_id.clone(),
-            occurred_at: Utc::now(),
-        });
+        record_config_error(config, status, &error);
         anyhow::Error::new(error)
     })?;
+    apply_fetched(config, manager, bin, status, fetched, RUNTIME_PROBATION).await
+}
+
+/// Records a failed reconcile so the next heartbeat or config acknowledgement
+/// reports it. Shared by the HTTP poll path and the WebSocket v2 path.
+fn record_config_error(config: &ConfigManager, status: &mut AgentStatus, error: &ConfigError) {
+    status.config_state = "apply_failed";
+    status.observed_revision = config.observed_revision().map(str::to_owned);
+    status.error = Some(ReportedError {
+        phase: error.phase,
+        code: error.code,
+        message: error.message.clone(),
+        node_id: error.node_id.clone(),
+        occurred_at: Utc::now(),
+    });
+}
+
+/// Starts sing-box from the committed config on disk, if there is one. A config
+/// that fails preflight or launch is marked for re-apply, so the next reconcile
+/// cannot skip it.
+async fn start_last_known_good(
+    config: &mut ConfigManager,
+    bin: &Path,
+) -> (Option<SingBoxManager>, Option<String>) {
+    if !config.has_active_config() {
+        return (None, config.startup_error().map(str::to_owned));
+    }
+    match check_config(bin, config.config_path()).await {
+        Ok(()) => {
+            match SingBoxManager::start(bin.to_path_buf(), config.config_path().clone()).await {
+                Ok(manager) => (Some(manager), config.startup_error().map(str::to_owned)),
+                Err(error) => {
+                    error!("failed to start last-known-good config: {error}");
+                    config.mark_needs_reapply();
+                    (None, Some(error.to_string()))
+                }
+            }
+        }
+        Err(error) => {
+            error!("last-known-good config failed startup preflight: {error}");
+            config.mark_needs_reapply();
+            (None, Some(error.to_string()))
+        }
+    }
+}
+
+/// Applies a compiled desired state with every safety invariant: candidate
+/// preflight, promotion, process replacement, probation, then commit or
+/// rollback. The HTTP poll path and the WebSocket v2 snapshot path both use it.
+async fn apply_fetched(
+    config: &mut ConfigManager,
+    manager: &mut Option<SingBoxManager>,
+    bin: &Path,
+    status: &mut AgentStatus,
+    fetched: FetchStatus,
+    probation: Duration,
+) -> Result<AgentPolicy> {
     let (policy, candidate) = match fetched {
         FetchStatus::Unchanged(policy) => {
             status.observed_revision = config.observed_revision().map(str::to_owned);
@@ -762,7 +1041,7 @@ async fn sync_config(
         );
         config.mark_candidate_error(&candidate, "apply", &e.to_string());
         let rolled_back = config.rollback().unwrap_or(false);
-        restore_runtime(manager, bin, config, rolled_back).await;
+        restore_runtime(manager, bin, config, rolled_back, probation).await;
         status.config_state = "apply_failed";
         status.error = Some(ReportedError {
             phase: "apply",
@@ -776,7 +1055,7 @@ async fn sync_config(
 
     // Only commit the candidate after the replacement process survives the
     // health window.
-    tokio::time::sleep(RUNTIME_PROBATION).await;
+    tokio::time::sleep(probation).await;
     if manager.as_ref().map(SingBoxManager::state) == Some(ProcessState::Running) {
         config.commit_applied(&candidate)?;
         config.set_runtime_confirmed(true);
@@ -790,7 +1069,7 @@ async fn sync_config(
             "health",
             "candidate did not become healthy during probation",
         );
-        restore_runtime(manager, bin, config, rolled_back).await;
+        restore_runtime(manager, bin, config, rolled_back, probation).await;
         error!(
             revision = %candidate.revision,
             rolled_back,
@@ -1449,6 +1728,7 @@ async fn restore_runtime(
     bin: &Path,
     config: &mut ConfigManager,
     rolled_back: bool,
+    probation: Duration,
 ) {
     if !rolled_back || !config.has_active_config() {
         if let Some(current) = manager.take() {
@@ -1469,7 +1749,7 @@ async fn restore_runtime(
             return;
         }
     }
-    tokio::time::sleep(RUNTIME_PROBATION).await;
+    tokio::time::sleep(probation).await;
     config.set_runtime_confirmed(
         manager.as_ref().map(SingBoxManager::state) == Some(ProcessState::Running),
     );
@@ -1787,10 +2067,14 @@ async fn heartbeat(
 mod tests {
     use super::{
         AGENT_CAPABILITIES, CandidateConfig, HelloSnapshot, PTY_CAPABILITY, agent_capabilities,
-        apply_ws_policy, node_id_from_error,
+        apply_singbox_log_overlay, apply_ws_policy, node_id_from_error,
     };
     use crate::config::AgentPolicy;
+    use crate::log_policy::{
+        Level as PolicyLevel, LogPolicy, PolicyRequest, RecordingFilter, Source as PolicySource,
+    };
     use crate::ws::codec::WelcomePayload;
+    use chrono::Utc;
 
     #[test]
     fn maps_singbox_inbound_index_back_to_node() {
@@ -1802,6 +2086,7 @@ mod tests {
                 secret: None,
             },
             referenced_generations: vec![],
+            log_level: PolicyLevel::Default,
         };
         assert_eq!(
             node_id_from_error(
@@ -1822,6 +2107,139 @@ mod tests {
     fn advertises_pty_only_when_opted_in() {
         assert!(!agent_capabilities(false).contains(&PTY_CAPABILITY));
         assert!(agent_capabilities(true).contains(&PTY_CAPABILITY));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn log_overlay_reloads_the_fake_process_and_keeps_the_revision() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "blossom-log-overlay-process-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let state_dir = dir.join("state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let logs = crate::logs::LogStore::default();
+        let policy = std::sync::Arc::new(
+            LogPolicy::load(
+                &state_dir,
+                PolicyLevel::Info,
+                RecordingFilter::new(),
+                Utc::now(),
+            )
+            .0,
+        );
+        policy
+            .request(
+                PolicyRequest::new(PolicySource::SingBox, 1, PolicyLevel::Debug),
+                Utc::now(),
+            )
+            .unwrap();
+        let mut config = crate::config::ConfigManager::new(
+            crate::client::new_client("http://127.0.0.1:1/api", "test-token")
+                .expect("client builds"),
+            state_dir.clone(),
+            logs.clone(),
+            policy.clone(),
+        )
+        .expect("config manager builds");
+        std::fs::write(
+            config.config_path(),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "log": {"level": "info"},
+                "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": 1080}]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let level_file = dir.join("level");
+        let bin = dir.join("fake-sing-box");
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = \"check\" ]; then exit 0; fi\n\
+                 grep -o '\"level\": \"[a-z]*\"' \"$3\" | head -1 > '{}'\n\
+                 echo 'INFO level applied'\n\
+                 exec sleep 30\n",
+                level_file.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let mut manager = Some(
+            crate::process::SingBoxManager::start_with_logs(
+                bin.clone(),
+                config.config_path().clone(),
+                logs.clone(),
+            )
+            .await
+            .expect("fake sing-box starts"),
+        );
+        let overlay = policy.overlay(Utc::now());
+        assert_eq!(overlay.effective, PolicyLevel::Debug);
+        apply_singbox_log_overlay(
+            &mut config,
+            &mut manager,
+            &bin,
+            overlay,
+            std::time::Duration::from_secs(11),
+        )
+        .await
+        .expect("log overlay applies through the validated path");
+        assert_eq!(
+            manager.as_ref().map(crate::process::SingBoxManager::state),
+            Some(crate::process::ProcessState::Running)
+        );
+        let active: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(config.config_path()).unwrap()).unwrap();
+        assert_eq!(active["log"]["level"], "debug");
+        let last_good: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(state_dir.join("last-known-good.json")).unwrap())
+                .unwrap();
+        assert_eq!(last_good["log"]["level"], "debug");
+        let level = std::fs::read_to_string(&level_file).unwrap();
+        assert!(level.contains("debug"), "{level}");
+        assert_eq!(config.observed_revision(), None);
+        assert_eq!(config.applied_revision(), None);
+
+        if let Some(manager) = manager.take() {
+            manager.shutdown().await;
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn reloadable_filter_changes_capture_without_rebuilding_the_layer() {
+        use crate::log_policy::AgentFilter as _;
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let store = crate::logs::LogStore::default();
+        let (filter, handle) =
+            tracing_subscriber::reload::Layer::new(tracing_subscriber::filter::LevelFilter::INFO);
+        let subscriber = tracing_subscriber::registry()
+            .with(filter)
+            .with(crate::logs::CaptureLayer::new(store.clone()));
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!("dropped before the reload");
+            super::ReloadingFilter { handle }
+                .set_level(PolicyLevel::Debug)
+                .expect("filter reloads");
+            tracing::debug!("kept after the reload");
+        });
+        let texts: Vec<String> = store
+            .resume(None, 10)
+            .unwrap()
+            .records
+            .into_iter()
+            .map(|record| record.text.clone())
+            .collect();
+        assert_eq!(texts, vec!["kept after the reload".to_string()]);
     }
 
     #[test]
@@ -1849,10 +2267,22 @@ mod tests {
 
     #[test]
     fn hello_snapshot_carries_the_capabilities_and_build_id() {
+        let state_dir = std::env::temp_dir().join(format!("blossom-hello-{}", std::process::id()));
+        let policy = std::sync::Arc::new(
+            LogPolicy::load(
+                &state_dir,
+                PolicyLevel::Info,
+                RecordingFilter::new(),
+                Utc::now(),
+            )
+            .0,
+        );
         let config = crate::config::ConfigManager::new(
             crate::client::new_client("http://127.0.0.1:1/api", "test-token")
                 .expect("client builds"),
-            std::env::temp_dir().join(format!("blossom-hello-{}", std::process::id())),
+            state_dir.clone(),
+            crate::logs::LogStore::default(),
+            policy,
         )
         .expect("config manager builds");
         let updates = crate::update::UpdateManager::new(
@@ -1877,9 +2307,7 @@ mod tests {
         assert!(payload.capabilities.iter().any(|value| value == "ws-v1"));
         assert!(!payload.agent_build_id.is_empty());
         assert!(payload.updates.is_some());
-        let _ = std::fs::remove_dir_all(
-            std::env::temp_dir().join(format!("blossom-hello-{}", std::process::id())),
-        );
+        let _ = std::fs::remove_dir_all(state_dir);
         let _ = std::fs::remove_dir_all(
             std::env::temp_dir().join(format!("blossom-hello-state-{}", std::process::id())),
         );

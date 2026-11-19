@@ -21,12 +21,14 @@ shell commands.
 | File               | Responsibility                                                                                                                                                  |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/main.rs`      | CLI (`clap`, flags mirrored by `AGENT_*` env vars), startup from the last-known-good config, the config-poll/heartbeat loops, WebSocket event wiring, shutdown.  |
+| `src/agent_v2.rs`  | Protocol v2 core loop (`--ws-protocol v2`): no HTTP agent API, snapshot apply/rollback, status publication, update policy, and v2 traffic reporting.            |
 | `src/client.rs`    | Wraps the progenitor-generated client; injects the `Authorization: Bearer` token as a sensitive default header.                                                  |
 | `src/config.rs`    | Fetches the v3 desired state, applies certificate bindings to the base sing-box config, writes candidates, tracks active / last-known-good, reports errors.      |
 | `src/ws/codec.rs`  | Frozen v1 JSON frame envelope (`hello`/`welcome`, `ping`/`pong`, `config.*`, `update.*`) and typed message decoding that ignores unknown frames.                  |
 | `src/ws/ports.rs`  | Narrow `WsTransport`/`WsConnection`/`AgentCommandSink` traits, the bounded outbound queue, and the jittered backoff/fallback policy.                            |
 | `src/ws/adapters.rs` | `tokio-tungstenite` transport: `/api/agent/ws` URL derivation, sensitive bearer header, `rustls` (`ring`) TLS.                                                |
 | `src/ws/mod.rs`    | Reconnect loop: `hello` on every connect, keepalive ping/pong, proactive reconnect, and HTTP-fallback signalling.                                               |
+| `src/ws/v2/`       | Opt-in protocol v2: `serde`-backed codec, subprotocol adapter, bounded snapshot assembler, session state machine, reconnect/backoff, and traffic acknowledgement routing. |
 | `src/acme/mod.rs`  | Bounded ACME job manager: typed issue/ack dispatch, per-job deadline, duplicate-result replay, and challenge solver wiring.                                      |
 | `src/acme/ports.rs` | Consumer-owned ACME/DNS/challenge ports, redacting secret wrappers, typed error phases, and the order state machine.                                             |
 | `src/acme/instant_backend.rs` | `instant-acme` adapter for Let's Encrypt/ZeroSSL, EAB decoding, order/finalize/certificate flow, and cleanup on every exit path.                           |
@@ -34,7 +36,9 @@ shell commands.
 | `src/acme/solver_dns01.rs` | DNS-01 relay over the agent WebSocket with exact TXT-value acknowledgement matching and cleanup tracking.                                                |
 | `src/pty/`         | Opt-in interactive PTY sessions: `portable-pty` adapter, bounded reader/writer queues, session cap, idle/hard lifetime limits, and incremental UTF-8 output chunks. |
 | `src/certificate.rs` | Validated, generation-addressed certificate store under `<state_dir>/certificates/<id>/generation-<n>/`.                                                      |
-| `src/process.rs`   | Supervises the sing-box child (`processkit`): log forwarding, restart with backoff, graceful replacement, `sing-box check` preflight.                            |
+| `src/process.rs`   | Supervises the sing-box child (`processkit`): stdout/stderr capture into the log buffer and tracing, restart with backoff, graceful replacement, `sing-box check` preflight. |
+| `src/logs/`        | Bounded in-memory log buffer: tracing capture (`layer.rs`), byte/line/age budgets (`ring.rs`, `model.rs`), known-secret redaction and normalization (`text.rs`), retained search (`search.rs`), and the locked facade (`store.rs`). |
+| `src/log_policy.rs` | Bounded local log-level policy: per-source revisions, persisted baseline/deadline, agent tracing-filter reloads, sing-box `log.level` overlays, expiry restoration and retry status. |
 | `src/stats.rs`     | Hand-written tonic/prost client for sing-box's built-in `api` service (`StartedService.SubscribeConnections`; no `.proto` files, no `tonic-build`).              |
 | `src/accountant.rs` | Pure per-connection accounting state machine that turns connection events into per-user deltas.                                                                 |
 | `src/traffic.rs`   | Runs the connection stream in the background, accumulates per-user deltas, maps them to subscription/node ids and reports them.                                  |
@@ -64,6 +68,15 @@ The agent opens one outbound WebSocket to `<AGENT_URL>/agent/ws` (`https` -> `ws
 - Keepalive pings are answered with `pong`; `welcome.reconnectBeforeSeconds` arms a proactive reconnect for serverless targets that cap connection lifetime.
 - Reconnect uses 1s -> 2s -> 5s -> 15s -> 30s backoff with jitter. A rejected upgrade (400/403/404/426/501) or a failure streak announces HTTP fallback, and the poll/heartbeat loops plus `TrafficReporter` keep running throughout.
 
+### Protocol v2 (opt-in)
+
+`--ws-protocol v2` / `AGENT_WS_PROTOCOL=v2` selects the WebSocket-first path in `src/agent_v2.rs`; `legacy` remains the default. The v2 client offers `blossom-agent.v2`, requires the echo before it proceeds, and makes no HTTP agent API calls. Configuration, status, and traffic all travel over that session.
+
+- Configuration arrives as bounded, ordered, digest-validated snapshots and only the verified body reaches the ordinary compile, preflight, promote, probation, and rollback path. A partial snapshot is discarded on disconnect; a failed identifier (including a refused snapshot) is held briefly so status reconciliation cannot spin on the same request.
+- `hello` reports the applied identifier or `null`. `welcome` and `agent.status.ack` carry the authoritative identifier, so a missed `config.notify` is recovered on the next status exchange. Deadlines, liveness, proactive `reconnectBeforeSeconds`, and jittered backoff (about 1 s to 60 s) are handled in `src/ws/v2/link.rs`; no HTTP fallback is attempted.
+- Traffic uses the same durable outbox as v1. A report stays on disk until `traffic.ack`; a lost acknowledgement or session resends the identical `reportId` and payload, and the control-plane ledger answers `duplicate`.
+- PTY, ACME, telemetry, update messages, and log-policy messages are not served by v2. The v2 `hello` therefore withholds `pty-v1`, `acme-v1`, and `telemetry-v1`, and version targets arrive only as `updatePolicy`. Promoting v2 to the global default remains a separate change.
+
 ### Agent-executed ACME
 
 The agent advertises `acme-v1`. A job is bounded to 100 unique lowercase DNS
@@ -92,6 +105,19 @@ The admin terminal is disabled unless the agent starts with `--pty-enabled` / `A
 - Reader, waiter and writer work runs on dedicated OS threads, never on Tokio workers. Reader output is bounded by a 64-frame queue; writer input by a 64-write queue of 16 KiB chunks. A full writer queue closes the session with `input_backpressure`; a full outbound WebSocket queue closes it with `output_backpressure` instead of growing memory.
 - PTY output is decoded incrementally, so a UTF-8 character split across reads is not corrupted. A shell exit, idle timeout, protocol error or WebSocket drop kills the child and emits `pty.exit` when the socket is still available.
 
+### Local log-level policy
+
+This branch implements the local half of the [log-level controls](../spec/2026-11-19-agent-ws-oauth-server-workspace/server-workspace.md#log-level-controls). It is not reachable from the control plane yet: no WebSocket frame, admin mutation, UI or `log-policy-v1` capability is added here.
+
+- `src/log_policy.rs` persists one record per source (`agent`, `sing-box`) in `<state_dir>/log-policy.json` (mode `0600`). Each record carries a revision scoped to that source, the requested level, the generated or local baseline, the effective level, an optional deadline and the last error.
+- Requests accept `error`, `warn`, `info` and `default` as baselines. `debug` and `trace` are temporary only: the default lifetime is 15 minutes and the local maximum is 60 minutes, regardless of a longer control-plane deadline. A baseline request carrying a deadline and a stale revision are rejected.
+- Agent levels change a `tracing_subscriber::reload` layer shared by local formatting and the retained `CaptureLayer`, so the buffer, its quotas and its redaction state are never rebuilt. A filter reload failure leaves the previous level effective and records the error.
+- Sing-box levels are a local overlay on `log.level` in the compiled candidate. The overlay is applied after certificate bindings and the agent `api` service, and the desired revision and digest are untouched. A log-only change writes a candidate, runs `sing-box check`, promotes and restarts the process, waits through probation and commits to last-known-good; any failure rolls back to the working configuration. The applied revision, node set and publish sequencing do not change.
+- Every desired-config compile re-reads the generated `log.level` as the new baseline and reapplies the current overlay, so refreshes, retries and a malformed `log` object converge on the same combined config. Newly received node credentials are registered for retained-log redaction before validation errors can be captured.
+- Supervisors call policy maintenance on a local timer even when the control plane is offline. Expired overrides restore the baseline through the same reload path, and a failed restoration keeps the working configuration, reports the requested/effective/error status and retries with a 30-second bound. At startup the persisted state is loaded and the committed and last-known-good configs are rewritten before `start_last_known_good`, so an override never outlives a restart.
+
+Handoff for the later policy contract: map an authenticated `log-policy-v1` revision to `PolicyRequest`, call `LogPolicy::request`, then execute the returned `PolicyAction`. An agent action calls `LogPolicy::apply_agent`; a sing-box action stages the overlay through the validated reload path and calls `LogPolicy::record` with the outcome. Publish `PolicyStatus` as the requested/effective/error view. The local API is unit-tested with recording filters and a fake sing-box process; the wire contract must add the capability and tests when it lands.
+
 ## Safety invariants
 
 These are the behaviours the code and its comments establish. Preserve them when editing; each has unit tests worth extending.
@@ -102,6 +128,8 @@ These are the behaviours the code and its comments establish. Preserve them when
 - **Report honestly.** `installed` is reported once material is staged and validated; `inUse` only after the candidate has been committed.
 - **Self-heal.** An equal `desiredRevision` is skipped only while the active config still parses and every referenced generation still validates.
 - **Secrets stay out of logs.** The token header is marked sensitive; keep tokens, keys and full config bodies out of `tracing` output.
+- **Retained logs are bounded and redacted.** The in-memory log buffer (`src/logs/`) redacts registered agent credentials (the agent token, the GitHub token and the per-run stats secret), `Bearer` tokens, whole PEM private-key blocks and the credential fields of every inbound `users` entry before insertion, then applies byte, line and age budgets. The current stats secret and both active and staged-candidate node credentials are registered on startup, fetch, promotion and rollback, and replaced sets stay redacted until the fixed registry bound retires them. A registration that would exceed the bound makes capture fail closed: every later line is stored as `[REDACTED]` rather than left exposed, while the proxy keeps running. Local host logging is unchanged; only the retained buffer is redacted.
+- **OAuth credentials need their own registration handoff.** When OAuth machine identity lands, add a dedicated `SecretScope` and register the client secret plus the current access token (and any refresh token) before the first token request or authenticated call, then replace that set on every refresh and rotation. The static-token `Agent` scope is not enough, because its set never rotates. Until then, only the configured static agent token is covered.
 - **ACME secrets stay bounded.** The agent accepts only the built-in ACME providers, validates every job/domain/challenge value, never logs or persists the generated private key, and returns it only over the authenticated WebSocket for control-plane encryption.
 - **The terminal is opt-in and bounded.** It is off by default, advertises `pty-v1` only when enabled, never opens a listening port, caps concurrent sessions, and kills every session when the process or WebSocket goes away. Terminal bytes are never written to logs, the database or audit rows.
 - **Do not trust the base config for traffic collection.** The agent strips `experimental.v2ray_api` and any pre-existing `api` service, then injects its own `api` service bound to `127.0.0.1` on a random free port with a random per-run secret. The injected endpoint lives inside the written configs, so a restart of the same agent run stays consistent, and the secret never leaves the process.
@@ -137,6 +165,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 ```
 
 - Unit tests are inline in each module (`#[test]` / `#[tokio::test]`); they need neither sing-box nor a network. `rcgen` (dev-dependency) builds throw-away certificates for the certificate tests.
+- `tests/ws_v2_lifecycle.rs` is a process-level, loopback-only test. It runs the built agent with a temporary state directory, a fake sing-box, and a local v2 WebSocket control plane that fails and records any HTTP agent API request. It covers cold apply, exact traffic replay after a lost `traffic.ack`, status reconciliation, failed-apply rollback, and offline last-known-good startup. It runs as part of `cargo test --locked`.
 - CI additionally builds the agent image and runs the managed-TLS lifecycle test:
 
   ```bash
