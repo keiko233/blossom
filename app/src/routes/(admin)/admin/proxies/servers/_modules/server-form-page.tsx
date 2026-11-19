@@ -25,10 +25,19 @@ export function ServerFormPage(): React.ReactElement {
   const goToList = () => void navigate({ to: SERVERS_LIST });
 
   const { form } = useServerFormController({
-    onSuccess: async ({ token }) => {
-      // Reveal the one-time token before returning to the list.
+    onSuccess: async ({ token, serverId }) => {
+      // Reveal the one-time token before leaving the create page.
       if (token) {
         await TokenRevealDialog.call({ token });
+      }
+      // OAuth-only creates have no token to show; send the operator to the
+      // Connection tab in both cases so installation starts from one place.
+      if (serverId) {
+        void navigate({
+          to: "/admin/proxies/servers/$serverId/connection",
+          params: { serverId },
+        });
+        return;
       }
       goToList();
     },
@@ -75,7 +84,7 @@ export function ServerFormPage(): React.ReactElement {
       >
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4">
           <div className="rounded-xl border bg-card p-4 shadow-xs">
-            <ServerFormFields form={form} />
+            <ServerFormFields form={form} showBackupToken />
           </div>
 
           <p className="text-sm text-muted-foreground">

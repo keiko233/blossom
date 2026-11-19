@@ -1,5 +1,6 @@
 import type React from "react";
 
+import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,6 +18,8 @@ import type { ServerForm } from "./use-server-form";
 
 export interface ServerFormFieldsProps {
   form: ServerForm;
+  /** Create offers an explicit static backup; editing manages it on Connection. */
+  showBackupToken?: boolean;
 }
 
 /**
@@ -26,6 +29,7 @@ export interface ServerFormFieldsProps {
  */
 export function ServerFormFields({
   form,
+  showBackupToken = false,
 }: ServerFormFieldsProps): React.ReactElement {
   return (
     <div className="flex flex-col gap-4">
@@ -161,6 +165,27 @@ export function ServerFormFields({
           </div>
         )}
       </form.Field>
+
+      {showBackupToken ? (
+        <form.Field name="enableBackupToken">
+          {(field) => (
+            <div className="flex flex-col gap-1 rounded-lg border bg-muted/24 p-3">
+              <label className="flex items-start gap-2 text-sm font-medium">
+                <Checkbox
+                  checked={field.state.value}
+                  onCheckedChange={(checked) =>
+                    field.handleChange(checked === true)
+                  }
+                />
+                <span>{m.admin_proxies_servers_field_backup_token()}</span>
+              </label>
+              <p className="text-xs text-muted-foreground">
+                {m.admin_proxies_servers_field_backup_token_description()}
+              </p>
+            </div>
+          )}
+        </form.Field>
+      ) : null}
     </div>
   );
 }

@@ -39,6 +39,8 @@ const modeLabel: Record<string, () => string> = {
 
 export interface ServerConnectionGrantsProps {
   grants: readonly ConnectionGrantRow[];
+  /** Active generation that stays in service until a replacement proves. */
+  activeGeneration: number | null;
   revoking: boolean;
   onRevoke: (grant: ConnectionGrantRow) => void;
 }
@@ -46,6 +48,7 @@ export interface ServerConnectionGrantsProps {
 /** Enrollment grant history, expiry, fixed-script download and recovery. */
 export function ServerConnectionGrants({
   grants,
+  activeGeneration,
   revoking,
   onRevoke,
 }: ServerConnectionGrantsProps): React.ReactElement {
@@ -138,6 +141,15 @@ export function ServerConnectionGrants({
                   {staleClaim ? (
                     <p className="text-xs text-destructive">
                       {m.admin_proxies_servers_connection_grant_recovery()}
+                    </p>
+                  ) : null}
+                  {grant.mode === "replace" &&
+                  activeGeneration !== null &&
+                  (status === "issued" || status === "redeeming") ? (
+                    <p className="text-xs text-muted-foreground">
+                      {m.admin_proxies_servers_connection_grant_replace_active_note(
+                        { generation: activeGeneration },
+                      )}
                     </p>
                   ) : null}
                   {status === "expired" ? (
