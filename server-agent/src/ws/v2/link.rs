@@ -21,6 +21,7 @@ use tracing::{debug, info, warn};
 
 use super::adapter::V2Connector;
 use super::session::{self, HelloIdentity, SessionEnd, SessionPorts, SessionTiming, Wire};
+use crate::logs::LogStore;
 use crate::ws::Jitter;
 use crate::ws::ports::WsError;
 
@@ -106,6 +107,7 @@ pub async fn run<C, J>(
     options: &LinkOptions,
     jitter: &J,
     cancel: &CancellationToken,
+    store: &LogStore,
 ) where
     C: Connector,
     J: Jitter,
@@ -117,9 +119,15 @@ pub async fn run<C, J>(
         }
         let delay = match connector.connect().await {
             Ok(mut wire) => {
-                let end =
-                    session::run(&mut wire, ports, &options.identity, &options.timing, cancel)
-                        .await;
+                let end = session::run(
+                    &mut wire,
+                    ports,
+                    &options.identity,
+                    &options.timing,
+                    cancel,
+                    store,
+                )
+                .await;
                 match end {
                     SessionEnd::Cancelled => return,
                     SessionEnd::Lost { reason, welcomed } => {

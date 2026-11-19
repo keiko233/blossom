@@ -9,6 +9,7 @@
 pub mod adapter;
 pub mod codec;
 pub mod link;
+mod logs;
 pub mod session;
 pub mod snapshot;
 pub mod traffic;

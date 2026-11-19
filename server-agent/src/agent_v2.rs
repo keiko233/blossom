@@ -40,6 +40,8 @@ use crate::ws::ports::WsCommand;
 use crate::ws::v2::adapter::V2Connector;
 use crate::ws::v2::codec::{
     AckStage, ConfigIdentifier, ConfigState, LogPolicyAck, RuntimeState, StatusError, UpdatePolicy,
+    LOGS_SEARCH_CAPABILITY, LOGS_TAIL_CAPABILITY,
+    RuntimeState, StatusError, UpdatePolicy,
 };
 use crate::ws::v2::link::{self, LinkOptions};
 use crate::ws::v2::session::{
@@ -66,6 +68,8 @@ const V2_CAPABILITIES: &[&str] = &[
     "log-policy-v1",
     "ws-v2",
     "traffic-v2",
+    LOGS_TAIL_CAPABILITY,
+    LOGS_SEARCH_CAPABILITY,
 ];
 const V2_PTY_CAPABILITY: &str = "pty-v2";
 
@@ -186,6 +190,7 @@ pub async fn run(
         capabilities,
     });
     let link_cancel = cancel.clone();
+    let link_logs = logs.clone();
     let link_task = tokio::spawn(async move {
         link::run(
             &transport,
@@ -193,6 +198,7 @@ pub async fn run(
             &options,
             &RandomJitter,
             &link_cancel,
+            &link_logs,
         )
         .await;
     });
@@ -690,6 +696,9 @@ async fn restart_for_update(manager: Option<SingBoxManager>) -> ! {
 mod tests {
     use super::{V2_CAPABILITIES, bounded, config_state_of, stage_of, v2_capabilities};
     use crate::ws::v2::codec::{AckStage, ConfigState};
+    use crate::ws::v2::codec::{
+        AckStage, ConfigState, LOGS_SEARCH_CAPABILITY, LOGS_TAIL_CAPABILITY,
+    };
 
     #[test]
     fn v2_advertises_only_what_the_v2_peer_serves() {
@@ -704,6 +713,12 @@ mod tests {
         assert!(!v2_capabilities(false).contains(&"pty-v2".to_string()));
         assert!(v2_capabilities(true).contains(&"pty-v2".to_string()));
         assert!(V2_CAPABILITIES.contains(&"log-policy-v1"));
+        for served in [LOGS_TAIL_CAPABILITY, LOGS_SEARCH_CAPABILITY] {
+            assert!(
+                V2_CAPABILITIES.contains(&served),
+                "{served} must be advertised"
+            );
+        }
     }
 
     #[test]

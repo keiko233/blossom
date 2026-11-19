@@ -13,6 +13,7 @@
 use std::fmt;
 
 use chrono::{DateTime, SecondsFormat, Utc};
+use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
@@ -34,6 +35,19 @@ pub const MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
 /// Base64 length of one full chunk: `ceil(chunk / 3) * 4`.
 pub const SNAPSHOT_CHUNK_BASE64_LEN: usize = SNAPSHOT_CHUNK_BYTES.div_ceil(3) * 4;
 
+/// Live tail over the retained log buffer.
+pub const LOGS_TAIL_CAPABILITY: &str = "logs-tail-v1";
+/// Retained search and context lookup over the retained log buffer.
+pub const LOGS_SEARCH_CAPABILITY: &str = "logs-search-v1";
+pub const LOGS_BATCH_MAX_RECORDS: usize = 200;
+pub const LOGS_RECORD_MAX_CHARS: usize = 4096;
+pub const LOGS_QUERY_MAX_CHARS: usize = 256;
+pub const LOGS_SEARCH_PAGE_MAX: usize = 100;
+pub const LOGS_CONTEXT_MAX_LINES: usize = 50;
+/// JavaScript's `Number.MAX_SAFE_INTEGER`. Contract sequence numbers stay at
+/// or below it, so a control plane can carry them exactly.
+pub const MAX_SAFE_SEQ: u64 = 9_007_199_254_740_991;
+
 const AGENT_TYPES: &[&str] = &[
     "hello",
     "agent.status",
@@ -49,6 +63,11 @@ const AGENT_TYPES: &[&str] = &[
     "pty.exit",
     "log.policy.get",
     "log.policy.ack",
+    "logs.batch",
+    "logs.gap",
+    "logs.search.result",
+    "logs.context.result",
+    "logs.error",
 ];
 const CONTROL_TYPES: &[&str] = &[
     "welcome",
@@ -69,6 +88,11 @@ const CONTROL_TYPES: &[&str] = &[
     "pty.data",
     "pty.resize",
     "pty.close",
+    "logs.subscribe",
+    "logs.unsubscribe",
+    "logs.search",
+    "logs.search.cancel",
+    "logs.context",
 ];
 
 /// The side that produced a frame. The receiver is the other side.
@@ -154,6 +178,11 @@ pub enum Message {
     PtyExit(PtyExit),
     LogPolicyGet(LogPolicyGet),
     LogPolicyAck(LogPolicyAck),
+    LogsSubscribe(LogsSubscribe),
+    LogsUnsubscribe(LogsUnsubscribe),
+    LogsSearch(LogsSearch),
+    LogsSearchCancel(LogsSearchCancel),
+    LogsContext(LogsContext),
     Welcome(Welcome),
     StatusAck(StatusAck),
     ConfigNotify(ConfigNotify),
@@ -170,6 +199,11 @@ pub enum Message {
     PtyClose(PtyClose),
     LogPolicyNotify(LogPolicyNotify),
     LogPolicySnapshot(LogPolicySnapshot),
+    LogsBatch(LogsBatch),
+    LogsGap(LogsGap),
+    LogsSearchResult(LogsSearchResult),
+    LogsContextResult(LogsContextResult),
+    LogsError(LogsError),
     Error(ErrorFrame),
     /// A well-formed frame of a type this codec does not know. Callers ignore it.
     Unknown(String),
@@ -264,6 +298,21 @@ pub fn decode(text: &str, sender: Sender, max_frame_bytes: usize) -> Result<Deco
         "log.policy.ack" => {
             Message::LogPolicyAck(checked(payload, LogPolicyAck::check).ok_or_else(invalid)?)
         }
+        "logs.subscribe" => {
+            Message::LogsSubscribe(checked(payload, LogsSubscribe::check).ok_or_else(invalid)?)
+        }
+        "logs.unsubscribe" => {
+            Message::LogsUnsubscribe(checked(payload, LogsUnsubscribe::check).ok_or_else(invalid)?)
+        }
+        "logs.search" => {
+            Message::LogsSearch(checked(payload, LogsSearch::check).ok_or_else(invalid)?)
+        }
+        "logs.search.cancel" => Message::LogsSearchCancel(
+            checked(payload, LogsSearchCancel::check).ok_or_else(invalid)?,
+        ),
+        "logs.context" => {
+            Message::LogsContext(checked(payload, LogsContext::check).ok_or_else(invalid)?)
+        }
         "welcome" => Message::Welcome(checked(payload, Welcome::check).ok_or_else(invalid)?),
         "agent.status.ack" => {
             Message::StatusAck(checked(payload, StatusAck::check).ok_or_else(invalid)?)
@@ -304,6 +353,15 @@ pub fn decode(text: &str, sender: Sender, max_frame_bytes: usize) -> Result<Deco
         "log.policy.snapshot" => Message::LogPolicySnapshot(
             checked(payload, LogPolicySnapshot::check).ok_or_else(invalid)?,
         ),
+        "logs.batch" => Message::LogsBatch(checked(payload, LogsBatch::check).ok_or_else(invalid)?),
+        "logs.gap" => Message::LogsGap(checked(payload, LogsGap::check).ok_or_else(invalid)?),
+        "logs.search.result" => Message::LogsSearchResult(
+            checked(payload, LogsSearchResult::check).ok_or_else(invalid)?,
+        ),
+        "logs.context.result" => Message::LogsContextResult(
+            checked(payload, LogsContextResult::check).ok_or_else(invalid)?,
+        ),
+        "logs.error" => Message::LogsError(checked(payload, LogsError::check).ok_or_else(invalid)?),
         "error" => Message::Error(checked(payload, ErrorFrame::check).ok_or_else(invalid)?),
         other => Message::Unknown(other.to_string()),
     };
@@ -894,6 +952,405 @@ impl TrafficAck {
     }
 }
 
+/// A buffer generation, carried as a decimal `u64` string because JavaScript
+/// numbers cannot hold the full range. Sequence numbers stay JS-safe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LogGeneration(u64);
+
+impl LogGeneration {
+    pub fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl fmt::Display for LogGeneration {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+impl Serialize for LogGeneration {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for LogGeneration {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct GenerationVisitor;
+
+        impl Visitor<'_> for GenerationVisitor {
+            type Value = LogGeneration;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a decimal u64 generation string")
+            }
+
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                if value.is_empty()
+                    || value.len() > 20
+                    || !value.bytes().all(|byte| byte.is_ascii_digit())
+                {
+                    return Err(E::custom("generation must be a decimal u64 string"));
+                }
+                value
+                    .parse::<u64>()
+                    .map(LogGeneration)
+                    .map_err(|_| E::custom("generation exceeds 64 bits"))
+            }
+        }
+
+        deserializer.deserialize_str(GenerationVisitor)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogGapReason {
+    Restarted,
+    Overwritten,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogSource {
+    Agent,
+    #[serde(rename = "sing-box")]
+    SingBox,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogCursor {
+    pub generation: LogGeneration,
+    pub seq: u64,
+}
+
+impl LogCursor {
+    fn check(&self) -> bool {
+        self.seq <= MAX_SAFE_SEQ
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogSearchCursor {
+    pub generation: LogGeneration,
+    pub pinned_seq: u64,
+    pub before: u64,
+    pub floor: u64,
+}
+
+impl LogSearchCursor {
+    fn check(&self) -> bool {
+        self.pinned_seq <= MAX_SAFE_SEQ && self.before <= MAX_SAFE_SEQ && self.floor <= MAX_SAFE_SEQ
+    }
+}
+
+/// One retained, already-redacted record. The agent only encodes this type;
+/// decoding it keeps the shared wire fixtures checkable in both directions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogRecord {
+    pub seq: u64,
+    pub time: DateTime<Utc>,
+    pub source: LogSource,
+    pub level: LogLevel,
+    pub process_generation: u64,
+    pub text: String,
+    pub truncated: bool,
+}
+
+impl LogRecord {
+    fn check(&self) -> bool {
+        self.seq >= 1
+            && self.seq <= MAX_SAFE_SEQ
+            && self.process_generation <= MAX_SAFE_SEQ
+            && chars_bounded(&self.text, 0, LOGS_RECORD_MAX_CHARS)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogFilter {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<LogSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_level: Option<LogLevel>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<LogSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_level: Option<LogLevel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<DateTime<Utc>>,
+}
+
+impl LogQuery {
+    fn check(&self) -> bool {
+        self.text
+            .as_ref()
+            .is_none_or(|text| chars_bounded(text, 1, LOGS_QUERY_MAX_CHARS))
+            && !matches!((self.since, self.until), (Some(since), Some(until)) if since >= until)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogGap {
+    pub reason: LogGapReason,
+    pub from_seq: u64,
+    pub to_seq: u64,
+}
+
+impl LogGap {
+    fn check(&self) -> bool {
+        match self.reason {
+            LogGapReason::Restarted => self.from_seq == 0 && self.to_seq == 0,
+            LogGapReason::Overwritten => {
+                self.from_seq >= 1 && self.to_seq >= self.from_seq && self.to_seq <= MAX_SAFE_SEQ
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogCoverage {
+    pub gap: Option<LogGapReason>,
+    pub searchable_from: Option<DateTime<Utc>>,
+    pub searchable_to: Option<DateTime<Utc>>,
+}
+
+/// `logs.subscribe` (control plane to agent). `resume: null` starts from the
+/// newest `limit` records.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogsSubscribe {
+    pub subscription_id: String,
+    pub filter: LogFilter,
+    pub resume: Option<LogCursor>,
+    pub limit: u64,
+}
+
+impl LogsSubscribe {
+    fn check(&self) -> bool {
+        log_id_ok(&self.subscription_id)
+            && self.resume.as_ref().is_none_or(LogCursor::check)
+            && (1..=LOGS_BATCH_MAX_RECORDS as u64).contains(&self.limit)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogsUnsubscribe {
+    pub subscription_id: String,
+}
+
+impl LogsUnsubscribe {
+    fn check(&self) -> bool {
+        log_id_ok(&self.subscription_id)
+    }
+}
+
+/// `logs.search` (control plane to agent). `cursor: null` starts a new search
+/// pinned at the newest record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogsSearch {
+    pub request_id: String,
+    pub query: LogQuery,
+    pub cursor: Option<LogSearchCursor>,
+    pub limit: u64,
+}
+
+impl LogsSearch {
+    fn check(&self) -> bool {
+        log_id_ok(&self.request_id)
+            && self.query.check()
+            && self.cursor.as_ref().is_none_or(LogSearchCursor::check)
+            && (1..=LOGS_SEARCH_PAGE_MAX as u64).contains(&self.limit)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogsSearchCancel {
+    pub request_id: String,
+}
+
+impl LogsSearchCancel {
+    fn check(&self) -> bool {
+        log_id_ok(&self.request_id)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogsContext {
+    pub request_id: String,
+    pub generation: LogGeneration,
+    pub seq: u64,
+    pub before: u64,
+    pub after: u64,
+}
+
+impl LogsContext {
+    fn check(&self) -> bool {
+        log_id_ok(&self.request_id)
+            && self.seq >= 1
+            && self.seq <= MAX_SAFE_SEQ
+            && self.before <= LOGS_CONTEXT_MAX_LINES as u64
+            && self.after <= LOGS_CONTEXT_MAX_LINES as u64
+    }
+}
+
+/// `logs.batch` (agent to control plane). `next` is the position after the
+/// last record the agent scanned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogsBatch {
+    pub subscription_id: String,
+    pub next: LogCursor,
+    pub has_more: bool,
+    pub records: Vec<LogRecord>,
+}
+
+impl LogsBatch {
+    fn check(&self) -> bool {
+        log_id_ok(&self.subscription_id)
+            && self.next.check()
+            && self.records.len() <= LOGS_BATCH_MAX_RECORDS
+            && self.records.iter().all(LogRecord::check)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogsGap {
+    pub subscription_id: String,
+    pub generation: LogGeneration,
+    pub gap: LogGap,
+}
+
+impl LogsGap {
+    fn check(&self) -> bool {
+        log_id_ok(&self.subscription_id) && self.gap.check()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogsSearchResult {
+    pub request_id: String,
+    pub generation: LogGeneration,
+    pub pinned_seq: u64,
+    pub matches: Vec<LogRecord>,
+    pub next: Option<LogSearchCursor>,
+    pub coverage: LogCoverage,
+}
+
+impl LogsSearchResult {
+    fn check(&self) -> bool {
+        log_id_ok(&self.request_id)
+            && self.pinned_seq <= MAX_SAFE_SEQ
+            && self.matches.len() <= LOGS_SEARCH_PAGE_MAX
+            && self.matches.iter().all(LogRecord::check)
+            && self.next.as_ref().is_none_or(LogSearchCursor::check)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogsContextResult {
+    pub request_id: String,
+    pub generation: LogGeneration,
+    pub target: LogRecord,
+    pub before: Vec<LogRecord>,
+    pub after: Vec<LogRecord>,
+}
+
+impl LogsContextResult {
+    fn check(&self) -> bool {
+        log_id_ok(&self.request_id)
+            && self.target.check()
+            && self.before.len() <= LOGS_CONTEXT_MAX_LINES
+            && self.after.len() <= LOGS_CONTEXT_MAX_LINES
+            && self.before.iter().all(LogRecord::check)
+            && self.after.iter().all(LogRecord::check)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogErrorCode {
+    InvalidRequest,
+    Unsupported,
+    Busy,
+    Restarted,
+    Overwritten,
+    NotFound,
+    Unavailable,
+}
+
+/// `logs.error` (agent to control plane). Exactly one of the two ids names the
+/// request it answers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogsError {
+    pub code: LogErrorCode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscription_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    pub message: String,
+}
+
+impl LogsError {
+    fn check(&self) -> bool {
+        let subscription = self.subscription_id.as_deref().is_none_or(log_id_ok);
+        let request = self.request_id.as_deref().is_none_or(log_id_ok);
+        subscription
+            && request
+            && self.subscription_id.is_some() != self.request_id.is_some()
+            && chars_bounded(&self.message, 1, 1024)
+    }
+}
+
+fn log_id_ok(value: &str) -> bool {
+    bounded(value, 1, 128)
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+}
+
+/// Counts UTF-16 code units, as the TypeScript contract's `String#length` does.
+fn chars_bounded(value: &str, min: usize, max: usize) -> bool {
+    (min..=max).contains(&value.encode_utf16().count())
+}
+
 /// Report ids match `[A-Za-z0-9._-]{8,128}`.
 pub fn report_id_ok(report_id: &str) -> bool {
     bounded(report_id, 8, 128)
@@ -1256,6 +1713,8 @@ mod tests {
 
     const FIXTURES: &str =
         include_str!("../../../../packages/contracts/fixtures/agent-ws-v2.frames.json");
+    const LOG_FIXTURES: &str =
+        include_str!("../../../../packages/contracts/fixtures/agent-ws-v2-logs.frames.json");
 
     fn sender_of(name: &str) -> Sender {
         match name {
@@ -1397,5 +1856,172 @@ mod tests {
         assert!(report_id_ok("2026.11-19_a"));
         assert!(!report_id_ok("short"));
         assert!(!report_id_ok("has space in it"));
+    }
+
+    #[test]
+    fn log_fixtures_decode_exactly_as_the_contract_expects() {
+        let document: Value = serde_json::from_str(LOG_FIXTURES).unwrap();
+        assert_eq!(document["subprotocol"], SUBPROTOCOL);
+        let frames = document["frames"].as_array().unwrap();
+        let mut agent_wire = 0;
+        let mut seen = std::collections::HashSet::new();
+
+        for entry in frames {
+            let sender = entry["sender"].as_str().unwrap();
+            // Browser frames belong to the admin relay, not the agent wire.
+            if sender == "browser" || sender == "control-plane-browser" {
+                continue;
+            }
+            agent_wire += 1;
+            let name = entry["name"].as_str().unwrap();
+            let text = serde_json::to_string(&entry["frame"]).unwrap();
+            let expect = entry["expect"].as_str().unwrap();
+            let sender = sender_of(sender);
+            let result = decode(&text, sender, MAX_FRAME_BYTES);
+            match expect {
+                "ok" => {
+                    let decoded = result.unwrap_or_else(|error| panic!("{name}: {error}"));
+                    assert!(
+                        !matches!(decoded.message, Message::Unknown(_)),
+                        "{name}: a known log type decoded as unknown"
+                    );
+                    seen.insert(entry["frame"]["type"].as_str().unwrap());
+                }
+                code => {
+                    let error = result.expect_err(name);
+                    assert_eq!(error.code(), code, "{name}: {error}");
+                }
+            }
+        }
+        assert!(agent_wire >= 23, "agent log fixture set shrank");
+        for message_type in [
+            "logs.subscribe",
+            "logs.unsubscribe",
+            "logs.search",
+            "logs.search.cancel",
+            "logs.context",
+            "logs.batch",
+            "logs.gap",
+            "logs.search.result",
+            "logs.context.result",
+            "logs.error",
+        ] {
+            assert!(seen.contains(message_type), "{message_type} has no fixture");
+        }
+    }
+
+    #[test]
+    fn log_results_round_trip_through_the_control_plane_decoder() {
+        let generation = LogGeneration::new(u64::MAX);
+        let record = LogRecord {
+            seq: 9,
+            time: Utc::now(),
+            source: LogSource::SingBox,
+            level: LogLevel::Warn,
+            process_generation: 2,
+            text: "dial tcp refused".to_string(),
+            truncated: false,
+        };
+        let cursor = LogCursor { generation, seq: 9 };
+        let batch = Message::LogsBatch(LogsBatch {
+            subscription_id: "tail-1".to_string(),
+            next: cursor,
+            has_more: false,
+            records: vec![record.clone()],
+        });
+        let gap = Message::LogsGap(LogsGap {
+            subscription_id: "tail-1".to_string(),
+            generation,
+            gap: LogGap {
+                reason: LogGapReason::Overwritten,
+                from_seq: 3,
+                to_seq: 8,
+            },
+        });
+        let search = Message::LogsSearchResult(LogsSearchResult {
+            request_id: "req-search-2".to_string(),
+            generation,
+            pinned_seq: 42,
+            matches: vec![record.clone()],
+            next: Some(LogSearchCursor {
+                generation,
+                pinned_seq: 42,
+                before: 9,
+                floor: 0,
+            }),
+            coverage: LogCoverage {
+                gap: None,
+                searchable_from: Some(record.time),
+                searchable_to: Some(record.time),
+            },
+        });
+        let context = Message::LogsContextResult(LogsContextResult {
+            request_id: "req-ctx-1".to_string(),
+            generation,
+            target: record.clone(),
+            before: vec![record.clone()],
+            after: Vec::new(),
+        });
+        let error = Message::LogsError(LogsError {
+            code: LogErrorCode::Busy,
+            subscription_id: None,
+            request_id: Some("req-search-2".to_string()),
+            message: "too many concurrent log searches".to_string(),
+        });
+
+        for (message_type, message) in [
+            ("logs.batch", batch),
+            ("logs.gap", gap),
+            ("logs.search.result", search),
+            ("logs.context.result", context),
+            ("logs.error", error),
+        ] {
+            let text = match &message {
+                Message::LogsBatch(payload) => encode(message_type, payload, None),
+                Message::LogsGap(payload) => encode(message_type, payload, None),
+                Message::LogsSearchResult(payload) => encode(message_type, payload, None),
+                Message::LogsContextResult(payload) => encode(message_type, payload, None),
+                Message::LogsError(payload) => encode(message_type, payload, None),
+                _ => unreachable!(),
+            }
+            .unwrap();
+            assert_eq!(
+                decode(&text, Sender::Agent, MAX_FRAME_BYTES)
+                    .unwrap()
+                    .message,
+                message,
+                "{message_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn log_generations_and_error_shapes_are_strict() {
+        let number = r#"{"v":2,"type":"logs.context","ts":"2026-11-19T00:00:00Z","payload":{"requestId":"r","generation":7,"seq":1,"before":0,"after":0}}"#;
+        assert_eq!(
+            decode(number, Sender::ControlPlane, MAX_FRAME_BYTES).unwrap_err(),
+            DecodeError::InvalidPayload("logs.context".to_string())
+        );
+        let oversized = format!(
+            r#"{{"v":2,"type":"logs.context","ts":"2026-11-19T00:00:00Z","payload":{{"requestId":"r","generation":"{}","seq":1,"before":0,"after":0}}}}"#,
+            u128::from(u64::MAX) + 1
+        );
+        assert_eq!(
+            decode(&oversized, Sender::ControlPlane, MAX_FRAME_BYTES).unwrap_err(),
+            DecodeError::InvalidPayload("logs.context".to_string())
+        );
+        let both_ids = LogsError {
+            code: LogErrorCode::Busy,
+            subscription_id: Some("tail-1".to_string()),
+            request_id: Some("req".to_string()),
+            message: "ambiguous".to_string(),
+        };
+        assert!(!both_ids.check());
+        let neither = LogsError {
+            subscription_id: None,
+            request_id: None,
+            ..both_ids
+        };
+        assert!(!neither.check());
     }
 }
