@@ -265,7 +265,7 @@ async fn main() -> Result<()> {
     }
     let state_dir = args.state_dir.clone();
     let traffic_dir = state_dir.join("traffic");
-    let mut config = ConfigManager::new(client.clone(), state_dir.clone())?;
+    let mut config = ConfigManager::new(client.clone(), state_dir.clone(), logs.clone())?;
     logs.replace_secrets(SecretScope::StatsApi, config.api_endpoint().secret.iter())?;
     let mut updates = UpdateManager::new(
         UpdateConfig {
@@ -1867,6 +1867,7 @@ mod tests {
             crate::client::new_client("http://127.0.0.1:1/api", "test-token")
                 .expect("client builds"),
             std::env::temp_dir().join(format!("blossom-hello-{}", std::process::id())),
+            crate::logs::LogStore::default(),
         )
         .expect("config manager builds");
         let updates = crate::update::UpdateManager::new(

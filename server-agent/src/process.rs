@@ -16,10 +16,15 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, warn};
 
-use crate::logs::{LogLevel, LogSource, LogStore, SING_BOX_OUTPUT_TARGET, strip_ansi};
+use crate::logs::{
+    LogLevel, LogSource, LogStore, PrivateKeyBlock, SING_BOX_OUTPUT_TARGET, strip_ansi,
+};
 
 /// Grace period for a SIGTERM before processkit escalates to SIGKILL on shutdown.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+/// Cap on reading buffered output after the child is reaped, so a lingering
+/// pipe held by an escaped descendant cannot stall shutdown.
+const OUTPUT_DRAIN: Duration = Duration::from_secs(2);
 /// Restart backoff bounds after an unexpected sing-box exit.
 const BACKOFF_MIN: Duration = Duration::from_millis(500);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
@@ -166,6 +171,10 @@ async fn spawn_singbox(bin: &Path, config_path: &Path, logs: &LogStore) -> Resul
 /// `check` decodes and constructs the service graph without touching the live
 /// process. Output is bounded before it can be reported upstream.
 pub async fn check_config(bin: &Path, config_path: &Path) -> Result<()> {
+    check_config_with_logs(bin, config_path, &LogStore::shared()).await
+}
+
+async fn check_config_with_logs(bin: &Path, config_path: &Path, logs: &LogStore) -> Result<()> {
     let output = tokio::time::timeout(
         Duration::from_secs(15),
         tokio::process::Command::new(bin)
@@ -184,7 +193,9 @@ pub async fn check_config(bin: &Path, config_path: &Path) -> Result<()> {
     if message.trim().is_empty() {
         message = String::from_utf8_lossy(&output.stdout).into_owned();
     }
+    // Redact before capping: a cut could leave a credential's prefix behind.
     let message = strip_ansi(message.trim());
+    let message = logs.redact_message(&message);
     let message: String = message.chars().take(4096).collect();
     Err(anyhow::anyhow!(message))
 }
@@ -325,6 +336,9 @@ async fn run_one(
     tokio::pin!(finish);
     let mut healthy_timer = Box::pin(tokio::time::sleep(HEALTHY_UPTIME));
     let mut marked_healthy = false;
+    // One block state per run: stdout and stderr share the sing-box source, and
+    // a new run or an ended stream never inherits an open key block.
+    let mut key_block = PrivateKeyBlock::default();
 
     loop {
         tokio::select! {
@@ -336,22 +350,12 @@ async fn run_one(
                 if let Err(e) = result {
                     error!("failed to wait for sing-box: {e}");
                 }
-                while let Some(event) = events.next().await {
-                    if let Some(message) = forward_log(event, logs, generation)
-                        && let Ok(mut slot) = last_error.lock()
-                    {
-                        *slot = Some(message);
-                    }
-                }
+                drain_output(&mut events, logs, generation, &mut key_block, last_error).await;
                 return RunOutcome::Exited;
             }
             event = events.next() => match event {
                 Some(event) => {
-                    if let Some(message) = forward_log(event, logs, generation)
-                        && let Ok(mut slot) = last_error.lock()
-                    {
-                        *slot = Some(message);
-                    }
+                    record_output(event, logs, generation, &mut key_block, last_error);
                 },
                 // Both streams closed: the process has exited.
                 None => return RunOutcome::Exited,
@@ -360,6 +364,9 @@ async fn run_one(
                 Some(Ctrl::Shutdown(ack)) => {
                     cancel.cancel();
                     let _ = finish.await;
+                    // Final lines emitted while shutting down are still
+                    // captured and redacted before the buffers close.
+                    drain_output(&mut events, logs, generation, &mut key_block, last_error).await;
                     let _ = ack.send(());
                     return RunOutcome::Stopped;
                 }
@@ -367,10 +374,46 @@ async fn run_one(
                 None => {
                     cancel.cancel();
                     let _ = finish.await;
+                    drain_output(&mut events, logs, generation, &mut key_block, last_error).await;
                     return RunOutcome::Stopped;
                 }
             },
         }
+    }
+}
+
+/// Drains every remaining line after the child has been reaped, so shutdown
+/// and exit output is captured with the same redaction as live output.
+async fn drain_output<S>(
+    events: &mut S,
+    logs: &LogStore,
+    generation: u64,
+    key_block: &mut PrivateKeyBlock,
+    last_error: &Arc<Mutex<Option<String>>>,
+) where
+    S: tokio_stream::Stream<Item = ProcessEvent> + Unpin,
+{
+    let drain = async {
+        while let Some(event) = events.next().await {
+            record_output(event, logs, generation, key_block, last_error);
+        }
+    };
+    if tokio::time::timeout(OUTPUT_DRAIN, drain).await.is_err() {
+        debug!("sing-box output stayed open after exit; stopped draining");
+    }
+}
+
+fn record_output(
+    event: ProcessEvent,
+    logs: &LogStore,
+    generation: u64,
+    key_block: &mut PrivateKeyBlock,
+    last_error: &Arc<Mutex<Option<String>>>,
+) {
+    if let Some(message) = forward_log(event, logs, generation, key_block)
+        && let Ok(mut slot) = last_error.lock()
+    {
+        *slot = Some(message);
     }
 }
 
@@ -382,7 +425,12 @@ async fn run_one(
 /// embeds in the line, mirroring the level sing-box itself assigns. The buffer
 /// records the line with its real source and process run, so the tracing layer
 /// skips it under [`SING_BOX_OUTPUT_TARGET`] to avoid a second copy.
-fn forward_log(event: ProcessEvent, logs: &LogStore, generation: u64) -> Option<String> {
+fn forward_log(
+    event: ProcessEvent,
+    logs: &LogStore,
+    generation: u64,
+    key_block: &mut PrivateKeyBlock,
+) -> Option<String> {
     let raw = match &event {
         ProcessEvent::Stdout(line) | ProcessEvent::Stderr(line) => line.text(),
         _ => return None,
@@ -393,11 +441,13 @@ fn forward_log(event: ProcessEvent, logs: &LogStore, generation: u64) -> Option<
         return None;
     }
     let level = singbox_level(line);
-    logs.record(LogSource::SingBox, level, generation, line);
+    // The buffer and `last_error` (reported upstream) get the sanitized text.
+    // Local output below keeps the line as sing-box wrote it.
+    let stored = logs.record_line(key_block, LogSource::SingBox, level, generation, line);
     match level {
         LogLevel::Error => {
             error!(target: SING_BOX_OUTPUT_TARGET, "sing-box: {line}");
-            Some(line.chars().take(4096).collect())
+            stored
         }
         LogLevel::Warn => {
             warn!(target: SING_BOX_OUTPUT_TARGET, "sing-box: {line}");
@@ -430,6 +480,7 @@ fn singbox_level(line: &str) -> LogLevel {
 #[cfg(test)]
 mod tests {
     use super::{Duration, SingBoxManager, check_config, strip_ansi};
+    use crate::logs::{LogStore, SecretScope};
 
     #[cfg(unix)]
     #[tokio::test]
@@ -510,6 +561,58 @@ mod tests {
         .unwrap();
         assert!(matches!(outcome, RunOutcome::Stopped));
         received.await.unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn shutdown_output_is_captured_and_redacted() {
+        use crate::logs::{LogStore, SecretScope};
+
+        const SECRET: &str = concat!("shutdown", "-credential-", "7731");
+        let dir = scratch_dir("drain");
+        let pid_file = dir.join("pid");
+        let bin = fake_singbox(
+            &dir,
+            &format!(
+                "trap 'echo \"ERROR shutdown {SECRET}\"; exit 0' TERM\n\
+                 echo $$ > '{}'\n\
+                 echo 'INFO ready'\n\
+                 while :; do sleep 1; done",
+                pid_file.display()
+            ),
+        );
+        let logs = LogStore::default();
+        logs.replace_secrets(SecretScope::NodeCredentials, [SECRET])
+            .unwrap();
+        let manager = SingBoxManager::start_with_logs(bin, dir.join("config.json"), logs.clone())
+            .await
+            .unwrap();
+        wait_until(|| {
+            pid_file.exists()
+                && logs
+                    .resume(None, 100)
+                    .unwrap()
+                    .records
+                    .iter()
+                    .any(|record| record.text == "INFO ready")
+        })
+        .await;
+
+        manager.shutdown().await;
+
+        let texts: Vec<String> = logs
+            .resume(None, 100)
+            .unwrap()
+            .records
+            .into_iter()
+            .map(|record| record.text.clone())
+            .collect();
+        assert!(
+            texts.iter().any(|text| text == "ERROR shutdown [REDACTED]"),
+            "{texts:?}"
+        );
+        assert!(texts.iter().all(|text| !text.contains(SECRET)));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// Writes an executable stand-in for sing-box into a fresh directory.
@@ -704,6 +807,152 @@ mod tests {
         let error = check_config(&bin, &config).await.unwrap_err().to_string();
         assert!(error.contains("inbounds[1].tls"));
         assert!(error.len() <= 4096);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Runs `script` under `sh -c` as one supervised run into `logs` and returns
+    /// the run's last error line.
+    #[cfg(unix)]
+    async fn run_script(script: &str, logs: &LogStore, generation: u64) -> Option<String> {
+        use super::*;
+
+        let cancel = CancellationToken::new();
+        let process = Command::new("sh")
+            .args(["-c", script])
+            .cancel_on(cancel.clone())
+            .cancel_grace(SHUTDOWN_GRACE)
+            .start()
+            .await
+            .unwrap();
+        let (_tx, mut rx) = mpsc::channel(1);
+        let state = Arc::new(AtomicU8::new(0));
+        let last_error = Arc::new(Mutex::new(None));
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(5),
+            run_one(
+                ManagedProcess {
+                    process,
+                    cancel,
+                    generation,
+                },
+                &mut rx,
+                &state,
+                &last_error,
+                logs,
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome, RunOutcome::Exited));
+        last_error.lock().unwrap().clone()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn key_blocks_and_node_credentials_stay_out_of_the_buffer() {
+        let logs = LogStore::default();
+        logs.replace_secrets(SecretScope::NodeCredentials, ["node-pass-7731"])
+            .unwrap();
+        // The key lines share one stdout stream, so their order is fixed. The
+        // stderr line may land inside the open block and be dropped with it,
+        // so it is checked only in the form it may take.
+        let script = "echo '-----BEGIN OPENSSH PRIVATE KEY-----'\n\
+                      echo 'b3BlbnNzaC1rZXktdjEAAAAABG5vbmU'\n\
+                      echo '-----END OPENSSH PRIVATE KEY-----'\n\
+                      echo 'ERROR after the key'\n\
+                      echo 'ERROR outbound rejected password=node-pass-7731' >&2\n\
+                      exit 1";
+        let last_error = run_script(script, &logs, 1).await;
+
+        let texts: Vec<String> = logs
+            .resume(None, 100)
+            .unwrap()
+            .records
+            .into_iter()
+            .map(|record| record.text.clone())
+            .collect();
+        assert!(texts.iter().all(|text| !text.contains("b3Bl")));
+        assert!(texts.iter().all(|text| !text.contains("node-pass-7731")));
+        assert_eq!(
+            texts
+                .iter()
+                .filter(|text| text.as_str() == "[REDACTED PRIVATE KEY]")
+                .count(),
+            1
+        );
+        assert!(texts.iter().any(|text| text == "ERROR after the key"));
+        for text in texts
+            .iter()
+            .filter(|text| text.contains("outbound rejected"))
+        {
+            assert_eq!(text, "ERROR outbound rejected password=[REDACTED]");
+        }
+        assert!(last_error.is_some_and(|text| !text.contains("node-pass-7731")));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_new_run_never_inherits_an_open_key_block() {
+        let logs = LogStore::default();
+        run_script(
+            "echo '-----BEGIN PRIVATE KEY-----'\necho 'MIIEvQIBADAN'\nexit 1",
+            &logs,
+            1,
+        )
+        .await;
+        run_script("echo 'ERROR recovered after restart'\nexit 1", &logs, 2).await;
+
+        let texts: Vec<String> = logs
+            .resume(None, 100)
+            .unwrap()
+            .records
+            .into_iter()
+            .map(|record| record.text.clone())
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                "[REDACTED PRIVATE KEY]".to_owned(),
+                "ERROR recovered after restart".to_owned()
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn check_config_redacts_credentials_before_the_length_cap() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let secret = "check-node-credential";
+        let logs = LogStore::default();
+        logs.replace_secrets(SecretScope::NodeCredentials, [secret])
+            .unwrap();
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("blossom-check-redact-{suffix}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("fake-sing-box");
+        let config = dir.join("candidate.json");
+        // The secret starts at byte 4080, so a cap applied first would leave its
+        // prefix in the message.
+        std::fs::write(
+            &bin,
+            format!("#!/bin/sh\nprintf 'ERROR decode %4066s {secret}\\n' '' >&2\nexit 1\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(&config, "{}").unwrap();
+
+        let error = super::check_config_with_logs(&bin, &config, &logs)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("[REDACTED]"));
+        assert!(!error.contains("check-node-cred"));
+        assert!(error.chars().count() <= 4096);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

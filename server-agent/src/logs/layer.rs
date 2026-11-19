@@ -5,6 +5,7 @@
 //! before they are formatted into the record.
 
 use std::fmt::{self, Write as _};
+use std::sync::Mutex;
 
 use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
@@ -12,7 +13,7 @@ use tracing_subscriber::layer::{Context, Layer};
 
 use super::model::{LogLevel, LogSource};
 use super::store::LogStore;
-use super::text::REDACTED;
+use super::text::{PrivateKeyBlock, REDACTED};
 
 /// Tracing target of supervised sing-box output. Those lines reach the buffer
 /// from the process pipe with their real source, so the layer skips them here
@@ -31,11 +32,16 @@ const SENSITIVE_FIELD_FRAGMENTS: &[&str] = &[
 
 pub(crate) struct CaptureLayer {
     store: LogStore,
+    /// Block state of the agent's own events, shared by every thread that logs.
+    block: Mutex<PrivateKeyBlock>,
 }
 
 impl CaptureLayer {
     pub(crate) fn new(store: LogStore) -> Self {
-        Self { store }
+        Self {
+            store,
+            block: Mutex::new(PrivateKeyBlock::default()),
+        }
     }
 }
 
@@ -47,12 +53,17 @@ impl<S: Subscriber> Layer<S> for CaptureLayer {
         }
         let mut visitor = TextVisitor::default();
         event.record(&mut visitor);
-        self.store.record(
-            LogSource::Agent,
-            level_of(metadata.level()),
-            self.store.current_process_generation(),
-            &visitor.into_text(),
-        );
+        let text = visitor.into_text();
+        // A poisoned block state drops the event rather than storing it unchecked.
+        let Ok(mut block) = self.block.lock() else {
+            return;
+        };
+        let level = level_of(metadata.level());
+        let generation = self.store.current_process_generation();
+        for line in text.split('\n') {
+            self.store
+                .record_line(&mut block, LogSource::Agent, level, generation, line);
+        }
     }
 }
 
@@ -186,5 +197,57 @@ mod tests {
         });
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].2, "agent line");
+    }
+
+    #[test]
+    fn key_blocks_in_multiline_and_chunked_events_are_masked() {
+        let records = capture(|| {
+            tracing::error!(
+                "-----BEGIN PRIVATE KEY-----\nMIIEvQ\n-----END PRIVATE KEY-----\nafter"
+            );
+            tracing::info!("-----BEGIN OPENSSH PRIVATE KEY-----");
+            tracing::info!("b3BlbnNzaC1rZXk");
+            tracing::info!("-----END OPENSSH PRIVATE KEY-----");
+            tracing::info!("done");
+        });
+        assert_eq!(
+            records,
+            vec![
+                (
+                    LogSource::Agent,
+                    LogLevel::Error,
+                    "[REDACTED PRIVATE KEY]".to_owned()
+                ),
+                (LogSource::Agent, LogLevel::Error, "after".to_owned()),
+                (
+                    LogSource::Agent,
+                    LogLevel::Info,
+                    "[REDACTED PRIVATE KEY]".to_owned()
+                ),
+                (LogSource::Agent, LogLevel::Info, "done".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn key_block_split_across_events_is_masked() {
+        let records = capture(|| {
+            tracing::error!("-----BEGIN OPENSSH");
+            tracing::error!("PRIVATE KEY-----");
+            tracing::error!("b3BlbnNzaC1rZXk");
+            tracing::error!("-----END OPENSSH PRIVATE KEY-----");
+            tracing::info!("after");
+        });
+        assert_eq!(
+            records,
+            vec![
+                (
+                    LogSource::Agent,
+                    LogLevel::Error,
+                    "[REDACTED PRIVATE KEY]".to_owned()
+                ),
+                (LogSource::Agent, LogLevel::Info, "after".to_owned()),
+            ]
+        );
     }
 }

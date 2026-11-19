@@ -17,7 +17,9 @@ use super::model::{
 };
 use super::ring::{ContextError, LogContext, LogResume, LogRing};
 use super::search::{SearchError, SearchPage, SearchRequest, scan_page};
-use super::text::{SecretRedactor, SecretRegistryFull, SecretScope, sanitize};
+use super::text::{
+    PrivateKeyBlock, SecretRedactor, SecretRegistryFull, SecretScope, redact_message, sanitize_line,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StoreError {
@@ -77,7 +79,8 @@ impl LogStore {
 
     /// Makes `secrets` the complete set for `scope`. Call it before a credential
     /// is first sent, logged or written, and again whenever the set changes.
-    /// Fails without changing anything if the registry bound would be exceeded.
+    /// If the registry bound would be exceeded it changes no registered set,
+    /// fails, and makes capture redact every later line whole.
     pub(crate) fn replace_secrets<I>(
         &self,
         scope: SecretScope,
@@ -102,8 +105,53 @@ impl LogStore {
         self.inner.process_generation.load(Ordering::Relaxed)
     }
 
-    /// Normalizes and redacts `raw`, then appends it. A poisoned lock drops
-    /// the record. Capture must never panic a process reader.
+    /// Sanitizes one line from an ordered `source` and appends it. `block`
+    /// must be the state of that source, so private-key bodies are dropped
+    /// across lines. Returns the stored text, or `None` when the line was
+    /// dropped. A poisoned lock drops the record: capture must never panic a
+    /// process reader.
+    pub(crate) fn record_line(
+        &self,
+        block: &mut PrivateKeyBlock,
+        source: LogSource,
+        level: LogLevel,
+        process_generation: u64,
+        raw: &str,
+    ) -> Option<String> {
+        self.record_line_at(Utc::now(), block, source, level, process_generation, raw)
+    }
+
+    fn record_line_at(
+        &self,
+        now: DateTime<Utc>,
+        block: &mut PrivateKeyBlock,
+        source: LogSource,
+        level: LogLevel,
+        process_generation: u64,
+        raw: &str,
+    ) -> Option<String> {
+        let (text, truncated) = sanitize_line(raw, &self.inner.redactor, block)?;
+        if let Ok(mut ring) = self.inner.ring.lock() {
+            ring.push(
+                now,
+                source,
+                level,
+                process_generation,
+                text.clone(),
+                truncated,
+            );
+        }
+        Some(text)
+    }
+
+    /// Redacts a multi-line message that is reported rather than logged. See
+    /// [`redact_message`].
+    pub(crate) fn redact_message(&self, text: &str) -> String {
+        redact_message(text, &self.inner.redactor)
+    }
+
+    /// Appends one self-contained record with its own block state.
+    #[cfg(test)]
     pub(crate) fn record(
         &self,
         source: LogSource,
@@ -114,6 +162,7 @@ impl LogStore {
         self.record_at(Utc::now(), source, level, process_generation, raw);
     }
 
+    #[cfg(test)]
     pub(crate) fn record_at(
         &self,
         now: DateTime<Utc>,
@@ -122,10 +171,14 @@ impl LogStore {
         process_generation: u64,
         raw: &str,
     ) {
-        let (text, truncated) = sanitize(raw, &self.inner.redactor);
-        if let Ok(mut ring) = self.inner.ring.lock() {
-            ring.push(now, source, level, process_generation, text, truncated);
-        }
+        self.record_line_at(
+            now,
+            &mut PrivateKeyBlock::default(),
+            source,
+            level,
+            process_generation,
+            raw,
+        );
     }
 
     /// Replays after `after`, or returns the newest `limit` records when it is

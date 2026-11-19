@@ -6,7 +6,7 @@ use tokio_util::sync::CancellationToken;
 use super::model::{GapReason, LogCursor, LogLevel, LogSource, RingLimits, SearchCursor};
 use super::search::{LogQuery, SearchRequest};
 use super::store::LogStore;
-use super::text::SecretScope;
+use super::text::{MAX_SECRET_FORMS, PrivateKeyBlock, SecretScope};
 
 fn text_request(text: &str, cursor: Option<SearchCursor>, limit: usize) -> SearchRequest {
     SearchRequest {
@@ -180,4 +180,114 @@ fn search_cursor_pages_across_eviction_without_silent_loss() {
     assert_eq!(continued.coverage.gap, Some(GapReason::Overwritten));
     assert!(continued.matches.is_empty());
     assert_eq!(continued.next, None);
+}
+
+#[test]
+fn key_block_chunks_never_reach_tail_search_or_context() {
+    let store = LogStore::new(RingLimits::default());
+    let mut block = PrivateKeyBlock::default();
+    let lines = [
+        "before the key",
+        "-----BEGIN EC PRIVATE KEY-----",
+        "MHcCAQEEIBODYSECRET",
+        "-----END EC PRIVATE KEY-----",
+        "after the key",
+    ];
+    for line in lines {
+        store.record_line(&mut block, LogSource::SingBox, LogLevel::Info, 1, line);
+    }
+
+    let tail = store.resume(None, 10).unwrap();
+    let texts: Vec<_> = tail.records.iter().map(|r| r.text.as_str()).collect();
+    assert_eq!(
+        texts,
+        vec!["before the key", "[REDACTED PRIVATE KEY]", "after the key"]
+    );
+
+    let cancel = CancellationToken::new();
+    let page = store
+        .search(&text_request("BODYSECRET", None, 10), &cancel)
+        .unwrap();
+    assert!(page.matches.is_empty());
+
+    let generation = store.generation().unwrap();
+    let context = store.context(generation, 2, 5, 5).unwrap();
+    let neighbours: Vec<_> = context
+        .before
+        .iter()
+        .chain(context.after.iter())
+        .map(|r| r.text.as_str())
+        .collect();
+    assert_eq!(neighbours, vec!["before the key", "after the key"]);
+}
+
+#[test]
+fn rotated_credentials_are_masked_in_every_egress_path() {
+    let store = LogStore::new(RingLimits::default());
+    store
+        .replace_secrets(SecretScope::NodeCredentials, ["node-old-pass"])
+        .unwrap();
+    store.record(
+        LogSource::SingBox,
+        LogLevel::Error,
+        1,
+        "outbound password=node-old-pass rejected",
+    );
+    store
+        .replace_secrets(SecretScope::NodeCredentials, ["node-new-pass"])
+        .unwrap();
+    store.record(
+        LogSource::SingBox,
+        LogLevel::Error,
+        2,
+        "outbound password=node-new-pass rejected",
+    );
+
+    let cancel = CancellationToken::new();
+    for needle in ["node-old", "node-new"] {
+        let page = store
+            .search(&text_request(needle, None, 10), &cancel)
+            .unwrap();
+        assert!(page.matches.is_empty(), "{needle} must not be retained");
+    }
+    let tail = store.resume(None, 10).unwrap();
+    assert!(tail.records.iter().all(|r| r.text.contains("[REDACTED]")));
+    assert_eq!(
+        store.redact_message("node-old-pass and node-new-pass"),
+        "[REDACTED] and [REDACTED]"
+    );
+}
+
+#[test]
+fn registry_overflow_masks_new_records_across_every_egress_path() {
+    let store = LogStore::new(RingLimits::default());
+    let many: Vec<String> = (0..=MAX_SECRET_FORMS)
+        .map(|n| format!("overflow-credential-{n:05}"))
+        .collect();
+    assert!(
+        store
+            .replace_secrets(SecretScope::NodeCredentials, &many)
+            .is_err()
+    );
+    store.record(
+        LogSource::SingBox,
+        LogLevel::Error,
+        1,
+        "looks like a credential but the registry overflowed",
+    );
+
+    let tail = store.resume(None, 10).unwrap();
+    assert_eq!(tail.records[0].text, "[REDACTED]");
+
+    let cancel = CancellationToken::new();
+    let page = store
+        .search(&text_request("overflow", None, 10), &cancel)
+        .unwrap();
+    assert!(page.matches.is_empty());
+
+    let generation = store.generation().unwrap();
+    let context = store.context(generation, 1, 5, 5).unwrap();
+    assert_eq!(context.target.text, "[REDACTED]");
+    assert!(context.before.is_empty());
+    assert!(context.after.is_empty());
 }

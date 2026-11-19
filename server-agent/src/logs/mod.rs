@@ -27,7 +27,7 @@ pub(crate) use layer::{CaptureLayer, SING_BOX_OUTPUT_TARGET};
 pub(crate) use model::LogCursor;
 pub(crate) use model::{LogLevel, LogSource};
 pub(crate) use store::LogStore;
-pub(crate) use text::{SecretScope, strip_ansi};
+pub(crate) use text::{PrivateKeyBlock, SecretRegistryFull, SecretScope, strip_ansi};
 
 #[cfg(test)]
 mod tests;

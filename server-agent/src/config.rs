@@ -35,6 +35,7 @@ use crate::certificate::{
     CertificateManager, CertificateRef, FULLCHAIN_FILE, GENERATION_DIR_PREFIX, PRIVATE_KEY_FILE,
 };
 use crate::client::{Client, types};
+use crate::logs::{LogStore, SecretRegistryFull, SecretScope};
 
 /// The agent always injects its own `api` service for traffic stats. The
 /// secret is per agent run (OS CSPRNG), the port is any free loopback port;
@@ -213,6 +214,7 @@ struct PersistedState {
 pub struct ConfigManager {
     client: Client,
     certificate_manager: CertificateManager,
+    logs: LogStore,
     state_dir: PathBuf,
     active_path: PathBuf,
     candidate_path: PathBuf,
@@ -226,7 +228,7 @@ pub struct ConfigManager {
 }
 
 impl ConfigManager {
-    pub fn new(client: Client, state_dir: PathBuf) -> Result<Self> {
+    pub(crate) fn new(client: Client, state_dir: PathBuf, logs: LogStore) -> Result<Self> {
         std::fs::create_dir_all(&state_dir)
             .with_context(|| format!("failed to create state dir {}", state_dir.display()))?;
         #[cfg(unix)]
@@ -288,6 +290,7 @@ impl ConfigManager {
         let mut manager = Self {
             client,
             certificate_manager,
+            logs,
             state_dir,
             active_path,
             candidate_path,
@@ -300,6 +303,7 @@ impl ConfigManager {
             startup_error,
         };
         manager.recompute_installed_deployments();
+        manager.refresh_credentials_or_warn();
         Ok(manager)
     }
 
@@ -333,6 +337,29 @@ impl ConfigManager {
 
     pub fn api_endpoint(&self) -> &ApiEndpoint {
         &self.api_endpoint
+    }
+
+    /// Registers the credentials of both the config the supervised process is
+    /// running and any candidate being staged. Keeping both sets current means
+    /// rotation, rollback and shutdown never leave a value unregistered while
+    /// a process that used it can still write output.
+    fn refresh_credentials(&self) -> Result<(), SecretRegistryFull> {
+        let mut credentials = node_credentials_from_path(&self.active_path);
+        credentials.extend(node_credentials_from_path(&self.candidate_path));
+        self.logs
+            .replace_secrets(SecretScope::StatsApi, self.api_endpoint.secret.iter())?;
+        self.logs
+            .replace_secrets(SecretScope::NodeCredentials, credentials)
+    }
+
+    /// A registration overflow switches the buffer to fail-closed redaction, so
+    /// it must never block the proxy. Surface it without a credential value.
+    fn refresh_credentials_or_warn(&self) {
+        if let Err(error) = self.refresh_credentials() {
+            warn!(
+                "node credential registration for retained-log redaction failed; captured text is fully redacted: {error}"
+            );
+        }
     }
 
     pub fn startup_error(&self) -> Option<&str> {
@@ -528,6 +555,7 @@ impl ConfigManager {
             &referenced_generations,
             &artifacts,
         ) {
+            self.refresh_credentials_or_warn();
             self.persist_state().map_err(|error| {
                 ConfigError::new("reconcile", "STATE_PERSIST_FAILED", error.to_string(), None)
             })?;
@@ -542,6 +570,7 @@ impl ConfigManager {
                 None,
             )
         })?;
+        self.refresh_credentials_or_warn();
         self.persist_state().map_err(|error| {
             ConfigError::new("reconcile", "STATE_PERSIST_FAILED", error.to_string(), None)
         })?;
@@ -706,6 +735,7 @@ impl ConfigManager {
     pub fn promote_candidate(&mut self) -> Result<()> {
         std::fs::rename(&self.candidate_path, &self.active_path)
             .context("failed to promote candidate config")?;
+        self.refresh_credentials_or_warn();
         for record in &mut self.persisted.deployments {
             record.in_use = false;
         }
@@ -752,6 +782,7 @@ impl ConfigManager {
             self.persisted.applied_at = None;
             self.api_endpoint = ApiEndpoint::generate();
             self.recompute_installed_deployments();
+            self.refresh_credentials_or_warn();
             return Ok(false);
         }
         replace_from(
@@ -762,6 +793,7 @@ impl ConfigManager {
         self.api_endpoint =
             read_api_endpoint(&self.active_path).unwrap_or_else(ApiEndpoint::generate);
         self.recompute_installed_deployments();
+        self.refresh_credentials_or_warn();
         Ok(true)
     }
 
@@ -951,6 +983,44 @@ fn replace_from(source: &Path, destination: &Path, temp: &Path) -> Result<()> {
         .with_context(|| format!("failed to replace {}", destination.display()))
 }
 
+fn node_credentials_from_path(path: &Path) -> Vec<String> {
+    read_config_map(path)
+        .map(|config| node_credentials(&config))
+        .unwrap_or_default()
+}
+
+/// Credential strings carried by inbound `users` entries. `name` and
+/// `username` identify a subscription and `flow` is a protocol mode; every
+/// other string on a user is authentication material. Collecting by shape
+/// covers protocol additions without a per-protocol secret table.
+fn node_credentials(config: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
+    let mut credentials = Vec::new();
+    let Some(inbounds) = config.get("inbounds").and_then(serde_json::Value::as_array) else {
+        return credentials;
+    };
+    for inbound in inbounds {
+        let Some(users) = inbound.get("users").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        for user in users {
+            let Some(user) = user.as_object() else {
+                continue;
+            };
+            for (key, value) in user {
+                if matches!(key.as_str(), "name" | "username" | "flow") {
+                    continue;
+                }
+                if let Some(value) = value.as_str().filter(|value| !value.is_empty()) {
+                    credentials.push(value.to_owned());
+                }
+            }
+        }
+    }
+    credentials.sort();
+    credentials.dedup();
+    credentials
+}
+
 fn read_config_map(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>> {
     let bytes =
         std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
@@ -1011,8 +1081,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ApiEndpoint, DeploymentRecord, extract_api_endpoint, inject_api_service,
-        materialize_bindings, sanitize_error, strip_base_tls_material, strip_untrusted_api,
+        ApiEndpoint, ConfigManager, DeploymentRecord, extract_api_endpoint, inject_api_service,
+        materialize_bindings, node_credentials, sanitize_error, strip_base_tls_material,
+        strip_untrusted_api, write_config_atomic,
     };
     use crate::certificate::StagedMaterial;
     use crate::client::types;
@@ -1271,5 +1342,133 @@ mod tests {
         let decoded: DeploymentRecord = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded.certificate_id, "cert-1");
         assert!(decoded.in_use);
+    }
+
+    #[test]
+    fn node_credentials_collect_auth_material_not_identities() {
+        let config = json!({
+            "inbounds": [
+                {
+                    "type": "vless",
+                    "users": [{
+                        "name": "node-1-sub-1",
+                        "uuid": "uuid-credential",
+                        "flow": "xtls-rprx-vision",
+                        "level": 0
+                    }]
+                },
+                {
+                    "type": "trojan",
+                    "users": [{"name": "node-2-sub-1", "password": "password-credential"}]
+                },
+                {
+                    "type": "hysteria",
+                    "users": [{"auth_str": "auth-credential"}]
+                },
+                {
+                    "type": "socks",
+                    "users": [{"username": "subscription-id"}]
+                }
+            ]
+        });
+        assert_eq!(
+            node_credentials(config.as_object().unwrap()),
+            vec![
+                "auth-credential".to_owned(),
+                "password-credential".to_owned(),
+                "uuid-credential".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn active_and_candidate_credentials_survive_rotation_and_rollback() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        use crate::logs::{LogLevel, LogSource, LogStore};
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("blossom-cred-lifecycle-{suffix}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let logs = LogStore::default();
+        let client = crate::client::new_client("http://127.0.0.1:1/api", "test-token")
+            .expect("client builds");
+        let mut manager =
+            ConfigManager::new(client, dir.clone(), logs.clone()).expect("config manager builds");
+
+        let active = json!({
+            "inbounds": [{
+                "type": "vless",
+                "users": [{"name": "n1-s1", "uuid": "old-node-credential"}]
+            }]
+        });
+        let candidate = json!({
+            "inbounds": [{
+                "type": "trojan",
+                "users": [{"name": "n2-s1", "password": "new-node-credential"}]
+            }]
+        });
+        let rollback = json!({
+            "services": [{
+                "type": "api",
+                "listen": "127.0.0.1",
+                "listen_port": 1,
+                "secret": "lkg-stats-secret"
+            }],
+            "inbounds": [{
+                "type": "hysteria2",
+                "users": [{"auth_str": "lkg-node-credential"}]
+            }]
+        });
+        write_config_atomic(manager.config_path(), active.as_object().unwrap()).unwrap();
+        write_config_atomic(manager.candidate_path(), candidate.as_object().unwrap()).unwrap();
+        manager.refresh_credentials().unwrap();
+
+        let stored = |text: &str| {
+            logs.record(LogSource::SingBox, LogLevel::Error, 1, text);
+            logs.resume(None, 100)
+                .unwrap()
+                .records
+                .last()
+                .unwrap()
+                .text
+                .clone()
+        };
+        assert_eq!(
+            stored("outbound old-node-credential"),
+            "outbound [REDACTED]"
+        );
+        assert_eq!(
+            stored("outbound new-node-credential"),
+            "outbound [REDACTED]"
+        );
+
+        manager.promote_candidate().unwrap();
+        assert!(!manager.candidate_path().exists());
+        assert_eq!(stored("active new-node-credential"), "active [REDACTED]");
+        // The replaced active credentials stay redacted while a process that
+        // used them could still be draining.
+        assert_eq!(
+            stored("draining old-node-credential"),
+            "draining [REDACTED]"
+        );
+
+        write_config_atomic(
+            &dir.join("last-known-good.json"),
+            rollback.as_object().unwrap(),
+        )
+        .unwrap();
+        assert!(manager.rollback().unwrap());
+        assert_eq!(
+            stored("rolled back lkg-node-credential"),
+            "rolled back [REDACTED]"
+        );
+        assert_eq!(stored("still new-node-credential"), "still [REDACTED]");
+        assert_eq!(stored("stats lkg-stats-secret"), "stats [REDACTED]");
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
