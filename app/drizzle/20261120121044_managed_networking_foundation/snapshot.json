@@ -1,0 +1,2959 @@
+{
+  "type": "diff",
+  "version": "9",
+  "dialect": "postgres",
+  "id": "88aab479-943b-49ab-9f66-2232ac7ad6a1",
+  "prevIds": ["56063215-cafc-4dd0-b3bf-149346bc05a6"],
+  "footprints": [
+    {
+      "statementType": "create_table",
+      "statementTarget": ["table", "public", "listener_claim"],
+      "writes": [
+        "s|tbl|public.listener_claim",
+        "n|tbl|public.listener_claim",
+        "e|tbl|public.listener_claim",
+        "n|rel|public.listener_claim",
+        "n|type|public.listener_claim",
+        "n|rel|public.listener_claim_pkey"
+      ],
+      "reads": ["n|sch|public"]
+    },
+    {
+      "statementType": "create_table",
+      "statementTarget": ["table", "public", "managed_config_version"],
+      "writes": [
+        "s|tbl|public.managed_config_version",
+        "n|tbl|public.managed_config_version",
+        "e|tbl|public.managed_config_version",
+        "n|rel|public.managed_config_version",
+        "n|type|public.managed_config_version",
+        "n|rel|public.managed_config_version_pkey",
+        "n|rel|public.managed_config_version_server_version_unique"
+      ],
+      "reads": ["n|sch|public"]
+    },
+    {
+      "statementType": "create_table",
+      "statementTarget": ["table", "public", "managed_outbound"],
+      "writes": [
+        "s|tbl|public.managed_outbound",
+        "n|tbl|public.managed_outbound",
+        "e|tbl|public.managed_outbound",
+        "n|rel|public.managed_outbound",
+        "n|type|public.managed_outbound",
+        "n|rel|public.managed_outbound_pkey",
+        "n|rel|public.managed_outbound_runtime_tag_key",
+        "n|rel|public.managed_outbound_link_id_key"
+      ],
+      "reads": ["n|sch|public"]
+    },
+    {
+      "statementType": "create_table",
+      "statementTarget": ["table", "public", "managed_rollout"],
+      "writes": [
+        "s|tbl|public.managed_rollout",
+        "n|tbl|public.managed_rollout",
+        "e|tbl|public.managed_rollout",
+        "n|rel|public.managed_rollout",
+        "n|type|public.managed_rollout",
+        "n|rel|public.managed_rollout_pkey"
+      ],
+      "reads": ["n|sch|public"]
+    },
+    {
+      "statementType": "create_table",
+      "statementTarget": ["table", "public", "managed_rollout_claim"],
+      "writes": [
+        "s|tbl|public.managed_rollout_claim",
+        "n|tbl|public.managed_rollout_claim",
+        "e|tbl|public.managed_rollout_claim",
+        "n|rel|public.managed_rollout_claim",
+        "n|type|public.managed_rollout_claim",
+        "n|rel|public.managed_rollout_claim_pkey"
+      ],
+      "reads": ["n|sch|public"]
+    },
+    {
+      "statementType": "create_table",
+      "statementTarget": ["table", "public", "managed_rollout_stage"],
+      "writes": [
+        "s|tbl|public.managed_rollout_stage",
+        "n|tbl|public.managed_rollout_stage",
+        "e|tbl|public.managed_rollout_stage",
+        "n|rel|public.managed_rollout_stage",
+        "n|type|public.managed_rollout_stage",
+        "n|rel|public.managed_rollout_stage_pkey"
+      ],
+      "reads": ["n|sch|public"]
+    },
+    {
+      "statementType": "create_table",
+      "statementTarget": ["table", "public", "managed_server_state"],
+      "writes": [
+        "s|tbl|public.managed_server_state",
+        "n|tbl|public.managed_server_state",
+        "e|tbl|public.managed_server_state",
+        "n|rel|public.managed_server_state",
+        "n|type|public.managed_server_state",
+        "n|rel|public.managed_server_state_pkey"
+      ],
+      "reads": ["n|sch|public"]
+    },
+    {
+      "statementType": "create_table",
+      "statementTarget": ["table", "public", "managed_topology"],
+      "writes": [
+        "s|tbl|public.managed_topology",
+        "n|tbl|public.managed_topology",
+        "e|tbl|public.managed_topology",
+        "n|rel|public.managed_topology",
+        "n|type|public.managed_topology",
+        "n|rel|public.managed_topology_pkey"
+      ],
+      "reads": ["n|sch|public"]
+    },
+    {
+      "statementType": "create_table",
+      "statementTarget": ["table", "public", "peer_inbound"],
+      "writes": [
+        "s|tbl|public.peer_inbound",
+        "n|tbl|public.peer_inbound",
+        "e|tbl|public.peer_inbound",
+        "n|rel|public.peer_inbound",
+        "n|type|public.peer_inbound",
+        "n|rel|public.peer_inbound_pkey",
+        "n|rel|public.peer_inbound_runtime_tag_key"
+      ],
+      "reads": ["n|sch|public"]
+    },
+    {
+      "statementType": "create_table",
+      "statementTarget": ["table", "public", "peer_link"],
+      "writes": [
+        "s|tbl|public.peer_link",
+        "n|tbl|public.peer_link",
+        "e|tbl|public.peer_link",
+        "n|rel|public.peer_link",
+        "n|type|public.peer_link",
+        "n|rel|public.peer_link_pkey",
+        "n|rel|public.peer_link_source_destination_unique",
+        "n|rel|public.peer_link_id_source_unique"
+      ],
+      "reads": ["n|sch|public"]
+    },
+    {
+      "statementType": "create_table",
+      "statementTarget": ["table", "public", "peer_link_credential"],
+      "writes": [
+        "s|tbl|public.peer_link_credential",
+        "n|tbl|public.peer_link_credential",
+        "e|tbl|public.peer_link_credential",
+        "n|rel|public.peer_link_credential",
+        "n|type|public.peer_link_credential",
+        "n|rel|public.peer_link_credential_pkey"
+      ],
+      "reads": ["n|sch|public"]
+    },
+    {
+      "statementType": "create_index",
+      "statementTarget": [
+        "index",
+        "public",
+        "listener_claim",
+        "listener_claim_owner_idx"
+      ],
+      "writes": [
+        "s|idx|public.listener_claim_owner_idx",
+        "n|idx|public.listener_claim_owner_idx",
+        "e|idx|public.listener_claim_owner_idx",
+        "n|rel|public.listener_claim_owner_idx"
+      ],
+      "reads": [
+        "n|tbl|public.listener_claim",
+        "n|sch|public",
+        "n|col|public.listener_claim.owner_kind",
+        "n|col|public.listener_claim.owner_id"
+      ]
+    },
+    {
+      "statementType": "create_index",
+      "statementTarget": [
+        "index",
+        "public",
+        "managed_outbound",
+        "managed_outbound_server_idx"
+      ],
+      "writes": [
+        "s|idx|public.managed_outbound_server_idx",
+        "n|idx|public.managed_outbound_server_idx",
+        "e|idx|public.managed_outbound_server_idx",
+        "n|rel|public.managed_outbound_server_idx"
+      ],
+      "reads": [
+        "n|tbl|public.managed_outbound",
+        "n|sch|public",
+        "n|col|public.managed_outbound.server_id"
+      ]
+    },
+    {
+      "statementType": "create_index",
+      "statementTarget": [
+        "index",
+        "public",
+        "managed_rollout",
+        "managed_rollout_state_idx"
+      ],
+      "writes": [
+        "s|idx|public.managed_rollout_state_idx",
+        "n|idx|public.managed_rollout_state_idx",
+        "e|idx|public.managed_rollout_state_idx",
+        "n|rel|public.managed_rollout_state_idx"
+      ],
+      "reads": [
+        "n|tbl|public.managed_rollout",
+        "n|sch|public",
+        "n|col|public.managed_rollout.state"
+      ]
+    },
+    {
+      "statementType": "create_index",
+      "statementTarget": [
+        "index",
+        "public",
+        "managed_rollout_claim",
+        "managed_rollout_claim_rollout_idx"
+      ],
+      "writes": [
+        "s|idx|public.managed_rollout_claim_rollout_idx",
+        "n|idx|public.managed_rollout_claim_rollout_idx",
+        "e|idx|public.managed_rollout_claim_rollout_idx",
+        "n|rel|public.managed_rollout_claim_rollout_idx"
+      ],
+      "reads": [
+        "n|tbl|public.managed_rollout_claim",
+        "n|sch|public",
+        "n|col|public.managed_rollout_claim.rollout_id"
+      ]
+    },
+    {
+      "statementType": "create_index",
+      "statementTarget": [
+        "index",
+        "public",
+        "managed_rollout_stage",
+        "managed_rollout_stage_server_idx"
+      ],
+      "writes": [
+        "s|idx|public.managed_rollout_stage_server_idx",
+        "n|idx|public.managed_rollout_stage_server_idx",
+        "e|idx|public.managed_rollout_stage_server_idx",
+        "n|rel|public.managed_rollout_stage_server_idx"
+      ],
+      "reads": [
+        "n|tbl|public.managed_rollout_stage",
+        "n|sch|public",
+        "n|col|public.managed_rollout_stage.server_id",
+        "n|col|public.managed_rollout_stage.state"
+      ]
+    },
+    {
+      "statementType": "create_index",
+      "statementTarget": [
+        "index",
+        "public",
+        "peer_inbound",
+        "peer_inbound_server_idx"
+      ],
+      "writes": [
+        "s|idx|public.peer_inbound_server_idx",
+        "n|idx|public.peer_inbound_server_idx",
+        "e|idx|public.peer_inbound_server_idx",
+        "n|rel|public.peer_inbound_server_idx"
+      ],
+      "reads": [
+        "n|tbl|public.peer_inbound",
+        "n|sch|public",
+        "n|col|public.peer_inbound.server_id"
+      ]
+    },
+    {
+      "statementType": "create_index",
+      "statementTarget": [
+        "index",
+        "public",
+        "peer_link",
+        "peer_link_destination_idx"
+      ],
+      "writes": [
+        "s|idx|public.peer_link_destination_idx",
+        "n|idx|public.peer_link_destination_idx",
+        "e|idx|public.peer_link_destination_idx",
+        "n|rel|public.peer_link_destination_idx"
+      ],
+      "reads": [
+        "n|tbl|public.peer_link",
+        "n|sch|public",
+        "n|col|public.peer_link.destination_inbound_id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "listener_claim"],
+      "writes": [
+        "s|fk|public.listener_claim.listener_claim_server_id_server_id_fkey",
+        "n|fk|public.listener_claim.listener_claim_server_id_server_id_fkey",
+        "e|fk|public.listener_claim.listener_claim_server_id_server_id_fkey",
+        "n|con|public.listener_claim.listener_claim_server_id_server_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.listener_claim",
+        "n|sch|public",
+        "n|tbl|public.server",
+        "n|sch|public",
+        "n|col|public.listener_claim.server_id",
+        "n|col|public.server.id",
+        "e|uniqueness|public.server.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "managed_config_version"],
+      "writes": [
+        "s|fk|public.managed_config_version.managed_config_version_server_id_server_id_fkey",
+        "n|fk|public.managed_config_version.managed_config_version_server_id_server_id_fkey",
+        "e|fk|public.managed_config_version.managed_config_version_server_id_server_id_fkey",
+        "n|con|public.managed_config_version.managed_config_version_server_id_server_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.managed_config_version",
+        "n|sch|public",
+        "n|tbl|public.server",
+        "n|sch|public",
+        "n|col|public.managed_config_version.server_id",
+        "n|col|public.server.id",
+        "e|uniqueness|public.server.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "managed_outbound"],
+      "writes": [
+        "s|fk|public.managed_outbound.managed_outbound_server_id_server_id_fkey",
+        "n|fk|public.managed_outbound.managed_outbound_server_id_server_id_fkey",
+        "e|fk|public.managed_outbound.managed_outbound_server_id_server_id_fkey",
+        "n|con|public.managed_outbound.managed_outbound_server_id_server_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.managed_outbound",
+        "n|sch|public",
+        "n|tbl|public.server",
+        "n|sch|public",
+        "n|col|public.managed_outbound.server_id",
+        "n|col|public.server.id",
+        "e|uniqueness|public.server.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "managed_outbound"],
+      "writes": [
+        "s|fk|public.managed_outbound.managed_outbound_link_source_fk",
+        "n|fk|public.managed_outbound.managed_outbound_link_source_fk",
+        "e|fk|public.managed_outbound.managed_outbound_link_source_fk",
+        "n|con|public.managed_outbound.managed_outbound_link_source_fk"
+      ],
+      "reads": [
+        "n|tbl|public.managed_outbound",
+        "n|sch|public",
+        "n|tbl|public.peer_link",
+        "n|sch|public",
+        "n|col|public.managed_outbound.link_id",
+        "n|col|public.managed_outbound.server_id",
+        "n|col|public.peer_link.id",
+        "n|col|public.peer_link.source_server_id",
+        "e|uniqueness|public.peer_link.id.source_server_id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "managed_rollout_claim"],
+      "writes": [
+        "s|fk|public.managed_rollout_claim.managed_rollout_claim_server_id_server_id_fkey",
+        "n|fk|public.managed_rollout_claim.managed_rollout_claim_server_id_server_id_fkey",
+        "e|fk|public.managed_rollout_claim.managed_rollout_claim_server_id_server_id_fkey",
+        "n|con|public.managed_rollout_claim.managed_rollout_claim_server_id_server_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.managed_rollout_claim",
+        "n|sch|public",
+        "n|tbl|public.server",
+        "n|sch|public",
+        "n|col|public.managed_rollout_claim.server_id",
+        "n|col|public.server.id",
+        "e|uniqueness|public.server.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "managed_rollout_claim"],
+      "writes": [
+        "s|fk|public.managed_rollout_claim.managed_rollout_claim_rollout_id_managed_rollout_id_fkey",
+        "n|fk|public.managed_rollout_claim.managed_rollout_claim_rollout_id_managed_rollout_id_fkey",
+        "e|fk|public.managed_rollout_claim.managed_rollout_claim_rollout_id_managed_rollout_id_fkey",
+        "n|con|public.managed_rollout_claim.managed_rollout_claim_rollout_id_managed_rollout_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.managed_rollout_claim",
+        "n|sch|public",
+        "n|tbl|public.managed_rollout",
+        "n|sch|public",
+        "n|col|public.managed_rollout_claim.rollout_id",
+        "n|col|public.managed_rollout.id",
+        "e|uniqueness|public.managed_rollout.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "managed_rollout_stage"],
+      "writes": [
+        "s|fk|public.managed_rollout_stage.managed_rollout_stage_rollout_id_managed_rollout_id_fkey",
+        "n|fk|public.managed_rollout_stage.managed_rollout_stage_rollout_id_managed_rollout_id_fkey",
+        "e|fk|public.managed_rollout_stage.managed_rollout_stage_rollout_id_managed_rollout_id_fkey",
+        "n|con|public.managed_rollout_stage.managed_rollout_stage_rollout_id_managed_rollout_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.managed_rollout_stage",
+        "n|sch|public",
+        "n|tbl|public.managed_rollout",
+        "n|sch|public",
+        "n|col|public.managed_rollout_stage.rollout_id",
+        "n|col|public.managed_rollout.id",
+        "e|uniqueness|public.managed_rollout.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "managed_rollout_stage"],
+      "writes": [
+        "s|fk|public.managed_rollout_stage.managed_rollout_stage_server_id_server_id_fkey",
+        "n|fk|public.managed_rollout_stage.managed_rollout_stage_server_id_server_id_fkey",
+        "e|fk|public.managed_rollout_stage.managed_rollout_stage_server_id_server_id_fkey",
+        "n|con|public.managed_rollout_stage.managed_rollout_stage_server_id_server_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.managed_rollout_stage",
+        "n|sch|public",
+        "n|tbl|public.server",
+        "n|sch|public",
+        "n|col|public.managed_rollout_stage.server_id",
+        "n|col|public.server.id",
+        "e|uniqueness|public.server.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "managed_rollout_stage"],
+      "writes": [
+        "s|fk|public.managed_rollout_stage.managed_rollout_stage_szhMN4c7oumS_fkey",
+        "n|fk|public.managed_rollout_stage.managed_rollout_stage_szhMN4c7oumS_fkey",
+        "e|fk|public.managed_rollout_stage.managed_rollout_stage_szhMN4c7oumS_fkey",
+        "n|con|public.managed_rollout_stage.managed_rollout_stage_szhMN4c7oumS_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.managed_rollout_stage",
+        "n|sch|public",
+        "n|tbl|public.managed_config_version",
+        "n|sch|public",
+        "n|col|public.managed_rollout_stage.config_version_id",
+        "n|col|public.managed_config_version.id",
+        "e|uniqueness|public.managed_config_version.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "managed_rollout_stage"],
+      "writes": [
+        "s|fk|public.managed_rollout_stage.managed_rollout_stage_5v31G073BEz8_fkey",
+        "n|fk|public.managed_rollout_stage.managed_rollout_stage_5v31G073BEz8_fkey",
+        "e|fk|public.managed_rollout_stage.managed_rollout_stage_5v31G073BEz8_fkey",
+        "n|con|public.managed_rollout_stage.managed_rollout_stage_5v31G073BEz8_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.managed_rollout_stage",
+        "n|sch|public",
+        "n|tbl|public.managed_config_version",
+        "n|sch|public",
+        "n|col|public.managed_rollout_stage.previous_config_version_id",
+        "n|col|public.managed_config_version.id",
+        "e|uniqueness|public.managed_config_version.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "managed_server_state"],
+      "writes": [
+        "s|fk|public.managed_server_state.managed_server_state_server_id_server_id_fkey",
+        "n|fk|public.managed_server_state.managed_server_state_server_id_server_id_fkey",
+        "e|fk|public.managed_server_state.managed_server_state_server_id_server_id_fkey",
+        "n|con|public.managed_server_state.managed_server_state_server_id_server_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.managed_server_state",
+        "n|sch|public",
+        "n|tbl|public.server",
+        "n|sch|public",
+        "n|col|public.managed_server_state.server_id",
+        "n|col|public.server.id",
+        "e|uniqueness|public.server.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "managed_server_state"],
+      "writes": [
+        "s|fk|public.managed_server_state.managed_server_state_L1uHQbh64qKY_fkey",
+        "n|fk|public.managed_server_state.managed_server_state_L1uHQbh64qKY_fkey",
+        "e|fk|public.managed_server_state.managed_server_state_L1uHQbh64qKY_fkey",
+        "n|con|public.managed_server_state.managed_server_state_L1uHQbh64qKY_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.managed_server_state",
+        "n|sch|public",
+        "n|tbl|public.managed_config_version",
+        "n|sch|public",
+        "n|col|public.managed_server_state.desired_config_version_id",
+        "n|col|public.managed_config_version.id",
+        "e|uniqueness|public.managed_config_version.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "managed_server_state"],
+      "writes": [
+        "s|fk|public.managed_server_state.managed_server_state_desired_rollout_id_managed_rollout_id_fkey",
+        "n|fk|public.managed_server_state.managed_server_state_desired_rollout_id_managed_rollout_id_fkey",
+        "e|fk|public.managed_server_state.managed_server_state_desired_rollout_id_managed_rollout_id_fkey",
+        "n|con|public.managed_server_state.managed_server_state_desired_rollout_id_managed_rollout_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.managed_server_state",
+        "n|sch|public",
+        "n|tbl|public.managed_rollout",
+        "n|sch|public",
+        "n|col|public.managed_server_state.desired_rollout_id",
+        "n|col|public.managed_rollout.id",
+        "e|uniqueness|public.managed_rollout.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "managed_server_state"],
+      "writes": [
+        "s|fk|public.managed_server_state.managed_server_state_etpzX51DYyPp_fkey",
+        "n|fk|public.managed_server_state.managed_server_state_etpzX51DYyPp_fkey",
+        "e|fk|public.managed_server_state.managed_server_state_etpzX51DYyPp_fkey",
+        "n|con|public.managed_server_state.managed_server_state_etpzX51DYyPp_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.managed_server_state",
+        "n|sch|public",
+        "n|tbl|public.managed_config_version",
+        "n|sch|public",
+        "n|col|public.managed_server_state.applied_config_version_id",
+        "n|col|public.managed_config_version.id",
+        "e|uniqueness|public.managed_config_version.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "peer_inbound"],
+      "writes": [
+        "s|fk|public.peer_inbound.peer_inbound_server_id_server_id_fkey",
+        "n|fk|public.peer_inbound.peer_inbound_server_id_server_id_fkey",
+        "e|fk|public.peer_inbound.peer_inbound_server_id_server_id_fkey",
+        "n|con|public.peer_inbound.peer_inbound_server_id_server_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.peer_inbound",
+        "n|sch|public",
+        "n|tbl|public.server",
+        "n|sch|public",
+        "n|col|public.peer_inbound.server_id",
+        "n|col|public.server.id",
+        "e|uniqueness|public.server.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "peer_inbound"],
+      "writes": [
+        "s|fk|public.peer_inbound.peer_inbound_certificate_id_managed_certificate_id_fkey",
+        "n|fk|public.peer_inbound.peer_inbound_certificate_id_managed_certificate_id_fkey",
+        "e|fk|public.peer_inbound.peer_inbound_certificate_id_managed_certificate_id_fkey",
+        "n|con|public.peer_inbound.peer_inbound_certificate_id_managed_certificate_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.peer_inbound",
+        "n|sch|public",
+        "n|tbl|public.managed_certificate",
+        "n|sch|public",
+        "n|col|public.peer_inbound.certificate_id",
+        "n|col|public.managed_certificate.id",
+        "e|uniqueness|public.managed_certificate.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "peer_link"],
+      "writes": [
+        "s|fk|public.peer_link.peer_link_source_server_id_server_id_fkey",
+        "n|fk|public.peer_link.peer_link_source_server_id_server_id_fkey",
+        "e|fk|public.peer_link.peer_link_source_server_id_server_id_fkey",
+        "n|con|public.peer_link.peer_link_source_server_id_server_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.peer_link",
+        "n|sch|public",
+        "n|tbl|public.server",
+        "n|sch|public",
+        "n|col|public.peer_link.source_server_id",
+        "n|col|public.server.id",
+        "e|uniqueness|public.server.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "peer_link"],
+      "writes": [
+        "s|fk|public.peer_link.peer_link_destination_inbound_id_peer_inbound_id_fkey",
+        "n|fk|public.peer_link.peer_link_destination_inbound_id_peer_inbound_id_fkey",
+        "e|fk|public.peer_link.peer_link_destination_inbound_id_peer_inbound_id_fkey",
+        "n|con|public.peer_link.peer_link_destination_inbound_id_peer_inbound_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.peer_link",
+        "n|sch|public",
+        "n|tbl|public.peer_inbound",
+        "n|sch|public",
+        "n|col|public.peer_link.destination_inbound_id",
+        "n|col|public.peer_inbound.id",
+        "e|uniqueness|public.peer_inbound.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "peer_link_credential"],
+      "writes": [
+        "s|fk|public.peer_link_credential.peer_link_credential_link_id_peer_link_id_fkey",
+        "n|fk|public.peer_link_credential.peer_link_credential_link_id_peer_link_id_fkey",
+        "e|fk|public.peer_link_credential.peer_link_credential_link_id_peer_link_id_fkey",
+        "n|con|public.peer_link_credential.peer_link_credential_link_id_peer_link_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.peer_link_credential",
+        "n|sch|public",
+        "n|tbl|public.peer_link",
+        "n|sch|public",
+        "n|col|public.peer_link_credential.link_id",
+        "n|col|public.peer_link.id",
+        "e|uniqueness|public.peer_link.id"
+      ]
+    }
+  ],
+  "deltas": [
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "name": "listener_claim",
+        "isRlsEnabled": false,
+        "entityType": "tables"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "name": "managed_config_version",
+        "isRlsEnabled": false,
+        "entityType": "tables"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "name": "managed_outbound",
+        "isRlsEnabled": false,
+        "entityType": "tables"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "name": "managed_rollout",
+        "isRlsEnabled": false,
+        "entityType": "tables"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "name": "managed_rollout_claim",
+        "isRlsEnabled": false,
+        "entityType": "tables"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "name": "managed_rollout_stage",
+        "isRlsEnabled": false,
+        "entityType": "tables"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "name": "managed_server_state",
+        "isRlsEnabled": false,
+        "entityType": "tables"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "name": "managed_topology",
+        "isRlsEnabled": false,
+        "entityType": "tables"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "name": "peer_inbound",
+        "isRlsEnabled": false,
+        "entityType": "tables"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "name": "peer_link",
+        "isRlsEnabled": false,
+        "entityType": "tables"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "name": "peer_link_credential",
+        "isRlsEnabled": false,
+        "entityType": "tables"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "listener_claim",
+        "name": "server_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "listener_claim",
+        "name": "port",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "listener_claim",
+        "name": "owner_kind",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "listener_claim",
+        "name": "owner_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "listener_claim",
+        "name": "created_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_config_version",
+        "name": "id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_config_version",
+        "name": "server_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_config_version",
+        "name": "version",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_config_version",
+        "name": "schema_version",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_config_version",
+        "name": "intent",
+        "type": "jsonb",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_config_version",
+        "name": "intent_digest",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_config_version",
+        "name": "subscriber_node_ids",
+        "type": "jsonb",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "'[]'",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_config_version",
+        "name": "created_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_outbound",
+        "name": "id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_outbound",
+        "name": "server_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_outbound",
+        "name": "kind",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_outbound",
+        "name": "name",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_outbound",
+        "name": "runtime_tag",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_outbound",
+        "name": "link_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_outbound",
+        "name": "dial_options",
+        "type": "jsonb",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "'{}'",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_outbound",
+        "name": "revision",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "1",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_outbound",
+        "name": "created_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_outbound",
+        "name": "updated_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout",
+        "name": "id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout",
+        "name": "state",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "'applying'",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout",
+        "name": "topology_generation",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout",
+        "name": "current_ordinal",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "0",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout",
+        "name": "stage_count",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout",
+        "name": "requested_by_user_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout",
+        "name": "failure_code",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout",
+        "name": "failure_message",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout",
+        "name": "created_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout",
+        "name": "updated_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout",
+        "name": "finished_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_claim",
+        "name": "server_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_claim",
+        "name": "rollout_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_claim",
+        "name": "claimed_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "rollout_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "ordinal",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "server_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "state",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "'pending'",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "config_version_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "previous_config_version_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "managed_fingerprint",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "min_revision_seq",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "subscriber_intent",
+        "type": "jsonb",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "subscriber_previous",
+        "type": "jsonb",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "deadline_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "issued_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "confirmed_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "failure_code",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "updated_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_server_state",
+        "name": "server_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_server_state",
+        "name": "desired_config_version_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_server_state",
+        "name": "desired_rollout_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_server_state",
+        "name": "desired_ordinal",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_server_state",
+        "name": "desired_min_revision_seq",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_server_state",
+        "name": "desired_managed_fingerprint",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_server_state",
+        "name": "applied_config_version_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_server_state",
+        "name": "applied_managed_fingerprint",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_server_state",
+        "name": "applied_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_server_state",
+        "name": "updated_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_topology",
+        "name": "id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_topology",
+        "name": "generation",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "0",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_topology",
+        "name": "updated_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_inbound",
+        "name": "id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_inbound",
+        "name": "server_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_inbound",
+        "name": "name",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_inbound",
+        "name": "runtime_tag",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_inbound",
+        "name": "protocol",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_inbound",
+        "name": "listen_address",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_inbound",
+        "name": "listen_port",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_inbound",
+        "name": "advertised_address",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_inbound",
+        "name": "advertised_port",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_inbound",
+        "name": "tls_server_name",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_inbound",
+        "name": "certificate_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_inbound",
+        "name": "revision",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "1",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_inbound",
+        "name": "created_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_inbound",
+        "name": "updated_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_link",
+        "name": "id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_link",
+        "name": "source_server_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_link",
+        "name": "destination_inbound_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_link",
+        "name": "revision",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "1",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_link",
+        "name": "created_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_link",
+        "name": "updated_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_link_credential",
+        "name": "link_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_link_credential",
+        "name": "generation",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_link_credential",
+        "name": "state",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "'active'",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_link_credential",
+        "name": "credential_ciphertext",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_link_credential",
+        "name": "created_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_link_credential",
+        "name": "retired_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "listener_claim",
+        "name": "listener_claim_owner_idx",
+        "nameExplicit": true,
+        "columns": [
+          {
+            "value": "owner_kind",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          },
+          {
+            "value": "owner_id",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          }
+        ],
+        "isUnique": false,
+        "where": null,
+        "with": "",
+        "method": "btree",
+        "concurrently": false,
+        "entityType": "indexes"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_outbound",
+        "name": "managed_outbound_server_idx",
+        "nameExplicit": true,
+        "columns": [
+          {
+            "value": "server_id",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          }
+        ],
+        "isUnique": false,
+        "where": null,
+        "with": "",
+        "method": "btree",
+        "concurrently": false,
+        "entityType": "indexes"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout",
+        "name": "managed_rollout_state_idx",
+        "nameExplicit": true,
+        "columns": [
+          {
+            "value": "state",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          }
+        ],
+        "isUnique": false,
+        "where": null,
+        "with": "",
+        "method": "btree",
+        "concurrently": false,
+        "entityType": "indexes"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_claim",
+        "name": "managed_rollout_claim_rollout_idx",
+        "nameExplicit": true,
+        "columns": [
+          {
+            "value": "rollout_id",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          }
+        ],
+        "isUnique": false,
+        "where": null,
+        "with": "",
+        "method": "btree",
+        "concurrently": false,
+        "entityType": "indexes"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "managed_rollout_stage_server_idx",
+        "nameExplicit": true,
+        "columns": [
+          {
+            "value": "server_id",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          },
+          {
+            "value": "state",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          }
+        ],
+        "isUnique": false,
+        "where": null,
+        "with": "",
+        "method": "btree",
+        "concurrently": false,
+        "entityType": "indexes"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_inbound",
+        "name": "peer_inbound_server_idx",
+        "nameExplicit": true,
+        "columns": [
+          {
+            "value": "server_id",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          }
+        ],
+        "isUnique": false,
+        "where": null,
+        "with": "",
+        "method": "btree",
+        "concurrently": false,
+        "entityType": "indexes"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_link",
+        "name": "peer_link_destination_idx",
+        "nameExplicit": true,
+        "columns": [
+          {
+            "value": "destination_inbound_id",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          }
+        ],
+        "isUnique": false,
+        "where": null,
+        "with": "",
+        "method": "btree",
+        "concurrently": false,
+        "entityType": "indexes"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "listener_claim",
+        "name": "listener_claim_server_id_server_id_fkey",
+        "nameExplicit": false,
+        "columns": ["server_id"],
+        "schemaTo": "public",
+        "tableTo": "server",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "CASCADE",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_config_version",
+        "name": "managed_config_version_server_id_server_id_fkey",
+        "nameExplicit": false,
+        "columns": ["server_id"],
+        "schemaTo": "public",
+        "tableTo": "server",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "CASCADE",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_outbound",
+        "name": "managed_outbound_server_id_server_id_fkey",
+        "nameExplicit": false,
+        "columns": ["server_id"],
+        "schemaTo": "public",
+        "tableTo": "server",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "RESTRICT",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_outbound",
+        "name": "managed_outbound_link_source_fk",
+        "nameExplicit": true,
+        "columns": ["link_id", "server_id"],
+        "schemaTo": "public",
+        "tableTo": "peer_link",
+        "columnsTo": ["id", "source_server_id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "RESTRICT",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_claim",
+        "name": "managed_rollout_claim_server_id_server_id_fkey",
+        "nameExplicit": false,
+        "columns": ["server_id"],
+        "schemaTo": "public",
+        "tableTo": "server",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "NO ACTION",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_claim",
+        "name": "managed_rollout_claim_rollout_id_managed_rollout_id_fkey",
+        "nameExplicit": false,
+        "columns": ["rollout_id"],
+        "schemaTo": "public",
+        "tableTo": "managed_rollout",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "CASCADE",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "managed_rollout_stage_rollout_id_managed_rollout_id_fkey",
+        "nameExplicit": false,
+        "columns": ["rollout_id"],
+        "schemaTo": "public",
+        "tableTo": "managed_rollout",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "CASCADE",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "managed_rollout_stage_server_id_server_id_fkey",
+        "nameExplicit": false,
+        "columns": ["server_id"],
+        "schemaTo": "public",
+        "tableTo": "server",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "CASCADE",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "managed_rollout_stage_szhMN4c7oumS_fkey",
+        "nameExplicit": false,
+        "columns": ["config_version_id"],
+        "schemaTo": "public",
+        "tableTo": "managed_config_version",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "NO ACTION",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "managed_rollout_stage_5v31G073BEz8_fkey",
+        "nameExplicit": false,
+        "columns": ["previous_config_version_id"],
+        "schemaTo": "public",
+        "tableTo": "managed_config_version",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "NO ACTION",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_server_state",
+        "name": "managed_server_state_server_id_server_id_fkey",
+        "nameExplicit": false,
+        "columns": ["server_id"],
+        "schemaTo": "public",
+        "tableTo": "server",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "CASCADE",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_server_state",
+        "name": "managed_server_state_L1uHQbh64qKY_fkey",
+        "nameExplicit": false,
+        "columns": ["desired_config_version_id"],
+        "schemaTo": "public",
+        "tableTo": "managed_config_version",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "NO ACTION",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_server_state",
+        "name": "managed_server_state_desired_rollout_id_managed_rollout_id_fkey",
+        "nameExplicit": false,
+        "columns": ["desired_rollout_id"],
+        "schemaTo": "public",
+        "tableTo": "managed_rollout",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "SET NULL",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_server_state",
+        "name": "managed_server_state_etpzX51DYyPp_fkey",
+        "nameExplicit": false,
+        "columns": ["applied_config_version_id"],
+        "schemaTo": "public",
+        "tableTo": "managed_config_version",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "NO ACTION",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_inbound",
+        "name": "peer_inbound_server_id_server_id_fkey",
+        "nameExplicit": false,
+        "columns": ["server_id"],
+        "schemaTo": "public",
+        "tableTo": "server",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "RESTRICT",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_inbound",
+        "name": "peer_inbound_certificate_id_managed_certificate_id_fkey",
+        "nameExplicit": false,
+        "columns": ["certificate_id"],
+        "schemaTo": "public",
+        "tableTo": "managed_certificate",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "RESTRICT",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_link",
+        "name": "peer_link_source_server_id_server_id_fkey",
+        "nameExplicit": false,
+        "columns": ["source_server_id"],
+        "schemaTo": "public",
+        "tableTo": "server",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "RESTRICT",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_link",
+        "name": "peer_link_destination_inbound_id_peer_inbound_id_fkey",
+        "nameExplicit": false,
+        "columns": ["destination_inbound_id"],
+        "schemaTo": "public",
+        "tableTo": "peer_inbound",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "RESTRICT",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_link_credential",
+        "name": "peer_link_credential_link_id_peer_link_id_fkey",
+        "nameExplicit": false,
+        "columns": ["link_id"],
+        "schemaTo": "public",
+        "tableTo": "peer_link",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "CASCADE",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "listener_claim",
+        "name": "listener_claim_pkey",
+        "columns": ["server_id", "port"],
+        "nameExplicit": false,
+        "entityType": "pks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "managed_rollout_stage_pkey",
+        "columns": ["rollout_id", "ordinal"],
+        "nameExplicit": false,
+        "entityType": "pks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_link_credential",
+        "name": "peer_link_credential_pkey",
+        "columns": ["link_id", "generation"],
+        "nameExplicit": false,
+        "entityType": "pks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_config_version",
+        "name": "managed_config_version_pkey",
+        "columns": ["id"],
+        "nameExplicit": false,
+        "entityType": "pks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_outbound",
+        "name": "managed_outbound_pkey",
+        "columns": ["id"],
+        "nameExplicit": false,
+        "entityType": "pks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout",
+        "name": "managed_rollout_pkey",
+        "columns": ["id"],
+        "nameExplicit": false,
+        "entityType": "pks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_claim",
+        "name": "managed_rollout_claim_pkey",
+        "columns": ["server_id"],
+        "nameExplicit": false,
+        "entityType": "pks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_server_state",
+        "name": "managed_server_state_pkey",
+        "columns": ["server_id"],
+        "nameExplicit": false,
+        "entityType": "pks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_topology",
+        "name": "managed_topology_pkey",
+        "columns": ["id"],
+        "nameExplicit": false,
+        "entityType": "pks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_inbound",
+        "name": "peer_inbound_pkey",
+        "columns": ["id"],
+        "nameExplicit": false,
+        "entityType": "pks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_link",
+        "name": "peer_link_pkey",
+        "columns": ["id"],
+        "nameExplicit": false,
+        "entityType": "pks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_config_version",
+        "name": "managed_config_version_server_version_unique",
+        "nameExplicit": true,
+        "columns": ["server_id", "version"],
+        "nullsNotDistinct": false,
+        "entityType": "uniques"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_link",
+        "name": "peer_link_source_destination_unique",
+        "nameExplicit": true,
+        "columns": ["source_server_id", "destination_inbound_id"],
+        "nullsNotDistinct": false,
+        "entityType": "uniques"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_link",
+        "name": "peer_link_id_source_unique",
+        "nameExplicit": true,
+        "columns": ["id", "source_server_id"],
+        "nullsNotDistinct": false,
+        "entityType": "uniques"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_outbound",
+        "name": "managed_outbound_runtime_tag_key",
+        "nameExplicit": false,
+        "columns": ["runtime_tag"],
+        "nullsNotDistinct": false,
+        "entityType": "uniques"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_outbound",
+        "name": "managed_outbound_link_id_key",
+        "nameExplicit": false,
+        "columns": ["link_id"],
+        "nullsNotDistinct": false,
+        "entityType": "uniques"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "peer_inbound",
+        "name": "peer_inbound_runtime_tag_key",
+        "nameExplicit": false,
+        "columns": ["runtime_tag"],
+        "nullsNotDistinct": false,
+        "entityType": "uniques"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "listener_claim",
+        "name": "listener_claim_port_range",
+        "value": "\"port\" BETWEEN 1 AND 65535",
+        "entityType": "checks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "listener_claim",
+        "name": "listener_claim_owner_kind",
+        "value": "\"owner_kind\" IN ('subscriber_inbound', 'peer_inbound')",
+        "entityType": "checks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_outbound",
+        "name": "managed_outbound_kind_link",
+        "value": "(\"kind\" = 'peer_link' AND \"link_id\" IS NOT NULL)\n        OR (\"kind\" = 'direct_profile' AND \"link_id\" IS NULL)",
+        "entityType": "checks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout",
+        "name": "managed_rollout_ordinal_range",
+        "value": "\"current_ordinal\" BETWEEN 0 AND \"stage_count\"",
+        "entityType": "checks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "managed_rollout_stage_ordinal",
+        "value": "\"ordinal\" >= 1",
+        "entityType": "checks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_topology",
+        "name": "managed_topology_singleton",
+        "value": "\"id\" = 'global'",
+        "entityType": "checks"
+      }
+    }
+  ]
+}
