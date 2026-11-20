@@ -26,18 +26,23 @@ use std::time::Duration;
 use anyhow::{Result, bail};
 use chrono::Utc;
 use tokio::sync::{mpsc, watch};
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::acme::solver_dns01::DnsAck;
 use crate::config::managed::MANAGED_NETWORKING_CAPABILITY;
-use crate::config::{AgentPolicy, ConfigError, ConfigManager};
+use crate::config::{AgentPolicy, ConfigError, ConfigManager, FetchStatus};
 use crate::log_policy::{LogPolicy, PolicyAction, PolicyRequest, SOURCES, Source as PolicySource};
 use crate::logs::{LogStore, SecretScope};
 use crate::metering::{
     MeteringConfig, MeteringState, MeteringWorker, NativeMetering, TonicEventSource,
 };
 use crate::oauth::OAuthTokenProvider;
+use crate::probe::{
+    LinkProbeOutcome, LinkProbeResult, MANAGED_LINK_PROBE_CAPABILITY, ProbeExecution, ProbeRuntime,
+    applied_generation, closed_result, unavailable_result,
+};
 use crate::process::{ProcessState, SingBoxManager, resolve_binary, singbox_version};
 use crate::service::{ActiveState, NativeRuntime};
 use crate::traffic::TrafficReporter;
@@ -75,6 +80,7 @@ const V2_CAPABILITIES: &[&str] = &[
     "acme-v1",
     "log-policy-v1",
     MANAGED_NETWORKING_CAPABILITY,
+    MANAGED_LINK_PROBE_CAPABILITY,
     "ws-v2",
     "traffic-v2",
     LOGS_TAIL_CAPABILITY,
@@ -100,6 +106,9 @@ const WS_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// How often the core re-reads sing-box's process state, so a crash loop is
 /// published without waiting for an apply.
 const RUNTIME_SAMPLE: Duration = Duration::from_secs(5);
+/// Bound on concurrent link probes per agent core. Each probe has its own
+/// contract deadline and is cancelled with the session that requested it.
+const MAX_CONCURRENT_PROBES: usize = 2;
 /// Longest status error message sent upstream; the contract caps it.
 const MAX_STATUS_MESSAGE_CHARS: usize = 4096;
 
@@ -173,6 +182,13 @@ pub async fn run(
             occurred_at: Utc::now(),
         });
     }
+
+    let mut probe_runtime = ProbeRuntime::new();
+    if let Err(error) = probe_runtime.sync_committed(&config).await {
+        warn!("probe responder is not ready at startup: {error}");
+    }
+    let mut probe_tasks: JoinSet<Option<(mpsc::Sender<LinkProbeResult>, LinkProbeResult)>> =
+        JoinSet::new();
 
     // Processkit and Docker keep the existing reporter and must fail startup
     // before any connection task is spawned. Native mode uses the metering
@@ -362,7 +378,10 @@ pub async fn run(
                     &bin,
                     &mut status,
                     probation,
-                    native_apply,
+                    ApplyHooks {
+                        native: native_apply,
+                        probes: &mut probe_runtime,
+                    },
                 )
                 .await;
                 if core.results.send(result).await.is_err() {
@@ -378,6 +397,74 @@ pub async fn run(
                     metering.as_mut(),
                 )
                 .await;
+                if let Err(error) = probe_runtime.sync_committed(&config).await {
+                    warn!("probe responder reconciliation after disable failed: {error}");
+                }
+            }
+            job = core.probe_jobs.recv(), if probe_tasks.len() < MAX_CONCURRENT_PROBES => {
+                let Some(job) = job else {
+                    break;
+                };
+                match ProbeRuntime::prepare_execution(
+                    &config,
+                    &job.server_id,
+                    &job.request,
+                ) {
+                    Ok(ProbeExecution::Run(executor)) => {
+                        let request = job.request;
+                        let reply = job.reply;
+                        let cancel = job.cancel;
+                        let applied = applied_generation(&config);
+                        probe_tasks.spawn(async move {
+                            tokio::select! {
+                                _ = cancel.cancelled() => None,
+                                result = executor.execute(&request) => {
+                                    let result = match result {
+                                        Ok(result) => result,
+                                        Err(error) => {
+                                            debug!("link probe did not reach an outcome: {error}");
+                                            closed_result(
+                                                &request,
+                                                LinkProbeOutcome::Unsupported,
+                                                applied,
+                                                None,
+                                            )
+                                        }
+                                    };
+                                    Some((reply, result))
+                                }
+                            }
+                        });
+                    }
+                    Ok(ProbeExecution::Finish(outcome)) => {
+                        let result = unavailable_result(&config, &job.request, outcome);
+                        if job.reply.send(result).await.is_err() {
+                            debug!("link probe result arrived after its session ended");
+                        }
+                    }
+                    Err(error) => {
+                        warn!("link probe preparation failed: {error}");
+                        let result = unavailable_result(
+                            &config,
+                            &job.request,
+                            LinkProbeOutcome::Unsupported,
+                        );
+                        if job.reply.send(result).await.is_err() {
+                            debug!("link probe result arrived after its session ended");
+                        }
+                    }
+                }
+            }
+            Some(result) = probe_tasks.join_next(), if !probe_tasks.is_empty() => {
+                match result {
+                    Ok(Some((reply, result))) => {
+                        if reply.send(result).await.is_err() {
+                            debug!("link probe result arrived after its session ended");
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => warn!("link probe task failed: {error}"),
+                }
             }
             job = core.log_jobs.recv() => {
                 let Some(job) = job else {
@@ -722,6 +809,11 @@ fn publish_log_acks(
 /// Applies one verified snapshot with the same safety invariants as the HTTP
 /// path: preflight, promotion, process replacement, probation, then commit or
 /// rollback. The result is what the session turns into `config.ack`.
+struct ApplyHooks<'a> {
+    native: Option<NativeApply<'a>>,
+    probes: &'a mut ProbeRuntime,
+}
+
 async fn apply_job(
     job: ApplyJob,
     config: &mut ConfigManager,
@@ -729,8 +821,9 @@ async fn apply_job(
     bin: &Path,
     status: &mut AgentStatus,
     probation: Duration,
-    native: Option<NativeApply<'_>>,
+    hooks: ApplyHooks<'_>,
 ) -> ApplyResult {
+    let ApplyHooks { native, probes } = hooks;
     let ApplyJob {
         request_id,
         desired,
@@ -746,7 +839,33 @@ async fn apply_job(
             failed_from_config(&error)
         }
         Ok(fetched) => {
-            match apply_fetched(config, manager, bin, status, fetched, probation, native).await {
+            if let FetchStatus::Updated { candidate, .. } = &fetched
+                && let Err(error) = probes.prepare_candidate(config, candidate).await
+            {
+                let message = bounded(&format!("probe runtime is not ready: {error}"));
+                warn!(revision = %desired.desired_revision, "{message}");
+                status.config_state = "apply_failed";
+                status.error = Some(ReportedError {
+                    phase: "apply",
+                    code: "PROBE_RUNTIME_UNAVAILABLE",
+                    message: message.clone(),
+                    node_id: None,
+                    occurred_at: Utc::now(),
+                });
+                return ApplyResult {
+                    request_id,
+                    desired,
+                    outcome: ApplyOutcome::Failed {
+                        stage: AckStage::Apply,
+                        error: message,
+                    },
+                };
+            }
+            let outcome = match apply_fetched(
+                config, manager, bin, status, fetched, probation, native,
+            )
+            .await
+            {
                 Err(error) => {
                     error!(revision = %desired.desired_revision, "configuration commit failed: {error}");
                     ApplyOutcome::Failed {
@@ -774,7 +893,11 @@ async fn apply_job(
                         error: "the candidate was not applied".to_string(),
                     },
                 },
+            };
+            if let Err(error) = probes.sync_committed(config).await {
+                warn!("probe responder reconciliation after apply failed: {error}");
             }
+            outcome
         }
     };
     ApplyResult {

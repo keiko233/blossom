@@ -16,10 +16,9 @@
 //! - the stats service is the single agent-injected loopback API endpoint, not
 //!   a control-plane or experimental endpoint.
 //!
-//! The builder below produces that shape for tests and the future integration.
-//! It is intentionally not called by the production apply path yet: the
-//! compiler does not emit agent-owned probe objects, and the authenticated v2
-//! transport is still the integration pass's scope.
+//! The builder below produces that shape. The managed apply path installs it
+//! from the explicit `managed.probeBindings` manifest and the committed
+//! config, then validates the complete candidate before preflight.
 
 use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr};
@@ -268,9 +267,9 @@ impl From<ProbeIdentityError> for ProbeIsolationError {
     }
 }
 
-/// The exact shape the future integration may install. `stats_endpoint` is the
-/// endpoint already chosen by `ConfigManager`; it is never accepted from the
-/// control plane or from a probe request.
+/// The single-binding test shape. `stats_endpoint` is the endpoint already
+/// chosen by `ConfigManager`; it is never accepted from the control plane or
+/// from a probe request.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ProbeCandidatePlan<'a> {
     pub(crate) ingress: Option<&'a ProbeIngress>,
@@ -278,62 +277,95 @@ pub(crate) struct ProbeCandidatePlan<'a> {
     pub(crate) stats_endpoint: SocketAddr,
 }
 
-/// Produces the candidate shape the validator accepts. Production activation
-/// remains disabled; unit tests and the integration pass call this directly.
+/// Several source ingresses share one agent-owned HTTP listener; each carries
+/// an authenticated user for one bound link. Destination responders share one
+/// fixed loopback endpoint and are selected by the exact peer identity.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ProbeCandidateBindings<'a> {
+    pub(crate) ingresses: &'a [ProbeIngress],
+    pub(crate) responders: &'a [ProbeResponderRoute],
+    pub(crate) stats_endpoint: SocketAddr,
+}
+
+/// Produces the single-binding candidate shape unit tests use. The managed
+/// apply path installs a [`ProbeCandidateBindings`] set instead.
 pub(crate) fn install_probe_candidate(
     config: &mut Map<String, Value>,
     plan: ProbeCandidatePlan<'_>,
 ) -> Result<(), ProbeIsolationError> {
-    let data_plane = data_plane_tags(config, plan.ingress.map(|_| PROBE_INGRESS_TAG))?;
-    if let Some(ingress) = plan.ingress {
-        if ingress.listen == plan.stats_endpoint
-            || ingress.responder_endpoint == plan.stats_endpoint
-        {
-            return Err(ProbeIsolationError::StatsEndpointOverlap);
-        }
-        if ingress.listen == ingress.responder_endpoint {
-            return Err(ProbeIsolationError::ResponderEndpointOverlap);
-        }
+    let ingresses: Vec<ProbeIngress> = plan.ingress.cloned().into_iter().collect();
+    let responders: Vec<ProbeResponderRoute> = plan.responder.cloned().into_iter().collect();
+    install_probe_bindings(
+        config,
+        &ProbeCandidateBindings {
+            ingresses: &ingresses,
+            responders: &responders,
+            stats_endpoint: plan.stats_endpoint,
+        },
+    )
+}
+
+/// Installs the resolved multi-link probe bindings. One HTTP ingress listener
+/// carries every source user, and every destination identity gets an exact
+/// route to the fixed loopback responder.
+pub(crate) fn install_probe_bindings(
+    config: &mut Map<String, Value>,
+    plan: &ProbeCandidateBindings<'_>,
+) -> Result<(), ProbeIsolationError> {
+    validate_binding_shape(plan)?;
+    let ingress_tags: Vec<&str> = plan
+        .ingresses
+        .iter()
+        .map(|ingress| ingress.tag.as_str())
+        .collect();
+    let data_plane = data_plane_tags(config, &ingress_tags)?;
+    if !plan.ingresses.is_empty() {
         let inbounds = config
             .get("inbounds")
             .and_then(Value::as_array)
             .ok_or(ProbeIsolationError::MissingIngress)?;
-        if inbounds
-            .iter()
-            .any(|inbound| inbound.get("tag").and_then(Value::as_str) == Some(ingress.tag.as_str()))
-        {
+        if inbounds.iter().any(|inbound| {
+            inbound
+                .get("tag")
+                .and_then(Value::as_str)
+                .is_some_and(|tag| tag == plan.ingresses[0].tag)
+        }) {
             return Err(ProbeIsolationError::DuplicateIngress);
         }
     }
-    if let Some(responder) = plan.responder
-        && responder.responder_endpoint == plan.stats_endpoint
-    {
-        return Err(ProbeIsolationError::StatsEndpointOverlap);
-    }
-    if plan.responder.is_some() && !has_direct_outbound(config) {
+    if !plan.responders.is_empty() && !has_direct_outbound(config) {
         return Err(ProbeIsolationError::MissingDirectOutbound);
     }
-    if let Some(ingress) = plan.ingress {
+    if !plan.ingresses.is_empty() {
+        let users: Vec<Value> = plan
+            .ingresses
+            .iter()
+            .map(|ingress| {
+                json!({
+                    "username": ingress.auth_user,
+                    "password": ingress.auth_credential.expose()
+                })
+            })
+            .collect();
         let inbounds = config
             .get_mut("inbounds")
             .and_then(Value::as_array_mut)
             .ok_or(ProbeIsolationError::MissingIngress)?;
         inbounds.push(json!({
             "type": "http",
-            "tag": ingress.tag,
-            "listen": ingress.listen.ip().to_string(),
-            "listen_port": ingress.listen.port(),
-            "users": [{
-                "username": ingress.auth_user,
-                "password": ingress.auth_credential.expose()
-            }]
+            "tag": plan.ingresses[0].tag,
+            "listen": plan.ingresses[0].listen.ip().to_string(),
+            "listen_port": plan.ingresses[0].listen.port(),
+            "users": users
         }));
     }
     let mut prelude = Vec::new();
-    if let Some(ingress) = plan.ingress {
-        prelude.push(probe_allow_rule(ingress));
+    if !plan.ingresses.is_empty() {
+        for ingress in plan.ingresses {
+            prelude.push(probe_allow_rule(ingress));
+        }
         prelude.push(json!({
-            "inbound": [ingress.tag],
+            "inbound": [plan.ingresses[0].tag],
             "action": "reject"
         }));
     }
@@ -343,7 +375,7 @@ pub(crate) fn install_probe_candidate(
             "action": "resolve",
             "strategy": "prefer_ipv4"
         }));
-        if let Some(responder) = plan.responder {
+        for responder in plan.responders {
             prelude.push(responder_allow_rule(responder));
         }
         prelude.push(json!({
@@ -367,9 +399,43 @@ pub(crate) fn install_probe_candidate(
     Ok(())
 }
 
+fn validate_binding_shape(plan: &ProbeCandidateBindings<'_>) -> Result<(), ProbeIsolationError> {
+    let Some(first) = plan.ingresses.first() else {
+        return Ok(());
+    };
+    if plan
+        .ingresses
+        .iter()
+        .any(|ingress| ingress.tag != first.tag || ingress.listen != first.listen)
+    {
+        return Err(ProbeIsolationError::IngressShape);
+    }
+    let mut users = HashSet::new();
+    for ingress in plan.ingresses {
+        if ingress.listen == plan.stats_endpoint
+            || ingress.responder_endpoint == plan.stats_endpoint
+        {
+            return Err(ProbeIsolationError::StatsEndpointOverlap);
+        }
+        if ingress.listen == ingress.responder_endpoint {
+            return Err(ProbeIsolationError::ResponderEndpointOverlap);
+        }
+        if !users.insert(ingress.auth_user.as_str()) {
+            return Err(ProbeIsolationError::IngressAuth);
+        }
+    }
+    for responder in plan.responders {
+        if responder.responder_endpoint == plan.stats_endpoint {
+            return Err(ProbeIsolationError::StatsEndpointOverlap);
+        }
+    }
+    Ok(())
+}
+
 fn probe_allow_rule(ingress: &ProbeIngress) -> Value {
     json!({
         "inbound": [ingress.tag],
+        "auth_user": [ingress.auth_user],
         "ip_cidr": [single_cidr(ingress.responder_endpoint.ip())],
         "port": [ingress.responder_endpoint.port()],
         "network": ["tcp"],
@@ -391,29 +457,52 @@ fn responder_allow_rule(responder: &ProbeResponderRoute) -> Value {
 }
 
 /// Proves the compiled candidate enforces the Task 08 probe trust boundary.
+/// This is the single-binding compatibility wrapper; production integration
+/// validates a [`ProbeCandidateBindings`] set with [`validate_probe_bindings`].
 pub(crate) fn validate_candidate(
     config: &Map<String, Value>,
     expected: &ProbeIsolationExpectation,
 ) -> Result<(), ProbeIsolationError> {
+    let ingresses: Vec<ProbeIngress> = expected.ingress.iter().cloned().collect();
+    let responders: Vec<ProbeResponderRoute> = expected.responder.iter().cloned().collect();
+    validate_probe_bindings(
+        config,
+        &ProbeCandidateBindings {
+            ingresses: &ingresses,
+            responders: &responders,
+            stats_endpoint: expected.stats_endpoint,
+        },
+    )
+}
+
+/// Proves the compiled candidate enforces the Task 08 probe trust boundary for
+/// every bound source link and destination peer identity.
+pub(crate) fn validate_probe_bindings(
+    config: &Map<String, Value>,
+    expected: &ProbeCandidateBindings<'_>,
+) -> Result<(), ProbeIsolationError> {
     if !expected.stats_endpoint.ip().is_loopback() {
         return Err(ProbeIsolationError::StatsEndpointNotLoopback);
     }
-    validate_stats_service(config, expected)?;
+    validate_stats_service(config, expected.stats_endpoint)?;
     let stats = expected.stats_endpoint;
-    let data_plane = data_plane_tags(config, expected.ingress.as_ref().map(|i| i.tag.as_str()))?;
+    let ingress_tags: Vec<&str> = expected
+        .ingresses
+        .iter()
+        .map(|ingress| ingress.tag.as_str())
+        .collect();
+    let data_plane = data_plane_tags(config, &ingress_tags)?;
 
-    if let Some(ingress) = &expected.ingress {
-        if ingress.responder_endpoint == stats || ingress.listen == stats {
-            return Err(ProbeIsolationError::StatsEndpointOverlap);
-        }
-        if ingress.listen == ingress.responder_endpoint {
-            return Err(ProbeIsolationError::ResponderEndpointOverlap);
-        }
-        validate_ingress(config, ingress)?;
-        source_link_credential(config, &ingress.outbound_tag)?;
-        validate_probe_rules(config, ingress)?;
+    validate_binding_shape(expected)?;
+    if let Some(first) = expected.ingresses.first() {
+        validate_ingress(config, expected.ingresses)?;
+        source_link_credential(config, &first.outbound_tag)?;
+        validate_probe_rules(config, expected.ingresses)?;
     }
-    if let Some(responder) = &expected.responder {
+    if !expected.responders.is_empty() && !has_direct_outbound(config) {
+        return Err(ProbeIsolationError::MissingDirectOutbound);
+    }
+    for responder in expected.responders {
         if responder.responder_endpoint == stats {
             return Err(ProbeIsolationError::StatsEndpointOverlap);
         }
@@ -430,17 +519,14 @@ pub(crate) fn validate_candidate(
             &responder.peer_inbound_tag,
             &responder.peer_identity,
         )?;
-        if !has_direct_outbound(config) {
-            return Err(ProbeIsolationError::MissingDirectOutbound);
-        }
     }
 
-    validate_data_plane(config, &data_plane, expected.responder.as_ref())
+    validate_data_plane(config, &data_plane, expected.responders)
 }
 
 fn validate_stats_service(
     config: &Map<String, Value>,
-    expected: &ProbeIsolationExpectation,
+    stats_endpoint: SocketAddr,
 ) -> Result<(), ProbeIsolationError> {
     if config
         .get("experimental")
@@ -473,10 +559,7 @@ fn validate_stats_service(
         .and_then(Value::as_u64)
         .and_then(|value| u16::try_from(value).ok())
         .ok_or(ProbeIsolationError::StatsServiceMismatch)?;
-    if !listen.is_loopback()
-        || listen != expected.stats_endpoint.ip()
-        || port != expected.stats_endpoint.port()
-    {
+    if !listen.is_loopback() || listen != stats_endpoint.ip() || port != stats_endpoint.port() {
         return Err(ProbeIsolationError::StatsServiceMismatch);
     }
     Ok(())
@@ -484,15 +567,18 @@ fn validate_stats_service(
 
 fn validate_ingress(
     config: &Map<String, Value>,
-    ingress: &ProbeIngress,
+    ingresses: &[ProbeIngress],
 ) -> Result<(), ProbeIsolationError> {
+    let Some(first) = ingresses.first() else {
+        return Ok(());
+    };
     let inbounds = config
         .get("inbounds")
         .and_then(Value::as_array)
         .ok_or(ProbeIsolationError::MissingIngress)?;
     let mut found = None;
     for inbound in inbounds {
-        if inbound.get("tag").and_then(Value::as_str) == Some(ingress.tag.as_str()) {
+        if inbound.get("tag").and_then(Value::as_str) == Some(first.tag.as_str()) {
             if found.is_some() {
                 return Err(ProbeIsolationError::DuplicateIngress);
             }
@@ -513,26 +599,34 @@ fn validate_ingress(
         .and_then(Value::as_u64)
         .and_then(|value| u16::try_from(value).ok())
         .ok_or(ProbeIsolationError::IngressShape)?;
-    if !listen.is_loopback() || listen != ingress.listen.ip() || port != ingress.listen.port() {
+    if !listen.is_loopback() || listen != first.listen.ip() || port != first.listen.port() {
         return Err(ProbeIsolationError::IngressShape);
     }
     let users = inbound
         .get("users")
         .and_then(Value::as_array)
-        .filter(|users| users.len() == 1)
+        .filter(|users| users.len() == ingresses.len())
         .ok_or(ProbeIsolationError::IngressAuth)?;
-    let user = users[0]
-        .as_object()
-        .ok_or(ProbeIsolationError::IngressAuth)?;
-    let username = user
-        .get("username")
-        .and_then(Value::as_str)
-        .ok_or(ProbeIsolationError::IngressAuth)?;
-    let credential = user
-        .get("password")
-        .and_then(Value::as_str)
-        .ok_or(ProbeIsolationError::IngressAuth)?;
-    if username != ingress.auth_user || credential != ingress.auth_credential.expose() {
+    let mut expected: Vec<(&str, &str)> = ingresses
+        .iter()
+        .map(|ingress| (ingress.auth_user.as_str(), ingress.auth_credential.expose()))
+        .collect();
+    expected.sort_unstable();
+    let mut observed: Vec<(&str, &str)> = Vec::new();
+    for user in users {
+        let user = user.as_object().ok_or(ProbeIsolationError::IngressAuth)?;
+        let username = user
+            .get("username")
+            .and_then(Value::as_str)
+            .ok_or(ProbeIsolationError::IngressAuth)?;
+        let credential = user
+            .get("password")
+            .and_then(Value::as_str)
+            .ok_or(ProbeIsolationError::IngressAuth)?;
+        observed.push((username, credential));
+    }
+    observed.sort_unstable();
+    if expected != observed {
         return Err(ProbeIsolationError::IngressAuth);
     }
     Ok(())
@@ -540,10 +634,13 @@ fn validate_ingress(
 
 fn validate_probe_rules(
     config: &Map<String, Value>,
-    ingress: &ProbeIngress,
+    ingresses: &[ProbeIngress],
 ) -> Result<(), ProbeIsolationError> {
+    let Some(first) = ingresses.first() else {
+        return Ok(());
+    };
     let rules = route_rules(config)?;
-    let mut allow = false;
+    let mut allowed: HashSet<&str> = HashSet::new();
     let mut reject = false;
     for rule in rules {
         let Some(object) = rule.as_object() else {
@@ -551,7 +648,7 @@ fn validate_probe_rules(
         };
         let explicit = has_effective_inbound_scope(object);
         let scope = explicit_scope(object);
-        if explicit && !scope.contains(&ingress.tag.as_str()) {
+        if explicit && !scope.contains(&first.tag.as_str()) {
             continue;
         }
         if explicit
@@ -572,23 +669,28 @@ fn validate_probe_rules(
                 continue;
             }
             Some("reject") if !explicit => {
-                if !allow {
+                if allowed.len() != ingresses.len() {
                     return Err(ProbeIsolationError::MissingProbeAllow);
                 }
                 return Err(ProbeIsolationError::UnsafeProbeAllow);
             }
             Some("sniff") => continue,
             Some("route") => {
-                if allow || reject {
+                if reject {
                     return Err(ProbeIsolationError::UnsafeProbeAllow);
                 }
-                if !is_probe_allow(object, ingress) {
+                let Some(ingress) = ingresses
+                    .iter()
+                    .find(|ingress| is_probe_allow(object, ingress))
+                else {
+                    return Err(ProbeIsolationError::UnsafeProbeAllow);
+                };
+                if !allowed.insert(ingress.auth_user.as_str()) {
                     return Err(ProbeIsolationError::UnsafeProbeAllow);
                 }
-                allow = true;
             }
             Some("reject") => {
-                if !allow {
+                if allowed.len() != ingresses.len() {
                     return Err(ProbeIsolationError::MissingProbeAllow);
                 }
                 if !is_bare_reject(object) {
@@ -599,7 +701,7 @@ fn validate_probe_rules(
             _ => return Err(ProbeIsolationError::UnsafeProbeAllow),
         }
     }
-    if !allow {
+    if allowed.len() != ingresses.len() {
         return Err(ProbeIsolationError::MissingProbeAllow);
     }
     if !reject {
@@ -621,12 +723,25 @@ fn is_probe_allow(object: &Map<String, Value>, ingress: &ProbeIngress) -> bool {
     if !object_keys_are(
         object,
         &[
-            "inbound", "ip_cidr", "port", "network", "action", "outbound",
+            "inbound",
+            "auth_user",
+            "ip_cidr",
+            "port",
+            "network",
+            "action",
+            "outbound",
         ],
     ) {
         return false;
     }
-    exact_cidr(object, ingress.responder_endpoint.ip())
+    let expected = ingress.auth_user.as_str();
+    let auth = match object.get("auth_user") {
+        Some(Value::String(value)) => vec![value.as_str()],
+        Some(Value::Array(values)) => values.iter().filter_map(Value::as_str).collect(),
+        _ => return false,
+    };
+    auth == vec![expected]
+        && exact_cidr(object, ingress.responder_endpoint.ip())
         && exact_port(object, ingress.responder_endpoint.port())
         && tcp_only(object)
 }
@@ -669,25 +784,10 @@ fn is_responder_allow(object: &Map<String, Value>, responder: &ProbeResponderRou
         && tcp_only(object)
 }
 
-fn looks_like_responder_allow(
-    object: &Map<String, Value>,
-    responder: &ProbeResponderRoute,
-) -> bool {
-    object.get("action").and_then(Value::as_str) == Some("route")
-        && object.get("outbound").and_then(Value::as_str) == Some(DIRECT_OUTBOUND_TAG)
-        && object
-            .get("inbound")
-            .and_then(Value::as_array)
-            .is_some_and(|tags| {
-                tags.len() == 1 && tags[0].as_str() == Some(responder.peer_inbound_tag.as_str())
-            })
-        && object.get("auth_user").is_some()
-}
-
 fn validate_data_plane(
     config: &Map<String, Value>,
     tags: &[String],
-    responder: Option<&ProbeResponderRoute>,
+    responders: &[ProbeResponderRoute],
 ) -> Result<(), ProbeIsolationError> {
     if tags.is_empty() {
         return Ok(());
@@ -696,52 +796,26 @@ fn validate_data_plane(
     if !has_route_resolver(config, rules, tags) {
         return Err(ProbeIsolationError::UnresolvedDataPlane(tags[0].clone()));
     }
-    // One exact responder exception must be reachable before the generic
-    // loopback reject. Only the exact principal and destination are admitted.
-    let mut responder_allow = false;
-    if let Some(responder) = responder {
-        let mut blocked_for_peer_before_allow = false;
-        for rule in rules {
-            let Some(object) = rule.as_object() else {
-                continue;
-            };
-            let covers_peer = !has_effective_inbound_scope(object)
-                || explicit_scope(object).contains(&responder.peer_inbound_tag.as_str());
-            if !covers_peer {
-                continue;
-            }
-            if is_pure_loopback_block(object)
-                && object_keys_are(object, &["inbound", "ip_cidr", "action"])
-            {
-                blocked_for_peer_before_allow = true;
-                continue;
-            }
-            if looks_like_responder_allow(object, responder) {
-                if !is_responder_allow(object, responder) {
-                    return Err(ProbeIsolationError::UnsafeResponderAllow);
-                }
-                if blocked_for_peer_before_allow {
-                    return Err(ProbeIsolationError::MissingResponderAllow);
-                }
-                responder_allow = true;
-            }
-        }
-        if !responder_allow {
-            return Err(ProbeIsolationError::MissingResponderAllow);
-        }
-    } else if rules.iter().any(|rule| {
+    // A global authenticated route cannot be proved to belong to one exact
+    // peer principal, so it is never accepted as a responder exception.
+    if rules.iter().any(|rule| {
         rule.as_object().is_some_and(|object| {
             object.get("action").and_then(Value::as_str) == Some("route")
                 && object.get("auth_user").is_some()
+                && !has_effective_inbound_scope(object)
         })
     }) {
         return Err(ProbeIsolationError::UnsafeResponderAllow);
     }
 
     for tag in tags {
+        let expected: Vec<&ProbeResponderRoute> = responders
+            .iter()
+            .filter(|responder| responder.peer_inbound_tag == tag.as_str())
+            .collect();
         let mut resolved = false;
         let mut blocked = EndpointCoverage::default();
-        let mut exact_responder = false;
+        let mut allowed: HashSet<usize> = HashSet::new();
         for rule in rules {
             let Some(object) = rule.as_object() else {
                 return Err(ProbeIsolationError::UnsafeDataPlaneAction(tag.clone()));
@@ -749,27 +823,42 @@ fn validate_data_plane(
             if !rule_covers(object, tag) {
                 continue;
             }
+            if is_pure_loopback_block(object)
+                && object_keys_are(object, &["inbound", "ip_cidr", "action"])
+            {
+                blocked = blocked.merge(endpoint_coverage(object));
+                continue;
+            }
             match object.get("action").and_then(Value::as_str) {
                 Some("sniff") => continue,
                 Some("resolve") => {
                     resolved = true;
                 }
-                Some("reject") => {
-                    if is_pure_loopback_block(object) {
-                        blocked = blocked.merge(endpoint_coverage(object));
+                Some("reject") => {}
+                Some("route") => {
+                    if object.get("auth_user").is_some() {
+                        let Some(index) = expected
+                            .iter()
+                            .position(|responder| is_responder_allow(object, responder))
+                        else {
+                            return Err(ProbeIsolationError::UnsafeResponderAllow);
+                        };
+                        if blocked.complete() {
+                            return Err(ProbeIsolationError::MissingResponderAllow);
+                        }
+                        if !allowed.insert(index) {
+                            return Err(ProbeIsolationError::UnsafeResponderAllow);
+                        }
+                        continue;
+                    }
+                    if !blocked.complete() {
+                        return Err(ProbeIsolationError::UnblockedLoopback(tag.clone()));
+                    }
+                    if !resolved {
+                        return Err(ProbeIsolationError::UnresolvedDataPlane(tag.clone()));
                     }
                 }
-                Some("route")
-                    if responder.is_some_and(|route| {
-                        route.peer_inbound_tag == tag.as_str() && is_responder_allow(object, route)
-                    }) =>
-                {
-                    if blocked.complete() {
-                        return Err(ProbeIsolationError::MissingResponderAllow);
-                    }
-                    exact_responder = true;
-                }
-                Some("route") | Some("bypass") => {
+                Some("bypass") => {
                     if !blocked.complete() {
                         return Err(ProbeIsolationError::UnblockedLoopback(tag.clone()));
                     }
@@ -786,8 +875,7 @@ fn validate_data_plane(
         if !resolved {
             return Err(ProbeIsolationError::UnresolvedDataPlane(tag.clone()));
         }
-        if responder.is_some_and(|route| route.peer_inbound_tag == tag.as_str()) && !exact_responder
-        {
+        if allowed.len() != expected.len() {
             return Err(ProbeIsolationError::MissingResponderAllow);
         }
     }
@@ -981,7 +1069,7 @@ fn has_direct_outbound(config: &Map<String, Value>) -> bool {
 /// additional agent-owned listener namespaces fail closed.
 pub(crate) fn data_plane_tags(
     config: &Map<String, Value>,
-    ingress_tag: Option<&str>,
+    ingress_tags: &[&str],
 ) -> Result<Vec<String>, ProbeIsolationError> {
     let inbounds = config
         .get("inbounds")
@@ -1000,7 +1088,7 @@ pub(crate) fn data_plane_tags(
         if !seen.insert(tag.to_string()) {
             return Err(ProbeIsolationError::UnsupportedInboundTag(tag.to_string()));
         }
-        if ingress_tag.is_some_and(|ingress| ingress == tag) {
+        if ingress_tags.contains(&tag) {
             continue;
         }
         if tag.starts_with(AGENT_OWNED_TAG_PREFIX) {

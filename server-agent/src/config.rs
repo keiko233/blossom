@@ -41,6 +41,7 @@ use crate::log_policy::{
 };
 use crate::logs::{LogStore, SecretRegistryFull, SecretScope};
 use crate::metering::InboundClassification;
+use crate::probe::{ManagedProbeBinding, install_probe_config};
 
 #[path = "config_managed.rs"]
 pub(crate) mod managed;
@@ -158,6 +159,18 @@ pub struct CandidateConfig {
     /// durable only after commit, so link probes can bind to what is actually
     /// serving across a restart. Legacy candidates carry `None`.
     pub managed_fingerprint: Option<String>,
+    /// Explicit managed probe mappings durable with the committed config. The
+    /// local runtime re-derives fixed routes and peer credentials from the
+    /// active config; endpoint details never enter this state.
+    pub managed_probe_bindings: Vec<ManagedProbeBinding>,
+}
+
+/// Managed metadata an equal revision must still match before a re-apply can
+/// be skipped. The probe manifest changes which local link mappings survive a
+/// restart even when the serialized sing-box config is otherwise unchanged.
+struct DesiredProbeState<'a> {
+    bindings: &'a [ManagedProbeBinding],
+    managed_fingerprint: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -241,6 +254,10 @@ struct PersistedState {
     /// legacy and pre-managed state, and never written before probation commit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     managed_fingerprint: Option<String>,
+    /// Managed probe mappings of the committed configuration. Missing in
+    /// legacy and pre-managed state.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    managed_probe_bindings: Vec<ManagedProbeBinding>,
 }
 
 pub struct ConfigManager {
@@ -392,30 +409,35 @@ impl ConfigManager {
     /// Managed stage fingerprint of the committed configuration, if the
     /// current generation carries one. Used by probe execution and status;
     /// it never changes the applied revision.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Task 08 probe integration reads the committed managed generation"
-        )
-    )]
     pub fn managed_fingerprint(&self) -> Option<&str> {
         self.persisted.managed_fingerprint.as_deref()
     }
 
     /// Publish-gate sequence prefix of the served revision. `None` while
     /// disabled, unapplied, or malformed.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Task 08 probe integration binds results to the served sequence"
-        )
-    )]
     pub fn served_revision_seq(&self) -> Option<u64> {
         let revision = self.served_revision()?;
         let (prefix, _) = revision.split_once(':')?;
         prefix.parse().ok()
+    }
+
+    /// Explicit managed probe mappings of the committed config.
+    pub(crate) fn managed_probe_bindings(&self) -> &[ManagedProbeBinding] {
+        &self.persisted.managed_probe_bindings
+    }
+
+    /// Parsed committed sing-box config. The probe runtime uses it to re-derive
+    /// fixed routes and peer credentials; it never trusts a request target.
+    pub(crate) fn active_config_map(&self) -> Result<serde_json::Map<String, serde_json::Value>> {
+        read_config_map(&self.active_path)
+    }
+
+    /// Parsed staged candidate config, used only to prepare responder
+    /// readiness before the candidate commits.
+    pub(crate) fn candidate_config_map(
+        &self,
+    ) -> Result<serde_json::Map<String, serde_json::Value>> {
+        read_config_map(&self.candidate_path)
     }
 
     pub fn active_node_ids(&self) -> &[String] {
@@ -615,6 +637,7 @@ impl ConfigManager {
         self.persisted.applied_at = Some(chrono::Utc::now());
         self.persisted.disabled = true;
         self.persisted.managed_fingerprint = None;
+        self.persisted.managed_probe_bindings.clear();
         self.needs_reapply = false;
         self.recompute_installed_deployments();
         self.refresh_credentials_or_warn();
@@ -658,6 +681,7 @@ impl ConfigManager {
             managed_files: Vec::new(),
             log_level: self.log_policy.overlay(chrono::Utc::now()).effective,
             managed_fingerprint: None,
+            managed_probe_bindings: Vec::new(),
         })
     }
 
@@ -943,6 +967,29 @@ impl ConfigManager {
             &self.api_endpoint.addr,
             self.api_endpoint.secret.as_deref().unwrap_or(""),
         );
+        if let Some(managed) = &managed {
+            // The base config determines the only valid link-to-runtime-tag
+            // mapping. Install fixed loopback routes, then prove the whole
+            // candidate cannot reach agent-owned endpoints before preflight.
+            let stats_endpoint = self.api_endpoint.addr.parse::<SocketAddr>().map_err(|_| {
+                ConfigError::new(
+                    "reconcile",
+                    "PROBE_BINDING_FAILED",
+                    "agent stats endpoint is not a socket address",
+                    None,
+                )
+            })?;
+            install_probe_config(&mut config, &managed.probe_bindings, stats_endpoint).map_err(
+                |error| {
+                    ConfigError::new(
+                        "reconcile",
+                        "PROBE_BINDING_FAILED",
+                        self.redacted_error(&error.to_string()),
+                        None,
+                    )
+                },
+            )?;
+        }
         // The control-plane document supplies the generated baseline; the
         // local policy overlays only `log.level`. The desired revision and its
         // digest are already fixed above, so this never changes publish
@@ -965,12 +1012,23 @@ impl ConfigManager {
             )
         })?;
 
+        let desired_probe_bindings = managed
+            .as_ref()
+            .map(|managed| managed.probe_bindings.as_slice())
+            .unwrap_or_default();
+        let desired_managed_fingerprint = managed
+            .as_ref()
+            .map(|managed| managed.managed_fingerprint.as_str());
         if self.can_skip(
             &desired_revision,
             &serialized,
             &referenced_generations,
             &artifacts,
             &managed_files,
+            DesiredProbeState {
+                bindings: desired_probe_bindings,
+                managed_fingerprint: desired_managed_fingerprint,
+            },
         ) {
             let _ = self.log_policy.record(
                 LogSourcePolicy::SingBox,
@@ -1018,6 +1076,10 @@ impl ConfigManager {
                 managed_fingerprint: managed
                     .as_ref()
                     .map(|managed| managed.managed_fingerprint.clone()),
+                managed_probe_bindings: managed
+                    .as_ref()
+                    .map(|managed| managed.probe_bindings.clone())
+                    .unwrap_or_default(),
             },
         })
     }
@@ -1031,11 +1093,17 @@ impl ConfigManager {
         references: &[CertificateRef],
         artifacts: &std::collections::HashMap<(String, u64), crate::certificate::StagedMaterial>,
         managed_files: &[ManagedFileRef],
+        probe: DesiredProbeState<'_>,
     ) -> bool {
         if self.needs_reapply || self.persisted.disabled {
             return false;
         }
         if self.persisted.applied_revision.as_deref() != Some(desired_revision) {
+            return false;
+        }
+        if self.persisted.managed_probe_bindings.as_slice() != probe.bindings
+            || self.persisted.managed_fingerprint.as_deref() != probe.managed_fingerprint
+        {
             return false;
         }
         if !self.active_path.exists() {
@@ -1194,6 +1262,7 @@ impl ConfigManager {
         self.persisted.active_node_ids = candidate.materialized_node_ids.clone();
         self.persisted.applied_at = Some(chrono::Utc::now());
         self.persisted.managed_fingerprint = candidate.managed_fingerprint.clone();
+        self.persisted.managed_probe_bindings = candidate.managed_probe_bindings.clone();
         self.api_endpoint = candidate.api_endpoint.clone();
         let referenced: HashSet<&CertificateRef> =
             candidate.referenced_generations.iter().collect();
@@ -1241,6 +1310,7 @@ impl ConfigManager {
             self.persisted.active_node_ids.clear();
             self.persisted.applied_at = None;
             self.persisted.managed_fingerprint = None;
+            self.persisted.managed_probe_bindings.clear();
             self.api_endpoint = ApiEndpoint::generate();
             self.recompute_installed_deployments();
             self.refresh_credentials_or_warn();
@@ -2510,6 +2580,128 @@ mod tests {
             Some("sha256:2222222222222222222222222222222222222222222222222222222222222222")
         );
         assert_eq!(restarted.served_revision_seq(), Some(11));
+    }
+
+    #[test]
+    fn a_managed_probe_manifest_is_materialized_and_persisted_only_after_commit() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("blossom-probe-apply-{suffix}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _cleanup = TempDir(&dir);
+        let mut manager = ConfigManager::new(
+            crate::client::new_client("http://127.0.0.1:1/api", "test-token")
+                .expect("client builds"),
+            dir.clone(),
+            crate::logs::LogStore::default(),
+            test_policy(&dir),
+        )
+        .expect("config manager builds");
+        let revision = "11:sha256:probe-test";
+        let document = json!({
+            "apiVersion": 3,
+            "agent": {"configPollIntervalSeconds": 60, "heartbeatIntervalSeconds": 30},
+            "desiredRevision": revision,
+            "materializedNodeIds": [],
+            "singboxConfig": {
+                "log": {"level": "info", "timestamp": true},
+                "dns": {"servers": [{"type": "local", "tag": "local-dns"}], "final": "local-dns"},
+                "inbounds": [{
+                    "type": "trojan",
+                    "tag": "peer-in-pin1",
+                    "listen": "127.0.0.1",
+                    "listen_port": 9443,
+                    "users": [{
+                        "name": "blz.peer.1.6.1.link-11",
+                        "password": "11111111-1111-1111-1111-111111111111"
+                    }]
+                }],
+                "outbounds": [
+                    {"type": "direct", "tag": "direct"},
+                    {
+                        "type": "trojan",
+                        "tag": "peer-out-pout1",
+                        "server": "127.0.0.1",
+                        "server_port": 9443,
+                        "password": "11111111-1111-1111-1111-111111111111"
+                    }
+                ],
+                "route": {
+                    "default_domain_resolver": "local-dns",
+                    "rules": [],
+                    "final": "direct"
+                }
+            },
+            "managedTlsBindings": [],
+            "certificateArtifacts": [],
+            "managed": {
+                "schemaVersion": 1,
+                "configVersionId": "mcv-probe-1",
+                "intentDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "managedFingerprint": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                "tlsBindings": [],
+                "peerTrustArtifacts": [],
+                "ruleSetBindings": [],
+                "ruleSetArtifacts": [],
+                "probeBindings": [{
+                    "linkId": "link-1",
+                    "credentialGeneration": 1,
+                    "sourceServerId": "srv-a",
+                    "destinationServerId": "srv-b",
+                    "sourceOutboundTag": "peer-out-pout1",
+                    "destinationInboundTag": "peer-in-pin1"
+                }]
+            }
+        });
+        let fetched = manager
+            .compile_snapshot(&serde_json::to_vec(&document).unwrap(), revision)
+            .expect("managed probe snapshot compiles");
+        let candidate = match fetched {
+            FetchStatus::Updated { candidate, .. } => candidate,
+            FetchStatus::Unchanged(_) => panic!("a new managed probe revision must stage"),
+        };
+        assert_eq!(candidate.managed_probe_bindings.len(), 1);
+        assert!(
+            manager.managed_probe_bindings().is_empty(),
+            "not durable before commit"
+        );
+        let candidate_config = manager.candidate_config_map().unwrap();
+        let probe_inbound = candidate_config["inbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|inbound| inbound["tag"] == "blossom-agent-link-probe-in")
+            .expect("the agent-owned ingress is compiled in");
+        assert_eq!(probe_inbound["users"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            candidate_config["route"]["rules"].as_array().unwrap().len(),
+            5,
+            "one source allow/reject pair and one fixed responder route"
+        );
+
+        manager.promote_candidate().unwrap();
+        manager.commit_applied(&candidate).unwrap();
+        assert_eq!(manager.managed_probe_bindings().len(), 1);
+        assert_eq!(
+            manager.managed_probe_bindings()[0]
+                .source_outbound_tag
+                .as_deref(),
+            Some("peer-out-pout1")
+        );
+
+        let restarted = ConfigManager::new(
+            crate::client::new_client("http://127.0.0.1:1/api", "test-token")
+                .expect("client builds"),
+            dir.clone(),
+            crate::logs::LogStore::default(),
+            test_policy(&dir),
+        )
+        .expect("config manager restarts");
+        assert_eq!(restarted.managed_probe_bindings().len(), 1);
     }
 
     #[test]

@@ -181,7 +181,6 @@ pub(crate) async fn write_response(
 
 #[cfg(test)]
 mod tests {
-    use tokio::io::AsyncWriteExt as _;
     use tokio::net::TcpListener;
 
     use super::*;

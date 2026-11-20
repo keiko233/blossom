@@ -2603,6 +2603,7 @@ mod tests {
             managed_files: vec![],
             log_level: PolicyLevel::Default,
             managed_fingerprint: None,
+            managed_probe_bindings: Vec::new(),
         };
         assert_eq!(
             node_id_from_error(

@@ -13,7 +13,7 @@
 //! to the core as an [`ApplyJob`], and a newer job replaces one not yet taken,
 //! so a stale body never overtakes a newer one.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,6 +35,7 @@ use super::logs;
 use super::snapshot::{SnapshotAssembler, SnapshotError, SnapshotLimits, VerifiedSnapshot};
 use super::telemetry::{self, Command as TelemetryCommand, HostSampler, Output as TelemetryOutput};
 use crate::logs::LogStore;
+use crate::probe::{LinkProbeOutcome, LinkProbeRequest, LinkProbeResult};
 use crate::ws::codec::{
     AcmeDnsAckPayload, AcmeIssuePayload, AgentWsFrame, CertificateDeployment, ReservedFrame,
     UpdateStatusPayload, UpdateTriggerPayload, frame_type,
@@ -141,6 +142,20 @@ pub enum TrafficOutcome {
     Rejected(String),
 }
 
+/// At most two probes execute per session; a third request is answered
+/// `unsupported` without reaching the core.
+const MAX_SESSION_PROBES: usize = 2;
+
+/// One authenticated link probe for the core. The reply channel is owned by
+/// this session, so a late result can never reach the next connection.
+#[derive(Debug)]
+pub struct ProbeJob {
+    pub server_id: String,
+    pub request: LinkProbeRequest,
+    pub reply: mpsc::Sender<LinkProbeResult>,
+    pub cancel: CancellationToken,
+}
+
 /// One traffic report to send. The reply channel closes without a value when
 /// the session ends first, which means no acknowledgement arrived.
 #[derive(Debug)]
@@ -191,6 +206,7 @@ pub struct SessionPorts {
     policy: watch::Sender<UpdatePolicy>,
     refusals: mpsc::Sender<SnapshotRefusal>,
     traffic: mpsc::Receiver<TrafficRequest>,
+    probe_jobs: mpsc::Sender<ProbeJob>,
     commands: mpsc::Sender<Command>,
     outbound: mpsc::Receiver<WsCommand>,
     online: watch::Sender<bool>,
@@ -208,6 +224,7 @@ pub struct CorePorts {
     pub policy: watch::Receiver<UpdatePolicy>,
     pub refusals: mpsc::Receiver<SnapshotRefusal>,
     pub commands: mpsc::Receiver<Command>,
+    pub probe_jobs: mpsc::Receiver<ProbeJob>,
     pub outbound: Arc<dyn AgentCommandSink>,
     pub online: watch::Receiver<bool>,
     /// A positive disablement from the upgrade or an open session.
@@ -235,6 +252,7 @@ pub fn channels(
     let (policy_tx, policy_rx) = watch::channel(initial_policy);
     let (refusals_tx, refusals_rx) = mpsc::channel(8);
     let (traffic_tx, traffic_rx) = mpsc::channel(1);
+    let (probe_jobs_tx, probe_jobs_rx) = mpsc::channel(2);
     let (commands_tx, commands_rx) = mpsc::channel(16);
     let (outbound_sink, outbound_rx) = crate::ws::ports::command_channel(64);
     let (online_tx, online_rx) = watch::channel(false);
@@ -250,6 +268,7 @@ pub fn channels(
             policy: policy_tx,
             refusals: refusals_tx,
             traffic: traffic_rx,
+            probe_jobs: probe_jobs_tx,
             commands: commands_tx,
             outbound: outbound_rx,
             online: online_tx,
@@ -265,6 +284,7 @@ pub fn channels(
             policy: policy_rx,
             refusals: refusals_rx,
             commands: commands_rx,
+            probe_jobs: probe_jobs_rx,
             outbound: Arc::new(outbound_sink),
             online: core_online,
             disabled: disabled_rx,
@@ -366,6 +386,9 @@ struct State {
     known_log_policy_revision: Option<u64>,
     log_get_seq: u64,
     sent_log_acks: Vec<LogPolicyAck>,
+    server_id: Option<String>,
+    session_id: Option<String>,
+    pending_probes: HashSet<String>,
 }
 
 /// The per-session telemetry task and its bounded queues. Creating a new
@@ -453,16 +476,21 @@ pub async fn run<W: Wire>(
 ) -> SessionEnd {
     let mut logs = logs::Session::start(store.clone(), cancel.child_token());
     let mut telemetry = SessionTelemetry::new(sampler, cancel);
+    let probe_cancel = cancel.child_token();
     let end = run_connection(
         wire,
         ports,
         identity,
         timing,
-        &mut telemetry,
-        cancel,
-        &mut logs,
+        ConnectionContext {
+            telemetry: &mut telemetry,
+            cancel,
+            probe_cancel: &probe_cancel,
+            logs: &mut logs,
+        },
     )
     .await;
+    probe_cancel.cancel();
     telemetry.stop().await;
     // The connection owns every tail and request; none may reach the next one.
     logs.shutdown().await;
@@ -473,15 +501,26 @@ pub async fn run<W: Wire>(
     end
 }
 
+struct ConnectionContext<'a> {
+    telemetry: &'a mut SessionTelemetry,
+    cancel: &'a CancellationToken,
+    probe_cancel: &'a CancellationToken,
+    logs: &'a mut logs::Session,
+}
+
 async fn run_connection<W: Wire>(
     wire: &mut W,
     ports: &mut SessionPorts,
     identity: &HelloIdentity,
     timing: &SessionTiming,
-    telemetry: &mut SessionTelemetry,
-    cancel: &CancellationToken,
-    logs: &mut logs::Session,
+    context: ConnectionContext<'_>,
 ) -> SessionEnd {
+    let ConnectionContext {
+        telemetry,
+        cancel,
+        probe_cancel,
+        logs,
+    } = context;
     let log_handle = logs.handle();
     let hello = build_hello(identity, &ports.status.borrow());
     if let Err(reason) = send(wire, "hello", &hello, None).await {
@@ -511,7 +550,11 @@ async fn run_connection<W: Wire>(
         known_log_policy_revision: None,
         log_get_seq: 0,
         sent_log_acks: Vec::new(),
+        server_id: None,
+        session_id: None,
+        pending_probes: HashSet::new(),
     };
+    let (probe_results_tx, mut probe_results_rx) = mpsc::channel::<LinkProbeResult>(8);
     let mut frame_limit = MAX_FRAME_BYTES;
     let mut ping_tick = tokio::time::interval(timing.ping);
     ping_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -527,6 +570,7 @@ async fn run_connection<W: Wire>(
         policy,
         refusals,
         traffic,
+        probe_jobs,
         commands,
         outbound,
         online,
@@ -627,6 +671,25 @@ async fn run_connection<W: Wire>(
                     permit.send(job);
                 }
             }
+            result = probe_results_rx.recv() => {
+                let Some(result) = result else {
+                    return SessionEnd::Cancelled;
+                };
+                if state.pending_probes.remove(&result.probe_id)
+                    && let Err(reason) = send(
+                        wire,
+                        "link_probe.result",
+                        &result,
+                        Some(&result.probe_id),
+                    )
+                    .await
+                {
+                    return SessionEnd::Lost {
+                        reason,
+                        welcomed: state.welcomed,
+                    };
+                }
+            }
             request = traffic.recv(), if state.welcomed => {
                 let Some(request) = request else {
                     return SessionEnd::Cancelled;
@@ -711,6 +774,9 @@ async fn run_connection<W: Wire>(
                         frame_limit: &mut frame_limit,
                         failed: &mut *failed,
                         logs: &log_handle,
+                        probe_jobs,
+                        probe_results: &probe_results_tx,
+                        probe_cancel,
                     },
                 )
                 .await;
@@ -743,6 +809,9 @@ struct Context<'a, W: Wire> {
     frame_limit: &'a mut usize,
     failed: &'a mut FailedApply,
     logs: &'a logs::Handle,
+    probe_jobs: &'a mpsc::Sender<ProbeJob>,
+    probe_results: &'a mpsc::Sender<LinkProbeResult>,
+    probe_cancel: &'a CancellationToken,
 }
 
 async fn handle<W: Wire>(
@@ -764,6 +833,9 @@ async fn handle<W: Wire>(
         frame_limit,
         failed,
         logs,
+        probe_jobs,
+        probe_results,
+        probe_cancel,
     } = context;
     match message {
         Message::LogsSubscribe(request) => {
@@ -798,6 +870,8 @@ async fn handle<W: Wire>(
                 return Ok(Flow::Continue);
             }
             state.welcomed = true;
+            state.server_id = Some(welcome.server_id.clone());
+            state.session_id = Some(welcome.session_id.clone());
             *frame_limit = frame_limit_for(&welcome.limits);
             state.assembler = SnapshotAssembler::new(SnapshotLimits::negotiated(&welcome.limits));
             state.status_interval = Duration::from_secs(welcome.status_interval_seconds);
@@ -940,6 +1014,58 @@ async fn handle<W: Wire>(
                 });
             }
         }
+        Message::LinkProbeRequest(request) => {
+            require_welcome(state, wire, "link_probe.request").await?;
+            if state.pending_probes.contains(&request.probe_id) {
+                debug!("ignoring a duplicate in-flight link probe request");
+                return Ok(Flow::Continue);
+            }
+            if state.pending_probes.len() >= MAX_SESSION_PROBES {
+                let result = LinkProbeResult {
+                    probe_id: request.probe_id.clone(),
+                    rollout_id: request.rollout_id.clone(),
+                    stage_ordinal: request.stage_ordinal,
+                    link_id: request.link_id.clone(),
+                    outcome: LinkProbeOutcome::Unsupported,
+                    applied: crate::probe::ManagedApplied {
+                        desired_revision_seq: 0,
+                        managed_fingerprint: None,
+                    },
+                    latency_ms: None,
+                    completed_at: chrono::Utc::now(),
+                };
+                send(wire, "link_probe.result", &result, Some(&result.probe_id)).await?;
+                return Ok(Flow::Continue);
+            }
+            let Some(server_id) = state.server_id.clone() else {
+                let _ = send_error(
+                    wire,
+                    ErrorCode::InvalidPayload,
+                    Some("link_probe.request"),
+                    "link probe arrived without a server identity".into(),
+                )
+                .await;
+                return Ok(Flow::Continue);
+            };
+            let probe_id = request.probe_id.clone();
+            let job = ProbeJob {
+                server_id,
+                request,
+                reply: probe_results.clone(),
+                cancel: probe_cancel.clone(),
+            };
+            match probe_jobs.try_send(job) {
+                Ok(()) => {
+                    state.pending_probes.insert(probe_id);
+                }
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    debug!("link probe queue is full; leaving the request unserved");
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    return Err("link probe core stopped".to_string());
+                }
+            }
+        }
         Message::TrafficAck(ack) => {
             if let Some(waiter) = state.waiters.remove(&ack.report_id) {
                 let outcome = match ack.result {
@@ -1030,6 +1156,7 @@ async fn handle<W: Wire>(
         | Message::LogsError(_)
         | Message::TelemetrySample(_)
         | Message::TelemetrySnapshot(_)
+        | Message::LinkProbeResult(_)
         | Message::Unknown(_) => {}
     }
     Ok(Flow::Continue)

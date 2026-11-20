@@ -1,10 +1,10 @@
 //! Bounded link-probe request/result contract (Task 08).
 //!
-//! Field parity source: `packages/contracts/src/managed-link-probe.ts` at
-//! `75fe189`. The payloads stay outside the v2 message tables and OpenAPI
-//! surface until the authenticated transport integration lands. This module
-//! only validates identifiers, generations, lifetimes and the closed outcome
-//! set; it never carries endpoint details or free-form error text.
+//! Field parity source: `packages/contracts/src/managed-link-probe.ts`.
+//! The v2 codec registers these payloads as `link_probe.request` and
+//! `link_probe.result`. This module only validates identifiers, generations,
+//! lifetimes and the closed outcome set; it never carries endpoint details or
+//! free-form error text.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 /// Capability the control plane must see on both ends before issuing a probe.
 pub(crate) const MANAGED_LINK_PROBE_CAPABILITY: &str = "managed-link-probe-v1";
 
-/// Proposed v2 message types. Registered by the integration pass, not here.
+/// Registered v2 message types.
 pub(crate) const MANAGED_LINK_PROBE_REQUEST_TYPE: &str = "link_probe.request";
 pub(crate) const MANAGED_LINK_PROBE_RESULT_TYPE: &str = "link_probe.result";
 
@@ -161,6 +161,10 @@ impl std::fmt::Display for LinkProbeContractError {
 impl std::error::Error for LinkProbeContractError {}
 
 impl LinkProbeRequest {
+    pub(crate) fn check(&self) -> bool {
+        self.validate().is_ok()
+    }
+
     pub(crate) fn validate(&self) -> Result<(), LinkProbeContractError> {
         validate_identifier("probeId", &self.probe_id)?;
         validate_identifier("rolloutId", &self.rollout_id)?;
@@ -209,6 +213,10 @@ impl LinkProbeEndpoint {
 }
 
 impl LinkProbeResult {
+    pub(crate) fn check(&self) -> bool {
+        self.validate().is_ok()
+    }
+
     pub(crate) fn validate(&self) -> Result<(), LinkProbeContractError> {
         validate_identifier("probeId", &self.probe_id)?;
         validate_identifier("rolloutId", &self.rollout_id)?;
@@ -230,7 +238,7 @@ impl LinkProbeResult {
 
 fn validate_identifier(field: &'static str, value: &str) -> Result<(), LinkProbeContractError> {
     if value.is_empty()
-        || value.chars().count() > MAX_LINK_PROBE_ID_CHARS
+        || value.encode_utf16().count() > MAX_LINK_PROBE_ID_CHARS
         || value.bytes().any(|byte| byte.is_ascii_control())
     {
         return Err(LinkProbeContractError::Identifier(field));

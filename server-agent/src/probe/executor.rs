@@ -618,7 +618,7 @@ mod tests {
         let Ok(bin) = std::env::var("SING_BOX_BIN") else {
             return;
         };
-        use crate::probe::identity::{LinkCredential, PeerLinkIdentity, peer_inbound_credential};
+        use crate::probe::identity::{LinkCredential, PeerLinkIdentity};
         use crate::probe::isolation::{
             ProbeIngress, ProbeIsolationExpectation, ProbeResponderRoute, install_probe_candidate,
             validate_candidate,
@@ -777,7 +777,7 @@ mod tests {
             managed_fingerprint: Some(format!("sha256:{}", "b".repeat(64))),
         };
 
-        let responder = ProbeResponder::start(
+        let responder = ProbeResponder::start(vec![
             ProbeResponderBinding::from_committed_config(
                 &destination,
                 format!("127.0.0.1:{responder_port}").parse().unwrap(),
@@ -787,7 +787,7 @@ mod tests {
                 destination_committed.clone(),
             )
             .unwrap(),
-        )
+        ])
         .await
         .unwrap();
 

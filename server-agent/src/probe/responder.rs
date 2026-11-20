@@ -6,6 +6,7 @@
 //! inbound. It never accepts a destination, path, URL, subscriber credential,
 //! or arbitrary token from the request.
 
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -33,10 +34,13 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_IN_FLIGHT_REQUESTS: usize = 8;
 
 /// One exact peer principal and the local committed generation it may prove.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProbeResponderBinding {
     pub(crate) listen: SocketAddr,
-    pub(crate) local_server_id: String,
+    /// Present when the manifest explicitly names the destination server. A
+    /// config-derived fallback still binds only the exact peer identity, but
+    /// cannot assert a server id that the config does not contain.
+    pub(crate) local_server_id: Option<String>,
     pub(crate) peer_identity: PeerLinkIdentity,
     pub(crate) peer_credential: LinkCredential,
     pub(crate) committed: ManagedGeneration,
@@ -66,7 +70,7 @@ impl ProbeResponderBinding {
         let peer_credential = peer_inbound_credential(config, peer_inbound_tag, &peer_identity)?;
         Ok(Self {
             listen,
-            local_server_id: local_server_id.to_string(),
+            local_server_id: Some(local_server_id.to_string()),
             peer_identity,
             peer_credential,
             committed,
@@ -81,8 +85,38 @@ pub(crate) struct ProbeResponder {
 }
 
 impl ProbeResponder {
-    pub(crate) async fn start(binding: ProbeResponderBinding) -> Result<Self, ProbeError> {
-        let listener = TcpListener::bind(binding.listen)
+    /// Starts one fixed loopback listener serving every configured link binding.
+    /// A second listener on the same endpoint or a duplicate identity fails
+    /// closed instead of letting one link shadow another.
+    pub(crate) async fn start(bindings: Vec<ProbeResponderBinding>) -> Result<Self, ProbeError> {
+        let Some(first) = bindings.first() else {
+            return Err(ProbeError::InvalidResponder(
+                "probe responder has no bindings",
+            ));
+        };
+        let listen = first.listen;
+        if !listen.ip().is_loopback() {
+            return Err(ProbeError::InvalidResponder(
+                "probe responder must bind loopback",
+            ));
+        }
+        if bindings.iter().any(|binding| binding.listen != listen) {
+            return Err(ProbeError::InvalidResponder(
+                "probe responder bindings name different endpoints",
+            ));
+        }
+        let mut seen = HashSet::new();
+        for binding in &bindings {
+            if !seen.insert((
+                binding.peer_identity.link_id.as_str(),
+                binding.peer_identity.generation,
+            )) {
+                return Err(ProbeError::InvalidResponder(
+                    "probe responder has an ambiguous link identity",
+                ));
+            }
+        }
+        let listener = TcpListener::bind(listen)
             .await
             .map_err(|error| ProbeError::Bind(format!("probe responder bind failed: {error}")))?;
         let local_addr = listener.local_addr().map_err(|error| {
@@ -94,7 +128,7 @@ impl ProbeResponder {
             ));
         }
         let cancel = CancellationToken::new();
-        let state = Arc::new(binding);
+        let state = Arc::new(bindings);
         let task = tokio::spawn(accept_loop(listener, state, cancel.clone()));
         Ok(Self {
             local_addr,
@@ -112,6 +146,14 @@ impl ProbeResponder {
         self.cancel.cancel();
         self.task.abort();
     }
+
+    /// Stops the accept loop and waits for the listener to drop before the
+    /// fixed endpoint is rebound for the next committed generation.
+    pub(crate) async fn shutdown(mut self) {
+        self.cancel.cancel();
+        self.task.abort();
+        let _ = (&mut self.task).await;
+    }
 }
 
 impl Drop for ProbeResponder {
@@ -123,7 +165,7 @@ impl Drop for ProbeResponder {
 
 async fn accept_loop(
     listener: TcpListener,
-    binding: Arc<ProbeResponderBinding>,
+    bindings: Arc<Vec<ProbeResponderBinding>>,
     cancel: CancellationToken,
 ) {
     let permits = Arc::new(Semaphore::new(MAX_IN_FLIGHT_REQUESTS));
@@ -142,10 +184,10 @@ async fn accept_loop(
                     drop(stream);
                     continue;
                 };
-                let binding = binding.clone();
+                let bindings = bindings.clone();
                 tokio::spawn(async move {
                     let _permit = permit;
-                    let _ = handle_connection(stream, binding).await;
+                    let _ = handle_connection(stream, bindings).await;
                 });
             }
         }
@@ -154,7 +196,7 @@ async fn accept_loop(
 
 async fn handle_connection(
     mut stream: TcpStream,
-    binding: Arc<ProbeResponderBinding>,
+    bindings: Arc<Vec<ProbeResponderBinding>>,
 ) -> Result<(), HttpError> {
     let message = match tokio::time::timeout(REQUEST_TIMEOUT, async {
         read_message(&mut stream, MAX_PROBE_BODY_BYTES, true).await
@@ -180,10 +222,18 @@ async fn handle_connection(
     if request.validate().is_err() {
         return reject(&mut stream, "400 Bad Request").await;
     }
-    if request.destination.server_id != binding.local_server_id
-        || request.link_id != binding.peer_identity.link_id
-        || request.credential_generation != binding.peer_identity.generation
-    {
+    let mut matching = bindings.iter().filter(|binding| {
+        binding.peer_identity.link_id == request.link_id
+            && binding.peer_identity.generation == request.credential_generation
+            && binding
+                .local_server_id
+                .as_deref()
+                .is_none_or(|server_id| server_id == request.destination.server_id)
+    });
+    let Some(binding) = matching.next() else {
+        return reject(&mut stream, "403 Forbidden").await;
+    };
+    if matching.next().is_some() {
         return reject(&mut stream, "403 Forbidden").await;
     }
     if !verify_request_token(&request, &binding.peer_credential, token) {
@@ -272,7 +322,7 @@ mod tests {
                 "listen_port": 9443,
                 "users": [{
                     "name": identity().user_name(),
-                    "password": "peer-credential"
+                    "password": "11111111-1111-1111-1111-111111111111"
                 }],
                 "tls": {"enabled": true, "server_name": "peer-b.internal.example.com"}
             }]
@@ -302,7 +352,7 @@ mod tests {
     }
 
     async fn binding(committed: ManagedGeneration) -> ProbeResponder {
-        ProbeResponder::start(
+        ProbeResponder::start(vec![
             ProbeResponderBinding::from_committed_config(
                 &config(),
                 "127.0.0.1:0".parse().unwrap(),
@@ -312,7 +362,7 @@ mod tests {
                 committed,
             )
             .unwrap(),
-        )
+        ])
         .await
         .unwrap()
     }
@@ -399,6 +449,59 @@ mod tests {
         )
         .await;
         assert!(response.starts_with("HTTP/1.1 404 Not Found"));
+        responder.finish();
+    }
+
+    #[tokio::test]
+    async fn several_link_identities_share_one_fixed_responder_endpoint() {
+        let mut config = config();
+        let second = PeerLinkIdentity::new("link-2", 1).unwrap();
+        config["inbounds"][0]["users"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "name": second.user_name(),
+                "password": "11111111-1111-1111-1111-111111111111"
+            }));
+        let listen = "127.0.0.1:0".parse().unwrap();
+        let first = ProbeResponderBinding::from_committed_config(
+            &config,
+            listen,
+            "srv-b",
+            "peer-in-pin1",
+            identity(),
+            committed(),
+        )
+        .unwrap();
+        let second_binding = ProbeResponderBinding::from_committed_config(
+            &config,
+            listen,
+            "srv-b",
+            "peer-in-pin1",
+            second.clone(),
+            committed(),
+        )
+        .unwrap();
+        let responder = ProbeResponder::start(vec![first, second_binding])
+            .await
+            .unwrap();
+        let first_request = request();
+        let response = post(responder.local_addr(), &first_request, None, PROBE_PATH).await;
+        assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+
+        let mut second_request = request();
+        second_request.probe_id = "probe-2".to_string();
+        second_request.link_id = second.link_id.clone();
+        let second_credential = peer_inbound_credential(&config, "peer-in-pin1", &second).unwrap();
+        let token = crate::probe::identity::request_token(&second_request, &second_credential);
+        let response = post(
+            responder.local_addr(),
+            &second_request,
+            Some(&token),
+            PROBE_PATH,
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
         responder.finish();
     }
 

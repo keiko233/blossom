@@ -1,11 +1,11 @@
-//! Managed link-probe executor and local isolation (Task 08, Rust side).
+//! Managed link-probe executor, local isolation and v2 runtime (Task 08).
 //!
-//! This module is not activated or advertised yet. It provides the bounded
-//! contract types, peer-link authentication, a fixed authenticated loopback
-//! ingress/responder pair, a candidate validator that proves the data-plane
-//! cannot reach agent-owned loopback endpoints, and a reusable executor. The
-//! authenticated v2 request/result wire, capability advertisement and
-//! control-plane rollout glue belong to the integration pass.
+//! The module provides the bounded contract types, the explicit
+//! `managed.probeBindings` mapping, peer-link authentication, a fixed
+//! authenticated loopback ingress/responder pair, a candidate validator that
+//! proves the data-plane cannot reach agent-owned loopback endpoints, and a
+//! reusable executor. The authenticated v2 request/result wire and capability
+//! advertisement are wired in `ws/v2` and `agent_v2`.
 //!
 //! Trust boundary: a probe is scoped to one planned link, one credential
 //! generation and one stage attempt; it authenticates with the peer link
@@ -15,12 +15,8 @@
 //! request's generation floors and fingerprints.
 
 #![allow(
-    unused_imports,
-    reason = "integration re-exports stay unused until the authenticated v2 probe wire lands"
-)]
-#![allow(
     dead_code,
-    reason = "Task 08 Rust pieces remain unwired until the authenticated v2 probe integration lands"
+    reason = "the probe runtime keeps compatibility helpers used by tests and the managed snapshot path"
 )]
 
 mod contract;
@@ -28,24 +24,15 @@ mod executor;
 mod http;
 mod identity;
 mod isolation;
+mod manifest;
 mod responder;
+mod runtime;
 
-#[cfg(test)]
-pub(crate) use contract::LinkProbeEndpoint;
 pub(crate) use contract::{
     LinkProbeOutcome, LinkProbeRequest, LinkProbeResult, MANAGED_LINK_PROBE_CAPABILITY,
-    MANAGED_LINK_PROBE_REQUEST_TYPE, MANAGED_LINK_PROBE_RESULT_TYPE, ManagedApplied,
-    ManagedGeneration,
+    ManagedApplied,
 };
-#[cfg(test)]
-pub(crate) use executor::ProbeTransportError;
-pub(crate) use executor::{
-    HttpConnectProbeTransport, ProbeExecutionContext, ProbeExecutionError, ProbeExecutor,
-    ProbeTransport,
+pub(crate) use manifest::{ManagedProbeBinding, install_probe_config, validate_manifest};
+pub(crate) use runtime::{
+    ProbeExecution, ProbeRuntime, applied_generation, closed_result, unavailable_result,
 };
-pub(crate) use identity::{LinkCredential, PeerLinkIdentity, ProbeIdentityError};
-pub(crate) use isolation::{
-    ProbeCandidatePlan, ProbeIngress, ProbeIsolationError, ProbeIsolationExpectation,
-    ProbeResponderRoute, install_probe_candidate, validate_candidate,
-};
-pub(crate) use responder::{ProbeError, ProbeResponder, ProbeResponderBinding};
