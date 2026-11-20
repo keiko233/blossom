@@ -15,11 +15,13 @@
     not(test),
     expect(
         dead_code,
-        reason = "Task 07 managed snapshot contract framework; live apply wiring follows Task 06"
+        reason = "Task 08/09 consume the remaining managed contract helpers (peer deployment reporting, tag classification and byte forecasts)"
     )
 )]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
@@ -27,6 +29,8 @@ use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest as _, Sha256};
+
+use crate::certificate::{FULLCHAIN_FILE, GENERATION_DIR_PREFIX, PRIVATE_KEY_FILE};
 
 /// V2 capability advertised once managed networking apply is enabled.
 pub const MANAGED_NETWORKING_CAPABILITY: &str = "managed-networking-v1";
@@ -390,6 +394,11 @@ impl ManagedSnapshotExtension {
         }
 
         let mut seen_rule_set_tags = HashSet::new();
+        let artifact_keys: HashSet<(String, String)> = self
+            .rule_set_artifacts
+            .iter()
+            .map(|artifact| (artifact.rule_set_id.clone(), artifact.version.clone()))
+            .collect();
         for binding in &self.rule_set_bindings {
             binding.validate()?;
             if !seen_rule_set_tags.insert(binding.runtime_tag.as_str()) {
@@ -397,6 +406,32 @@ impl ManagedSnapshotExtension {
                     binding.runtime_tag.clone(),
                 ));
             }
+            let key = (binding.rule_set_id.clone(), binding.version.clone());
+            let Some(artifact) = self
+                .rule_set_artifacts
+                .iter()
+                .find(|artifact| (artifact.rule_set_id.clone(), artifact.version.clone()) == key)
+            else {
+                return Err(ManagedContractError::Materialize(format!(
+                    "rule-set binding {} has no artifact",
+                    binding.runtime_tag
+                )));
+            };
+            if artifact.format != binding.format
+                || artifact.sha256 != binding.sha256
+                || artifact.size_bytes != binding.size_bytes
+            {
+                return Err(ManagedContractError::InvalidRuleSetArtifact {
+                    rule_set_id: binding.rule_set_id.clone(),
+                    reason: "binding does not match its artifact".to_string(),
+                });
+            }
+        }
+        if artifact_keys.len() != self.rule_set_artifacts.len() {
+            return Err(ManagedContractError::InvalidRuleSetArtifact {
+                rule_set_id: "<duplicate>".to_string(),
+                reason: "duplicate rule-set artifact identity".to_string(),
+            });
         }
 
         let mut aggregate_bytes: usize = 0;
@@ -479,8 +514,45 @@ impl AgentConfigV3Document {
         }
         if let Some(managed) = &doc.managed {
             managed.validate()?;
+            doc.validate_managed_links(managed)?;
         }
         Ok(doc)
+    }
+
+    /// Every managed TLS binding must name the exact key-pair or public trust
+    /// artifact that ships in the same document. The agent refuses to stage a
+    /// candidate whose bindings and artifacts disagree.
+    fn validate_managed_links(
+        &self,
+        managed: &ManagedSnapshotExtension,
+    ) -> Result<(), ManagedContractError> {
+        for binding in &managed.tls_bindings {
+            let keypair = self.certificate_artifacts.iter().find(|artifact| {
+                artifact.certificate_id == binding.certificate_id
+                    && artifact.generation == binding.generation
+                    && artifact.fingerprint_sha256 == binding.fingerprint_sha256
+            });
+            let public = managed.peer_trust_artifacts.iter().find(|artifact| {
+                artifact.certificate_id == binding.certificate_id
+                    && artifact.generation == binding.generation
+                    && artifact.fingerprint_sha256 == binding.fingerprint_sha256
+            });
+            let present = match binding.direction {
+                PeerTlsDirection::Inbound => keypair.is_some(),
+                PeerTlsDirection::Outbound => public.is_some(),
+            };
+            if !present {
+                return Err(ManagedContractError::Materialize(format!(
+                    "peer TLS binding {} has no matching artifact",
+                    binding.binding_id
+                )));
+            }
+            if binding.direction == PeerTlsDirection::Outbound && public.is_some() {
+                // A public trust artifact must never carry private key material;
+                // the struct cannot express one, and the TS contract also omits it.
+            }
+        }
+        Ok(())
     }
 }
 
@@ -507,6 +579,14 @@ pub enum ManagedContractError {
     },
     InvalidRuleSetArtifact {
         rule_set_id: String,
+        reason: String,
+    },
+    InvalidRuleSetFormat {
+        rule_set_id: String,
+    },
+    Materialize(String),
+    StageFailed {
+        path: String,
         reason: String,
     },
 }
@@ -555,6 +635,18 @@ impl std::fmt::Display for ManagedContractError {
                 formatter,
                 "invalid rule-set artifact {rule_set_id}: {reason}"
             ),
+            Self::InvalidRuleSetFormat { rule_set_id } => {
+                write!(formatter, "rule-set {rule_set_id} is not binary SRS data")
+            }
+            Self::Materialize(message) => {
+                write!(
+                    formatter,
+                    "managed config materialization failed: {message}"
+                )
+            }
+            Self::StageFailed { path, reason } => {
+                write!(formatter, "failed to stage {path}: {reason}")
+            }
         }
     }
 }
@@ -623,6 +715,335 @@ pub fn local_rule_set_srs_path(
         .join("rule-sets")
         .join(rule_set_id)
         .join(format!("{version}-{sha256}.srs"))
+}
+
+/// One local file the applied configuration references. `sha256` is set for
+/// digest-addressed rule-set assets; certificate files are checked for
+/// presence because their generation directory is validated at stage time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedFileRef {
+    pub path: PathBuf,
+    pub sha256: Option<String>,
+}
+
+/// Local paths produced by staging the managed extension. They are retained
+/// across rollback so the last-known-good configuration never loses an artifact
+/// it still references. Task 08 owns retirement/GC after reverse-order cleanup.
+#[derive(Debug, Default)]
+pub struct StagedManagedArtifacts {
+    pub peer_trust: HashMap<(String, u64), PathBuf>,
+    /// One concatenated CA bundle per peer outbound trust binding tag. The
+    /// pinned sing-box outbound TLS `certificate_path` is a single string, so
+    /// overlapping trust generations are bundled atomically there.
+    pub peer_trust_bundles: HashMap<String, PathBuf>,
+    pub rule_sets: HashMap<(String, String, String), PathBuf>,
+}
+
+fn write_managed_file(path: &Path, bytes: &[u8]) -> Result<(), ManagedContractError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| ManagedContractError::StageFailed {
+            path: parent.display().to_string(),
+            reason: error.to_string(),
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).map_err(|error| {
+                ManagedContractError::StageFailed {
+                    path: parent.display().to_string(),
+                    reason: error.to_string(),
+                }
+            })?;
+        }
+    }
+    let mut options = fs::OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|error| ManagedContractError::StageFailed {
+            path: path.display().to_string(),
+            reason: error.to_string(),
+        })?;
+    file.write_all(bytes)
+        .and_then(|_| file.sync_all())
+        .map_err(|error| ManagedContractError::StageFailed {
+            path: path.display().to_string(),
+            reason: error.to_string(),
+        })
+}
+
+/// Stages digest-verified public peer trust and binary rule-set assets under
+/// the agent's own state directory. Nothing here writes control-plane paths.
+pub fn stage_managed_artifacts(
+    managed: &ManagedSnapshotExtension,
+    state_dir: &Path,
+) -> Result<StagedManagedArtifacts, ManagedContractError> {
+    let mut staged = StagedManagedArtifacts::default();
+    for artifact in &managed.peer_trust_artifacts {
+        let path =
+            local_peer_trust_ca_path(state_dir, &artifact.certificate_id, artifact.generation);
+        write_managed_file(&path, artifact.certificate_pem.as_bytes())?;
+        staged
+            .peer_trust
+            .insert((artifact.certificate_id.clone(), artifact.generation), path);
+    }
+    let mut bundles: HashMap<String, Vec<String>> = HashMap::new();
+    for binding in &managed.tls_bindings {
+        if binding.direction != PeerTlsDirection::Outbound {
+            continue;
+        }
+        let artifact = managed
+            .peer_trust_artifacts
+            .iter()
+            .find(|artifact| {
+                artifact.certificate_id == binding.certificate_id
+                    && artifact.generation == binding.generation
+            })
+            .ok_or_else(|| {
+                ManagedContractError::Materialize(format!(
+                    "peer outbound {} trust artifact is missing",
+                    binding.runtime_tag
+                ))
+            })?;
+        bundles
+            .entry(binding.runtime_tag.clone())
+            .or_default()
+            .push(artifact.certificate_pem.clone());
+    }
+    for (tag, mut certificates) in bundles {
+        certificates.sort();
+        let bundle = certificates.join("\n");
+        let digest = hex::encode(Sha256::digest(bundle.as_bytes()));
+        let path = state_dir
+            .join("peer-trust")
+            .join(&tag)
+            .join(format!("{digest}.pem"));
+        write_managed_file(&path, bundle.as_bytes())?;
+        staged.peer_trust_bundles.insert(tag, path);
+    }
+    for artifact in &managed.rule_set_artifacts {
+        let raw = artifact.decode_and_verify()?;
+        // The pinned sing-box binary only consumes SRS files. Refuse a
+        // misplaced JSON/YAML rule-set before it reaches `sing-box check`.
+        if raw.len() < 4 || &raw[..3] != b"SRS" {
+            return Err(ManagedContractError::InvalidRuleSetFormat {
+                rule_set_id: artifact.rule_set_id.clone(),
+            });
+        }
+        let path = local_rule_set_srs_path(
+            state_dir,
+            &artifact.rule_set_id,
+            &artifact.version,
+            &artifact.sha256,
+        );
+        write_managed_file(&path, &raw)?;
+        staged.rule_sets.insert(
+            (
+                artifact.rule_set_id.clone(),
+                artifact.version.clone(),
+                artifact.sha256.clone(),
+            ),
+            path,
+        );
+    }
+    Ok(staged)
+}
+
+fn unique_object_mut<'a>(
+    config: &'a mut Map<String, Value>,
+    array: &str,
+    tag: &str,
+    kind: &str,
+) -> Result<&'a mut Map<String, Value>, ManagedContractError> {
+    let Some(values) = config.get_mut(array).and_then(Value::as_array_mut) else {
+        return Err(ManagedContractError::Materialize(format!(
+            "{kind} {tag}: base config has no {array} array"
+        )));
+    };
+    let mut found = None;
+    for (index, value) in values.iter_mut().enumerate() {
+        if value.get("tag").and_then(Value::as_str) == Some(tag) {
+            if found.is_some() {
+                return Err(ManagedContractError::Materialize(format!(
+                    "{kind} {tag} is duplicated in the base config"
+                )));
+            }
+            found = Some(index);
+        }
+    }
+    let Some(index) = found else {
+        return Err(ManagedContractError::Materialize(format!(
+            "{kind} {tag} is missing from the base config"
+        )));
+    };
+    values[index]
+        .as_object_mut()
+        .ok_or_else(|| ManagedContractError::Materialize(format!("{kind} {tag} is not an object")))
+}
+
+/// Injects only agent-local paths for receiver identities, sender public trust
+/// and rule-set artifacts. Every control-plane path was stripped by the caller.
+/// `certificate_root` is the CertificateManager generation root; receiver
+/// key-pairs are already staged there by the ordinary certificate path.
+pub fn materialize_managed_config(
+    config: &mut Map<String, Value>,
+    managed: &ManagedSnapshotExtension,
+    staged: &StagedManagedArtifacts,
+    certificate_root: &Path,
+) -> Result<Vec<ManagedFileRef>, ManagedContractError> {
+    let mut refs = Vec::new();
+    let mut outbound_trust: HashMap<String, String> = HashMap::new();
+
+    for binding in &managed.tls_bindings {
+        match binding.direction {
+            PeerTlsDirection::Inbound => {
+                let inbound =
+                    unique_object_mut(config, "inbounds", &binding.runtime_tag, "inbound")?;
+                let tls = inbound
+                    .get_mut("tls")
+                    .and_then(Value::as_object_mut)
+                    .ok_or_else(|| {
+                        ManagedContractError::Materialize(format!(
+                            "inbound {} has no tls object",
+                            binding.runtime_tag
+                        ))
+                    })?;
+                let generation_dir = certificate_root
+                    .join(&binding.certificate_id)
+                    .join(format!("{GENERATION_DIR_PREFIX}{}", binding.generation));
+                let certificate_path = generation_dir.join(FULLCHAIN_FILE);
+                let key_path = generation_dir.join(PRIVATE_KEY_FILE);
+                tls.insert("enabled".into(), Value::Bool(true));
+                tls.insert(
+                    "server_name".into(),
+                    Value::String(binding.server_name.clone()),
+                );
+                tls.insert(
+                    "certificate_path".into(),
+                    Value::String(certificate_path.to_string_lossy().into_owned()),
+                );
+                tls.insert(
+                    "key_path".into(),
+                    Value::String(key_path.to_string_lossy().into_owned()),
+                );
+                refs.push(ManagedFileRef {
+                    path: certificate_path,
+                    sha256: None,
+                });
+                refs.push(ManagedFileRef {
+                    path: key_path,
+                    sha256: None,
+                });
+            }
+            PeerTlsDirection::Outbound => {
+                if !staged.peer_trust_bundles.contains_key(&binding.runtime_tag) {
+                    return Err(ManagedContractError::Materialize(format!(
+                        "peer trust bundle for binding {} was not staged",
+                        binding.binding_id
+                    )));
+                }
+                let entry = outbound_trust
+                    .entry(binding.runtime_tag.clone())
+                    .or_insert_with(|| binding.server_name.clone());
+                if entry != &binding.server_name {
+                    return Err(ManagedContractError::Materialize(format!(
+                        "outbound {} has conflicting TLS server names",
+                        binding.runtime_tag
+                    )));
+                }
+            }
+        }
+    }
+
+    for (tag, server_name) in outbound_trust {
+        let bundle = staged
+            .peer_trust_bundles
+            .get(&tag)
+            .ok_or_else(|| {
+                ManagedContractError::Materialize(format!(
+                    "peer trust bundle for outbound {tag} was not staged"
+                ))
+            })?
+            .clone();
+        let outbound = unique_object_mut(config, "outbounds", &tag, "outbound")?;
+        let tls = outbound
+            .get_mut("tls")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                ManagedContractError::Materialize(format!("outbound {tag} has no tls object"))
+            })?;
+        tls.insert("enabled".into(), Value::Bool(true));
+        tls.insert("server_name".into(), Value::String(server_name));
+        tls.insert(
+            "certificate_path".into(),
+            Value::String(bundle.to_string_lossy().into_owned()),
+        );
+        tls.remove("certificate");
+        tls.remove("insecure");
+        refs.push(ManagedFileRef {
+            path: bundle,
+            sha256: None,
+        });
+    }
+
+    for binding in &managed.rule_set_bindings {
+        let path = staged
+            .rule_sets
+            .get(&(
+                binding.rule_set_id.clone(),
+                binding.version.clone(),
+                binding.sha256.clone(),
+            ))
+            .ok_or_else(|| {
+                ManagedContractError::Materialize(format!(
+                    "rule-set {} was not staged",
+                    binding.runtime_tag
+                ))
+            })?;
+        let route = config
+            .get_mut("route")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                ManagedContractError::Materialize("base config has no route object".to_string())
+            })?;
+        let Some(rule_sets) = route.get_mut("rule_set").and_then(Value::as_array_mut) else {
+            return Err(ManagedContractError::Materialize(
+                "base config has no route.rule_set array".to_string(),
+            ));
+        };
+        let entry = rule_sets
+            .iter_mut()
+            .find(|entry| entry.get("tag").and_then(Value::as_str) == Some(&binding.runtime_tag))
+            .ok_or_else(|| {
+                ManagedContractError::Materialize(format!(
+                    "rule-set {} is missing from route.rule_set",
+                    binding.runtime_tag
+                ))
+            })?;
+        let object = entry.as_object_mut().ok_or_else(|| {
+            ManagedContractError::Materialize(format!(
+                "rule-set {} is not an object",
+                binding.runtime_tag
+            ))
+        })?;
+        object.insert("type".into(), Value::String("local".to_string()));
+        object.insert("format".into(), Value::String("binary".to_string()));
+        object.insert(
+            "path".into(),
+            Value::String(path.to_string_lossy().into_owned()),
+        );
+        refs.push(ManagedFileRef {
+            path: path.clone(),
+            sha256: Some(binding.sha256.clone()),
+        });
+    }
+
+    Ok(refs)
 }
 
 fn is_lowercase_sha256_hex(value: &str) -> bool {
@@ -699,6 +1120,7 @@ mod tests {
                         .unwrap_or_else(|error| panic!("{name} managed decode: {error}"));
                     if kind == "legacy" {
                         assert!(decoded.managed.is_none(), "{name}");
+                        assert!(generated.managed.is_none(), "{name}");
                     } else {
                         let managed = decoded.managed.as_ref().expect(name);
                         assert_eq!(managed.schema_version, MANAGED_SNAPSHOT_SCHEMA_VERSION);
@@ -707,7 +1129,21 @@ mod tests {
                         assert_eq!(managed.rule_set_bindings.len(), 1);
                         assert_eq!(managed.rule_set_artifacts.len(), 1);
                         let raw_srs = managed.rule_set_artifacts[0].decode_and_verify().unwrap();
-                        assert_eq!(raw_srs, b"abc");
+                        assert_eq!(raw_srs.len(), 34);
+                        assert_eq!(&raw_srs[..3], b"SRS");
+
+                        // The generated decoder must expose the same extension
+                        // through the shared OpenAPI component names.
+                        let generated_managed = generated.managed.as_ref().expect(name);
+                        assert_eq!(*generated_managed.schema_version, 1.0);
+                        assert_eq!(generated_managed.tls_bindings.len(), 2);
+                        assert_eq!(generated_managed.peer_trust_artifacts.len(), 1);
+                        assert_eq!(generated_managed.rule_set_bindings.len(), 1);
+                        assert_eq!(generated_managed.rule_set_artifacts.len(), 1);
+                        assert_eq!(
+                            generated_managed.config_version_id.to_string(),
+                            managed.config_version_id
+                        );
                     }
                 }
                 "invalid" => {
@@ -812,6 +1248,111 @@ mod tests {
         );
         assert_eq!(classify_runtime_tag("peer-in-"), None);
         assert_eq!(classify_runtime_tag("custom"), None);
+    }
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir()
+                .join(format!("blossom-managed-{}-{nanos}", std::process::id()));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn managed_fixture_document() -> AgentConfigV3Document {
+        let fixture: Value = serde_json::from_str(SNAPSHOT_FIXTURES).unwrap();
+        let entry = fixture["snapshots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["name"] == "managed-v3-single-unit")
+            .unwrap();
+        let bytes = serde_json::to_vec(&entry["document"]).unwrap();
+        AgentConfigV3Document::decode_and_validate(&bytes).unwrap()
+    }
+
+    #[test]
+    fn stages_managed_artifacts_and_materializes_only_local_paths() {
+        let mut document = managed_fixture_document();
+        let managed = document.managed.as_ref().unwrap();
+        let dir = TempDir::new();
+        let staged = stage_managed_artifacts(managed, &dir.0).unwrap();
+
+        strip_untrusted_outbound_tls(&mut document.singbox_config);
+        strip_untrusted_rule_set_locations(&mut document.singbox_config);
+        let certificate_root = dir.0.join("certificates");
+        let refs = materialize_managed_config(
+            &mut document.singbox_config,
+            managed,
+            &staged,
+            &certificate_root,
+        )
+        .unwrap();
+        assert!(refs.iter().any(|entry| entry.sha256.is_some()));
+
+        let inbound = &document.singbox_config["inbounds"][1]["tls"];
+        assert_eq!(inbound["enabled"], Value::Bool(true));
+        assert!(
+            inbound["certificate_path"]
+                .as_str()
+                .unwrap()
+                .starts_with(&dir.0.display().to_string())
+        );
+        assert!(
+            inbound["key_path"]
+                .as_str()
+                .unwrap()
+                .starts_with(&dir.0.display().to_string())
+        );
+
+        let outbound = &document.singbox_config["outbounds"][2]["tls"];
+        let certificate_path = outbound["certificate_path"].as_str().unwrap();
+        assert!(certificate_path.starts_with(&dir.0.display().to_string()));
+        assert!(Path::new(certificate_path).exists());
+        assert!(!outbound.as_object().unwrap().contains_key("insecure"));
+        assert!(!outbound.as_object().unwrap().contains_key("certificate"));
+
+        let rule_set = &document.singbox_config["route"]["rule_set"][0];
+        assert_eq!(rule_set["format"], Value::String("binary".to_string()));
+        assert!(
+            rule_set["path"]
+                .as_str()
+                .unwrap()
+                .starts_with(&dir.0.display().to_string())
+        );
+        assert_ne!(
+            rule_set["path"].as_str().unwrap(),
+            "/etc/untrusted/geoip-cn.srs"
+        );
+    }
+
+    #[test]
+    fn rejects_non_srs_rule_set_content_before_staging() {
+        let mut document = managed_fixture_document();
+        let managed = document.managed.as_mut().unwrap();
+        managed.rule_set_artifacts[0].content_base64 = STANDARD.encode(b"abc");
+        managed.rule_set_artifacts[0].size_bytes = 3;
+        managed.rule_set_artifacts[0].sha256 = hex::encode(Sha256::digest(b"abc"));
+        managed.rule_set_bindings[0].sha256 = managed.rule_set_artifacts[0].sha256.clone();
+        managed.rule_set_bindings[0].size_bytes = 3;
+
+        let dir = TempDir::new();
+        assert!(matches!(
+            stage_managed_artifacts(managed, &dir.0),
+            Err(ManagedContractError::InvalidRuleSetFormat { .. })
+        ));
     }
 
     #[test]

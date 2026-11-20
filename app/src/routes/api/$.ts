@@ -1,3 +1,12 @@
+import {
+  certificateArtifactSchema,
+  managedPeerTlsBindingSchema,
+  managedPeerTrustArtifactSchema,
+  managedRuleSetArtifactSchema,
+  managedRuleSetBindingSchema,
+  managedSnapshotExtensionSchema,
+  managedTlsBindingSchema,
+} from "@blossom/contracts/agent-config-v3";
 import { SmartCoercionPlugin } from "@orpc/json-schema";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
@@ -28,6 +37,38 @@ const handler = new OpenAPIHandler(router, {
         commonSchemas: {
           Todo: { schema: TodoSchema },
           UndefinedError: { error: "UndefinedError" },
+          // Registered so the legacy `managedTlsBindings` array and the
+          // managed extension's `managed.tlsBindings` array generate
+          // distinct, correctly named Rust types instead of colliding on
+          // `...ManagedTlsBindingsItem`.
+          CertificateArtifact: {
+            schema: certificateArtifactSchema,
+            strategy: "output",
+          },
+          ManagedTlsBinding: {
+            schema: managedTlsBindingSchema,
+            strategy: "output",
+          },
+          ManagedPeerTlsBinding: {
+            schema: managedPeerTlsBindingSchema,
+            strategy: "output",
+          },
+          ManagedPeerTrustArtifact: {
+            schema: managedPeerTrustArtifactSchema,
+            strategy: "output",
+          },
+          ManagedRuleSetBinding: {
+            schema: managedRuleSetBindingSchema,
+            strategy: "output",
+          },
+          ManagedRuleSetArtifact: {
+            schema: managedRuleSetArtifactSchema,
+            strategy: "output",
+          },
+          ManagedSnapshotExtension: {
+            schema: managedSnapshotExtensionSchema,
+            strategy: "output",
+          },
         },
         security: [{ bearerAuth: [] }],
         components: {

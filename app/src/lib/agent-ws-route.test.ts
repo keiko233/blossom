@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Server } from "@/db/proxy-schema";
 import { AgentAuthError } from "@/lib/agent-oauth";
 import { hashAgentToken } from "@/lib/agent-token";
+import { ManagedNetworkingRequiresV2Error } from "@/lib/managed-compile-error";
 
 import {
   AGENT_WS_DISABLED_STATE_HEADER,
@@ -312,6 +313,25 @@ describe("agent WebSocket route", () => {
       server,
       welcome,
     );
+  });
+
+  it("returns 409 rather than a legacy welcome for a managed server", async () => {
+    const hub = makeHub();
+    const response = await handleAgentWsRequest(
+      request({ authorization: "Bearer fake-token", upgrade: "websocket" }),
+      {
+        authenticate: async () => authenticated(),
+        authenticateDisabled: async () => null,
+        buildWelcome: async () => {
+          throw new ManagedNetworkingRequiresV2Error();
+        },
+        wakeCertificateIssuance: async () => undefined,
+        hub,
+      },
+    );
+    expect(response.status).toBe(409);
+    expect(await response.text()).toContain("blossom-agent.v2");
+    expect(hub.acceptAgent).not.toHaveBeenCalled();
   });
 
   it("returns 426 for a valid plain HTTP request and 503 on hub failure", async () => {

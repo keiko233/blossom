@@ -1,3 +1,4 @@
+import type { ManagedRuleSetFormat } from "@blossom/contracts/agent-config-v3";
 import type {
   ListenerClaimOwnerKind,
   ManagedOutboundKind,
@@ -215,6 +216,41 @@ export const managedOutbound = pgTable(
   ],
 );
 
+// --- Immutable rule-set assets ---------------------------------------------
+
+/**
+ * One immutable binary rule-set asset revision. `(rule_set_id, version)` is
+ * the identity a managed stage intent references; content is addressed by
+ * digest and bounded to 512 KiB raw before the compiler embeds it in a V3
+ * snapshot. Rows are never updated in place: a new revision is a new row.
+ */
+export const managedRuleSetAsset = pgTable(
+  "managed_rule_set_asset",
+  {
+    ruleSetId: text("rule_set_id").notNull(),
+    version: text("version").notNull(),
+    format: text("format").$type<ManagedRuleSetFormat>().notNull(),
+    // Curated provenance: catalog entry, import batch, or operator source.
+    source: text("source").notNull(),
+    contentBase64: text("content_base64").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    sha256: text("sha256").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ruleSetId, table.version] }),
+    check(
+      "managed_rule_set_asset_size",
+      sql`${table.sizeBytes} BETWEEN 1 AND 524288`,
+    ),
+    check(
+      "managed_rule_set_asset_sha256",
+      sql`${table.sha256} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check("managed_rule_set_asset_format", sql`${table.format} = 'binary'`),
+  ],
+);
+
 // --- Immutable intent -------------------------------------------------------
 
 /**
@@ -393,6 +429,7 @@ export type PeerLink = typeof peerLink.$inferSelect;
 export type PeerLinkCredential = typeof peerLinkCredential.$inferSelect;
 export type ManagedOutbound = typeof managedOutbound.$inferSelect;
 export type ManagedConfigVersion = typeof managedConfigVersion.$inferSelect;
+export type ManagedRuleSetAsset = typeof managedRuleSetAsset.$inferSelect;
 export type ManagedRollout = typeof managedRollout.$inferSelect;
 export type ManagedRolloutStage = typeof managedRolloutStage.$inferSelect;
 export type ManagedServerState = typeof managedServerState.$inferSelect;

@@ -139,8 +139,8 @@
         "ruleSetId": "geoip-cn",
         "version": "20261120",
         "format": "binary",
-        "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-        "sizeBytes": 3
+        "sha256": "92d8d10d7a32dca08ff48c4e79a671d79abea67a25a7c6d14b4d77097d0693ca",
+        "sizeBytes": 34
       }
     ],
     "stageExpectations": {
@@ -323,8 +323,8 @@
         "managed": {
           "schemaVersion": 1,
           "configVersionId": "mcv-srv-a-v1",
-          "intentDigest": "sha256:28538b473e92d0b9afcae4c32bce2198aaab9c89919b9bf484e4de64600681da",
-          "managedFingerprint": "sha256:7154fdd1a8406ab406651a2f4092d2df3cc7fc2affa9c484a90d3efcd076aa27",
+          "intentDigest": "sha256:f145577fa8946fd71085e96d9e305e59bc67060d0d3f7794f1d70b9a34811b4c",
+          "managedFingerprint": "sha256:71c700e6e336fc92caf0496f45e8c9fff6449626eb8c6f523bb21cb909cee114",
           "tlsBindings": [
             {
               "bindingId": "peer-tls:inbound:peer_inbound:pin1:cert-peer-a:2",
@@ -368,8 +368,8 @@
               "ruleSetId": "geoip-cn",
               "version": "20261120",
               "format": "binary",
-              "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-              "sizeBytes": 3
+              "sha256": "92d8d10d7a32dca08ff48c4e79a671d79abea67a25a7c6d14b4d77097d0693ca",
+              "sizeBytes": 34
             }
           ],
           "ruleSetArtifacts": [
@@ -377,9 +377,9 @@
               "ruleSetId": "geoip-cn",
               "version": "20261120",
               "format": "binary",
-              "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-              "sizeBytes": 3,
-              "contentBase64": "YWJj"
+              "sha256": "92d8d10d7a32dca08ff48c4e79a671d79abea67a25a7c6d14b4d77097d0693ca",
+              "sizeBytes": 34,
+              "contentBase64": "U1JTAXjaYmRgY2SAAEaWAwxMDCDi/38GQAAAAP//EvcDlA=="
             }
           ]
         }

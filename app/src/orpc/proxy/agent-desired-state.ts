@@ -1,3 +1,8 @@
+import type {
+  AgentConfigV3Output,
+  ManagedSnapshotExtension,
+} from "@blossom/contracts/agent-config-v3";
+import { MANAGED_NETWORKING_V2_CAPABILITY } from "@blossom/contracts/agent-config-v3";
 import type { AgentWsWelcomePayload } from "@blossom/contracts/agent-ws";
 import { formatDesiredRevision } from "@blossom/domain/config-revision";
 
@@ -6,9 +11,17 @@ import type { Server } from "@/db/proxy-schema";
 import { toSingboxRouteRules } from "@/lib/routing-rules";
 import { listEnabledServerNodes } from "@/query/agent";
 import { getCertificateAgentContext } from "@/query/certificate-agent";
+import { loadManagedCompileState } from "@/query/managed-compile-state";
 import { listEnabledRules } from "@/query/rule-access";
 import { getNodeActiveSubscriptions } from "@/query/subscription-access";
 
+import {
+  assertManagedOutputBudget,
+  compileManagedServerConfig,
+  ManagedCompileError,
+  ManagedNetworkingRequiresV2Error,
+  mergePeerCertificateArtifacts,
+} from "./managed-singbox";
 import {
   buildCertificateArtifacts,
   buildGenerationByCertificateId,
@@ -16,6 +29,7 @@ import {
   compileServerConfig,
   computeDesiredRevision,
   filterCertificateArtifactsForBindings,
+  validateMaterializedSnapshotAgainstIntent,
   type NodeInbound,
 } from "./singbox";
 import { buildInboundUser } from "./singbox-users";
@@ -33,6 +47,12 @@ export interface AgentDesiredState {
   managedTlsBindings: ReturnType<typeof buildManagedTlsBindings>;
   certificateArtifacts: ReturnType<typeof buildCertificateArtifacts>;
   desiredRevision: string;
+  /** Sequence read coherently with the managed pointer; falls back to the row. */
+  desiredRevisionSeq: number;
+  /** Single-unit extension, omitted for legacy servers. */
+  managed?: ManagedSnapshotExtension;
+  /** Raw rule-set sizes for the live/preview byte budget. */
+  managedRuleSetSizes: { ruleSetId: string; rawBytes: number }[];
   /**
    * The identifier stays correct until this instant even with no change
    * record: the earliest expiry of a subscription in the compiled state, capped
@@ -67,12 +87,14 @@ async function compileAgentServerConfig(
     users: perNodeUsers[index]!,
   }));
   const materialized = built.filter(({ users }) => users.length > 0);
+  const legacyRouteRules = toSingboxRouteRules(rules);
   const config = compileServerConfig({
     inbounds: built,
-    routeRules: toSingboxRouteRules(rules),
+    routeRules: legacyRouteRules,
   });
   return {
     config,
+    legacyRouteRules,
     materializedNodes: materialized.map(({ node }) => node),
     materializedNodeIds: materialized.map(({ node }) => node.id),
     earliestExpiryMs: expiries.reduce<number | null>(
@@ -98,6 +120,14 @@ export interface AgentDesiredStateOptions {
    * the issuer uses the shared facade, so it passes `false` there.
    */
   advanceCertificates?: boolean;
+  /**
+   * `legacy` is the HTTP and v1 WebSocket path: managed state is refused so a
+   * legacy compile can never replace serving peer state. `v2` requires the
+   * agent's negotiated capability before compiling the managed extension.
+   */
+  managedDelivery?: "legacy" | "v2";
+  /** Capabilities from the v2 `hello`, used only with `managedDelivery: "v2"`. */
+  agentCapabilities?: readonly string[];
 }
 
 export async function buildAgentDesiredState(
@@ -106,13 +136,29 @@ export async function buildAgentDesiredState(
 ): Promise<AgentDesiredState> {
   const checkedAt = Date.now();
   const [
-    { config, materializedNodes, materializedNodeIds, earliestExpiryMs },
+    {
+      config,
+      legacyRouteRules,
+      materializedNodes,
+      materializedNodeIds,
+      earliestExpiryMs,
+    },
     certificateContext,
+    managedState,
   ] = await Promise.all([
     compileAgentServerConfig(server.id, server.enabled, options.database),
     getCertificateAgentContext(server.id, {
       database: options.database,
       advanceIssuance: options.advanceCertificates ?? true,
+    }),
+    loadManagedCompileState(server.id, options.database).catch((error) => {
+      if (
+        (options.managedDelivery ?? "legacy") === "legacy" &&
+        error instanceof ManagedCompileError
+      ) {
+        throw new ManagedNetworkingRequiresV2Error();
+      }
+      throw error;
     }),
   ]);
 
@@ -122,29 +168,143 @@ export async function buildAgentDesiredState(
     materializedNodes,
     generationByCertificateId,
   );
-  const certificateArtifacts = filterCertificateArtifactsForBindings(
+  const baseCertificateArtifacts = filterCertificateArtifactsForBindings(
     buildCertificateArtifacts(certificateContext),
     managedTlsBindings,
   );
 
+  if (!managedState) {
+    return {
+      config,
+      materializedNodeIds,
+      managedTlsBindings,
+      certificateArtifacts: baseCertificateArtifacts,
+      desiredRevisionSeq: server.desiredRevisionSeq,
+      managedRuleSetSizes: [],
+      desiredRevision: formatDesiredRevision(
+        server.desiredRevisionSeq,
+        computeDesiredRevision(
+          config,
+          managedTlsBindings,
+          baseCertificateArtifacts,
+          materializedNodeIds,
+        ),
+      ),
+      validUntil: new Date(
+        Math.min(
+          checkedAt + AGENT_DESIRED_CONFIG_MAX_AGE_MS,
+          earliestExpiryMs ?? Number.POSITIVE_INFINITY,
+        ),
+      ),
+    };
+  }
+
+  if ((options.managedDelivery ?? "legacy") === "legacy") {
+    throw new ManagedNetworkingRequiresV2Error();
+  }
+  if (
+    !(options.agentCapabilities ?? []).includes(
+      MANAGED_NETWORKING_V2_CAPABILITY,
+    )
+  ) {
+    throw new ManagedCompileError(
+      "unsupported_agent",
+      "the connected agent did not advertise managed-networking-v1",
+      managedState.fallbackRevision,
+      managedState.desiredRevisionSeq,
+    );
+  }
+
+  let compiled: ReturnType<typeof compileManagedServerConfig>;
+  try {
+    compiled = compileManagedServerConfig({
+      intent: managedState.intent,
+      subscriberConfig: config,
+      legacyRouteRules,
+      ruleSetArtifacts: managedState.ruleSetArtifacts,
+      tlsMaterial: managedState.tlsMaterial,
+      peerCredentials: managedState.peerCredentials,
+    });
+  } catch (error) {
+    if (error instanceof ManagedCompileError) {
+      throw new ManagedCompileError(
+        error.code,
+        error.message,
+        managedState.fallbackRevision,
+        managedState.desiredRevisionSeq,
+      );
+    }
+    throw error;
+  }
+  const certificateArtifacts = mergePeerCertificateArtifacts(
+    baseCertificateArtifacts,
+    compiled.peerCertificateArtifacts,
+  );
+  const desiredRevision = formatDesiredRevision(
+    managedState.desiredRevisionSeq,
+    computeDesiredRevision(
+      compiled.config,
+      managedTlsBindings,
+      certificateArtifacts,
+      materializedNodeIds,
+      compiled.extension,
+    ),
+  );
+
+  const validationSnapshot = {
+    apiVersion: 3 as const,
+    agent: {
+      configPollIntervalSeconds: 5,
+      heartbeatIntervalSeconds: 5,
+    },
+    desiredRevision,
+    materializedNodeIds,
+    singboxConfig: compiled.config,
+    managedTlsBindings,
+    certificateArtifacts,
+    managed: compiled.extension,
+  } satisfies AgentConfigV3Output;
+  const validation = validateMaterializedSnapshotAgainstIntent(
+    managedState.intent,
+    validationSnapshot,
+  );
+  if (!validation.ok) {
+    throw new ManagedCompileError(
+      "managed_state_inconsistent",
+      `materialized snapshot does not match its pinned intent: ${validation.issues
+        .map((issue) => issue.code)
+        .join(", ")}`,
+      managedState.fallbackRevision,
+      managedState.desiredRevisionSeq,
+    );
+  }
+
+  const managedCertExpiries = [
+    ...managedState.tlsMaterial.inbound.map((entry) =>
+      Date.parse(entry.artifact.notAfter),
+    ),
+    ...managedState.tlsMaterial.outboundTrust.map((entry) =>
+      Date.parse(entry.artifact.notAfter),
+    ),
+  ].filter(Number.isFinite);
+
   return {
-    config,
+    config: compiled.config,
     materializedNodeIds,
     managedTlsBindings,
     certificateArtifacts,
-    desiredRevision: formatDesiredRevision(
-      server.desiredRevisionSeq,
-      computeDesiredRevision(
-        config,
-        managedTlsBindings,
-        certificateArtifacts,
-        materializedNodeIds,
-      ),
-    ),
+    desiredRevisionSeq: managedState.desiredRevisionSeq,
+    managed: compiled.extension,
+    managedRuleSetSizes: compiled.embeddedRuleSetBindings.map((binding) => ({
+      ruleSetId: binding.ruleSetId,
+      rawBytes: binding.sizeBytes,
+    })),
+    desiredRevision,
     validUntil: new Date(
       Math.min(
         checkedAt + AGENT_DESIRED_CONFIG_MAX_AGE_MS,
         earliestExpiryMs ?? Number.POSITIVE_INFINITY,
+        ...managedCertExpiries,
       ),
     ),
   };
@@ -165,7 +325,7 @@ export function buildAgentConfigV3Output(
   >,
   desired: AgentDesiredState,
 ) {
-  return {
+  const output = {
     apiVersion: 3 as const,
     agent: {
       configPollIntervalSeconds: server.configPollIntervalSeconds,
@@ -182,7 +342,12 @@ export function buildAgentConfigV3Output(
     singboxConfig: desired.config,
     managedTlsBindings: desired.managedTlsBindings,
     certificateArtifacts: desired.certificateArtifacts,
+    ...(desired.managed ? { managed: desired.managed } : {}),
   };
+  if (desired.managed) {
+    assertManagedOutputBudget(output, desired.managedRuleSetSizes);
+  }
+  return output;
 }
 
 export async function buildAgentWelcome(
@@ -193,7 +358,7 @@ export async function buildAgentWelcome(
     serverId: server.id,
     serverName: server.name,
     protocolVersion: 1,
-    desiredRevisionSeq: server.desiredRevisionSeq,
+    desiredRevisionSeq: desired.desiredRevisionSeq,
     desiredRevision: desired.desiredRevision,
     pollIntervalSeconds: server.configPollIntervalSeconds,
     heartbeatIntervalSeconds: server.heartbeatIntervalSeconds,

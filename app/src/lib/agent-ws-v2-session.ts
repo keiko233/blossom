@@ -40,6 +40,7 @@ import {
 import { parseRevisionSeq } from "@blossom/domain/config-revision";
 
 import type { Server } from "@/db/proxy-schema";
+import { ManagedCompileError } from "@/lib/managed-compile-error";
 import type {
   AgentSessionCredential,
   CachedDesiredRevision,
@@ -188,11 +189,17 @@ export interface AgentWsV2Store {
     sample: AgentWsV2TelemetrySamplePayload,
   ): Promise<AgentWsV2MetricOutcome>;
   /**
-   * Compiles the same desired state the v3 HTTP response serves. `validUntil`
-   * is the instant the identifier must be recompiled by, even with no change.
+   * Compiles the same desired state the v3 response serves. `managedDelivery`
+   * lets the store refuse a managed compile for an agent that did not
+   * negotiate `managed-networking-v1`; `desiredRevisionSeq` is read coherently
+   * with the managed pointer and must be used for the delivered identifier.
    */
-  compile(server: Server): Promise<{
+  compile(
+    server: Server,
+    options?: { agentCapabilities?: readonly string[] },
+  ): Promise<{
     desiredRevision: string;
+    desiredRevisionSeq?: number;
     document: unknown;
     validUntil: Date;
   }>;
@@ -405,17 +412,39 @@ export function openAgentWsV2Session(
         desiredRevision: marker,
       };
     }
-    const compiled = await store.compile(server);
+    let compiled: Awaited<ReturnType<AgentWsV2Store["compile"]>>;
+    try {
+      compiled = await store.compile(server, {
+        agentCapabilities: capabilities,
+      });
+    } catch (error) {
+      if (error instanceof ManagedCompileError) {
+        // Fail closed: never compile a legacy payload for a managed server.
+        // The fallback lets welcome/status advertise the last issued managed
+        // identifier; the next config.get receives a snapshot error and the
+        // agent keeps its last-known-good process.
+        return {
+          desiredRevisionSeq:
+            error.desiredRevisionSeq ?? server.desiredRevisionSeq,
+          desiredRevision:
+            error.fallbackRevision ??
+            server.desiredConfigRevision ??
+            `${server.desiredRevisionSeq}:sha256:${"0".repeat(64)}`,
+        };
+      }
+      throw error;
+    }
+    const seq = compiled.desiredRevisionSeq ?? server.desiredRevisionSeq;
     await safely("cache desired revision", () =>
       store.cacheDesiredRevision(serverId, sessionId, {
-        desiredRevisionSeq: server.desiredRevisionSeq,
+        desiredRevisionSeq: seq,
         desiredInputsVersion: server.desiredInputsVersion,
         desiredRevision: compiled.desiredRevision,
         validUntil: compiled.validUntil,
       }),
     );
     return {
-      desiredRevisionSeq: server.desiredRevisionSeq,
+      desiredRevisionSeq: seq,
       desiredRevision: compiled.desiredRevision,
     };
   }
@@ -474,6 +503,7 @@ export function openAgentWsV2Session(
       );
     }
 
+    capabilities = hello.capabilities;
     const desired = await currentDesired(server);
     welcomed = true;
     send(
@@ -503,7 +533,6 @@ export function openAgentWsV2Session(
       id,
     );
     options.onWelcome?.();
-    capabilities = hello.capabilities;
     if (capabilities.includes(AGENT_WS_V2_TELEMETRY_HISTORY_CAPABILITY)) {
       send("telemetry.subscribe", {
         subscriptionId: `history-${sessionId}`,
@@ -553,7 +582,22 @@ export function openAgentWsV2Session(
     if (!server) {
       return;
     }
-    const compiled = await store.compile(server);
+    let compiled: Awaited<ReturnType<AgentWsV2Store["compile"]>>;
+    try {
+      compiled = await store.compile(server, {
+        agentCapabilities: capabilities,
+      });
+    } catch (error) {
+      if (error instanceof ManagedCompileError) {
+        send("config.snapshot.error", {
+          requestId,
+          code: "unavailable",
+          message: error.message.slice(0, 2048),
+        });
+        return;
+      }
+      throw error;
+    }
     if (generation !== snapshotGeneration) {
       return;
     }
@@ -574,8 +618,9 @@ export function openAgentWsV2Session(
       return;
     }
 
+    const seq = compiled.desiredRevisionSeq ?? server.desiredRevisionSeq;
     const desired = {
-      desiredRevisionSeq: server.desiredRevisionSeq,
+      desiredRevisionSeq: seq,
       desiredRevision: compiled.desiredRevision,
     };
     send("config.snapshot.begin", {
@@ -593,7 +638,7 @@ export function openAgentWsV2Session(
 
     await safely("cache desired revision", () =>
       store.cacheDesiredRevision(serverId, sessionId, {
-        desiredRevisionSeq: server.desiredRevisionSeq,
+        desiredRevisionSeq: seq,
         desiredInputsVersion: server.desiredInputsVersion,
         desiredRevision: compiled.desiredRevision,
         validUntil: compiled.validUntil,

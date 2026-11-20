@@ -45,6 +45,11 @@ use crate::metering::InboundClassification;
 #[path = "config_managed.rs"]
 pub(crate) mod managed;
 
+use managed::{
+    AgentConfigV3Document, ManagedFileRef, ManagedSnapshotExtension, materialize_managed_config,
+    stage_managed_artifacts, strip_untrusted_outbound_tls, strip_untrusted_rule_set_locations,
+};
+
 /// The agent always injects its own `api` service for traffic stats. The
 /// secret is per agent run (OS CSPRNG), the port is any free loopback port;
 /// the control plane's `experimental.v2ray_api` and any pre-existing `api`
@@ -142,6 +147,10 @@ pub struct CandidateConfig {
     pub materialized_node_ids: Vec<String>,
     pub api_endpoint: ApiEndpoint,
     pub referenced_generations: Vec<CertificateRef>,
+    /// Agent-owned local files referenced by the managed extension. They are
+    /// checked again before an equal revision may be skipped, and retained
+    /// across rollback for the last-known-good configuration.
+    pub managed_files: Vec<ManagedFileRef>,
     /// Local overlay written into the candidate. A commit records this as the
     /// effective sing-box level; a later policy change stages another reload.
     pub log_level: LogLevelPolicy,
@@ -608,6 +617,7 @@ impl ConfigManager {
             materialized_node_ids: Vec::new(),
             api_endpoint: self.api_endpoint.clone(),
             referenced_generations: Vec::new(),
+            managed_files: Vec::new(),
             log_level: self.log_policy.overlay(chrono::Utc::now()).effective,
         })
     }
@@ -678,7 +688,7 @@ impl ConfigManager {
                 None,
             )
         })?;
-        self.compile_document(response.into_inner())
+        self.compile_document(response.into_inner(), None)
     }
 
     /// Compiles a v3 document received as a verified WebSocket snapshot. The
@@ -709,6 +719,19 @@ impl ConfigManager {
         let mut raw_candidates = Vec::new();
         raw_credential_candidates(&raw, &mut raw_candidates);
         self.register_credentials_or_warn(raw_candidates);
+        // Validate the additive managed extension before the progenitor type
+        // sees the document. Legacy documents produce `managed: None` and
+        // continue through the unchanged subscriber path.
+        let managed_document =
+            AgentConfigV3Document::decode_and_validate(body).map_err(|error| {
+                ConfigError::new(
+                    "receive",
+                    "SNAPSHOT_MANAGED_INVALID",
+                    self.redacted_error(&error.to_string()),
+                    None,
+                )
+            })?;
+        let managed = managed_document.managed;
         let document: types::GetAgentConfigV3Response =
             serde_json::from_value(raw).map_err(|error| {
                 ConfigError::new(
@@ -726,7 +749,7 @@ impl ConfigManager {
                 None,
             ));
         }
-        self.compile_document(document)
+        self.compile_document(document, managed)
     }
 
     /// Compiles one v3 document into the candidate or skips it when the active
@@ -734,6 +757,7 @@ impl ConfigManager {
     fn compile_document(
         &mut self,
         document: types::GetAgentConfigV3Response,
+        managed: Option<ManagedSnapshotExtension>,
     ) -> Result<FetchStatus, ConfigError> {
         let policy = AgentPolicy {
             config_poll_interval_seconds: document
@@ -755,6 +779,13 @@ impl ConfigManager {
         };
         let desired_revision = document.desired_revision.to_string();
         self.observed_revision = Some(desired_revision.clone());
+        let subscriber_artifact_keys: Option<HashSet<(String, u64)>> = managed.as_ref().map(|_| {
+            document
+                .managed_tls_bindings
+                .iter()
+                .map(|binding| (binding.certificate_id.to_string(), binding.generation.get()))
+                .collect()
+        });
 
         // Reconcile certificate artifacts into validated generation storage.
         let mut artifacts =
@@ -765,11 +796,18 @@ impl ConfigManager {
                 artifact.certificate_id.to_string(),
                 artifact.generation.get(),
             );
-            self.ensure_deployment(&key.0, key.1, artifact.fingerprint_sha256.as_str());
+            let tracks_subscriber = subscriber_artifact_keys
+                .as_ref()
+                .is_none_or(|keys| keys.contains(&key));
+            if tracks_subscriber {
+                self.ensure_deployment(&key.0, key.1, artifact.fingerprint_sha256.as_str());
+            }
             match self.certificate_manager.stage(artifact) {
                 Ok(material) => {
                     artifacts.insert(key, material.clone());
-                    self.upsert_deployment(&material);
+                    if tracks_subscriber {
+                        self.upsert_deployment(&material);
+                    }
                 }
                 Err(error) => {
                     let message = self.redacted_error(&sanitize_error(&error.to_string()));
@@ -832,6 +870,34 @@ impl ConfigManager {
             ));
         }
 
+        let managed_files = if let Some(managed) = &managed {
+            strip_untrusted_outbound_tls(&mut config);
+            strip_untrusted_rule_set_locations(&mut config);
+            let staged = stage_managed_artifacts(managed, &self.state_dir).map_err(|error| {
+                ConfigError::new(
+                    "reconcile",
+                    "MANAGED_ARTIFACT_STAGE_FAILED",
+                    self.redacted_error(&error.to_string()),
+                    None,
+                )
+            })?;
+            materialize_managed_config(
+                &mut config,
+                managed,
+                &staged,
+                self.certificate_manager.root(),
+            )
+            .map_err(|error| {
+                ConfigError::new(
+                    "reconcile",
+                    "MANAGED_MATERIALIZE_FAILED",
+                    self.redacted_error(&error.to_string()),
+                    None,
+                )
+            })?
+        } else {
+            Vec::new()
+        };
         strip_untrusted_api(&mut config);
         inject_api_service(
             &mut config,
@@ -865,6 +931,7 @@ impl ConfigManager {
             &serialized,
             &referenced_generations,
             &artifacts,
+            &managed_files,
         ) {
             let _ = self.log_policy.record(
                 LogSourcePolicy::SingBox,
@@ -907,6 +974,7 @@ impl ConfigManager {
                     .collect(),
                 api_endpoint: self.api_endpoint.clone(),
                 referenced_generations,
+                managed_files,
                 log_level: overlay.effective,
             },
         })
@@ -920,6 +988,7 @@ impl ConfigManager {
         candidate_bytes: &[u8],
         references: &[CertificateRef],
         artifacts: &std::collections::HashMap<(String, u64), crate::certificate::StagedMaterial>,
+        managed_files: &[ManagedFileRef],
     ) -> bool {
         if self.needs_reapply || self.persisted.disabled {
             return false;
@@ -935,6 +1004,18 @@ impl ConfigManager {
         };
         if active_bytes != candidate_bytes {
             return false;
+        }
+        for managed_file in managed_files {
+            let Ok(bytes) = std::fs::read(&managed_file.path) else {
+                return false;
+            };
+            if let Some(expected) = &managed_file.sha256 {
+                use sha2::Digest as _;
+                let actual = hex::encode(sha2::Sha256::digest(&bytes));
+                if &actual != expected {
+                    return false;
+                }
+            }
         }
         for reference in references {
             let fingerprint = artifacts
@@ -1181,7 +1262,7 @@ fn strip_base_tls_material(config: &mut serde_json::Map<String, serde_json::Valu
 /// can record per-deployment errors.
 fn materialize_bindings(
     config: &mut serde_json::Map<String, serde_json::Value>,
-    bindings: &[types::GetAgentConfigV3ResponseManagedTlsBindingsItem],
+    bindings: &[types::ManagedTlsBinding],
     artifacts: &std::collections::HashMap<(String, u64), crate::certificate::StagedMaterial>,
     root: &Path,
 ) -> (Vec<CertificateRef>, Vec<BindingError>) {
@@ -1333,22 +1414,52 @@ fn node_credentials_from_path(path: &Path) -> Vec<String> {
 /// covers protocol additions without a per-protocol secret table.
 fn node_credentials(config: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
     let mut credentials = Vec::new();
-    let Some(inbounds) = config.get("inbounds").and_then(serde_json::Value::as_array) else {
-        return credentials;
-    };
-    for inbound in inbounds {
-        let Some(users) = inbound.get("users").and_then(serde_json::Value::as_array) else {
-            continue;
-        };
-        for user in users {
-            let Some(user) = user.as_object() else {
+    if let Some(inbounds) = config.get("inbounds").and_then(serde_json::Value::as_array) {
+        for inbound in inbounds {
+            let Some(users) = inbound.get("users").and_then(serde_json::Value::as_array) else {
                 continue;
             };
-            for (key, value) in user {
-                if matches!(key.as_str(), "name" | "username" | "flow") {
+            for user in users {
+                let Some(user) = user.as_object() else {
                     continue;
+                };
+                for (key, value) in user {
+                    if matches!(key.as_str(), "name" | "username" | "flow") {
+                        continue;
+                    }
+                    if let Some(value) = value.as_str().filter(|value| !value.is_empty()) {
+                        credentials.push(value.to_owned());
+                    }
                 }
-                if let Some(value) = value.as_str().filter(|value| !value.is_empty()) {
+            }
+        }
+    }
+    // Managed peer outbounds carry their link credential on the outbound
+    // itself. Only credential-shaped fields are registered, never server
+    // names, tags or dial options.
+    if let Some(outbounds) = config
+        .get("outbounds")
+        .and_then(serde_json::Value::as_array)
+    {
+        for outbound in outbounds {
+            let Some(outbound) = outbound.as_object() else {
+                continue;
+            };
+            for key in [
+                "uuid",
+                "auth_str",
+                "auth",
+                "psk",
+                "secret",
+                "token",
+                "private_key",
+                "password",
+            ] {
+                if let Some(value) = outbound
+                    .get(key)
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.is_empty())
+                {
                     credentials.push(value.to_owned());
                 }
             }
@@ -1459,8 +1570,8 @@ mod tests {
 
     use super::{
         ApiEndpoint, ConfigManager, DeploymentRecord, FetchStatus, extract_api_endpoint,
-        inject_api_service, materialize_bindings, node_credentials, sanitize_error,
-        strip_base_tls_material, strip_untrusted_api, write_config_atomic,
+        inject_api_service, materialize_bindings, node_credentials, read_config_map,
+        sanitize_error, strip_base_tls_material, strip_untrusted_api, write_config_atomic,
     };
     use crate::certificate::StagedMaterial;
     use crate::client::types;
@@ -1506,7 +1617,7 @@ mod tests {
         .unwrap()
         .clone();
 
-        let binding = types::GetAgentConfigV3ResponseManagedTlsBindingsItem {
+        let binding = types::ManagedTlsBinding {
             node_id: "node-edge".parse().unwrap(),
             inbound_tag: "node-edge".parse().unwrap(),
             certificate_id: "cert-1".parse().unwrap(),
@@ -1552,7 +1663,7 @@ mod tests {
         .as_object()
         .unwrap()
         .clone();
-        let binding = types::GetAgentConfigV3ResponseManagedTlsBindingsItem {
+        let binding = types::ManagedTlsBinding {
             node_id: "node-edge".parse().unwrap(),
             inbound_tag: "node-edge".parse().unwrap(),
             certificate_id: "cert-1".parse().unwrap(),
@@ -1584,7 +1695,7 @@ mod tests {
         .as_object()
         .unwrap()
         .clone();
-        let binding = types::GetAgentConfigV3ResponseManagedTlsBindingsItem {
+        let binding = types::ManagedTlsBinding {
             node_id: "node-edge".parse().unwrap(),
             inbound_tag: "node-edge".parse().unwrap(),
             certificate_id: "cert-1".parse().unwrap(),
@@ -1891,6 +2002,22 @@ mod tests {
                     "type": "socks",
                     "users": [{"username": "subscription-id"}]
                 }
+            ],
+            "outbounds": [
+                {
+                    "type": "trojan",
+                    "tag": "peer-out-p1",
+                    "server": "peer.example.com",
+                    "server_port": 443,
+                    "password": "peer-outbound-trojan-credential"
+                },
+                {
+                    "type": "vless",
+                    "tag": "peer-out-p2",
+                    "server": "peer.example.com",
+                    "server_port": 443,
+                    "uuid": "peer-outbound-uuid-credential"
+                }
             ]
         });
         assert_eq!(
@@ -1898,6 +2025,8 @@ mod tests {
             vec![
                 "auth-credential".to_owned(),
                 "password-credential".to_owned(),
+                "peer-outbound-trojan-credential".to_owned(),
+                "peer-outbound-uuid-credential".to_owned(),
                 "uuid-credential".to_owned()
             ]
         );
@@ -2147,6 +2276,168 @@ mod tests {
             "rejected credential [REDACTED]"
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn managed_snapshot_stages_verified_assets_and_materializes_local_paths() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        use base64::Engine as _;
+        use sha2::Digest as _;
+
+        // Real binary SRS generated by the pinned sing-box 1.14.4
+        // (`rule-set compile`), so `sing-box check` validates the artifact.
+        let srs = base64::engine::general_purpose::STANDARD
+            .decode("U1JTAXjaYmRgY2SAAEaWAwxMDCDi/38GQAAAAP//EvcDlA==")
+            .unwrap();
+        let srs_sha = hex::encode(sha2::Sha256::digest(&srs));
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("blossom-managed-apply-{suffix}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _cleanup = TempDir(&dir);
+        let logs = crate::logs::LogStore::default();
+        let mut manager = ConfigManager::new(
+            crate::client::new_client("http://127.0.0.1:1/api", "test-token")
+                .expect("client builds"),
+            dir.clone(),
+            logs,
+            test_policy(&dir),
+        )
+        .expect("config manager builds");
+        let revision = "11:sha256:managed-test";
+        let mut document = json!({
+            "apiVersion": 3,
+            "agent": {"configPollIntervalSeconds": 60, "heartbeatIntervalSeconds": 30},
+            "desiredRevision": revision,
+            "materializedNodeIds": [],
+            "singboxConfig": {
+                "log": {"level": "info", "timestamp": true},
+                "inbounds": [],
+                "outbounds": [
+                    {"type": "direct", "tag": "direct"},
+                    {
+                        "type": "trojan",
+                        "tag": "peer-out-pout1",
+                        "server": "203.0.113.20",
+                        "server_port": 9443,
+                        "tls": {
+                            "enabled": true,
+                            "server_name": "peer-b.internal.example.com",
+                            "certificate": ["untrusted-inline-ca"],
+                            "certificate_path": "/etc/untrusted/ca.pem",
+                            "key_path": "/etc/untrusted/client.key",
+                            "insecure": true
+                        }
+                    }
+                ],
+                "route": {
+                    "rules": [],
+                    "rule_set": [{
+                        "tag": "rule-set-rs1",
+                        "type": "local",
+                        "format": "binary",
+                        "path": "/etc/untrusted/rs1.srs",
+                        "url": "https://untrusted.example.com/rs1.srs"
+                    }],
+                    "final": "direct"
+                }
+            },
+            "managedTlsBindings": [],
+            "certificateArtifacts": [],
+            "managed": {
+                "schemaVersion": 1,
+                "configVersionId": "mcv-apply-1",
+                "intentDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "managedFingerprint": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                "tlsBindings": [{
+                    "bindingId": "peer-tls:outbound:peer_outbound:pout1:cert-peer-b:5",
+                    "runtimeTag": "peer-out-pout1",
+                    "direction": "outbound",
+                    "ownerKind": "peer_outbound",
+                    "ownerId": "pout1",
+                    "certificateId": "cert-peer-b",
+                    "generation": 5,
+                    "fingerprintSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+                    "serverName": "peer-b.internal.example.com",
+                    "usage": "peer_ca_trust"
+                }],
+                "peerTrustArtifacts": [{
+                    "certificateId": "cert-peer-b",
+                    "generation": 5,
+                    "domains": ["peer-b.internal.example.com"],
+                    "fingerprintSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+                    "notBefore": "2026-01-01T00:00:00.000Z",
+                    "notAfter": "2027-01-01T00:00:00.000Z",
+                    "certificatePem": "PEER-B-PUBLIC-CERT"
+                }],
+                "ruleSetBindings": [{
+                    "runtimeTag": "rule-set-rs1",
+                    "ruleSetId": "rs1",
+                    "version": "v1",
+                    "format": "binary",
+                    "sha256": srs_sha,
+                    "sizeBytes": srs.len()
+                }],
+                "ruleSetArtifacts": [{
+                    "ruleSetId": "rs1",
+                    "version": "v1",
+                    "format": "binary",
+                    "sha256": srs_sha,
+                    "sizeBytes": srs.len(),
+                    "contentBase64": base64::engine::general_purpose::STANDARD.encode(&srs)
+                }]
+            }
+        });
+        if std::env::var("SING_BOX_BIN").is_ok() {
+            let certified =
+                rcgen::generate_simple_self_signed(vec!["peer-b.internal.example.com".to_string()])
+                    .unwrap();
+            document["managed"]["peerTrustArtifacts"][0]["certificatePem"] =
+                serde_json::Value::String(certified.cert.pem());
+        }
+        let body = serde_json::to_vec(&document).unwrap();
+        let FetchStatus::Updated { candidate, .. } = manager
+            .compile_snapshot(&body, revision)
+            .expect("managed snapshot compiles")
+        else {
+            panic!("new managed snapshot must stage");
+        };
+        assert!(
+            candidate
+                .managed_files
+                .iter()
+                .any(|file| file.sha256.as_deref() == Some(srs_sha.as_str()))
+        );
+        let active = read_config_map(manager.candidate_path()).unwrap();
+        let tls = active["outbounds"][1]["tls"].as_object().unwrap();
+        let certificate_path = tls["certificate_path"].as_str().unwrap();
+        assert!(certificate_path.starts_with(&dir.display().to_string()));
+        assert!(std::path::Path::new(certificate_path).exists());
+        assert!(!tls.contains_key("insecure"));
+        assert!(!tls.contains_key("certificate"));
+        assert!(!tls.contains_key("key_path"));
+        let rule_set_path = active["route"]["rule_set"][0]["path"].as_str().unwrap();
+        assert!(rule_set_path.starts_with(&dir.display().to_string()));
+        assert_ne!(rule_set_path, "/etc/untrusted/rs1.srs");
+        assert!(std::path::Path::new(rule_set_path).exists());
+
+        if let Ok(bin) = std::env::var("SING_BOX_BIN") {
+            let output = std::process::Command::new(bin)
+                .arg("check")
+                .arg("-c")
+                .arg(manager.candidate_path())
+                .output()
+                .expect("pinned sing-box runs");
+            assert!(
+                output.status.success(),
+                "pinned sing-box rejected the managed candidate:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 
     #[test]

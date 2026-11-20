@@ -15,6 +15,7 @@ import {
   buildAgentDesiredState,
 } from "./agent-desired-state";
 import { applyAgentTrafficReport } from "./agent-traffic-report";
+import { ManagedNetworkingRequiresV2Error } from "./managed-singbox";
 import {
   agentConfigV3OutputSchema,
   heartbeatSchema,
@@ -96,8 +97,15 @@ export const getAgentConfigV3 = agentProcedure
     // the content hash. The agent treats it as opaque (equality + content
     // byte-compare only); the subscription gate parses the seq prefix back
     // out of heartbeat `appliedRevision` reports.
-    const desired = await buildAgentDesiredState(context.server);
-    return buildAgentConfigV3Output(context.server, desired);
+    try {
+      const desired = await buildAgentDesiredState(context.server);
+      return buildAgentConfigV3Output(context.server, desired);
+    } catch (error) {
+      if (error instanceof ManagedNetworkingRequiresV2Error) {
+        throw new ORPCError("CONFLICT", { message: error.message });
+      }
+      throw error;
+    }
   });
 
 export const agentHeartbeat = agentProcedure
