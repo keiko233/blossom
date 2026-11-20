@@ -42,6 +42,9 @@ use crate::log_policy::{
 use crate::logs::{LogStore, SecretRegistryFull, SecretScope};
 use crate::metering::InboundClassification;
 
+#[path = "config_managed.rs"]
+pub(crate) mod managed;
+
 /// The agent always injects its own `api` service for traffic stats. The
 /// secret is per agent run (OS CSPRNG), the port is any free loopback port;
 /// the control plane's `experimental.v2ray_api` and any pre-existing `api`

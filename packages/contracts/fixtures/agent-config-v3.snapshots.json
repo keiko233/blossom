@@ -1,0 +1,465 @@
+{
+  "$comment": "Shared V3 desired-state and managed stage-intent compatibility fixtures (Task 07). Validated by packages/contracts/src/agent-config-v3.test.ts, app/src/orpc/proxy/agent-v3.test.ts, and server-agent/src/config_managed.rs.",
+  "apiVersion": 3,
+  "capability": "managed-networking-v1",
+  "budgets": {
+    "maxRuleSetAssetRawBytes": 524288,
+    "maxRuleSetAggregateRawBytes": 2097152,
+    "maxActivationPreviewBytes": 6291456,
+    "maxWireSnapshotBytes": 8388608
+  },
+  "stageIntent": {
+    "schemaVersion": 1,
+    "configVersionId": "mcv-srv-a-v1",
+    "serverId": "srv-a",
+    "version": 1,
+    "topologyGeneration": 4,
+    "subscriberInbounds": [
+      {
+        "nodeId": "n1",
+        "inboundTag": "node-n1",
+        "protocol": "vless",
+        "listenPort": 443,
+        "tlsServerName": "edge-a.example.com",
+        "certificateId": "cert-sub-a",
+        "settingsDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      {
+        "nodeId": "n2",
+        "inboundTag": "node-n2",
+        "protocol": "trojan",
+        "listenPort": 8443,
+        "tlsServerName": "zero-a.example.com",
+        "certificateId": "cert-sub-a",
+        "settingsDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      }
+    ],
+    "peerInbounds": [
+      {
+        "inboundId": "pin1",
+        "runtimeTag": "peer-in-pin1",
+        "protocol": "vless",
+        "listenAddress": "::",
+        "listenPort": 9443,
+        "advertisedAddress": "198.51.100.10",
+        "advertisedPort": 9443,
+        "tlsServerName": "peer-a.internal.example.com",
+        "certificateId": "cert-peer-a",
+        "certificateGeneration": 2,
+        "certificateFingerprintSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        "admissions": [
+          {
+            "linkId": "link-c-to-a",
+            "sourceServerId": "srv-c",
+            "credentialGeneration": 1
+          }
+        ]
+      }
+    ],
+    "outbounds": [
+      {
+        "outboundId": "dprof1",
+        "runtimeTag": "direct-dprof1",
+        "kind": "direct_profile",
+        "dialOptions": {
+          "bind_interface": "eth0"
+        },
+        "linkId": null,
+        "destinationServerId": null,
+        "destinationInboundId": null,
+        "protocol": null,
+        "serverAddress": null,
+        "serverPort": null,
+        "tlsServerName": null,
+        "credentialGeneration": null,
+        "trustMode": null,
+        "trustedCertificates": []
+      },
+      {
+        "outboundId": "pout1",
+        "runtimeTag": "peer-out-pout1",
+        "kind": "peer_link",
+        "dialOptions": {},
+        "linkId": "link-a-to-b",
+        "destinationServerId": "srv-b",
+        "destinationInboundId": "pin-b1",
+        "protocol": "trojan",
+        "serverAddress": "203.0.113.20",
+        "serverPort": 9443,
+        "tlsServerName": "peer-b.internal.example.com",
+        "credentialGeneration": 3,
+        "trustMode": "managed_certificate",
+        "trustedCertificates": [
+          {
+            "certificateId": "cert-peer-b",
+            "generation": 5,
+            "fingerprintSha256": "4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ]
+      }
+    ],
+    "routingPolicy": {
+      "finalOutboundTag": "direct",
+      "rules": [
+        {
+          "ruleId": "rule-cn-to-b",
+          "inboundTags": ["node-n1", "node-n2"],
+          "sniff": true,
+          "resolveStrategy": "prefer_ipv4",
+          "network": "tcp",
+          "domains": [],
+          "domainSuffixes": [],
+          "domainKeywords": [],
+          "ipCidrs": [],
+          "ports": [],
+          "ruleSetTags": ["rule-set-geoip-cn"],
+          "action": "route",
+          "outboundTag": "peer-out-pout1"
+        },
+        {
+          "ruleId": "rule-zero-user-only",
+          "inboundTags": ["node-n2"],
+          "sniff": false,
+          "resolveStrategy": null,
+          "network": "tcp",
+          "domains": ["only-n2.example.com"],
+          "domainSuffixes": [],
+          "domainKeywords": [],
+          "ipCidrs": [],
+          "ports": [],
+          "ruleSetTags": [],
+          "action": "reject",
+          "outboundTag": null
+        }
+      ]
+    },
+    "ruleSets": [
+      {
+        "runtimeTag": "rule-set-geoip-cn",
+        "ruleSetId": "geoip-cn",
+        "version": "20261120",
+        "format": "binary",
+        "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "sizeBytes": 3
+      }
+    ],
+    "stageExpectations": {
+      "requiredRuntimeTags": [
+        "node-n1",
+        "node-n2",
+        "peer-in-pin1",
+        "direct-dprof1",
+        "peer-out-pout1",
+        "rule-set-geoip-cn"
+      ],
+      "removedRuntimeTags": ["peer-out-retired0"]
+    }
+  },
+  "snapshots": [
+    {
+      "name": "legacy-v3-subscriber-only",
+      "expect": "ok",
+      "kind": "legacy",
+      "document": {
+        "apiVersion": 3,
+        "agent": {
+          "configPollIntervalSeconds": 60,
+          "heartbeatIntervalSeconds": 30,
+          "desiredAgentVersion": "latest"
+        },
+        "desiredRevision": "7:sha256:48a9e1aa59f365863b57348ccd1701026c39652cfb74b8e2b039811611802ec6",
+        "materializedNodeIds": ["n1"],
+        "singboxConfig": {
+          "log": { "level": "info", "timestamp": true },
+          "inbounds": [
+            {
+              "type": "vless",
+              "tag": "node-n1",
+              "listen": "::",
+              "listen_port": 443,
+              "tls": {
+                "enabled": true,
+                "server_name": "edge-a.example.com"
+              }
+            }
+          ],
+          "outbounds": [{ "type": "direct", "tag": "direct" }],
+          "route": { "rules": [], "rule_set": [], "final": "direct" }
+        },
+        "managedTlsBindings": [
+          {
+            "nodeId": "n1",
+            "inboundTag": "node-n1",
+            "certificateId": "cert-sub-a",
+            "generation": 1,
+            "serverName": "edge-a.example.com"
+          }
+        ],
+        "certificateArtifacts": [
+          {
+            "certificateId": "cert-sub-a",
+            "generation": 1,
+            "domains": ["edge-a.example.com"],
+            "fingerprintSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "notBefore": "2026-01-01T00:00:00.000Z",
+            "notAfter": "2027-01-01T00:00:00.000Z",
+            "certificatePem": "-----BEGIN CERTIFICATE-----\nSUB-A\n-----END CERTIFICATE-----\n",
+            "privateKeyPem": "-----BEGIN PRIVATE KEY-----\nSUB-A-KEY\n-----END PRIVATE KEY-----\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "managed-v3-single-unit",
+      "expect": "ok",
+      "kind": "managed",
+      "document": {
+        "apiVersion": 3,
+        "agent": {
+          "configPollIntervalSeconds": 60,
+          "heartbeatIntervalSeconds": 30
+        },
+        "desiredRevision": "12:sha256:9f848c32a9bd9b9b33e09f5e6f844bf42a8e1960d4bc0c122f93e95a3d7f6301",
+        "materializedNodeIds": ["n1"],
+        "singboxConfig": {
+          "log": { "level": "info", "timestamp": true },
+          "inbounds": [
+            {
+              "type": "vless",
+              "tag": "node-n1",
+              "listen": "::",
+              "listen_port": 443,
+              "tls": {
+                "enabled": true,
+                "server_name": "edge-a.example.com"
+              }
+            },
+            {
+              "type": "vless",
+              "tag": "peer-in-pin1",
+              "listen": "::",
+              "listen_port": 9443,
+              "tls": {
+                "enabled": true,
+                "server_name": "peer-a.internal.example.com"
+              }
+            }
+          ],
+          "outbounds": [
+            { "type": "direct", "tag": "direct" },
+            {
+              "type": "direct",
+              "tag": "direct-dprof1",
+              "bind_interface": "eth0"
+            },
+            {
+              "type": "trojan",
+              "tag": "peer-out-pout1",
+              "server": "203.0.113.20",
+              "server_port": 9443,
+              "tls": {
+                "enabled": true,
+                "server_name": "peer-b.internal.example.com",
+                "certificate": ["untrusted-inline-ca"],
+                "certificate_path": "/etc/untrusted/ca.pem",
+                "key_path": "/etc/untrusted/client.key",
+                "insecure": true
+              }
+            }
+          ],
+          "route": {
+            "rules": [
+              {
+                "inbound": ["node-n1"],
+                "network": ["tcp"],
+                "rule_set": ["rule-set-geoip-cn"],
+                "action": "route",
+                "outbound": "peer-out-pout1"
+              }
+            ],
+            "rule_set": [
+              {
+                "tag": "rule-set-geoip-cn",
+                "type": "local",
+                "format": "binary",
+                "path": "/etc/untrusted/geoip-cn.srs",
+                "url": "https://untrusted.example.com/geoip-cn.srs"
+              }
+            ],
+            "final": "direct"
+          }
+        },
+        "managedTlsBindings": [
+          {
+            "nodeId": "n1",
+            "inboundTag": "node-n1",
+            "certificateId": "cert-sub-a",
+            "generation": 1,
+            "serverName": "edge-a.example.com"
+          }
+        ],
+        "certificateArtifacts": [
+          {
+            "certificateId": "cert-sub-a",
+            "generation": 1,
+            "domains": ["edge-a.example.com"],
+            "fingerprintSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "notBefore": "2026-01-01T00:00:00.000Z",
+            "notAfter": "2027-01-01T00:00:00.000Z",
+            "certificatePem": "-----BEGIN CERTIFICATE-----\nSUB-A\n-----END CERTIFICATE-----\n",
+            "privateKeyPem": "-----BEGIN PRIVATE KEY-----\nSUB-A-KEY\n-----END PRIVATE KEY-----\n"
+          },
+          {
+            "certificateId": "cert-peer-a",
+            "generation": 2,
+            "domains": ["peer-a.internal.example.com"],
+            "fingerprintSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "notBefore": "2026-01-01T00:00:00.000Z",
+            "notAfter": "2027-01-01T00:00:00.000Z",
+            "certificatePem": "-----BEGIN CERTIFICATE-----\nPEER-A\n-----END CERTIFICATE-----\n",
+            "privateKeyPem": "-----BEGIN PRIVATE KEY-----\nPEER-A-KEY\n-----END PRIVATE KEY-----\n"
+          }
+        ],
+        "managed": {
+          "schemaVersion": 1,
+          "configVersionId": "mcv-srv-a-v1",
+          "intentDigest": "sha256:28538b473e92d0b9afcae4c32bce2198aaab9c89919b9bf484e4de64600681da",
+          "managedFingerprint": "sha256:7154fdd1a8406ab406651a2f4092d2df3cc7fc2affa9c484a90d3efcd076aa27",
+          "tlsBindings": [
+            {
+              "bindingId": "peer-tls:inbound:peer_inbound:pin1:cert-peer-a:2",
+              "runtimeTag": "peer-in-pin1",
+              "direction": "inbound",
+              "ownerKind": "peer_inbound",
+              "ownerId": "pin1",
+              "certificateId": "cert-peer-a",
+              "generation": 2,
+              "fingerprintSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+              "serverName": "peer-a.internal.example.com",
+              "usage": "identity_fullchain_and_key"
+            },
+            {
+              "bindingId": "peer-tls:outbound:peer_outbound:pout1:cert-peer-b:5",
+              "runtimeTag": "peer-out-pout1",
+              "direction": "outbound",
+              "ownerKind": "peer_outbound",
+              "ownerId": "pout1",
+              "certificateId": "cert-peer-b",
+              "generation": 5,
+              "fingerprintSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+              "serverName": "peer-b.internal.example.com",
+              "usage": "peer_ca_trust"
+            }
+          ],
+          "peerTrustArtifacts": [
+            {
+              "certificateId": "cert-peer-b",
+              "generation": 5,
+              "domains": ["peer-b.internal.example.com"],
+              "fingerprintSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+              "notBefore": "2026-01-01T00:00:00.000Z",
+              "notAfter": "2027-01-01T00:00:00.000Z",
+              "certificatePem": "-----BEGIN CERTIFICATE-----\nPEER-B-PUBLIC-ONLY\n-----END CERTIFICATE-----\n"
+            }
+          ],
+          "ruleSetBindings": [
+            {
+              "runtimeTag": "rule-set-geoip-cn",
+              "ruleSetId": "geoip-cn",
+              "version": "20261120",
+              "format": "binary",
+              "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+              "sizeBytes": 3
+            }
+          ],
+          "ruleSetArtifacts": [
+            {
+              "ruleSetId": "geoip-cn",
+              "version": "20261120",
+              "format": "binary",
+              "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+              "sizeBytes": 3,
+              "contentBase64": "YWJj"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "reject-outbound-binding-with-inbound-tag",
+      "expect": "invalid",
+      "kind": "managed",
+      "document": {
+        "apiVersion": 3,
+        "agent": {
+          "configPollIntervalSeconds": 60,
+          "heartbeatIntervalSeconds": 30
+        },
+        "desiredRevision": "12:sha256:9f848c32a9bd9b9b33e09f5e6f844bf42a8e1960d4bc0c122f93e95a3d7f6301",
+        "materializedNodeIds": [],
+        "singboxConfig": {},
+        "managedTlsBindings": [],
+        "certificateArtifacts": [],
+        "managed": {
+          "schemaVersion": 1,
+          "configVersionId": "mcv-srv-a-v1",
+          "intentDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "managedFingerprint": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+          "tlsBindings": [
+            {
+              "bindingId": "peer-tls:outbound:peer_outbound:pout1:cert-peer-b:5",
+              "runtimeTag": "peer-in-pout1",
+              "direction": "outbound",
+              "ownerKind": "peer_outbound",
+              "ownerId": "pout1",
+              "certificateId": "cert-peer-b",
+              "generation": 5,
+              "fingerprintSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+              "serverName": "peer-b.internal.example.com",
+              "usage": "peer_ca_trust"
+            }
+          ],
+          "peerTrustArtifacts": [],
+          "ruleSetBindings": [],
+          "ruleSetArtifacts": []
+        }
+      }
+    },
+    {
+      "name": "reject-rule-set-over-per-asset-budget",
+      "expect": "invalid",
+      "kind": "managed",
+      "document": {
+        "apiVersion": 3,
+        "agent": {
+          "configPollIntervalSeconds": 60,
+          "heartbeatIntervalSeconds": 30
+        },
+        "desiredRevision": "12:sha256:9f848c32a9bd9b9b33e09f5e6f844bf42a8e1960d4bc0c122f93e95a3d7f6301",
+        "materializedNodeIds": [],
+        "singboxConfig": {},
+        "managedTlsBindings": [],
+        "certificateArtifacts": [],
+        "managed": {
+          "schemaVersion": 1,
+          "configVersionId": "mcv-srv-a-v1",
+          "intentDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "managedFingerprint": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+          "tlsBindings": [],
+          "peerTrustArtifacts": [],
+          "ruleSetBindings": [
+            {
+              "runtimeTag": "rule-set-oversized",
+              "ruleSetId": "oversized",
+              "version": "1",
+              "format": "binary",
+              "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+              "sizeBytes": 524289
+            }
+          ],
+          "ruleSetArtifacts": []
+        }
+      }
+    }
+  ]
+}
