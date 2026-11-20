@@ -1,7 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { timingSafeEqual } from "node:crypto";
 
 import { getServerEnv } from "@/lib/env";
+import {
+  authorizeMaintenanceRequest,
+  NO_STORE_HEADERS,
+} from "@/lib/maintenance-auth";
 import { pruneServerMetricHistory } from "@/query/server-metric-store";
 
 const DEFAULT_BATCH_SIZE = 1_000;
@@ -9,27 +12,11 @@ const DEFAULT_MAX_BATCHES = 10;
 const MAX_BATCH_SIZE = 5_000;
 const MAX_BATCHES = 100;
 
-function bearer(request: Request): string | null {
-  const header = request.headers.get("authorization") ?? "";
-  const match = /^Bearer\s+(.+)$/i.exec(header);
-  return match?.[1] ?? null;
-}
-
-function sameSecret(actual: string, expected: string): boolean {
-  const left = Buffer.from(actual);
-  const right = Buffer.from(expected);
-  return left.length === right.length && timingSafeEqual(left, right);
-}
-
 function bounded(value: string | null, fallback: number, max: number): number {
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0
     ? Math.min(parsed, max)
     : fallback;
-}
-
-function headers(): HeadersInit {
-  return { "cache-control": "no-store" };
 }
 
 /**
@@ -55,16 +42,9 @@ export async function handleServerMetricMaintenance(
   request: Request,
   dependencies: ServerMetricMaintenanceDependencies = defaultDependencies,
 ): Promise<Response> {
-  const expected = dependencies.token();
-  if (!expected) {
-    return Response.json(
-      { error: "maintenance_disabled" },
-      { status: 503, headers: headers() },
-    );
-  }
-  const token = bearer(request);
-  if (!token || !sameSecret(token, expected)) {
-    return new Response(null, { status: 401, headers: headers() });
+  const denied = authorizeMaintenanceRequest(request, dependencies.token());
+  if (denied) {
+    return denied;
   }
   const url = new URL(request.url);
   const batchSize = bounded(
@@ -84,7 +64,7 @@ export async function handleServerMetricMaintenance(
   });
   return Response.json(
     { removed, batchSize, maxBatches },
-    { headers: headers() },
+    { headers: NO_STORE_HEADERS },
   );
 }
 
