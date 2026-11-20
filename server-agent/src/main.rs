@@ -16,6 +16,7 @@ mod log_policy;
 mod logs;
 mod metering;
 mod oauth;
+mod probe;
 mod process;
 mod pty;
 mod service;
