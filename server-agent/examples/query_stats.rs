@@ -6,11 +6,20 @@
 //! ```sh
 //! cargo run --example query_stats -- 127.0.0.1:18080 <secret>
 //! ```
+//!
+//! Pass a third argument to write every encoded `ConnectionEvents` frame to
+//! that directory as `connection-events-<n>.bin`. The checked-in decoder fixtures
+//! under `src/stats/fixtures/` were captured this way from the pinned 1.14.4
+//! binary; the capture is manual and is not part of `cargo test`.
 
 #[path = "../src/stats.rs"]
 mod stats;
 
+use std::fs;
+use std::path::PathBuf;
 use std::time::Duration;
+
+use prost::Message as _;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -18,26 +27,44 @@ async fn main() -> anyhow::Result<()> {
         .nth(1)
         .unwrap_or_else(|| "127.0.0.1:18080".to_string());
     let secret = std::env::args().nth(2);
-    let mut client = stats::StatsClient::connect_lazy(&addr, secret.as_deref())?;
+    let dump_dir = std::env::args().nth(3).map(PathBuf::from);
+    if let Some(dir) = &dump_dir {
+        fs::create_dir_all(dir)?;
+    }
 
+    let mut client = stats::StatsClient::connect_lazy(&addr, secret.as_deref())?;
     let mut stream = client.subscribe_connections(Duration::from_secs(1)).await?;
+    let mut sequence = 0_u64;
     while let Some(message) = stream.message().await? {
+        if let Some(dir) = &dump_dir {
+            sequence += 1;
+            fs::write(
+                dir.join(format!("connection-events-{sequence:04}.bin")),
+                message.encode_to_vec(),
+            )?;
+        }
         println!("reset={} events={}", message.reset, message.events.len());
         for event in &message.events {
             match &event.connection {
                 Some(connection) => println!(
-                    "  type={} id={} user={} up_total={} down_total={} up_delta={} down_delta={}",
+                    "  type={} id={} inbound={} user={} closed_at={} up_total={} down_total={} up_delta={} down_delta={}",
                     event.r#type,
                     event.id,
+                    connection.inbound,
                     connection.user,
+                    connection.closed_at,
                     connection.uplink_total,
                     connection.downlink_total,
                     event.uplink_delta,
                     event.downlink_delta,
                 ),
                 None => println!(
-                    "  type={} id={} (no connection metadata)",
-                    event.r#type, event.id
+                    "  type={} id={} closed_at={} up_delta={} down_delta={} (no connection metadata)",
+                    event.r#type,
+                    event.id,
+                    event.closed_at,
+                    event.uplink_delta,
+                    event.downlink_delta
                 ),
             }
         }

@@ -406,7 +406,7 @@ impl PendingQueue {
     }
 }
 
-fn read_batch(path: &Path) -> Result<Batch, String> {
+pub(crate) fn read_batch(path: &Path) -> Result<Batch, String> {
     let bytes = fs::read(path).map_err(|e| e.to_string())?;
     let batch: Batch = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");

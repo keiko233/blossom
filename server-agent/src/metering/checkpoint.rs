@@ -69,6 +69,10 @@ pub(crate) struct Checkpoint {
     pub(super) accountant: AccountantState,
     /// Sealed, unacknowledged batches, oldest first.
     pub(super) outbox: Vec<Batch>,
+    /// Report ids imported from the legacy traffic queue. They are durable
+    /// tombstones so a leftover legacy file can never be sealed a second time.
+    #[serde(default)]
+    pub(super) legacy_imported: Vec<String>,
 }
 
 impl Checkpoint {
@@ -92,13 +96,26 @@ impl Checkpoint {
             if !is_report_id(&batch.report_id) || !report_ids.insert(batch.report_id.as_str()) {
                 return Err(CheckpointError::InvalidBatch);
             }
+            if batch.entries.iter().any(|entry| {
+                entry.subscription_id.is_empty()
+                    || entry.uplink_bytes < 0
+                    || entry.downlink_bytes < 0
+            }) {
+                return Err(CheckpointError::InvalidBatch);
+            }
+        }
+        let mut imported = HashSet::new();
+        for report_id in &self.legacy_imported {
+            if !is_report_id(report_id) || !imported.insert(report_id.as_str()) {
+                return Err(CheckpointError::InvalidBatch);
+            }
         }
         Ok(())
     }
 }
 
 /// The control plane's report id grammar: `[A-Za-z0-9._-]{8,128}`.
-fn is_report_id(value: &str) -> bool {
+pub(super) fn is_report_id(value: &str) -> bool {
     (8..=128).contains(&value.len())
         && value
             .bytes()

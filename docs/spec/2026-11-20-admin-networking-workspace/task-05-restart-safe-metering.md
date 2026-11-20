@@ -9,7 +9,11 @@ This handoff covers the fixture and core slice of task 05 in the [implementation
 | [`checkpoint.rs`](../../../server-agent/src/metering/checkpoint.rs) | `InstanceKey`, which is task 04's `RuntimeInstance` display key validated as a file-name-safe string. `Checkpoint`, the schema 1 record: instance, sequence, commit time, window start, accountant state and outbox batches.                                                     |
 | [`store.rs`](../../../server-agent/src/metering/store.rs)           | `CheckpointStore` writes `<dir>/runtime.checkpoint.json` with mode `0600` (temp file, fsync, rename, directory fsync). A damaged or future-schema file is moved to `runtime.checkpoint.damaged.json`. An I/O read error is returned as an error and is never treated as damage.  |
 | [`meter.rs`](../../../server-agent/src/metering/meter.rs)           | `RuntimeMeter` (`recover`, `apply`, `commit`, `sendable`, `acknowledge`), `Recovery`, `BaselineReason` and `Commit`.                                                                                                                                                             |
-| [`tests.rs`](../../../server-agent/src/metering/tests.rs)           | Fixtures against a control-plane ledger that deduplicates by ID: a long connection across an agent restart, a crash before and after commit, a lost ACK, a failed commit, closed connections replayed, missing and damaged checkpoints, a future schema and runtime replacement. |
+| [`tests.rs`](../../../server-agent/src/metering/tests.rs)           | Fixtures against a control-plane ledger that deduplicates by ID: a long connection across an agent restart, a crash before and after commit, a lost ACK, a failed commit, closed connections replayed, missing and damaged checkpoints, a future schema, runtime replacement, retention and inbound/identity filtering. |
+| [`filter.rs`](../../../server-agent/src/metering/filter.rs)        | Inbound classification (`subscriber`/`peer`/`probe`), the Rust subscriber identity codec, the managed-metering capability gate and filtering before the accountant. A missing or unknown inbound latches the instance as unproven. |
+| [`import.rs`](../../../server-agent/src/metering/import.rs)        | One-time scan/import of the legacy `traffic/pending` queue under its existing report ids; files are removed only after the importing checkpoint commits. |
+| [`worker.rs`](../../../server-agent/src/metering/worker.rs)        | `MeteringState` and `MeteringWorker`: accepts task 04 `RuntimeInstance` observations, final-commits the old meter, recovers the new instance, invalidates old stream ids, imports the legacy queue and flushes durable batches through any `ReportSink`. |
+| [`stats.rs`](../../../server-agent/src/stats.rs)                  | `Connection.inbound` field 2, the pinned 1.14.4 capture fixtures and the protocol constants. Actual captures cover live/update/closed events and a closed-history snapshot. |
 
 [`accountant.rs`](../../../server-agent/src/accountant.rs) gains `state`, `from_state` and `baseline`. Existing behavior does not change. `traffic.rs` only makes the batch format, report ID, entry drain and atomic-write helpers `pub(crate)`, so committed batches keep the existing wire format and can go through the existing `ReportSink`.
 
@@ -35,22 +39,22 @@ This handoff covers the fixture and core slice of task 05 in the [implementation
 
 Processkit and Docker can adopt the same meter with `InvocationId::Process`. In that mode every agent restart also restarts sing-box, so recovery always classifies `NewInstance`. Live connections are dropped, but the outbox is preserved and nothing is charged twice.
 
-## Pinned stats fixture verification (owed)
+## Pinned stats fixture verification
 
-The pinned test binary is sing-box **1.14.4** (`Dockerfile.test`, with a digest per architecture). Unit fixtures are hand-built `ConnectionEvents`. To confirm the decoder against the real binary:
+The pinned test binary is sing-box **1.14.4** (`Dockerfile.test`, with a digest per architecture). `examples/query_stats.rs` can dump encoded `ConnectionEvents` frames, and checked-in captures under `server-agent/src/stats/fixtures/` are decoded by unit tests.
 
-1. Capture raw `SubscribeConnections` frames from 1.14.4 by extending `examples/query_stats.rs` to dump the encoded messages. Cover one long connection, a reconnect snapshot, more than 1000 closed connections (history overflow) and a process restart. Commit them as binary fixtures and decode them in a unit test.
-2. Assert the fields the agent consumes (`user` = 10, `closedAt` = 13, `uplinkTotal` = 16, `downlinkTotal` = 17, the event type and both deltas). Assert the size of the closed history. If the snapshot fills the history and its oldest `closedAt` is newer than the last commit, record a partial unobservable window.
-3. Run an opt-in, `#[ignore]`d process test that uses the real binary with a long-lived loopback connection across an agent restart, and assert the ledger totals equal the sing-box totals.
+1. Actual 1.14.4 captures cover a live NEW event, UPDATE deltas, a CLOSED event with final totals, and a reconnect snapshot with replayed closed history. The snapshot carried 177 closed connections; repeated local runs did not fill the 1000-entry history, so the >1000 overflow fixture is still owed.
+2. The tests assert the fields the agent consumes: `inbound` = 2, `user` = 10, event/`Connection` `closedAt` = 6/13, `uplinkTotal` = 16, `downlinkTotal` = 17, the event type and both deltas. They also assert the captured closed-history size and unique ids. A 1000-entry snapshot whose oldest `closedAt` is newer than the last commit yields an unobservable gap from that commit to the oldest retained closure.
+3. The opt-in real-binary restart test and a >1000-history overflow capture remain owed.
 
-## Filtering (owed)
+## Filtering
 
-- Read the inbound tag field number from `daemon/started_service.proto` at tag `v1.14.4`, and the protocol version that introduced it, before adding it to `stats::Connection`. This slice has not verified it.
-- Filter inside `RuntimeMeter::apply`, before `ConnectionAccountant`. Peer and probe connections must never enter tracked state.
-  - Classify each inbound tag from the committed generation's inbound classification. A config change creates a new generation and therefore a new instance, so the classification is fixed for the lifetime of a meter.
-  - Bill only subscriber inbounds whose `user` decodes through the subscriber identity codec.
-  - Drop and count unknown tags and identities that do not decode.
-- If the runtime does not provide the field, keep subscriber-only servers on the current behavior and block metered activation of peer links.
+- `Connection.inbound` is field 2 in `daemon/started_service.proto`. It was present when `StartedService` first shipped in 1.13.0, and the pinned 1.14.4 binary returns it. The agent keeps its existing >= 1.14 floor.
+- `RuntimeMeter::apply` filters inside the meter, before `ConnectionAccountant`. Peer and probe connections never enter tracked state.
+  - Each inbound tag comes from the committed generation's explicit classification. A config change creates a new generation and therefore a new instance, so the classification is fixed for the lifetime of a meter.
+  - Only subscriber inbounds whose `user` decodes through the `blz.1...` codec are billable. A bare legacy id is dropped under managed metering.
+  - Unknown tags, missing inbound fields and undecodable identities are dropped and counted. A missing or unknown inbound latches `unproven` for the instance and defers every later commit.
+- `managed_metering` requires a supported stats protocol and a classification that proves every committed tag. Otherwise managed activation and peer links stay blocked. Processkit and Docker remain on the existing path until integration supplies that proof.
 
 ## Docker profile recommendation
 
@@ -69,4 +73,4 @@ On a disposable VM with task 04's units: one established flow across an agent re
 
 ## Checks run for this slice
 
-From `server-agent/`: `cargo fmt --all`, `cargo clippy --locked --all-targets --all-features -- -D warnings` and `cargo test --locked -- --test-threads=1` all pass. The run covers 412 unit tests, including 10 new `metering::` tests and 3 new `accountant::` tests, plus 8 OAuth service tests and 2 v2 lifecycle tests.
+From `server-agent/`: `cargo fmt --all`, `cargo fmt --all -- --check`, `cargo clippy --locked --all-targets --all-features -- -D warnings` and `cargo test --locked -- --test-threads=1` all pass. The run covers 432 unit tests, including 16 `metering::tests` fixtures, 4 filter tests, 6 worker tests, 4 pinned-stats tests, 17 `accountant` tests, plus 8 OAuth service tests and 2 v2 lifecycle tests. The transferable worker/trigger call sites, activation gate, real-binary restart test and >1000 closed-history capture remain integration work.

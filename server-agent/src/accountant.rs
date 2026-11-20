@@ -332,6 +332,7 @@ mod tests {
 
     fn connection(user: &str, uplink_total: i64, downlink_total: i64) -> Connection {
         Connection {
+            inbound: "node-test".to_string(),
             user: user.to_string(),
             closed_at: 0,
             uplink_total,
