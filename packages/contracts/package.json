@@ -6,6 +6,7 @@
     "./agent-config-v3": "./src/agent-config-v3.ts",
     "./agent-ws": "./src/agent-ws.ts",
     "./agent-ws-v2": "./src/agent-ws-v2.ts",
+    "./managed-link-probe": "./src/managed-link-probe.ts",
     "./log-policy": "./src/log-policy.ts",
     "./agent-ws-v2-logs": "./src/agent-ws-v2-logs.ts",
     "./plan": "./src/plan.ts",

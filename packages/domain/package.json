@@ -9,6 +9,7 @@
     "./group-membership": "./src/group-membership.ts",
     "./link-identity": "./src/link-identity.ts",
     "./managed-networking": "./src/managed-networking.ts",
+    "./managed-rollout": "./src/managed-rollout.ts",
     "./registration-policy": "./src/registration-policy.ts"
   }
 }
