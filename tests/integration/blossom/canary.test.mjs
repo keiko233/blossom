@@ -115,14 +115,16 @@ function fakeProbe({ version, wired = false, activation = "false" }) {
         const probe = wired ? "    MANAGED_LINK_PROBE_CAPABILITY,\n" : "";
         return `const V2_CAPABILITIES: &[&str] = &[\n    "config-v3",\n${probe}];\n`;
       }
-      if (wired && file.endsWith("agent-config-v3.ts")) {
-        return "probeBindings: []";
+      if (file.endsWith("agent-config-v3.ts")) {
+        return wired ? "probeBindings: []" : "";
       }
-      if (wired && file.endsWith("managed-singbox.ts")) {
-        return "probeBindings: []";
+      if (file.endsWith("managed-singbox.ts")) {
+        return wired ? "probeBindings: []" : "";
       }
-      if (wired && file.endsWith("query/networking.ts")) {
-        return "await admitManagedRollout(input);";
+      if (file.endsWith("query/networking.ts")) {
+        return wired
+          ? 'export const applyNetworkingRollout = createServerFn({ method: "POST" })'
+          : "";
       }
       return readFileSync(file, "utf8");
     },

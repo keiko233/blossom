@@ -220,7 +220,7 @@ function managedProbeBindings(repoRoot, { readText }) {
  * against an integration whose export name differs, without guessing it here.
  */
 function applyIngress(repoRoot, { readText }) {
-  return /admitManagedRollout\s*\(/.test(
+  return /export const applyNetworkingRollout\s*=\s*createServerFn\(/.test(
     readText(path.join(repoRoot, NETWORKING_QUERY_SOURCE)),
   );
 }
