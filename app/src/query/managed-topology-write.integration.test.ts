@@ -567,11 +567,23 @@ describe.skipIf(!PG_URL)("managed topology boundary", () => {
         expect(
           (
             await admin.query(
-              `SELECT state, min_revision_seq FROM managed_rollout_stage
+              `SELECT state, min_revision_seq, issued_revision_seq,
+                      issued_at IS NOT NULL AS issued, deadline_at IS NOT NULL AS deadline,
+                      confirmed_at
+               FROM managed_rollout_stage
                WHERE rollout_id = 'r-pointer' AND ordinal = 1`,
             )
           ).rows,
-        ).toEqual([{ state: "confirmed", min_revision_seq: 1 }]);
+        ).toEqual([
+          {
+            state: "issued",
+            min_revision_seq: 1,
+            issued_revision_seq: 1,
+            issued: true,
+            deadline: true,
+            confirmed_at: null,
+          },
+        ]);
         expect(
           (
             await admin.query(
