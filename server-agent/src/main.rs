@@ -14,6 +14,12 @@ mod client;
 mod config;
 mod log_policy;
 mod logs;
+#[expect(
+    dead_code,
+    unused_imports,
+    reason = "restart-safe metering foundation; wired in with native service activation"
+)]
+mod metering;
 mod oauth;
 mod process;
 mod pty;
