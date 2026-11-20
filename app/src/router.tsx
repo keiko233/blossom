@@ -2,6 +2,7 @@ import { createRouter as createTanStackRouter } from "@tanstack/react-router";
 import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query";
 import type { ReactNode } from "react";
 
+import { WORKSPACE_SCROLL_TO_TOP_SELECTORS } from "./components/app-shell/workspace";
 import { getContext } from "./integrations/tanstack-query/root-provider";
 import { routeTree } from "./route-tree.gen";
 
@@ -12,6 +13,7 @@ export function getRouter() {
     routeTree,
     context,
     scrollRestoration: true,
+    scrollToTopSelectors: WORKSPACE_SCROLL_TO_TOP_SELECTORS,
     defaultPreload: "intent",
     defaultPreloadStaleTime: 0,
   });

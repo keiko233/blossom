@@ -3,6 +3,7 @@ import { PlusIcon } from "lucide-react";
 import type React from "react";
 import { useRef, useState } from "react";
 
+import { WorkspaceSidebar } from "@/components/app-shell/workspace";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
@@ -77,14 +78,10 @@ export function ServerSidebar({
   };
 
   return (
-    <aside
+    <WorkspaceSidebar
       id={id}
       data-slot="server-sidebar"
-      className={cn(
-        "w-full flex-col gap-3 border-b p-4",
-        "md:sticky md:top-16 md:flex md:h-[calc(100svh-4rem)] md:overflow-y-auto md:border-r md:border-b-0",
-        className,
-      )}
+      className={cn("gap-3 p-4", className)}
     >
       <div className="flex items-center justify-between gap-2">
         <h2 className="font-medium">{m.admin_nav_proxies_item_servers()}</h2>
@@ -159,6 +156,6 @@ export function ServerSidebar({
           </ul>
         </nav>
       )}
-    </aside>
+    </WorkspaceSidebar>
   );
 }

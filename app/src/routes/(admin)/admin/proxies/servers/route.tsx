@@ -2,6 +2,7 @@ import { createFileRoute, Outlet } from "@tanstack/react-router";
 import type React from "react";
 import { useState } from "react";
 
+import { Workspace, WorkspacePane } from "@/components/app-shell/workspace";
 import { Button } from "@/components/ui/button";
 import { m } from "@/paraglide/messages";
 
@@ -27,7 +28,7 @@ function RouteComponent(): React.ReactElement {
   const { data: servers, isPending, isError } = useServerList();
 
   return (
-    <div className="flex min-w-0 flex-col md:grid md:grid-cols-[18rem_minmax(0,1fr)]">
+    <Workspace>
       <div className="border-b p-3 md:hidden">
         <Button
           variant="outline"
@@ -49,9 +50,9 @@ function RouteComponent(): React.ReactElement {
         onNavigate={() => setListOpen(false)}
       />
 
-      <div className="min-w-0">
+      <WorkspacePane>
         <Outlet />
-      </div>
-    </div>
+      </WorkspacePane>
+    </Workspace>
   );
 }

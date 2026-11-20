@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import type React from "react";
 
+import { WorkspaceViewport } from "@/components/app-shell/workspace";
 import { m } from "@/paraglide/messages";
 
 import { ServerFormPage } from "./_modules/server-form-page";
@@ -13,5 +14,9 @@ export const Route = createFileRoute("/(admin)/admin/proxies/servers/new")({
 });
 
 function RouteComponent(): React.ReactElement {
-  return <ServerFormPage />;
+  return (
+    <WorkspaceViewport scrollId="server-new">
+      <ServerFormPage />
+    </WorkspaceViewport>
+  );
 }

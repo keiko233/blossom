@@ -1,6 +1,10 @@
 import { createFileRoute, Outlet } from "@tanstack/react-router";
 import type React from "react";
 
+import {
+  WorkspaceHeader,
+  WorkspaceViewport,
+} from "@/components/app-shell/workspace";
 import { getServer } from "@/query/servers";
 
 import { ServerWorkspaceHeader } from "../_modules/server-workspace-header";
@@ -20,14 +24,20 @@ function RouteComponent(): React.ReactElement {
   const item = servers?.find((row) => row.id === server.id);
 
   return (
-    <div className="flex min-w-0 flex-col gap-4 p-4 md:p-6">
-      <ServerWorkspaceHeader server={server} item={item} />
-      <ServerWorkspaceTabs serverId={server.id} />
+    <>
+      <WorkspaceHeader className="px-4 pt-4 md:px-6 md:pt-6">
+        <ServerWorkspaceHeader server={server} item={item} />
+        <ServerWorkspaceTabs serverId={server.id} />
+      </WorkspaceHeader>
       {/* Keyed by server so switching servers remounts the active tab and no
           state from the previous server carries over. */}
-      <div key={server.id} className="flex min-w-0 flex-col gap-4">
+      <WorkspaceViewport
+        key={server.id}
+        scrollId={`server-${server.id}`}
+        className="gap-4 p-4 md:p-6"
+      >
         <Outlet />
-      </div>
-    </div>
+      </WorkspaceViewport>
+    </>
   );
 }

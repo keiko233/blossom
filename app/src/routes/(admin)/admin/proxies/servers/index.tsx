@@ -2,6 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { PlusIcon, ServerIcon } from "lucide-react";
 import type React from "react";
 
+import { WorkspaceViewport } from "@/components/app-shell/workspace";
 import { Button } from "@/components/ui/button";
 import {
   Empty,
@@ -24,7 +25,7 @@ function RouteComponent(): React.ReactElement {
   const noServers = servers?.length === 0;
 
   return (
-    <div className="flex p-4 md:p-6">
+    <WorkspaceViewport scrollId="servers" className="p-4 md:p-6">
       <Empty>
         <EmptyHeader>
           <EmptyMedia variant="icon">
@@ -46,6 +47,6 @@ function RouteComponent(): React.ReactElement {
           {m.admin_proxies_servers_add()}
         </Button>
       </Empty>
-    </div>
+    </WorkspaceViewport>
   );
 }
