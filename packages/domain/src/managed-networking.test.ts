@@ -4,6 +4,7 @@ import {
   agentOwnedRuntimeTag,
   BUILTIN_DIRECT_OUTBOUND_TAG,
   classifyManagedRuntimeTag,
+  directProfileIpFamilyDialFields,
   estimateBase64EncodedBytes,
   evaluateManagedSnapshotByteBudget,
   isReservedRuntimeTag,
@@ -150,5 +151,13 @@ describe("evaluateManagedSnapshotByteBudget", () => {
 describe("managed activation", () => {
   it("stays disabled until the rollout gate ships", () => {
     expect(MANAGED_NETWORKING_ACTIVATION_ENABLED).toBe(false);
+  });
+});
+
+describe("directProfileIpFamilyDialFields", () => {
+  it("maps only the explicit family, leaving any at the sing-box defaults", () => {
+    expect(directProfileIpFamilyDialFields("any")).toEqual({});
+    expect(directProfileIpFamilyDialFields("ipv4")).toEqual({ inet6: false });
+    expect(directProfileIpFamilyDialFields("ipv6")).toEqual({ inet4: false });
   });
 });

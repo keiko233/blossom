@@ -46,6 +46,32 @@ export type PeerProtocol = (typeof PEER_PROTOCOLS)[number];
 export const MANAGED_OUTBOUND_KINDS = ["direct_profile", "peer_link"] as const;
 export type ManagedOutboundKind = (typeof MANAGED_OUTBOUND_KINDS)[number];
 
+/**
+ * IP-family choices a named direct profile may pin. `any` leaves the sing-box
+ * dial defaults untouched; the other values map to validated `inet4`/`inet6`
+ * bind fields at render time.
+ */
+export const MANAGEABLE_OUTBOUND_IP_FAMILIES = ["any", "ipv4", "ipv6"] as const;
+export type ManageableOutboundIpFamily =
+  (typeof MANAGEABLE_OUTBOUND_IP_FAMILIES)[number];
+
+/**
+ * Maps a named direct profile's IP-family choice to the sing-box `direct`
+ * outbound dial field. `any` contributes no field.
+ */
+export function directProfileIpFamilyDialFields(
+  family: ManageableOutboundIpFamily,
+): Record<string, boolean> {
+  switch (family) {
+    case "any":
+      return {};
+    case "ipv4":
+      return { inet6: false };
+    case "ipv6":
+      return { inet4: false };
+  }
+}
+
 export const PEER_CREDENTIAL_STATES = [
   "active",
   "retiring",
