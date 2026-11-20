@@ -17,6 +17,12 @@ mod logs;
 mod oauth;
 mod process;
 mod pty;
+#[expect(
+    dead_code,
+    unused_imports,
+    reason = "opt-in lifecycle foundation; native activation is gated on task 05"
+)]
+mod service;
 mod stats;
 #[cfg(target_os = "linux")]
 mod telemetry;
