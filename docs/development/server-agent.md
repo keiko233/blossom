@@ -58,7 +58,7 @@ acknowledgements stay responsive. See
 | `src/pty/`                                                          | Opt-in interactive PTY sessions: `launch.rs` (explicit shell, controlled environment), `session.rs` (`portable-pty` adapter, bounded reader/writer queues, session-wide cleanup), `sys.rs` (Linux account and session lookups), session cap, idle/hard lifetime limits, and incremental UTF-8 output chunks. |
 | `src/certificate.rs`                                                | Validated, generation-addressed certificate store under `<state_dir>/certificates/<id>/generation-<n>/`.                                                                                                                                                                                                     |
 | `src/process.rs`                                                    | Supervises the sing-box child (`processkit`): stdout/stderr capture into the log buffer and tracing, restart with backoff, graceful replacement, `sing-box check` preflight.                                                                                                                                 |
-| `src/service/`                                                      | Opt-in, not yet wired native service lifecycle: `RuntimeService` port, fixed service identities, invocation ids and the durable trial/commit/rollback/disable journal ([handoff](../spec/2026-11-20-admin-networking-workspace/task-04-native-service-lifecycle.md)).                                        |
+| `src/service/`                                                      | Opt-in native service lifecycle: `RuntimeService` systemd adapter, fixed service identities and invocation ids, durable trial/commit/rollback/disable journal, signed protected promotion, privileged local control helper and the boot selector/launcher ([handoff](../spec/2026-11-20-admin-networking-workspace/task-04-native-service-lifecycle.md)). |
 | `src/logs/`                                                         | Bounded in-memory log buffer: tracing capture (`layer.rs`), byte/line/age budgets (`ring.rs`, `model.rs`), known-secret redaction and normalization (`text.rs`), retained search (`search.rs`), and the locked facade (`store.rs`).                                                                          |
 | `src/log_policy.rs`                                                 | Bounded local log-level policy: per-source revisions, persisted baseline/deadline, agent tracing-filter reloads, sing-box `log.level` overlays, expiry restoration and retry status.                                                                                                                         |
 | `src/stats.rs`                                                      | Hand-written tonic/prost client for sing-box's built-in `api` service (`StartedService.SubscribeConnections`; no `.proto` files, no `tonic-build`).                                                                                                                                                          |
@@ -101,6 +101,43 @@ Protocol v2 in `src/agent_v2.rs` is the default for both `--credentials-file` an
 - Traffic uses the same durable outbox as v1. A report stays on disk until `traffic.ack`; a lost acknowledgement or session resends the identical `reportId` and payload, and the control-plane ledger answers `duplicate`.
 - Updates, ACME, PTY, remote log policy, retained log tail/search, and telemetry are served over v2. `update.trigger` and `update.status` use the v1 payloads, while `welcome.updatePolicy` and `agent.status.ack.updatePolicy` still replay the version targets. The v2 `hello` advertises `acme-v1`, `pty-v2` when local PTY sessions are enabled under a non-root account, `log-policy-v1`, `logs-tail-v1`/`logs-search-v1`, and `telemetry-v2`/`telemetry-history-v2` when the sampler is available; it never advertises the v1 PTY, ACME or telemetry capabilities. V1 remains available only through the explicit legacy protocol.
 - Telemetry v2 is served on Linux: `telemetry.subscribe` starts or replaces a `live`/`history` cadence, `telemetry.unsubscribe` stops it, `telemetry.inspect` answers with the existing snapshot, and samples carry a `scopeKey` plus counter-derived network rates. Subscriptions belong to one connection and are dropped when it ends.
+
+### Native service lifecycle (opt-in)
+
+`--native-service-control` / `AGENT_NATIVE_SERVICE_CONTROL=true` selects an
+externally supervised native runtime instead of processkit. It requires
+protocol v2 and a root-owned `blossom-service-control` helper at
+`--service-control-socket` (default `/run/blossom-service-control/control.sock`).
+The helper is the only writer of the deployment journal and the protected
+`releases/` tree, and the only caller of the host systemd manager. The agent
+stages downloads and candidate configs; the helper verifies the installer-pinned
+signed release manifest and digest before copying bytes into
+`releases/<component>/<sha256>/`.
+
+`blossom-agent.service` and `blossom-sing-box.service` each run a privileged
+`ExecStartPre=+ ... boot-select` step that consumes a one-shot trial and writes
+a root-owned selection under `/run`, then a fixed `boot-exec` launcher that
+verifies and executes only that generation. `Disabled` exits 77,
+`Unprovisioned` exits 78 and an untrusted selection exits 79; all are listed in
+`RestartPreventExitStatus=`. The runtime unit is independent of the agent unit:
+there is no `PartOf=` or `BindsTo=`, so an agent restart leaves the serving
+runtime running.
+
+The v2 apply path preflights with the committed release binary, stages the
+candidate config, records disable/enable intent durably, trials the candidate,
+waits probation, commits only while the same invocation serves, and confirms on
+the authenticated session. Administrative disable persists native disable
+intent before stopping the unit. Log-level overlays and update triggers are not
+implemented in this adapter yet and are reported; agent/sing-box binaries in
+native mode are promoted through the helper rather than the processkit updater.
+
+The default agent and installer paths are unchanged. The installer opt-in is
+`BLOSSOM_NATIVE_SERVICE=1` plus `BLOSSOM_RELEASE_PUBLIC_KEY` (64 lowercase hex
+Ed25519 public key bytes); it installs the helper, runtime identity, units,
+socket and pinned key, bootstraps the initial generations, and leaves the
+existing unit path as the default. Native mode keeps PTY off because the agent
+and its shell would share the helper-authorized uid; a separate PTY service
+identity is still required before the terminal can be enabled there.
 
 ### Agent-executed ACME
 

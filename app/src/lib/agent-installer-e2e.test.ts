@@ -83,6 +83,9 @@ if [ "$1" = "--version" ]; then
   echo "server-agent 1.4.0"
   exit 0
 fi
+if [ "$1" = "bootstrap" ]; then
+  exit 0
+fi
 if [ "$1" = "enroll" ]; then
   shift
   grant_file=
@@ -117,6 +120,9 @@ exit 1
     `#!/bin/sh
 if [ "$1" = "version" ]; then
   echo "sing-box version 1.14.4"
+  exit 0
+fi
+if [ "$1" = "check" ]; then
   exit 0
 fi
 exit 1
@@ -288,6 +294,22 @@ function sandboxScript(
       "/var/lib/blossom-agent",
       join(sandbox.root, "var/lib/blossom-agent"),
     )
+    .replaceAll(
+      "/usr/local/lib/blossom-service-control",
+      join(sandbox.root, "usr/local/lib/blossom-service-control"),
+    )
+    .replaceAll(
+      "/etc/blossom-service-control",
+      join(sandbox.root, "etc/blossom-service-control"),
+    )
+    .replaceAll(
+      "/var/lib/blossom-service-control",
+      join(sandbox.root, "var/lib/blossom-service-control"),
+    )
+    .replaceAll(
+      "/run/blossom-service-control",
+      join(sandbox.root, "run/blossom-service-control"),
+    )
     .replace(
       "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
       `PATH=${sandbox.fakeBin}:/usr/sbin:/usr/bin:/sbin:/bin`,
@@ -303,6 +325,7 @@ function runInstaller(
   options: {
     stdin?: string;
     confirm?: string;
+    native?: boolean;
   } = {},
 ) {
   const scriptPath = join(sandbox.root, "install.sh");
@@ -319,6 +342,10 @@ function runInstaller(
   };
   if (options.confirm) env.BLOSSOM_INSTALL_CONFIRM = options.confirm;
   if (options.stdin) env.BLOSSOM_GRANT_STDIN = "1";
+  if (options.native) {
+    env.BLOSSOM_NATIVE_SERVICE = "1";
+    env.BLOSSOM_RELEASE_PUBLIC_KEY = "a".repeat(64);
+  }
   return spawnSync("sh", [scriptPath], {
     encoding: "utf8",
     env,
@@ -484,5 +511,63 @@ describe("systemd installer sandbox", () => {
         (name) => name.startsWith(".install."),
       ),
     ).toBe(false);
+  });
+});
+
+describe("native installer sandbox", () => {
+  it("installs helper, units and pinned key only when explicitly selected", () => {
+    const sandbox = createSandbox();
+    const script = sandboxScript(sandbox, { inline: true });
+    const result = runInstaller(sandbox, script, { native: true });
+
+    expect(result.status, result.stderr).toBe(0);
+    const agentUnit = readFileSync(paths(sandbox.root).unit, "utf8");
+    expect(agentUnit).toContain("boot-select --service agent");
+    expect(agentUnit).toContain("boot-exec --service agent");
+    expect(agentUnit).not.toMatch(/PartOf=|BindsTo=/);
+    expect(agentUnit).toContain("RestartPreventExitStatus=77 78 79");
+    const helperUnit = readFileSync(
+      join(sandbox.root, "etc/systemd/system/blossom-service-control.service"),
+      "utf8",
+    );
+    expect(helperUnit).toContain("User=root");
+    expect(helperUnit).toContain("--agent-uid 0");
+    const runtimeUnit = readFileSync(
+      join(sandbox.root, "etc/systemd/system/blossom-sing-box.service"),
+      "utf8",
+    );
+    expect(runtimeUnit).toContain("User=blossom-runtime");
+    expect(runtimeUnit).not.toMatch(/PartOf=|BindsTo=/);
+    expect(
+      readFileSync(
+        join(sandbox.root, "etc/blossom-service-control/release-signing.pub"),
+        "utf8",
+      ),
+    ).toBe(`${"a".repeat(64)}\n`);
+    expect(
+      readFileSync(
+        join(sandbox.root, "etc/blossom-agent/installation.json"),
+        "utf8",
+      ),
+    ).toContain("native_service=1");
+    expect(
+      readFileSync(
+        join(
+          sandbox.root,
+          "usr/local/lib/blossom-service-control/blossom-service-control",
+        ),
+        "utf8",
+      ),
+    ).toBe(readFileSync(sandbox.agentArchive, "utf8"));
+  });
+
+  it("refuses to silently switch an existing native host back to processkit", () => {
+    const sandbox = createSandbox();
+    const script = sandboxScript(sandbox, { inline: true });
+    expect(runInstaller(sandbox, script, { native: true }).status).toBe(0);
+
+    const switched = runInstaller(sandbox, script);
+    expect(switched.status).not.toBe(0);
+    expect(switched.stderr).toContain("native service lifecycle");
   });
 });
