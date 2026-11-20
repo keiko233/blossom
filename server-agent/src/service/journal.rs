@@ -55,6 +55,12 @@ impl From<ArtifactDigest> for String {
     }
 }
 
+impl fmt::Display for ArtifactDigest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
 /// The immutable artifacts one generation boots from. Paths are derived
 /// locally from the digests by the promoter; none come from the control plane.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,7 +148,8 @@ pub(crate) struct Serving {
 
 /// The unit task 05 keys runtime checkpoints by: one generation running under
 /// one invocation. Counters never carry across instances.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct RuntimeInstance {
     pub(crate) service: ServiceIdentity,
     pub(crate) generation: Generation,
@@ -226,12 +233,61 @@ impl DeploymentJournal {
         self.committed.as_ref()
     }
 
+    /// The generation a promoted artifact set may use. A retry of the same
+    /// failed artifact set reuses its generation so attempts stay bounded; a
+    /// different artifact set moves forward instead of conflicting.
+    pub(crate) fn next_generation_for(
+        &self,
+        binary_sha256: &ArtifactDigest,
+        config_sha256: &ArtifactDigest,
+    ) -> Generation {
+        if let Some(trial) = &self.trial
+            && trial.candidate.binary_sha256 == *binary_sha256
+            && trial.candidate.config_sha256 == *config_sha256
+        {
+            return trial.candidate.generation;
+        }
+        self.next_generation()
+    }
+
+    /// The next unused generation when no artifact identity is known yet.
+    pub(crate) fn next_generation(&self) -> Generation {
+        let committed = self.committed.as_ref().map(|record| record.generation.0);
+        let trial = self
+            .trial
+            .as_ref()
+            .map(|trial| trial.candidate.generation.0)
+            .filter(|generation| *generation > committed.unwrap_or(0));
+        Generation(committed.into_iter().chain(trial).max().unwrap_or(0) + 1)
+    }
+
+    #[allow(dead_code)] // used by journal fixture assertions and operator diagnostics
     pub(crate) fn confirmation(&self) -> &Confirmation {
         &self.confirmation
     }
 
     pub(crate) fn trial(&self) -> Option<&Trial> {
         self.trial.as_ref()
+    }
+
+    /// Installer bootstrap: records a generation that was copied into the
+    /// protected release store by the root installer. It is not a trial and
+    /// does not arm a candidate.
+    pub(crate) fn bootstrap(&mut self, record: GenerationRecord) -> Result<(), JournalError> {
+        if let Some(committed) = &self.committed {
+            if committed == &record {
+                return Ok(());
+            }
+            if record.generation <= committed.generation {
+                return Err(JournalError::StaleGeneration);
+            }
+        }
+        self.committed = Some(record);
+        self.confirmation = Confirmation::Confirmed;
+        self.trial = None;
+        self.serving = None;
+        self.intent = RunIntent::Enabled;
+        Ok(())
     }
 
     /// Records a one-shot authorization for the next invocation to boot
@@ -675,6 +731,32 @@ mod tests {
         assert_eq!(
             journal.authorize_trial(record(2), Duration::seconds(30)),
             Err(JournalError::StaleGeneration)
+        );
+    }
+
+    #[test]
+    fn next_generation_reuses_only_the_same_failed_artifacts() {
+        let mut journal = committed_journal();
+        let failed = record(2);
+        journal
+            .authorize_trial(failed.clone(), Duration::seconds(30))
+            .unwrap();
+        journal.select_boot(invocation(2), at(10));
+        journal.rollback().unwrap();
+
+        assert_eq!(
+            journal.next_generation_for(&failed.binary_sha256, &failed.config_sha256),
+            Generation(2)
+        );
+        let changed_config = record(9).config_sha256;
+        assert_eq!(
+            journal.next_generation_for(&failed.binary_sha256, &changed_config),
+            Generation(3)
+        );
+        let changed_binary = record(9).binary_sha256;
+        assert_eq!(
+            journal.next_generation_for(&changed_binary, &failed.config_sha256),
+            Generation(3)
         );
     }
 

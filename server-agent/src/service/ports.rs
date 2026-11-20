@@ -155,7 +155,8 @@ impl From<BootId> for String {
 }
 
 /// Backend-neutral activity state, modelled on systemd `ActiveState`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub(crate) enum ActiveState {
     Active,
     Reloading,
@@ -187,7 +188,8 @@ impl std::str::FromStr for ActiveState {
 
 /// A fresh read of one service. `invocation` is absent while the service has
 /// never run in this boot or the backend reports none.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct ServiceObservation {
     pub(crate) service: ServiceIdentity,
     pub(crate) active: ActiveState,

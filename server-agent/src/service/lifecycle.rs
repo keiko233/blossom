@@ -45,6 +45,58 @@ impl ServiceLifecycle {
         Self { port, store }
     }
 
+    pub(crate) fn service(&self) -> super::ports::ServiceIdentity {
+        self.store.service()
+    }
+
+    /// Reads the service through the backend without touching the journal.
+    pub(crate) async fn inspect(&self) -> Result<ServiceObservation, LifecycleError> {
+        Ok(self.port.inspect(self.store.service()).await?)
+    }
+
+    /// Applies an ordinary start, stop, reload or restart and returns the
+    /// re-read service state.
+    pub(crate) async fn apply(
+        &self,
+        operation: ServiceOperation,
+    ) -> Result<ServiceObservation, LifecycleError> {
+        Ok(self.port.apply(self.store.service(), operation).await?)
+    }
+
+    /// The committed (last-known-good) generation, if any.
+    pub(crate) fn committed(&self) -> Result<Option<GenerationRecord>, LifecycleError> {
+        Ok(self.store.load()?.committed().cloned())
+    }
+
+    /// Allocates the next local generation for an artifact set. A retry of the
+    /// same failed candidate reuses its generation; a changed candidate moves
+    /// forward.
+    pub(crate) fn next_generation_for(
+        &self,
+        binary: &super::journal::ArtifactDigest,
+        config: &super::journal::ArtifactDigest,
+    ) -> Result<Generation, LifecycleError> {
+        Ok(self.store.load()?.next_generation_for(binary, config))
+    }
+
+    /// Marks the committed generation confirmed after an authenticated
+    /// control-plane exchange.
+    pub(crate) fn confirm(&self, generation: Generation) -> Result<(), LifecycleError> {
+        let mut journal = self.store.load()?;
+        journal.confirm(generation)?;
+        self.store.persist(&journal)?;
+        Ok(())
+    }
+
+    /// Reverts an unconfirmed commit to the retained previous generation and
+    /// restarts onto it.
+    pub(crate) async fn revert_unconfirmed(&self) -> Result<RuntimeInstance, LifecycleError> {
+        let mut journal = self.store.load()?;
+        journal.revert_unconfirmed()?;
+        self.store.persist(&journal)?;
+        self.restart_committed().await
+    }
+
     /// The instance serving now, verified against a fresh observation. An
     /// agent that restarts adopts the running service through this call.
     pub(crate) async fn runtime_instance(&self) -> Result<Option<RuntimeInstance>, LifecycleError> {
