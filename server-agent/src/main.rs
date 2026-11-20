@@ -2900,11 +2900,21 @@ mod tests {
         );
     }
 
-    fn service_startup(arguments: &[&str]) -> anyhow::Result<super::ServiceStartup> {
+    /// Serializes startup parsing because clap reads the process environment.
+    static SERVICE_STARTUP_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn parse_service_startup(arguments: &[&str]) -> anyhow::Result<super::ServiceStartup> {
         let mut argv = vec!["server-agent"];
         argv.extend_from_slice(arguments);
         let cli = Cli::try_parse_from(argv).expect("CLI parses");
         cli.service.startup()
+    }
+
+    fn service_startup(arguments: &[&str]) -> anyhow::Result<super::ServiceStartup> {
+        let _guard = SERVICE_STARTUP_ENV
+            .lock()
+            .expect("startup environment lock");
+        parse_service_startup(arguments)
     }
 
     #[test]
@@ -2968,12 +2978,18 @@ mod tests {
     #[test]
     fn an_environment_ws_disable_has_the_same_precedence_as_the_flag() {
         const KEY: &str = "AGENT_WS_ENABLED";
+        // Startup parsing takes the same lock, so no concurrent test can
+        // observe this test's temporary environment value.
+        let _guard = SERVICE_STARTUP_ENV
+            .lock()
+            .expect("startup environment lock");
         let parse = |value: &str| {
-            // SAFETY: this test owns the variable and no other test reads it.
+            // SAFETY: the startup environment lock is held across the set,
+            // parse and removal.
             unsafe { std::env::set_var(KEY, value) };
             let result =
-                service_startup(&["--url", "http://127.0.0.1:1/api", "--token", "agt_test"]);
-            // SAFETY: paired with the set above in this single test.
+                parse_service_startup(&["--url", "http://127.0.0.1:1/api", "--token", "agt_test"]);
+            // SAFETY: paired with the set above while the lock is still held.
             unsafe { std::env::remove_var(KEY) };
             result
         };
