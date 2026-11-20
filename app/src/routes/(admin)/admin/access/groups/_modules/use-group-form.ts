@@ -2,6 +2,7 @@ import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { toastManager } from "@/components/ui/toast";
+import { isGroupRevisionConflict } from "@/lib/group-revision-conflict";
 import { m } from "@/paraglide/messages";
 import {
   createGroup,
@@ -10,13 +11,14 @@ import {
   updateGroup,
 } from "@/query/groups";
 
-/** Group row plus its member node ids, as returned by `getGroup`. */
+/** Group row (with `revision`) plus its ordered member node ids. */
 export type GroupWithNodes = Awaited<ReturnType<typeof getGroup>>;
 
 export interface GroupFormValues {
   name: string;
   remark: string;
   sortOrder: number;
+  /** Ordered membership draft; saved in this order. */
   nodeIds: string[];
 }
 
@@ -74,7 +76,12 @@ export function useGroupFormController({
     mutationFn: async (values: GroupFormValues) => {
       const payload = toPayload(values);
       if (group) {
-        await updateGroup({ data: { id: group.id, ...payload } });
+        // Supplying the loaded revision selects the ordered write: the server
+        // stores this exact order or rejects a stale draft with
+        // GROUP_REVISION_CONFLICT.
+        await updateGroup({
+          data: { id: group.id, expectedRevision: group.revision, ...payload },
+        });
       } else {
         await createGroup({ data: payload });
       }
@@ -89,10 +96,13 @@ export function useGroupFormController({
       });
       onSuccess();
     },
-    onError: () => {
+    onError: (error) => {
+      // The draft stays in the form so nothing is lost on a conflict.
       toastManager.add({
         type: "error",
-        title: m.admin_proxies_groups_toast_error(),
+        title: isGroupRevisionConflict(error)
+          ? m.admin_proxies_groups_toast_conflict()
+          : m.admin_proxies_groups_toast_error(),
       });
     },
   });

@@ -26,6 +26,7 @@ import {
 } from "@/db/proxy-schema";
 import { notifyAgentConfigChanged } from "@/lib/agent-notifications";
 import { supportsInteractiveTransactions } from "@/lib/env-schema";
+import { GROUP_REVISION_CONFLICT } from "@/lib/group-revision-conflict";
 import {
   listServerIdsForGroupIds,
   listServerIdsForNodeIds,
@@ -152,7 +153,7 @@ export interface DeleteNodeWithMembershipCascadeResult {
 }
 
 export class GroupMembershipConflictError extends Error {
-  readonly code = "GROUP_REVISION_CONFLICT" as const;
+  readonly code = GROUP_REVISION_CONFLICT;
   readonly groupId: string;
   readonly expectedRevision: number;
   readonly currentRevision: number;

@@ -8,17 +8,6 @@ import {
   PageHeaderTitle,
 } from "@/components/app-shell/page-header";
 import { Button } from "@/components/ui/button";
-import {
-  Combobox,
-  ComboboxChip,
-  ComboboxChips,
-  ComboboxChipsInput,
-  ComboboxEmpty,
-  ComboboxItem,
-  ComboboxList,
-  ComboboxPopup,
-  ComboboxValue,
-} from "@/components/ui/combobox";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
@@ -30,11 +19,11 @@ import {
 } from "@/components/ui/number-field";
 import { previewNodeSelection } from "@/lib/access-impact";
 import { m } from "@/paraglide/messages";
-import type { NodeListItem } from "@/query/nodes";
 import { listNodes, NODES_QUERY_KEY } from "@/query/nodes";
 
 import { EffectiveNodePreviewPanel } from "./effective-node-preview";
 import { GroupImpactPanel } from "./group-impact-panel";
+import { GroupMembershipEditor } from "./group-membership-editor";
 import { type GroupWithNodes, useGroupFormController } from "./use-group-form";
 
 const GROUPS_LIST = "/admin/access/groups" as const;
@@ -163,83 +152,35 @@ export function GroupFormPage({
               )}
             </form.Field>
 
-            {/* Membership multi-select. Form state keeps node ids; the combobox
-                works with node objects, so map at this boundary. */}
+            {/* Ordered membership: form state is the draft in subscription
+                order; the editor only proposes new drafts. */}
             <form.Field name="nodeIds">
-              {(field) => {
-                const selected = nodeOptions.filter((n) =>
-                  field.state.value.includes(n.id),
-                );
-                return (
-                  <Field>
-                    <FieldLabel>
-                      {m.admin_proxies_groups_field_nodes()}
-                    </FieldLabel>
-                    <Combobox
-                      multiple
-                      items={nodeOptions}
-                      value={selected}
-                      onValueChange={(next: NodeListItem[]) =>
-                        field.handleChange(next.map((n) => n.id))
-                      }
-                      itemToStringLabel={(n: NodeListItem) => n.name}
-                    >
-                      <ComboboxChips>
-                        <ComboboxValue>
-                          {(value: NodeListItem[]) => (
-                            <>
-                              {value.map((n) => (
-                                <ComboboxChip key={n.id} aria-label={n.name}>
-                                  {n.name}
-                                </ComboboxChip>
-                              ))}
-                              <ComboboxChipsInput
-                                placeholder={
-                                  value.length
-                                    ? undefined
-                                    : m.admin_proxies_groups_field_nodes_placeholder()
-                                }
-                              />
-                            </>
-                          )}
-                        </ComboboxValue>
-                      </ComboboxChips>
-                      <ComboboxPopup>
-                        <ComboboxEmpty>
-                          {m.admin_proxies_groups_field_nodes_empty()}
-                        </ComboboxEmpty>
-                        <ComboboxList>
-                          {(n: NodeListItem) => (
-                            <ComboboxItem key={n.id} value={n}>
-                              <div className="flex flex-col">
-                                <span>{n.name}</span>
-                                <span className="font-mono text-xs text-muted-foreground">
-                                  {n.serverSummary.name} · {n.resolvedAddress}:
-                                  {n.listenPort}
-                                </span>
-                              </div>
-                            </ComboboxItem>
-                          )}
-                        </ComboboxList>
-                      </ComboboxPopup>
-                    </Combobox>
-                    {nodesLoaded && nodeOptions.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">
-                        {m.admin_access_no_nodes_hint()}{" "}
-                        <Link
-                          className="underline underline-offset-4"
-                          rel="noopener noreferrer"
-                          target="_blank"
-                          to="/admin/servers"
-                        >
-                          {m.admin_access_create_node()}
-                        </Link>{" "}
-                        {m.admin_access_new_tab_hint()}
-                      </p>
-                    ) : null}
-                  </Field>
-                );
-              }}
+              {(field) => (
+                <Field>
+                  <FieldLabel>
+                    {m.admin_proxies_groups_field_nodes()}
+                  </FieldLabel>
+                  <GroupMembershipEditor
+                    nodes={nodeOptions}
+                    value={field.state.value}
+                    onChange={(nodeIds) => field.handleChange(nodeIds)}
+                  />
+                  {nodesLoaded && nodeOptions.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">
+                      {m.admin_access_no_nodes_hint()}{" "}
+                      <Link
+                        className="underline underline-offset-4"
+                        rel="noopener noreferrer"
+                        target="_blank"
+                        to="/admin/servers"
+                      >
+                        {m.admin_access_create_node()}
+                      </Link>{" "}
+                      {m.admin_access_new_tab_hint()}
+                    </p>
+                  ) : null}
+                </Field>
+              )}
             </form.Field>
           </div>
 
