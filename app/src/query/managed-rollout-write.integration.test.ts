@@ -277,7 +277,7 @@ describe.skipIf(!PG_URL)("managed rollout transitions", () => {
 
         // A timeout never confirms.
         await admin.query(
-          `UPDATE managed_rollout_stage SET deadline_at = now() - interval '1 second'
+          `UPDATE managed_rollout_stage SET deadline_at = (now() AT TIME ZONE 'UTC') - interval '1 second'
            WHERE rollout_id = 'rollout-proof' AND ordinal = 1`,
         );
         expect(
@@ -708,7 +708,7 @@ describe.skipIf(!PG_URL)("managed rollout transitions", () => {
         if (!issued.ok || issued.action !== "issued") return;
         const committedSeq = issued.revisionSeq;
         await admin.query(
-          `UPDATE managed_rollout_stage SET deadline_at = now() - interval '1 second'
+          `UPDATE managed_rollout_stage SET deadline_at = (now() AT TIME ZONE 'UTC') - interval '1 second'
            WHERE rollout_id = 'rollout-retry'`,
         );
         await setServerSeq("srv-a", committedSeq + 7);
