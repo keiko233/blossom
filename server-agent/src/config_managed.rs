@@ -1139,6 +1139,17 @@ mod tests {
                         assert_eq!(managed.peer_trust_artifacts.len(), 1);
                         assert_eq!(managed.rule_set_bindings.len(), 1);
                         assert_eq!(managed.rule_set_artifacts.len(), 1);
+                        assert_eq!(managed.probe_bindings.len(), 2);
+                        assert_eq!(managed.probe_bindings[0].link_id, "link-a-to-b");
+                        assert_eq!(
+                            managed.probe_bindings[0].source_outbound_tag.as_deref(),
+                            Some("peer-out-pout1")
+                        );
+                        assert_eq!(managed.probe_bindings[1].link_id, "link-c-to-a");
+                        assert_eq!(
+                            managed.probe_bindings[1].destination_inbound_tag.as_deref(),
+                            Some("peer-in-pin1")
+                        );
                         let raw_srs = managed.rule_set_artifacts[0].decode_and_verify().unwrap();
                         assert_eq!(raw_srs.len(), 34);
                         assert_eq!(&raw_srs[..3], b"SRS");
@@ -1151,6 +1162,7 @@ mod tests {
                         assert_eq!(generated_managed.peer_trust_artifacts.len(), 1);
                         assert_eq!(generated_managed.rule_set_bindings.len(), 1);
                         assert_eq!(generated_managed.rule_set_artifacts.len(), 1);
+                        assert_eq!(generated_managed.probe_bindings.len(), 2);
                         assert_eq!(
                             generated_managed.config_version_id.to_string(),
                             managed.config_version_id

@@ -105,10 +105,16 @@ impl ManagedProbeBinding {
 /// config is materialized.
 pub(crate) fn validate_manifest(bindings: &[ManagedProbeBinding]) -> Result<(), ProbeBindingError> {
     let mut seen = std::collections::HashSet::new();
+    let mut seen_source_tags = std::collections::HashSet::new();
     for binding in bindings {
         binding.validate()?;
         if !seen.insert((binding.link_id.as_str(), binding.credential_generation)) {
             return Err(ProbeBindingError::DuplicateLink(binding.link_id.clone()));
+        }
+        if let Some(tag) = &binding.source_outbound_tag
+            && !seen_source_tags.insert(tag.as_str())
+        {
+            return Err(ProbeBindingError::AmbiguousSourceTag(tag.clone()));
         }
     }
     Ok(())
@@ -428,6 +434,7 @@ fn validate_id(field: &'static str, value: &str) -> Result<(), ProbeBindingError
 pub(crate) enum ProbeBindingError {
     Invalid(&'static str),
     DuplicateLink(String),
+    AmbiguousSourceTag(String),
     AmbiguousIdentity(String),
     Identity(ProbeIdentityError),
     Isolation(ProbeIsolationError),
@@ -439,6 +446,9 @@ impl std::fmt::Display for ProbeBindingError {
             Self::Invalid(field) => write!(formatter, "invalid probe binding {field}"),
             Self::DuplicateLink(link_id) => {
                 write!(formatter, "duplicate probe binding for link {link_id}")
+            }
+            Self::AmbiguousSourceTag(tag) => {
+                write!(formatter, "ambiguous probe source outbound {tag}")
             }
             Self::AmbiguousIdentity(link_id) => {
                 write!(
@@ -663,6 +673,21 @@ mod tests {
         assert!(matches!(
             install_probe_config(&mut config, &[missing], "127.0.0.1:19081".parse().unwrap()),
             Err(ProbeBindingError::Invalid("runtime tags"))
+        ));
+        let ambiguous = [
+            binding("link-1", "peer-out-pout1", "peer-in-pin1"),
+            ManagedProbeBinding {
+                link_id: "link-3".to_string(),
+                credential_generation: 1,
+                source_server_id: "srv-a".to_string(),
+                destination_server_id: "srv-b".to_string(),
+                source_outbound_tag: Some("peer-out-pout1".to_string()),
+                destination_inbound_tag: None,
+            },
+        ];
+        assert!(matches!(
+            validate_manifest(&ambiguous),
+            Err(ProbeBindingError::AmbiguousSourceTag(tag)) if tag == "peer-out-pout1"
         ));
         assert!(config["inbounds"].as_array().unwrap().len() == 2);
     }

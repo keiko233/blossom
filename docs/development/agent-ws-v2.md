@@ -92,6 +92,15 @@ byte-for-byte unchanged.
   connected agent lacks the capability. Task 08 owns rollout issue/confirm/
   recovery, probes and notification; Task 07 only delivers and applies the
   current pointer.
+- `managed.probeBindings` is the agent-local link-to-tag manifest derived from
+  the frozen per-server intent: a sender stage names `linkId`,
+  `credentialGeneration`, both server ids and its `sourceOutboundTag`; a
+  receiver stage names the same identity and its `destinationInboundTag`. At
+  least one local tag is required; remote tags, endpoints, addresses and
+  credentials are never inferred. Duplicate link generations and ambiguous
+  source outbounds fail closed. The compiler, `intentDigest`,
+  `managedFingerprint` and `desiredRevision` all use the same deterministic,
+  sorted bindings, so issue, compile, recovery and a managed relay agree.
 - **Established contract, activation disabled.** `link_probe.request`
   (control plane to agent) and `link_probe.result` (agent to control plane)
   carry the bounded payloads from `@blossom/contracts/managed-link-probe`.
@@ -106,8 +115,9 @@ byte-for-byte unchanged.
   remain the proof channel for rollout stages; a probe result never confirms a
   stage by itself. The shared frames are checked by
   `packages/contracts/src/agent-ws-v2.test.ts` and
-  `packages/contracts/fixtures/agent-ws-v2-link-probe.frames.json`; the Rust
-  probe executor consumes the same fixture in its own Task 08 handoff.
+  `packages/contracts/fixtures/agent-ws-v2-link-probe.frames.json`. The Rust
+  codec and probe contract decode the same fixture, and the shipped v2 agent
+  advertises `managed-link-probe-v1`.
 
 - `agent.status` `{reason, runtimeState?, configState?, singBoxVersion?, activeNodeIds?, error?, certificateDeployments, updates?}` reports only the fields present. `error: null` clears the last error.
 - `agent.status.ack` `{desired, updatePolicy, logPolicyRevision?}` carries the control plane's identifier. If it differs from the applied identifier, send `config.get`. This is how a lost `config.notify` is recovered. The identifier is authoritative within the bounds in [Known limits](#known-limits-of-the-control-plane): a change that no path signalled is reflected at the first status exchange after the cached identifier's deadline. A newer `logPolicyRevision` recovers a missed policy notification through `log.policy.get`.

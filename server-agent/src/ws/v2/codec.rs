@@ -1969,6 +1969,8 @@ mod tests {
         include_str!("../../../../packages/contracts/fixtures/agent-ws-v2.frames.json");
     const LOG_FIXTURES: &str =
         include_str!("../../../../packages/contracts/fixtures/agent-ws-v2-logs.frames.json");
+    const LINK_PROBE_FIXTURES: &str =
+        include_str!("../../../../packages/contracts/fixtures/agent-ws-v2-link-probe.frames.json");
 
     fn sender_of(name: &str) -> Sender {
         match name {
@@ -2013,30 +2015,21 @@ mod tests {
 
     #[test]
     fn managed_link_probe_frames_decode_in_their_contract_direction() {
-        let request = serde_json::json!({
-            "v": 2,
-            "type": "link_probe.request",
-            "ts": "2026-11-20T00:00:00.000Z",
-            "payload": {
-                "probeId": "probe-1",
-                "rolloutId": "rollout-1",
-                "stageOrdinal": 2,
-                "linkId": "link-1",
-                "credentialGeneration": 1,
-                "source": {
-                    "serverId": "srv-a",
-                    "managedFingerprint": format!("sha256:{}", "a".repeat(64)),
-                    "minRevisionSeq": 20
-                },
-                "destination": {
-                    "serverId": "srv-b",
-                    "managedFingerprint": format!("sha256:{}", "b".repeat(64)),
-                    "minRevisionSeq": 10
-                },
-                "issuedAt": "2026-11-20T00:00:00.000Z",
-                "expiresAt": "2026-11-20T00:01:00.000Z"
-            }
-        });
+        let document: Value = serde_json::from_str(LINK_PROBE_FIXTURES).unwrap();
+        let request = document["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["frame"]["type"] == "link_probe.request")
+            .expect("request fixture exists")["frame"]
+            .clone();
+        let expected_result = document["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["frame"]["type"] == "link_probe.result")
+            .expect("result fixture exists")["frame"]
+            .clone();
         let text = serde_json::to_string(&request).unwrap();
         let decoded = decode(&text, Sender::ControlPlane, MAX_FRAME_BYTES).unwrap();
         assert!(matches!(decoded.message, Message::LinkProbeRequest(_)));
@@ -2045,19 +2038,14 @@ mod tests {
             DecodeError::InvalidDirection("link_probe.request".to_string())
         );
 
-        let result = Message::LinkProbeResult(crate::probe::LinkProbeResult {
-            probe_id: "probe-1".to_string(),
-            rollout_id: "rollout-1".to_string(),
-            stage_ordinal: 2,
-            link_id: "link-1".to_string(),
-            outcome: crate::probe::LinkProbeOutcome::Succeeded,
-            applied: crate::probe::ManagedApplied {
-                desired_revision_seq: 20,
-                managed_fingerprint: Some(format!("sha256:{}", "a".repeat(64))),
-            },
-            latency_ms: Some(42),
-            completed_at: chrono::Utc::now(),
-        });
+        let decoded_result = decode(
+            &serde_json::to_string(&expected_result).unwrap(),
+            Sender::Agent,
+            MAX_FRAME_BYTES,
+        )
+        .unwrap();
+        let result = decoded_result.message;
+        assert!(matches!(result, Message::LinkProbeResult(_)));
         let text = match &result {
             Message::LinkProbeResult(payload) => {
                 encode("link_probe.result", payload, None).unwrap()

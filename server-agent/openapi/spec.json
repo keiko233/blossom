@@ -358,6 +358,64 @@
           "contentBase64"
         ]
       },
+      "ManagedProbeBinding": {
+        "type": "object",
+        "properties": {
+          "linkId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "credentialGeneration": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "sourceServerId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "destinationServerId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "sourceOutboundTag": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "destinationInboundTag": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "linkId",
+          "credentialGeneration",
+          "sourceServerId",
+          "destinationServerId"
+        ],
+        "additionalProperties": false
+      },
       "ManagedSnapshotExtension": {
         "type": "object",
         "properties": {
@@ -408,6 +466,14 @@
             "items": {
               "$ref": "#/components/schemas/ManagedRuleSetArtifact"
             }
+          },
+          "probeBindings": {
+            "type": "array",
+            "maxItems": 2000,
+            "items": {
+              "$ref": "#/components/schemas/ManagedProbeBinding"
+            },
+            "default": []
           }
         },
         "required": [

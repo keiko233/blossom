@@ -4,13 +4,16 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_CONFIG_V3_API_VERSION,
   agentConfigV3OutputSchema,
+  deriveManagedProbeBindings,
   formatManagedPeerTlsBindingId,
   MANAGED_NETWORKING_V2_CAPABILITY,
   MANAGED_SNAPSHOT_LIMITS,
   managedPeerCertificateDeploymentSchema,
   managedPeerTlsBindingSchema,
+  managedProbeBindingSchema,
   managedRuleSetBindingSchema,
   managedStageIntentSchema,
+  validateManagedProbeBindings,
 } from "./agent-config-v3";
 
 const fixtureFile = JSON.parse(
@@ -108,6 +111,95 @@ describe("agent config v3 shared contracts", () => {
         fingerprintSha256: "f".repeat(64),
         installed: false,
         inUse: true,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("derives one deterministic local-side probe tag per link identity", () => {
+    const intent = managedStageIntentSchema.parse(fixtureFile.stageIntent);
+    expect(deriveManagedProbeBindings(intent)).toEqual([
+      {
+        linkId: "link-a-to-b",
+        credentialGeneration: 3,
+        sourceServerId: "srv-a",
+        destinationServerId: "srv-b",
+        sourceOutboundTag: "peer-out-pout1",
+        destinationInboundTag: null,
+      },
+      {
+        linkId: "link-c-to-a",
+        credentialGeneration: 1,
+        sourceServerId: "srv-c",
+        destinationServerId: "srv-a",
+        sourceOutboundTag: null,
+        destinationInboundTag: "peer-in-pin1",
+      },
+    ]);
+  });
+
+  it("rejects ambiguous, duplicate and self probe bindings", () => {
+    const source = {
+      linkId: "link-a-to-b",
+      credentialGeneration: 1,
+      sourceServerId: "srv-a",
+      destinationServerId: "srv-b",
+      sourceOutboundTag: "peer-out-pout1",
+      destinationInboundTag: null,
+    };
+    const receiver = {
+      linkId: "link-c-to-a",
+      credentialGeneration: 1,
+      sourceServerId: "srv-c",
+      destinationServerId: "srv-a",
+      sourceOutboundTag: null,
+      destinationInboundTag: "peer-in-pin1",
+    };
+    expect(validateManagedProbeBindings([receiver, source])).toEqual([
+      source,
+      receiver,
+    ]);
+    expect(
+      validateManagedProbeBindings([
+        source,
+        { ...receiver, destinationInboundTag: "peer-in-pin1" },
+      ]),
+    ).toHaveLength(2);
+    expect(() => validateManagedProbeBindings([source, { ...source }])).toThrow(
+      /duplicate probe binding/,
+    );
+    expect(() =>
+      validateManagedProbeBindings([
+        source,
+        {
+          ...source,
+          linkId: "link-d-to-b",
+          destinationInboundTag: null,
+        },
+      ]),
+    ).toThrow(/ambiguous probe source outbound/);
+    expect(
+      managedProbeBindingSchema.safeParse({
+        ...source,
+        sourceOutboundTag: null,
+        destinationInboundTag: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      managedProbeBindingSchema.safeParse({
+        ...source,
+        destinationServerId: "srv-a",
+      }).success,
+    ).toBe(false);
+    expect(
+      managedProbeBindingSchema.safeParse({
+        ...source,
+        sourceOutboundTag: "direct",
+      }).success,
+    ).toBe(false);
+    expect(
+      managedProbeBindingSchema.safeParse({
+        ...receiver,
+        destinationInboundTag: "node-n1",
       }).success,
     ).toBe(false);
   });

@@ -88,8 +88,8 @@ function managedIntent(): ManagedStageIntent {
         certificateFingerprintSha256: FP_A,
         admissions: [
           {
-            linkId: "link-int",
-            sourceServerId: SERVER_ID,
+            linkId: "link-in-int",
+            sourceServerId: LEGACY_SERVER_ID,
             credentialGeneration: 1,
           },
         ],
@@ -109,7 +109,7 @@ function managedIntent(): ManagedStageIntent {
         dialOptions: {},
         linkId: "link-int",
         destinationServerId: LEGACY_SERVER_ID,
-        destinationInboundId: "pin-int",
+        destinationInboundId: "pin-remote-int",
         protocol: "trojan",
         serverAddress: "203.0.113.20",
         serverPort: 9443,
@@ -229,22 +229,35 @@ describe.skipIf(!PG_URL)("managed V3 compile from stage pointer", () => {
       `INSERT INTO peer_inbound
          (id, server_id, name, runtime_tag, protocol, listen_address, listen_port,
           advertised_address, advertised_port, tls_server_name, certificate_id)
-       VALUES ('pin-int', $1, 'peer', 'peer-in-pin-int', 'vless', '::', 9443, '198.51.100.10', 9443, 'peer-a.internal.example.com', 'cert-peer-a-int')`,
+       VALUES ('pin-int', $1, 'peer', 'peer-in-pin-int', 'vless', '::', 9443, '198.51.100.10', 9443, 'peer-a.internal.example.com', 'cert-peer-a-int'),
+              ('pin-remote-int', $2, 'remote peer', 'peer-in-pin-remote-int', 'vless', '::', 9444, '198.51.100.20', 9444, 'peer-b.internal.example.com', 'cert-peer-b-int')`,
+      [SERVER_ID, LEGACY_SERVER_ID],
+    );
+    await pool!.query(
+      `INSERT INTO peer_link (id, source_server_id, destination_inbound_id)
+       VALUES ('link-int', $1, 'pin-remote-int')`,
       [SERVER_ID],
     );
     await pool!.query(
       `INSERT INTO peer_link (id, source_server_id, destination_inbound_id)
-       VALUES ('link-int', $1, 'pin-int')`,
-      [SERVER_ID],
+       VALUES ('link-in-int', $1, 'pin-int')`,
+      [LEGACY_SERVER_ID],
     );
     await pool!.query(
       `INSERT INTO peer_link_credential (link_id, generation, state, credential_ciphertext)
-       VALUES ('link-int', 1, 'active', $1)`,
+       VALUES ('link-int', 1, 'active', $1),
+              ('link-in-int', 1, 'active', $2)`,
       [
         encryptManagedPeerCredential(
           "link-int",
           1,
           "550e8400-e29b-41d4-a716-446655440000",
+          KEY,
+        ),
+        encryptManagedPeerCredential(
+          "link-in-int",
+          1,
+          "550e8400-e29b-41d4-a716-446655440001",
           KEY,
         ),
       ],
@@ -296,6 +309,24 @@ describe.skipIf(!PG_URL)("managed V3 compile from stage pointer", () => {
       computeManagedStateFingerprint(managedIntent()),
     );
     expect(desired.managed?.tlsBindings).toHaveLength(2);
+    expect(desired.managed?.probeBindings).toEqual([
+      {
+        linkId: "link-in-int",
+        credentialGeneration: 1,
+        sourceServerId: LEGACY_SERVER_ID,
+        destinationServerId: SERVER_ID,
+        sourceOutboundTag: null,
+        destinationInboundTag: "peer-in-pin-int",
+      },
+      {
+        linkId: "link-int",
+        credentialGeneration: 1,
+        sourceServerId: SERVER_ID,
+        destinationServerId: LEGACY_SERVER_ID,
+        sourceOutboundTag: "peer-out-pout-int",
+        destinationInboundTag: null,
+      },
+    ]);
     expect(desired.managed?.peerTrustArtifacts[0]).not.toHaveProperty(
       "privateKeyPem",
     );

@@ -1056,6 +1056,8 @@ async fn restart_for_update(manager: Option<SingBoxManager>) -> ! {
 #[cfg(test)]
 mod tests {
     use super::{V2_CAPABILITIES, bounded, config_state_of, stage_of, v2_capabilities};
+    use crate::config::managed::MANAGED_NETWORKING_CAPABILITY;
+    use crate::probe::MANAGED_LINK_PROBE_CAPABILITY;
     use crate::ws::v2::codec::{
         AckStage, ConfigState, LOGS_SEARCH_CAPABILITY, LOGS_TAIL_CAPABILITY,
     };
@@ -1073,6 +1075,8 @@ mod tests {
         assert!(!v2_capabilities(false).contains(&"pty-v2".to_string()));
         assert!(v2_capabilities(true).contains(&"pty-v2".to_string()));
         assert!(V2_CAPABILITIES.contains(&"log-policy-v1"));
+        assert!(V2_CAPABILITIES.contains(&MANAGED_NETWORKING_CAPABILITY));
+        assert!(V2_CAPABILITIES.contains(&MANAGED_LINK_PROBE_CAPABILITY));
         for served in [LOGS_TAIL_CAPABILITY, LOGS_SEARCH_CAPABILITY] {
             assert!(
                 V2_CAPABILITIES.contains(&served),

@@ -5,12 +5,14 @@ import type {
   ManagedIntentRouteRule,
   ManagedPeerTlsBinding,
   ManagedPeerTrustArtifact,
+  ManagedProbeBinding,
   ManagedRuleSetArtifact,
   ManagedRuleSetBinding,
   ManagedSnapshotExtension,
   ManagedStageIntent,
 } from "@blossom/contracts/agent-config-v3";
 import {
+  deriveManagedProbeBindings,
   formatManagedPeerTlsBindingId,
   MANAGED_SNAPSHOT_SCHEMA_VERSION,
 } from "@blossom/contracts/agent-config-v3";
@@ -81,6 +83,8 @@ export interface CompileManagedServerConfigResult {
   extension: ManagedSnapshotExtension;
   intentDigest: string;
   managedFingerprint: string;
+  /** Local link-to-tag mapping duplicated into the extension for the agent. */
+  probeBindings: ManagedProbeBinding[];
   /** Peer receiver certificates that must also be staged by the agent. */
   peerCertificateArtifacts: CertificateArtifact[];
   /** Peer inbound tags omitted because no admission is currently valid. */
@@ -621,6 +625,15 @@ export function compileManagedServerConfig(
   const intent = input.intent;
   const intentDigest = computeManagedStageIntentDigest(intent);
   const managedFingerprint = computeManagedStateFingerprint(intent);
+  let probeBindings: ManagedProbeBinding[];
+  try {
+    probeBindings = deriveManagedProbeBindings(intent);
+  } catch (error) {
+    fail(
+      "managed_intent_invalid",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
 
   const ruleSets = verifyRuleSetArtifacts(intent, input.ruleSetArtifacts);
   const tls = ensureManagedTlsBindings(intent, input.tlsMaterial, now);
@@ -755,6 +768,7 @@ export function compileManagedServerConfig(
     peerTrustArtifacts: tls.peerTrustArtifacts,
     ruleSetBindings: ruleSets.bindings,
     ruleSetArtifacts: ruleSets.artifacts,
+    probeBindings,
   };
 
   return {
@@ -762,6 +776,7 @@ export function compileManagedServerConfig(
     extension,
     intentDigest,
     managedFingerprint,
+    probeBindings,
     peerCertificateArtifacts: tls.peerCertificateArtifacts,
     prunedPeerInboundTags,
     materializedInboundTags: [...materializedInboundTags].sort(),

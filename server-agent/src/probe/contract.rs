@@ -270,6 +270,29 @@ mod tests {
 
     use super::*;
 
+    const LINK_PROBE_FIXTURES: &str =
+        include_str!("../../../packages/contracts/fixtures/agent-ws-v2-link-probe.frames.json");
+
+    fn keys(value: &Value) -> std::collections::BTreeSet<&str> {
+        value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect()
+    }
+
+    fn fixture_frame(frame_type: &str) -> Value {
+        let document: Value = serde_json::from_str(LINK_PROBE_FIXTURES).unwrap();
+        document["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["frame"]["type"] == frame_type)
+            .unwrap_or_else(|| panic!("missing {frame_type} fixture"))["frame"]["payload"]
+            .clone()
+    }
+
     fn fixture() -> LinkProbeRequest {
         serde_json::from_value(json!({
             "probeId": "probe-1",
@@ -291,6 +314,36 @@ mod tests {
             "expiresAt": "2026-11-20T00:01:00.000Z"
         }))
         .expect("fixture decodes")
+    }
+
+    #[test]
+    fn shared_ts_fixtures_decode_with_exact_field_parity() {
+        let request_payload = fixture_frame("link_probe.request");
+        let request: LinkProbeRequest = serde_json::from_value(request_payload.clone())
+            .expect("request payload matches the Rust contract");
+        request.validate().expect("bounded request");
+        let encoded = serde_json::to_value(&request).unwrap();
+        assert_eq!(keys(&encoded), keys(&request_payload));
+        assert_eq!(keys(&encoded["source"]), keys(&request_payload["source"]));
+        assert_eq!(
+            keys(&encoded["destination"]),
+            keys(&request_payload["destination"])
+        );
+        assert_eq!(encoded["source"]["serverId"], "srv-a");
+        assert_eq!(encoded["destination"]["serverId"], "srv-b");
+        assert_eq!(encoded["credentialGeneration"], 1);
+        assert_eq!(encoded["stageOrdinal"], 2);
+
+        let result_payload = fixture_frame("link_probe.result");
+        let result: LinkProbeResult = serde_json::from_value(result_payload.clone())
+            .expect("result payload matches the Rust contract");
+        result.validate().expect("bounded result");
+        let encoded = serde_json::to_value(&result).unwrap();
+        assert_eq!(keys(&encoded), keys(&result_payload));
+        assert_eq!(keys(&encoded["applied"]), keys(&result_payload["applied"]));
+        assert_eq!(encoded["outcome"], "succeeded");
+        assert_eq!(encoded["applied"]["desiredRevisionSeq"], 21);
+        assert!(encoded.get("destination").is_none());
     }
 
     #[test]

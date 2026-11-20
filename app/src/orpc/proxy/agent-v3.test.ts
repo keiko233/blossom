@@ -646,6 +646,32 @@ describe("managed stage intent versus materialized snapshot (Task 07)", () => {
     expect(
       computeDesiredRevision(config, bindings, artifacts, ["n1"], null),
     ).toBe(legacyRev);
+    const reorderedProbeRev = computeDesiredRevision(
+      config,
+      bindings,
+      artifacts,
+      ["n1"],
+      {
+        ...snapshot.managed!,
+        probeBindings: [...snapshot.managed!.probeBindings].reverse(),
+      },
+    );
+    expect(reorderedProbeRev).toBe(managedRev);
+    const changedProbeRev = computeDesiredRevision(
+      config,
+      bindings,
+      artifacts,
+      ["n1"],
+      {
+        ...snapshot.managed!,
+        probeBindings: snapshot.managed!.probeBindings.map((binding) =>
+          binding.sourceOutboundTag === null
+            ? binding
+            : { ...binding, sourceOutboundTag: "peer-out-changed" },
+        ),
+      },
+    );
+    expect(changedProbeRev).not.toBe(managedRev);
   });
 
   it("intersects route scopes with materialized inbounds and drops rules with an empty intersection", () => {

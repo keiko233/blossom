@@ -2,6 +2,7 @@ import {
   certificateArtifactSchema,
   managedPeerTlsBindingSchema,
   managedPeerTrustArtifactSchema,
+  managedProbeBindingSchema,
   managedRuleSetArtifactSchema,
   managedRuleSetBindingSchema,
   managedSnapshotExtensionSchema,
@@ -63,6 +64,10 @@ const handler = new OpenAPIHandler(router, {
           },
           ManagedRuleSetArtifact: {
             schema: managedRuleSetArtifactSchema,
+            strategy: "output",
+          },
+          ManagedProbeBinding: {
+            schema: managedProbeBindingSchema,
             strategy: "output",
           },
           ManagedSnapshotExtension: {

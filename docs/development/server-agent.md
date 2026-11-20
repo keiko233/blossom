@@ -78,13 +78,12 @@ acknowledgements stay responsive. See
 - `--url`/`AGENT_URL` must include the `/api` prefix; spec paths are relative to it.
 - The agent advertises capabilities in `hello`/heartbeat. An explicit legacy agent keeps `AGENT_CAPABILITIES` in `main.rs` (`config-v3`, `managed-tls-v3`, `certificate-deployments-v1`, `atomic-config-rollback`, `connection-stream-traffic`, `ws-v1`, `telemetry-v1`, `acme-v1`, plus `pty-v1` only when `AGENT_PTY_ENABLED=true`). The default v2 agent advertises `V2_CAPABILITIES` in `agent_v2.rs` (`config-v3`, `managed-tls-v3`, `certificate-deployments-v1`, `atomic-config-rollback`, `connection-stream-traffic`, `acme-v1`, `log-policy-v1`, `ws-v2`, `traffic-v2`, log tail/search, plus `pty-v2` and Linux telemetry when available). Add a capability when the agent gains behaviour the control plane may want to depend on.
 - The control plane registers the Task 08 `link_probe.request` / `link_probe.result` frames in
-  `@blossom/contracts`, but the shipped agent does not advertise
-  `managed-link-probe-v1` until its probe executor and fixed responder land. Today it
-  ignores these unknown in-direction frames, so an older agent neither answers a probe
-  nor fails the session. The executor handoff must decode the frames from
-  `packages/contracts/fixtures/agent-ws-v2-link-probe.frames.json`, advertise the
-  capability only when isolation and the fixed responder are available, and report only
-  a bounded outcome plus the source's applied generation.
+  `@blossom/contracts`. The shipped v2 agent advertises `managed-link-probe-v1`,
+  decodes the shared `packages/contracts/fixtures/agent-ws-v2-link-probe.frames.json`
+  frames, installs only the loopback ingress/responder routes derived from
+  `managed.probeBindings` and the committed config, and reports only a bounded outcome
+  plus the source's applied generation. An older agent ignores the unknown frames and
+  never answers a probe.
 - `desiredRevision` is opaque to the agent: equality and content comparison only. The control plane parses its own sequence prefix back out of the reported `appliedRevision` for the [publish gate](architecture.md#publish-gate).
 - The poll and heartbeat intervals come from the control plane per server; `AGENT_INTERVAL` is only the bootstrap value.
 - The same polled `agent` object may carry `desiredAgentVersion` and `desiredSingBoxVersion` (`latest` or an exact version). The heartbeat reports the per-binary `updates` state back. The WebSocket channel feeds the same `AgentPolicy` directives without changing the reconciler.

@@ -4,11 +4,13 @@ import type {
   ManagedIntentRouteRule,
   ManagedPeerTlsBinding,
   ManagedPeerTrustArtifact,
+  ManagedProbeBinding,
   ManagedRuleSetArtifact,
   ManagedRuleSetBinding,
   ManagedSnapshotExtension,
   ManagedStageIntent,
 } from "@blossom/contracts/agent-config-v3";
+import { deriveManagedProbeBindings } from "@blossom/contracts/agent-config-v3";
 import { BUILTIN_DIRECT_OUTBOUND_TAG } from "@blossom/domain/managed-networking";
 import { createHash } from "node:crypto";
 
@@ -375,6 +377,7 @@ export interface ManagedSnapshotRevisionMetadata {
   peerTrustArtifacts: ManagedPeerTrustArtifactMetadata[];
   ruleSetBindings: ManagedRuleSetBinding[];
   ruleSetArtifacts: ManagedRuleSetArtifactMetadata[];
+  probeBindings: ManagedProbeBinding[];
 }
 
 function toPeerTrustArtifactMetadata(
@@ -430,7 +433,20 @@ function toManagedSnapshotRevisionMetadata(
           a.ruleSetId.localeCompare(b.ruleSetId) ||
           a.version.localeCompare(b.version),
       ),
+    probeBindings: [...managed.probeBindings].sort(compareManagedProbeBindings),
   };
+}
+
+function compareManagedProbeBindings(
+  a: ManagedProbeBinding,
+  b: ManagedProbeBinding,
+): number {
+  return (
+    a.linkId.localeCompare(b.linkId) ||
+    a.credentialGeneration - b.credentialGeneration ||
+    (a.sourceOutboundTag ?? "").localeCompare(b.sourceOutboundTag ?? "") ||
+    (a.destinationInboundTag ?? "").localeCompare(b.destinationInboundTag ?? "")
+  );
 }
 
 /**
@@ -523,6 +539,7 @@ export function computeManagedStageIntentDigest(
         ...intent.stageExpectations.removedRuntimeTags,
       ].sort(),
     },
+    probeBindings: deriveManagedProbeBindings(intent),
   });
   return `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
 }
@@ -616,6 +633,7 @@ export function computeManagedStateFingerprint(
         ...intent.stageExpectations.removedRuntimeTags,
       ].sort(),
     },
+    probeBindings: deriveManagedProbeBindings(intent),
   });
   return `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
 }
@@ -662,6 +680,11 @@ export type ManagedMaterializationIssue =
       code: "managed_fingerprint_mismatch";
       expected: string;
       actual: string;
+    }
+  | {
+      code: "probe_binding_mismatch";
+      expected: ManagedProbeBinding[];
+      actual: ManagedProbeBinding[];
     }
   | {
       code: "missing_required_runtime_tag";
@@ -751,6 +774,16 @@ export function validateMaterializedSnapshotAgainstIntent(
       code: "managed_fingerprint_mismatch",
       expected: managedFingerprint,
       actual: managed.managedFingerprint,
+    });
+  }
+  const expectedProbeBindings = deriveManagedProbeBindings(intent);
+  if (
+    canonicalize(expectedProbeBindings) !== canonicalize(managed.probeBindings)
+  ) {
+    issues.push({
+      code: "probe_binding_mismatch",
+      expected: expectedProbeBindings,
+      actual: managed.probeBindings,
     });
   }
 
