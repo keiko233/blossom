@@ -44,7 +44,13 @@ import {
   withoutNodeTlsMaterial,
 } from "@/orpc/proxy/sing-box-registry";
 import { recordConfigChange } from "@/query/config-change";
-import { deleteNodeWithMembershipCascade } from "@/query/group-membership-write";
+import {
+  deleteLegacySubscriberNode,
+  isLegacyNodeStructuralChange,
+  LegacyNodeWriteRejectedError,
+  readLegacyStructuralNodeWriteFence,
+  writeLegacySubscriberNode,
+} from "@/query/managed-topology-write";
 
 /** TanStack Query key for the admin node list. */
 export const NODES_QUERY_KEY = ["admin", "nodes"] as const;
@@ -398,6 +404,14 @@ export const createNode = createServerFn({ method: "POST" })
 
     let changedServerIds: string[] = [];
     const run = async (tx: DbHandle) => {
+      // The structural fence is checked before the binding so an obvious
+      // rejection does not need neon-http compensation.
+      const fence = await readLegacyStructuralNodeWriteFence(
+        { serverIds: [data.serverId] },
+        tx,
+      );
+      if (fence) throw new LegacyNodeWriteRejectedError(fence);
+
       if (data.certificateId) {
         const plan = await planBindingForNode(
           tx,
@@ -407,31 +421,38 @@ export const createNode = createServerFn({ method: "POST" })
         pendingPlan = plan;
         await upsertBinding(tx, plan, data.certificateId, data.serverId);
       }
-      const [row] = await tx
-        .insert(node)
-        .values({
-          id,
-          name: data.name,
-          remark: data.remark,
-          tags: data.tags,
-          enabled: data.enabled,
-          serverId: data.serverId,
-          // `null` IS a valid override ("use server.address"); only `undefined`
-          // should fall back to the schema default (empty {}).
-          address: data.address ?? null,
-          listenPort: data.listenPort,
-          protocol: data.protocol,
-          certificateId: data.certificateId ?? null,
-          tlsServerName: data.tlsServerName ?? null,
-          // Strictly re-validate the fragment against the sing-box schema for
-          // this protocol, after stripping X.509 material + raw server_name.
-          settings: parseNodeSettings(
-            data.protocol,
-            withoutNodeTlsMaterial(data.settings),
-          ),
-        })
-        .returning();
-      if (!row) throw new Error("Failed to create node");
+      const written = await writeLegacySubscriberNode(
+        {
+          kind: "create",
+          values: {
+            id,
+            name: data.name,
+            remark: data.remark,
+            tags: data.tags,
+            enabled: data.enabled,
+            serverId: data.serverId,
+            // `null` IS a valid override ("use server.address"); only `undefined`
+            // should fall back to the schema default (empty {}).
+            address: data.address ?? null,
+            listenPort: data.listenPort,
+            protocol: data.protocol,
+            certificateId: data.certificateId ?? null,
+            tlsServerName: data.tlsServerName ?? null,
+            // Strictly re-validate the fragment against the sing-box schema for
+            // this protocol, after stripping X.509 material + raw server_name.
+            settings: parseNodeSettings(
+              data.protocol,
+              withoutNodeTlsMaterial(data.settings),
+            ),
+          },
+        },
+        { database: tx },
+      );
+      if (!written.ok) {
+        if (written.reason === "not_found") throw new Error("Not found");
+        throw new LegacyNodeWriteRejectedError(written);
+      }
+      const row = written.node;
       // Publish gate: an enabled node appears in subscriptions only after the
       // agent confirms the revision that first serves it. Disabled nodes are
       // absent from both payloads, so creating one records nothing.
@@ -448,20 +469,32 @@ export const createNode = createServerFn({ method: "POST" })
     };
 
     let row;
-    if (supportsInteractiveTransactions(databaseDriver)) {
-      row = await withNodeTransaction(db, databaseDriver, run);
-    } else {
-      try {
+    try {
+      if (supportsInteractiveTransactions(databaseDriver)) {
+        row = await withNodeTransaction(db, databaseDriver, run);
+      } else {
         row = await run(db);
-      } catch (error) {
-        await compensateBindingAfterNodeFailure(
-          db,
-          data.certificateId,
-          data.serverId,
-          pendingPlan,
-        );
-        throw error;
       }
+    } catch (error) {
+      if (error instanceof LegacyNodeWriteRejectedError) {
+        if (!supportsInteractiveTransactions(databaseDriver)) {
+          await compensateBindingAfterNodeFailure(
+            db,
+            data.certificateId,
+            data.serverId,
+            pendingPlan,
+          );
+        }
+        return error.rejection;
+      }
+      if (supportsInteractiveTransactions(databaseDriver)) throw error;
+      await compensateBindingAfterNodeFailure(
+        db,
+        data.certificateId,
+        data.serverId,
+        pendingPlan,
+      );
+      throw error;
     }
     await notifyAgentConfigChanged(changedServerIds, "node created");
     return { node: row };
@@ -557,7 +590,7 @@ export const updateNode = createServerFn({ method: "POST" })
     // Publish gate: record only changes that alter the compiled agent config
     // or the client connection tuple, and only when the node is enabled on
     // either side of the transition (a dark node is in neither payload).
-    const configChanged = isNodeConfigChange(existingNode, {
+    const afterNode = {
       protocol: effectiveProtocol,
       listenPort: rest.listenPort ?? existingNode.listenPort,
       settings: sanitizedSettings,
@@ -565,7 +598,9 @@ export const updateNode = createServerFn({ method: "POST" })
       tlsServerName: effectiveTlsServerName,
       serverId: effectiveServerId,
       enabled: rest.enabled ?? existingNode.enabled,
-    });
+    };
+    const configChanged = isNodeConfigChange(existingNode, afterNode);
+    const structural = isLegacyNodeStructuralChange(existingNode, afterNode);
     const prevRow = configChanged
       ? await snapshotNodeForGate(db, existingNode)
       : null;
@@ -575,6 +610,16 @@ export const updateNode = createServerFn({ method: "POST" })
 
     let changedServerIds: string[] = [];
     const run = async (tx: DbHandle) => {
+      if (structural) {
+        const fence = await readLegacyStructuralNodeWriteFence(
+          {
+            nodeId: id,
+            serverIds: [existingNode.serverId, effectiveServerId],
+          },
+          tx,
+        );
+        if (fence) throw new LegacyNodeWriteRejectedError(fence);
+      }
       if (newBinding) {
         const plan = await planBindingForNode(
           tx,
@@ -589,18 +634,42 @@ export const updateNode = createServerFn({ method: "POST" })
           newBinding.serverId,
         );
       }
-      const [row] = await tx
-        .update(node)
-        .set({
-          ...rest,
-          ...(protocol ? { protocol } : {}),
-          ...(certificateId !== undefined ? { certificateId } : {}),
-          ...(tlsServerName !== undefined ? { tlsServerName } : {}),
-          settings: sanitizedSettings,
-          ...addressUpdate,
-        })
-        .where(eq(node.id, id))
-        .returning();
+      let row: typeof existingNode | undefined;
+      if (structural) {
+        const written = await writeLegacySubscriberNode(
+          {
+            kind: "update",
+            nodeId: id,
+            values: {
+              ...rest,
+              ...(protocol ? { protocol } : {}),
+              ...(certificateId !== undefined ? { certificateId } : {}),
+              ...(tlsServerName !== undefined ? { tlsServerName } : {}),
+              settings: sanitizedSettings,
+              ...addressUpdate,
+            },
+          },
+          { database: tx },
+        );
+        if (!written.ok) {
+          if (written.reason === "not_found") throw new Error("Not found");
+          throw new LegacyNodeWriteRejectedError(written);
+        }
+        row = written.node;
+      } else {
+        [row] = await tx
+          .update(node)
+          .set({
+            ...rest,
+            ...(protocol ? { protocol } : {}),
+            ...(certificateId !== undefined ? { certificateId } : {}),
+            ...(tlsServerName !== undefined ? { tlsServerName } : {}),
+            settings: sanitizedSettings,
+            ...addressUpdate,
+          })
+          .where(eq(node.id, id))
+          .returning();
+      }
       if (!row) {
         throw new Error("Not found");
       }
@@ -628,22 +697,25 @@ export const updateNode = createServerFn({ method: "POST" })
     };
 
     let row;
-    if (supportsInteractiveTransactions(databaseDriver)) {
-      row = await withNodeTransaction(db, databaseDriver, run);
-    } else {
-      try {
+    try {
+      if (supportsInteractiveTransactions(databaseDriver)) {
+        row = await withNodeTransaction(db, databaseDriver, run);
+      } else {
         row = await run(db);
-      } catch (error) {
-        if (!nodePersisted) {
-          await compensateBindingAfterNodeFailure(
-            db,
-            newBinding?.certificateId,
-            newBinding?.serverId,
-            pendingPlan,
-          );
-        }
-        throw error;
       }
+    } catch (error) {
+      if (!supportsInteractiveTransactions(databaseDriver) && !nodePersisted) {
+        await compensateBindingAfterNodeFailure(
+          db,
+          newBinding?.certificateId,
+          newBinding?.serverId,
+          pendingPlan,
+        );
+      }
+      if (error instanceof LegacyNodeWriteRejectedError) {
+        return error.rejection;
+      }
+      throw error;
     }
     await notifyAgentConfigChanged(changedServerIds, "node updated");
     return row;
@@ -729,20 +801,17 @@ export const deleteNode = createServerFn({ method: "POST" })
     let changedServerIds: string[] = [];
     const run = async (tx: DbHandle) => {
       // Delete the node and compact every affected group's membership in one
-      // statement. The removed node's identity rides on the publish-gate
-      // record below; subscriptions omit a deleted node immediately.
-      const cascade = await deleteNodeWithMembershipCascade(
+      // topologically fenced statement. The removed node's identity rides on
+      // the publish-gate record below; subscriptions omit it immediately.
+      const deleted = await deleteLegacySubscriberNode(
         { nodeId: data.id },
-        {
-          database: tx,
-          driver: databaseDriver,
-          interactive: supportsInteractiveTransactions(databaseDriver),
-        },
+        { database: tx },
       );
-      if (!cascade) {
-        throw new Error("Not found");
+      if (!deleted.ok) {
+        if (deleted.reason === "not_found") throw new Error("Not found");
+        throw new LegacyNodeWriteRejectedError(deleted);
       }
-      const row = cascade.node;
+      const row = deleted.node;
       if (row.enabled) {
         const change = await recordConfigChange(tx, {
           kind: "node",
@@ -760,7 +829,15 @@ export const deleteNode = createServerFn({ method: "POST" })
       }
       return { id: row.id };
     };
-    const result = await withNodeTransaction(db, databaseDriver, run);
+    let result;
+    try {
+      result = await withNodeTransaction(db, databaseDriver, run);
+    } catch (error) {
+      if (error instanceof LegacyNodeWriteRejectedError) {
+        return error.rejection;
+      }
+      throw error;
+    }
     await notifyAgentConfigChanged(changedServerIds, "node deleted");
     return result;
   });

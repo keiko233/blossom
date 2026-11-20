@@ -87,13 +87,19 @@ import {
   withDatabaseTransaction,
 } from "@/query/group-membership-write";
 import { getGroup } from "@/query/groups";
-import { deleteNodeMCP } from "@/query/mcp-tools";
-import { deleteNode as deleteNodeFromUi, listNodes } from "@/query/nodes";
+import { createNodeMCP, deleteNodeMCP, updateNodeMCP } from "@/query/mcp-tools";
+import {
+  createNode as createNodeFromUi,
+  deleteNode as deleteNodeFromUi,
+  listNodes,
+  updateNode as updateNodeFromUi,
+} from "@/query/nodes";
 import {
   getGatedSubscriptionView,
   getSubscriptionAccessibleNodes,
   findSubscriptionByToken,
 } from "@/query/subscription-access";
+import { rotateSubscriptionCredentials } from "@/query/subscription-write";
 
 const PG_URL = process.env.BLOSSOM_TEST_PG_URL;
 const NEON_URL = process.env.BLOSSOM_TEST_NEON_HTTP_URL;
@@ -147,7 +153,8 @@ let fx: Fixture;
 async function resetAndSeed() {
   const { admin, adminDb } = fx;
   await admin.query(
-    `TRUNCATE "user", plan, proxy_group, server, config_change CASCADE`,
+    `TRUNCATE "user", plan, proxy_group, server, config_change, managed_rollout CASCADE;
+     UPDATE managed_topology SET generation = 0;`,
   );
   await adminDb.insert(user).values([
     { id: "alice", name: "Alice", email: "alice@example.test" },
@@ -714,6 +721,111 @@ describe.skipIf(!PG_URL)(
             { id: "srv-b", desired_revision_seq: 1 },
             { id: "srv-c", desired_revision_seq: 0 },
           ]);
+        });
+
+        it("UI and MCP structural writers reject active rollout claims", async () => {
+          await fx.admin.query(`
+            INSERT INTO managed_rollout (id, topology_generation, stage_count)
+            VALUES ('r-fence', 0, 1);
+            INSERT INTO managed_rollout_claim (server_id, rollout_id)
+            VALUES ('srv-b', 'r-fence');
+          `);
+          const deleteUi = deleteNodeFromUi as unknown as (arg: {
+            data: { id: string };
+          }) => Promise<unknown>;
+          const updateUi = updateNodeFromUi as unknown as (arg: {
+            data: Record<string, unknown>;
+          }) => Promise<unknown>;
+          const createUi = createNodeFromUi as unknown as (arg: {
+            data: Record<string, unknown>;
+          }) => Promise<unknown>;
+
+          const rejection = {
+            ok: false,
+            reason: "rollout_in_progress",
+            serverId: "srv-b",
+            rolloutId: "r-fence",
+          };
+          await expect(deleteUi({ data: { id: "b" } })).resolves.toEqual(
+            rejection,
+          );
+          await expect(deleteNodeMCP("admin", "b")).resolves.toEqual(rejection);
+          await expect(
+            updateUi({ data: { id: "b", listenPort: 10007 } }),
+          ).resolves.toEqual(rejection);
+          await expect(
+            updateNodeMCP("admin", "b", { listenPort: 10007 }),
+          ).resolves.toEqual(rejection);
+          await expect(
+            createUi({
+              data: {
+                name: "fenced",
+                serverId: "srv-b",
+                listenPort: 10008,
+                protocol: "trojan",
+                settings: {},
+              },
+            }),
+          ).resolves.toEqual(rejection);
+          await expect(
+            createNodeMCP("admin", {
+              name: "fenced",
+              serverId: "srv-b",
+              listenPort: 10008,
+              protocol: "trojan",
+              settings: {},
+            }),
+          ).resolves.toEqual(rejection);
+          expect(
+            (await fx.admin.query(`SELECT id FROM node WHERE id = 'b'`)).rows,
+          ).toEqual([{ id: "b" }]);
+
+          // An active rollout claim fences subscriber structure, not
+          // entitlement revocation or credential rotation.
+          const revoked = await writeGroupMembership(
+            { groupId: "g-swap", expectedRevision: 1, nodeIds: ["a"] },
+            { database: holder.db, driver: holder.driver },
+          );
+          expect(revoked.ok).toBe(true);
+          const rotated = await rotateSubscriptionCredentials("sub-alice");
+          expect(rotated.serverIds).toEqual(["srv-a", "srv-b", "srv-c"]);
+        });
+
+        it("UI and MCP structural writers reject a pointed managed subscriber ingress", async () => {
+          await fx.admin.query(`
+            INSERT INTO managed_config_version
+              (id, server_id, version, schema_version, intent, intent_digest, subscriber_node_ids)
+            VALUES ('cv-ref', 'srv-b', 1, 1, '{}', 'sha256:ref', '["b"]'::jsonb);
+            INSERT INTO managed_server_state
+              (server_id, desired_config_version_id, applied_config_version_id)
+            VALUES ('srv-b', 'cv-ref', 'cv-ref');
+          `);
+          const deleteUi = deleteNodeFromUi as unknown as (arg: {
+            data: { id: string };
+          }) => Promise<unknown>;
+          const updateUi = updateNodeFromUi as unknown as (arg: {
+            data: Record<string, unknown>;
+          }) => Promise<unknown>;
+
+          const rejection = {
+            ok: false,
+            reason: "managed_reference",
+            nodeId: "b",
+            configVersionIds: ["cv-ref"],
+          };
+          await expect(deleteUi({ data: { id: "b" } })).resolves.toEqual(
+            rejection,
+          );
+          await expect(deleteNodeMCP("admin", "b")).resolves.toEqual(rejection);
+          await expect(
+            updateUi({ data: { id: "b", listenPort: 10007 } }),
+          ).resolves.toEqual(rejection);
+          await expect(
+            updateNodeMCP("admin", "b", { listenPort: 10007 }),
+          ).resolves.toEqual(rejection);
+          expect(
+            (await fx.admin.query(`SELECT id FROM node WHERE id = 'b'`)).rows,
+          ).toEqual([{ id: "b" }]);
         });
 
         it("orders exports by group sort/member position with first occurrence winning", async () => {
