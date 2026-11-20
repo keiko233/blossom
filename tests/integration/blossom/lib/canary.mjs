@@ -86,6 +86,20 @@ const AGENT_SOURCE = path.join("server-agent", "src");
 const AGENT_V2_SOURCE = path.join(AGENT_SOURCE, "agent_v2.rs");
 const PROBE_MODULE_SOURCE = path.join(AGENT_SOURCE, "probe");
 const ACTIVATION_SOURCE = path.join("packages", "domain", "src", "managed-networking.ts");
+const NETWORKING_QUERY_SOURCE = path.join("app", "src", "query", "networking.ts");
+const MANAGED_CONTRACT_SOURCE = path.join(
+  "packages",
+  "contracts",
+  "src",
+  "agent-config-v3.ts",
+);
+const MANAGED_COMPILER_SOURCE = path.join(
+  "app",
+  "src",
+  "orpc",
+  "proxy",
+  "managed-singbox.ts",
+);
 const LINK_PROBE_CAPABILITY = "managed-link-probe-v1";
 
 /**
@@ -104,6 +118,16 @@ export const CANARY_PREREQUISITES = {
   "agent-link-probe-transport": {
     scope: "core",
     summary: `agent advertises ${LINK_PROBE_CAPABILITY} and handles link_probe.request (task 08)`,
+  },
+  "managed-probe-bindings": {
+    scope: "core",
+    summary:
+      "the managed snapshot compiler emits probeBindings for every sender link (task 08 integration)",
+  },
+  "apply-ingress": {
+    scope: "core",
+    summary:
+      "an audited admin apply creates a rollout and the v2 apply/status ingress advances it (task 09 integration)",
   },
   "activation-enabled": {
     scope: "core",
@@ -139,8 +163,42 @@ function linkProbeTransport(repoRoot, { run, readText }) {
     path.join(repoRoot, AGENT_SOURCE),
   ]).stdout.split("\n");
   const probeModule = path.join(repoRoot, PROBE_MODULE_SOURCE) + path.sep;
-  const handles = users.some((file) => file.trim() !== "" && !file.startsWith(probeModule));
+  const handles = users.some(
+    (file) => file.trim() !== "" && !file.startsWith(probeModule),
+  );
   return { advertises, handles };
+}
+
+/**
+ * Static indicator for the compiler half of task 08: a sender's managed
+ * snapshot must name its probe bindings, otherwise the Rust executor cannot
+ * derive the loopback ingress and fixed responder for the link. The live run
+ * still proves it end to end with a successful managed_link_probe row.
+ */
+function managedProbeBindings(repoRoot, { readText }) {
+  const contract = readText(path.join(repoRoot, MANAGED_CONTRACT_SOURCE));
+  const compiler = readText(path.join(repoRoot, MANAGED_COMPILER_SOURCE));
+  return /probeBindings/.test(contract) && /probeBindings/.test(compiler);
+}
+
+/**
+ * Static indicator for task 09's Apply integration: an admin server function
+ * must call rollout admission. An explicit `--apply-fn` lets the canary run
+ * against an integration whose export name differs, without guessing it here.
+ */
+function applyIngress(repoRoot, { readText }) {
+  return /admitManagedRollout\s*\(/.test(
+    readText(path.join(repoRoot, NETWORKING_QUERY_SOURCE)),
+  );
+}
+
+/** `file#export` for a canary server-function override. */
+export function parseServerFnSpec(spec) {
+  const [file, exportName, ...rest] = String(spec).split("#");
+  if (!file || !exportName || rest.length > 0) {
+    throw new Error(`expected <file>#<export>, received '${spec}'`);
+  }
+  return [file, exportName];
 }
 
 /**
@@ -148,7 +206,16 @@ function linkProbeTransport(repoRoot, { run, readText }) {
  * and `readText(path)`. Returns facts plus one entry per missing prerequisite;
  * the base harness preflight is merged in by the caller.
  */
-export function canaryPreflight({ repoRoot, singBox, dockerReachable, systemdVm }, probe = {}) {
+export function canaryPreflight(
+  {
+    repoRoot,
+    singBox,
+    dockerReachable,
+    systemdVm,
+    applyFn,
+  },
+  probe = {},
+) {
   const { run = defaultRun, readText } = probe;
   const facts = {};
   const missing = [];
@@ -182,6 +249,28 @@ export function canaryPreflight({ repoRoot, singBox, dockerReachable, systemdVm 
     miss(
       "agent-link-probe-transport",
       `server-agent/src does not ${gaps.join(" or ")} (task 08 Rust transport not landed)`,
+    );
+  }
+
+  const bindings = managedProbeBindings(repoRoot, { readText });
+  facts.managedProbeBindings = bindings;
+  if (!bindings) {
+    miss(
+      "managed-probe-bindings",
+      `${MANAGED_COMPILER_SOURCE} does not emit probeBindings for sender links (task 08 control-plane integration not landed)`,
+    );
+  }
+
+  const administrativeApply = applyIngress(repoRoot, { readText });
+  facts.applyIngress = applyFn
+    ? `explicit ${applyFn}`
+    : administrativeApply
+      ? "admin server function"
+      : "missing";
+  if (!applyFn && !administrativeApply) {
+    miss(
+      "apply-ingress",
+      `${NETWORKING_QUERY_SOURCE} does not admit a rollout (task 09 Apply integration not landed); pass --apply-fn <file>#<export> when it lands`,
     );
   }
 
@@ -220,46 +309,95 @@ export const CANARY_EVIDENCE = [
   {
     id: "receiver-first",
     title: "B's receiver stage is proven before A's sender and routing stages",
-    requires: ["base-harness", "pinned-sing-box", "agent-link-probe-transport", "activation-enabled"],
+    requires: [
+      "base-harness",
+      "pinned-sing-box",
+      "agent-link-probe-transport",
+      "managed-probe-bindings",
+      "apply-ingress",
+      "activation-enabled",
+    ],
     observe:
       "managed_rollout_stage rows (serverId, ordinal, state, issuedAt, confirmedAt), managed_link_probe rows, and subscription fetches taken during the rollout",
   },
   {
     id: "isolated-relay",
     title: "A-to-B relay carries the subscriber flow and nothing else reaches B",
-    requires: ["base-harness", "pinned-sing-box", "agent-link-probe-transport", "activation-enabled"],
+    requires: [
+      "base-harness",
+      "pinned-sing-box",
+      "agent-link-probe-transport",
+      "managed-probe-bindings",
+      "apply-ingress",
+      "activation-enabled",
+    ],
     observe:
       "origin request log (path token, remote address), direct dials to B's peer inbound with the subscriber credential, and dials through A to each agent's loopback stats endpoint",
   },
   {
     id: "export-only-a",
     title: "subscriptions list only A's subscriber inbound",
-    requires: ["base-harness", "pinned-sing-box", "agent-link-probe-transport", "activation-enabled"],
+    requires: [
+      "base-harness",
+      "pinned-sing-box",
+      "agent-link-probe-transport",
+      "managed-probe-bindings",
+      "apply-ingress",
+      "activation-enabled",
+    ],
     observe: "served Clash proxies (server, port) against A's node and B's peer listener",
   },
   {
     id: "no-double-billing",
     title: "the forwarded download is billed once, at A",
-    requires: ["base-harness", "pinned-sing-box", "agent-link-probe-transport", "activation-enabled"],
+    requires: [
+      "base-harness",
+      "pinned-sing-box",
+      "agent-link-probe-transport",
+      "managed-probe-bindings",
+      "apply-ingress",
+      "activation-enabled",
+    ],
     observe: "subscription.traffic_used_bytes delta and traffic_record rows per server",
   },
   {
     id: "failure-recovery",
     title: "failed and aborted stages restore the last confirmed version",
-    requires: ["base-harness", "pinned-sing-box", "agent-link-probe-transport", "activation-enabled"],
+    requires: [
+      "base-harness",
+      "pinned-sing-box",
+      "agent-link-probe-transport",
+      "managed-probe-bindings",
+      "apply-ingress",
+      "activation-enabled",
+    ],
     observe:
       "managed_rollout / managed_rollout_stage after an injected B failure and an Abort during apply; subscriber traffic after recovery",
   },
   {
     id: "live-revocation",
     title: "revocation reaches the data plane while a networking candidate is failed",
-    requires: ["base-harness", "pinned-sing-box", "agent-link-probe-transport", "activation-enabled"],
+    requires: [
+      "base-harness",
+      "pinned-sing-box",
+      "agent-link-probe-transport",
+      "managed-probe-bindings",
+      "apply-ingress",
+      "activation-enabled",
+    ],
     observe: "subscription status code and a proxied request through A after cancelling the subscription",
   },
   {
     id: "downgrade-gate",
     title: "unsupported agents block activation and managed state drains before downgrade",
-    requires: ["base-harness", "pinned-sing-box", "agent-link-probe-transport", "activation-enabled"],
+    requires: [
+      "base-harness",
+      "pinned-sing-box",
+      "agent-link-probe-transport",
+      "managed-probe-bindings",
+      "apply-ingress",
+      "activation-enabled",
+    ],
     observe:
       "apply result with B on a build lacking managed-networking-v1, legacy config request status for A, and rollout state after draining the link",
   },

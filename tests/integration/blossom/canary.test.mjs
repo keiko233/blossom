@@ -23,6 +23,7 @@ import {
   judgeNoDoubleBilling,
   judgeReceiverFirst,
   parsePinnedSingBox,
+  parseServerFnSpec,
   planEvidence,
 } from "./lib/canary.mjs";
 import { run as defaultRun } from "./lib/util.mjs";
@@ -80,6 +81,15 @@ function fakeProbe({ version, wired = false, activation = "false" }) {
         const probe = wired ? "    MANAGED_LINK_PROBE_CAPABILITY,\n" : "";
         return `const V2_CAPABILITIES: &[&str] = &[\n    "config-v3",\n${probe}];\n`;
       }
+      if (wired && file.endsWith("agent-config-v3.ts")) {
+        return "probeBindings: []";
+      }
+      if (wired && file.endsWith("managed-singbox.ts")) {
+        return "probeBindings: []";
+      }
+      if (wired && file.endsWith("query/networking.ts")) {
+        return "await admitManagedRollout(input);";
+      }
       return readFileSync(file, "utf8");
     },
   };
@@ -102,13 +112,17 @@ test("preflight names every missing prerequisite explicitly", () => {
   assert.deepEqual(missing.map((m) => m.id).sort(), [
     "activation-enabled",
     "agent-link-probe-transport",
+    "apply-ingress",
     "docker-agent-profile",
+    "managed-probe-bindings",
     "pinned-sing-box",
     "systemd-disposable-vm",
   ]);
   for (const entry of missing) assert.ok(CANARY_PREREQUISITES[entry.id], entry.id);
   assert.match(missing.find((m) => m.id === "agent-link-probe-transport").detail, /advertise .* or handle/);
+  assert.match(missing.find((m) => m.id === "apply-ingress").detail, /task 09 Apply/);
   assert.equal(facts.activationEnabled, "false");
+  assert.equal(facts.applyIngress, "missing");
 });
 
 test("preflight passes once the pin, task 08 transport, gate and profiles are present", () => {
@@ -121,6 +135,34 @@ test("preflight passes once the pin, task 08 transport, gate and profiles are pr
     }),
   );
   assert.deepEqual(missing, []);
+});
+
+test("an explicit apply server function unblocks the apply ingress only", () => {
+  const { missing, facts } = canaryPreflight(
+    {
+      repoRoot,
+      singBox: "/bin/sing-box",
+      dockerReachable: true,
+      systemdVm: "canary-vm",
+      applyFn: "src/query/networking.ts#applyNetworkingRollout",
+    },
+    fakeProbe({
+      version: `sing-box version ${pinned.version}\nTags: with_v2ray_api`,
+      wired: true,
+      activation: "true",
+    }),
+  );
+  assert.deepEqual(missing, []);
+  assert.equal(facts.applyIngress, "explicit src/query/networking.ts#applyNetworkingRollout");
+});
+
+test("a server-function override must be file#export", () => {
+  assert.deepEqual(parseServerFnSpec("src/query/networking.ts#applyNetworkingRollout"), [
+    "src/query/networking.ts",
+    "applyNetworkingRollout",
+  ]);
+  assert.throws(() => parseServerFnSpec("src/query/networking.ts"), /expected/);
+  assert.throws(() => parseServerFnSpec("a#b#c"), /expected/);
 });
 
 test("preflight rejects the pinned version without the stats tag", () => {
