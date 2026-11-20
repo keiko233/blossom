@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { getAdminWorkspace, resolveLegacyAdminPath } from "./admin-workspace";
+import {
+  filterLegacyAdminSearch,
+  getAdminWorkspace,
+  resolveLegacyAdminPath,
+} from "./admin-workspace";
 
 const SERVER = "srv_1";
 
 describe("resolveLegacyAdminPath", () => {
   it.each([
+    ["/admin/proxies", "/admin/servers"],
     ["/admin/proxies/servers", "/admin/servers"],
     ["/admin/proxies/servers/", "/admin/servers"],
     ["/admin/proxies/servers/new", "/admin/servers/new"],
@@ -17,6 +22,10 @@ describe("resolveLegacyAdminPath", () => {
     [
       `/admin/proxies/servers/${SERVER}/terminal`,
       `/admin/servers/${SERVER}/terminal`,
+    ],
+    [
+      `/admin/proxies/servers/${SERVER}/outbounds`,
+      `/admin/servers/${SERVER}/outbounds`,
     ],
     ["/admin/proxies/nodes", "/admin/servers"],
     ["/admin/proxies/nodes/new", "/admin/servers"],
@@ -77,5 +86,46 @@ describe("getAdminWorkspace", () => {
 
   it("returns null outside the admin area", () => {
     expect(getAdminWorkspace("/dashboard")).toBeNull();
+  });
+});
+
+describe("filterLegacyAdminSearch", () => {
+  it("keeps only allowlisted keys for the destination page", () => {
+    const search = new URLSearchParams({
+      page: "2",
+      q: "ali",
+      role: "admin",
+      token: "secret",
+      status: "active",
+      tab: "servers",
+    });
+
+    expect(filterLegacyAdminSearch("/admin/access/users", search)).toEqual({
+      page: "2",
+      q: "ali",
+      role: "admin",
+      status: "active",
+    });
+  });
+
+  it("applies nested redeem detail params to redeem routes only", () => {
+    const search = new URLSearchParams({
+      codesPage: "3",
+      token: "secret",
+    });
+
+    expect(
+      filterLegacyAdminSearch("/admin/access/redeem/batch_1", search),
+    ).toEqual({ codesPage: "3" });
+    expect(filterLegacyAdminSearch("/admin/access/users", search)).toEqual({});
+  });
+
+  it("drops every parameter for destinations without an allowlist", () => {
+    expect(
+      filterLegacyAdminSearch(
+        "/admin/networking/routing",
+        new URLSearchParams({ q: "drop" }),
+      ),
+    ).toEqual({});
   });
 });

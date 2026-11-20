@@ -66,7 +66,7 @@ export function TrafficTrend({
           render={
             <Link
               search={{ server: serverId, user: userId }}
-              to="/admin/traffic"
+              to="/admin/operations/traffic"
             />
           }
         >

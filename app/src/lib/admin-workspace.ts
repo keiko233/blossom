@@ -25,6 +25,7 @@ export type LegacyAdminDestination =
 
 const LEGACY_SERVER_TABS: Record<string, string> = {
   nodes: "inbounds",
+  outbounds: "outbounds",
   settings: "settings",
   connection: "connection",
   logs: "logs",
@@ -57,6 +58,10 @@ function resolveLegacyProxiesPath(
   rest: string[],
 ): LegacyAdminDestination | null {
   const [section, id, tab, ...extra] = rest;
+
+  if (section === undefined) {
+    return path("servers");
+  }
 
   switch (section) {
     case "servers":
@@ -124,4 +129,112 @@ export function getAdminWorkspace(pathname: string): AdminWorkspaceId | null {
   }
 
   return ADMIN_WORKSPACE_IDS.find((id) => id === segments[0]) ?? "overview";
+}
+
+/**
+ * Search parameters each canonical page understands, so an old bookmark keeps
+ * its filters and pagination without smuggling unrelated or sensitive values
+ * into a different page. A key matches its own section and nested resource
+ * routes.
+ */
+const LEGACY_SEARCH_ALLOWLIST: Record<string, readonly string[]> = {
+  "/admin/access/users": [
+    "page",
+    "pageSize",
+    "q",
+    "role",
+    "status",
+    "subscription",
+    "sort",
+    "dir",
+  ],
+  "/admin/access/subscriptions": [
+    "page",
+    "pageSize",
+    "q",
+    "status",
+    "stored",
+    "plan",
+    "expiring",
+    "quota",
+    "sort",
+    "dir",
+  ],
+  "/admin/access/redeem": [
+    "page",
+    "pageSize",
+    "q",
+    "plan",
+    "mode",
+    "status",
+    "sort",
+    "dir",
+    "codesPage",
+    "redemptionsPage",
+  ],
+  "/admin/operations/traffic": [
+    "range",
+    "from",
+    "to",
+    "server",
+    "node",
+    "plan",
+    "user",
+    "by",
+    "page",
+    "pageSize",
+    "sort",
+    "dir",
+  ],
+  "/admin/operations/audit": [
+    "tab",
+    "page",
+    "pageSize",
+    "actor",
+    "action",
+    "targetType",
+    "targetId",
+    "status",
+    "from",
+    "to",
+    "dir",
+  ],
+};
+
+function allowedSearchParams(pathname: string): readonly string[] {
+  let match: readonly string[] = [];
+  let matchLength = 0;
+
+  for (const [prefix, keys] of Object.entries(LEGACY_SEARCH_ALLOWLIST)) {
+    if (
+      (pathname === prefix || pathname.startsWith(`${prefix}/`)) &&
+      prefix.length > matchLength
+    ) {
+      match = keys;
+      matchLength = prefix.length;
+    }
+  }
+
+  return match;
+}
+
+/**
+ * Keeps only the destination page's allowlisted search parameters. Values
+ * stay as strings so the destination's own schema validates them.
+ */
+export function filterLegacyAdminSearch(
+  pathname: string,
+  search: URLSearchParams,
+): Record<string, string> {
+  const allowed = allowedSearchParams(pathname);
+  const filtered: Record<string, string> = {};
+
+  for (const key of allowed) {
+    const value = search.get(key);
+    if (value !== null) {
+      filtered[key] = value;
+    }
+  }
+
+  return filtered;
 }

@@ -27,7 +27,9 @@ export function ImpersonationBanner({ user }: ImpersonationBannerProps) {
       if (error) {
         throw new Error(error.message);
       }
-      window.location.assign(`/admin/users/${encodeURIComponent(user.id)}`);
+      window.location.assign(
+        `/admin/access/users/${encodeURIComponent(user.id)}`,
+      );
     } catch {
       toastManager.add({
         type: "error",

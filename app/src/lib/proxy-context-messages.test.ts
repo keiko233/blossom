@@ -19,14 +19,10 @@ function sourceFiles(dir: string): string[] {
 const placeholders = (text: string): string[] =>
   [...text.matchAll(/\{(\w+)\}/g)].map((match) => match[1]!).sort();
 
-const proxyPages = join(
-  appRoot,
-  "src",
-  "routes",
-  "(admin)",
-  "admin",
-  "proxies",
-);
+const adminRoutes = join(appRoot, "src", "routes", "(admin)", "admin");
+const serverPages = join(adminRoutes, "servers");
+const inboundPages = join(adminRoutes, "servers", "$serverId", "inbounds");
+const certificatePages = join(adminRoutes, "networking", "certificates");
 
 describe("server, node and certificate messages", () => {
   it("keeps both locale catalogs on the same keys", () => {
@@ -35,8 +31,8 @@ describe("server, node and certificate messages", () => {
 
   it("defines every message the proxy admin pages use in both locales", () => {
     const used = new Set<string>();
-    for (const dir of ["servers", "nodes", "certificates"]) {
-      for (const file of sourceFiles(join(proxyPages, dir))) {
+    for (const dir of [serverPages, inboundPages, certificatePages]) {
+      for (const file of sourceFiles(dir)) {
         for (const match of readFileSync(file, "utf8").matchAll(
           /\bm\.([a-z0-9_]+)\(/g,
         )) {

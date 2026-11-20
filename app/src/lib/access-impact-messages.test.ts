@@ -10,12 +10,12 @@ const zh = catalog("zh-cn.json");
 
 const adminRoutes = join(appRoot, "src", "routes", "(admin)", "admin");
 const queryDirs = [
-  join(adminRoutes, "proxies", "groups"),
-  join(adminRoutes, "plans"),
-  join(adminRoutes, "subscriptions"),
+  join(adminRoutes, "access", "groups"),
+  join(adminRoutes, "access", "plans"),
+  join(adminRoutes, "access", "subscriptions"),
 ];
 const extraFiles = [
-  join(adminRoutes, "users", "_modules", "assign-plan-dialog.tsx"),
+  join(adminRoutes, "access", "users", "_modules", "assign-plan-dialog.tsx"),
 ];
 
 function sourceFiles(dir: string): string[] {

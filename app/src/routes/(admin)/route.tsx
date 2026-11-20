@@ -8,7 +8,7 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { getSession } from "@/lib/auth";
 
 import { AdminSidebar } from "./_modules/admin-sidebar";
-import { TokenRevealDialog } from "./admin/proxies/servers/_modules/token-reveal-dialog";
+import { TokenRevealDialog } from "./admin/servers/_modules/token-reveal-dialog";
 
 export const Route = createFileRoute("/(admin)")({
   beforeLoad: async () => {
@@ -37,7 +37,7 @@ function RouteComponent() {
   const { user } = Route.useRouteContext();
 
   return (
-    <SidebarProvider className="h-dvh">
+    <SidebarProvider className="h-dvh" defaultOpen={false}>
       <AdminSidebar user={user} />
 
       {/* The shell fills the viewport and pages scroll inside the admin
