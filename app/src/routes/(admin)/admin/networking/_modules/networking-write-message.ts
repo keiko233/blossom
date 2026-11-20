@@ -35,3 +35,66 @@ export function networkingWriteReasonMessage(reason: string): string {
       return m.admin_networking_write_failed();
   }
 }
+
+/** Localizes Retry/Abort result reasons from the audited rollout adapter. */
+export function networkingRolloutReasonMessage(reason: string): string {
+  switch (reason) {
+    case "activation_disabled":
+      return m.admin_networking_rollout_reason_activation_disabled();
+    case "not_retryable":
+      return m.admin_networking_rollout_reason_not_retryable();
+    case "paused":
+      return m.admin_networking_rollout_reason_paused();
+    case "rollout_not_found":
+      return m.admin_networking_rollout_reason_rollout_not_found();
+    case "rollout_inactive":
+      return m.admin_networking_rollout_reason_rollout_inactive();
+    case "already_recovering":
+      return m.admin_networking_rollout_reason_already_recovering();
+    case "stage_conflict":
+      return m.admin_networking_rollout_reason_stage_conflict();
+    case "topology_conflict":
+      return m.admin_networking_rollout_reason_topology_conflict();
+    case "probe_stage_not_confirmed":
+      return m.admin_networking_rollout_reason_probe_stage_not_confirmed();
+    case "probe_link_mismatch":
+      return m.admin_networking_rollout_reason_probe_link_mismatch();
+    case "probe_destination_missing":
+      return m.admin_networking_rollout_reason_probe_destination_missing();
+    case "probe_credential_missing":
+      return m.admin_networking_rollout_reason_probe_credential_missing();
+    case "probe_capability_missing":
+      return m.admin_networking_rollout_reason_probe_capability_missing();
+    default:
+      return m.admin_networking_rollout_toast_action_failed();
+  }
+}
+
+/** Localizes the audited Apply admission result before any stage is issued. */
+export function networkingApplyReasonMessage(reason: string): string {
+  switch (reason) {
+    case "activation_disabled":
+      return m.admin_networking_issue_activation_disabled();
+    case "validation":
+      return m.admin_networking_validation_blocked();
+    case "cycle":
+      return m.admin_networking_routing_plan_cycle();
+    case "readiness":
+      return m.admin_networking_apply_readiness_blocked();
+    case "budget":
+      return m.admin_networking_apply_budget_blocked();
+    case "topology_conflict":
+      return m.admin_networking_apply_conflict();
+    case "claim_conflict":
+      return m.admin_networking_apply_claim_conflict();
+    case "config_version_conflict":
+      return m.admin_networking_apply_config_version_conflict();
+    case "state_conflict":
+      return m.admin_networking_apply_revision_conflict();
+    case "rollout_exists":
+      return m.admin_networking_apply_rollout_exists();
+    case "invalid_admission":
+    default:
+      return m.admin_networking_apply_failed();
+  }
+}

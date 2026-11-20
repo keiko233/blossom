@@ -322,7 +322,10 @@ function RouteComponent(): React.ReactElement {
             {m.admin_networking_action_view_topology()}
           </Button>
         </NetworkingSection>
-        <NetworkingRollouts rollouts={data.rollouts} />
+        <NetworkingRollouts
+          rollouts={data.rollouts}
+          activationEnabled={data.activationEnabled}
+        />
       </div>
 
       <LinkEditorDialog

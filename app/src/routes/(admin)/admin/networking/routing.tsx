@@ -30,6 +30,10 @@ import {
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { toastManager } from "@/components/ui/toast";
+import type {
+  ApplyNetworkingRolloutInput,
+  PlanNetworkingRolloutInput,
+} from "@/lib/networking-schema";
 import {
   buildRoutingPreview,
   diffRoutingDrafts,
@@ -37,8 +41,10 @@ import {
 } from "@/lib/networking-workspace";
 import { m } from "@/paraglide/messages";
 import {
+  applyNetworkingRollout,
   planNetworkingRollout,
   saveRouting,
+  type NetworkingRolloutApplyResult,
   type NetworkingRolloutPlanResult,
   type RoutingDraftSaveResult,
 } from "@/query/networking";
@@ -46,7 +52,10 @@ import {
 import { NetworkingSection } from "./_modules/networking-badges";
 import { NetworkingIssues } from "./_modules/networking-issues";
 import { NetworkingRollouts } from "./_modules/networking-rollouts";
-import { networkingWriteReasonMessage } from "./_modules/networking-write-message";
+import {
+  networkingApplyReasonMessage,
+  networkingWriteReasonMessage,
+} from "./_modules/networking-write-message";
 import { RoutingPlanPanel } from "./_modules/routing-plan";
 import { RoutingPreviewPanel } from "./_modules/routing-preview";
 import { RoutingRuleDialog } from "./_modules/routing-rule-dialog";
@@ -98,6 +107,8 @@ function RouteComponent(): React.ReactElement {
     null,
   );
   const [planError, setPlanError] = useState<string | null>(null);
+  const [applyResult, setApplyResult] =
+    useState<NetworkingRolloutApplyResult | null>(null);
 
   useEffect(() => {
     if (!search.server) return;
@@ -117,32 +128,37 @@ function RouteComponent(): React.ReactElement {
     planMutation.reset();
   }, [view, loadedServerId]);
 
-  const planMutation = useMutation({
-    mutationFn: (state: DraftState) => {
-      const usedPeerDestinations = new Set<string>();
-      if (view) {
-        for (const tag of state.rules
-          .filter((rule) => rule.action === "route")
-          .map((rule) => rule.outboundTag)) {
-          if (!tag || !tag.startsWith("peer-out-")) continue;
-          const outbound = view.outboundOptions.find((row) => row.tag === tag);
-          if (outbound?.destinationServerId)
-            usedPeerDestinations.add(outbound.destinationServerId);
-        }
-        return planNetworkingRollout({
-          data: {
-            serverIds: [...new Set([state.serverId, ...usedPeerDestinations])],
-            draft: {
-              serverId: state.serverId,
-              finalOutboundTag: state.finalOutboundTag,
-              rules: state.rules,
-              expectedTopologyGeneration: view.topologyGeneration,
-            },
-          },
-        });
+  const planInputFor = (state: DraftState): PlanNetworkingRolloutInput => {
+    const usedPeerDestinations = new Set<string>();
+    if (view) {
+      for (const tag of state.rules
+        .filter((rule) => rule.action === "route")
+        .map((rule) => rule.outboundTag)) {
+        if (!tag || !tag.startsWith("peer-out-")) continue;
+        const outbound = view.outboundOptions.find((row) => row.tag === tag);
+        if (outbound?.destinationServerId)
+          usedPeerDestinations.add(outbound.destinationServerId);
       }
-      return Promise.reject(new Error("No server selected"));
-    },
+    }
+    return {
+      serverIds: [...new Set([state.serverId, ...usedPeerDestinations])],
+      draft: {
+        serverId: state.serverId,
+        finalOutboundTag: state.finalOutboundTag,
+        rules: state.rules,
+        expectedTopologyGeneration: view?.topologyGeneration ?? 0,
+      },
+    };
+  };
+
+  const planMutation = useMutation({
+    mutationFn: (input: PlanNetworkingRolloutInput) =>
+      planNetworkingRollout({ data: input }),
+  });
+
+  const applyMutation = useMutation({
+    mutationFn: (input: ApplyNetworkingRolloutInput) =>
+      applyNetworkingRollout({ data: input }),
   });
 
   if (workspacePending || isPending) {
@@ -194,6 +210,12 @@ function RouteComponent(): React.ReactElement {
       ? null
       : (draft.rules.find((rule) => rule.ruleId === editingRuleId) ?? null);
   const plan = planMutation.data as NetworkingRolloutPlanResult | undefined;
+  const planFresh = Boolean(
+    plan &&
+    planMutation.variables &&
+    JSON.stringify(planMutation.variables) ===
+      JSON.stringify(planInputFor(draft)),
+  );
 
   const setRule = (next: ManagedIntentRouteRule) => {
     setDraft((current) =>
@@ -262,8 +284,39 @@ function RouteComponent(): React.ReactElement {
 
   const runPlan = async () => {
     setPlanError(null);
+    setApplyResult(null);
     try {
-      await planMutation.mutateAsync(draft);
+      await planMutation.mutateAsync(planInputFor(draft));
+    } catch (error) {
+      setPlanError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const apply = async () => {
+    const planned = planMutation.data;
+    const plannedInput = planMutation.variables;
+    if (!planned || !plannedInput) return;
+    const currentInput = planInputFor(draft);
+    if (JSON.stringify(currentInput) !== JSON.stringify(plannedInput)) {
+      setPlanError(m.admin_networking_apply_requires_plan());
+      return;
+    }
+    setPlanError(null);
+    try {
+      const result = await applyMutation.mutateAsync({
+        ...currentInput,
+        expectedTopologyGeneration: planned.topologyGeneration,
+      });
+      setApplyResult(result);
+      if (result.ok) {
+        toastManager.add({
+          type: "success",
+          title: m.admin_networking_apply_admitted({
+            count: result.plan?.stages.length ?? 0,
+          }),
+        });
+        await invalidate();
+      }
     } catch (error) {
       setPlanError(error instanceof Error ? error.message : String(error));
     }
@@ -299,8 +352,20 @@ function RouteComponent(): React.ReactElement {
           </Button>
           <Button
             size="sm"
-            disabled
-            title={m.admin_networking_activation_disabled_title()}
+            loading={applyMutation.isPending}
+            disabled={
+              !view.activationEnabled || !planFresh || !plan?.admissionReady
+            }
+            title={
+              !view.activationEnabled
+                ? m.admin_networking_activation_disabled_title()
+                : !planFresh
+                  ? m.admin_networking_apply_requires_plan()
+                  : !plan?.admissionReady
+                    ? m.admin_networking_apply_not_ready()
+                    : undefined
+            }
+            onClick={() => void apply()}
           >
             {m.admin_networking_action_apply()}
           </Button>
@@ -331,6 +396,20 @@ function RouteComponent(): React.ReactElement {
       {planError ? (
         <p role="alert" className="text-sm text-destructive">
           {planError}
+        </p>
+      ) : null}
+      {applyResult && !applyResult.ok ? (
+        <p role="alert" className="text-sm text-destructive">
+          {networkingApplyReasonMessage(
+            applyResult.reason ?? "invalid_admission",
+          )}
+        </p>
+      ) : null}
+      {applyResult?.ok ? (
+        <p className="text-sm text-success-foreground">
+          {m.admin_networking_apply_admitted({
+            count: applyResult.plan?.stages.length ?? 0,
+          })}
         </p>
       ) : null}
 
@@ -540,7 +619,10 @@ function RouteComponent(): React.ReactElement {
             plan={plan ?? null}
             pending={planMutation.isPending}
           />
-          <NetworkingRollouts rollouts={view.rollouts} />
+          <NetworkingRollouts
+            rollouts={view.rollouts}
+            activationEnabled={view.activationEnabled}
+          />
         </div>
       </div>
 

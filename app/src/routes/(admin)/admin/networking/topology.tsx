@@ -166,7 +166,10 @@ function RouteComponent(): React.ReactElement {
               />
             </NetworkingSection>
 
-            <NetworkingRollouts rollouts={data.rollouts} />
+            <NetworkingRollouts
+              rollouts={data.rollouts}
+              activationEnabled={data.activationEnabled}
+            />
           </div>
         </div>
       )}

@@ -6,6 +6,7 @@ import type { NetworkingRolloutPlanResult } from "@/query/networking";
 
 import { NetworkingSection, StageRoleBadge } from "./networking-badges";
 import { NetworkingIssues } from "./networking-issues";
+import { networkingReadinessReasonMessage } from "./networking-readiness-message";
 
 const IMPACT_LABEL = {
   listener_change: m.admin_networking_routing_plan_listener,
@@ -60,7 +61,34 @@ export function RoutingPlanPanel({
                 {m.admin_networking_activation_disabled_title()}
               </Badge>
             )}
+            <Badge variant={plan.admissionReady ? "success" : "warning"}>
+              {plan.admissionReady
+                ? m.admin_networking_routing_plan_ready()
+                : m.admin_networking_routing_plan_not_ready()}
+            </Badge>
           </div>
+          {plan.admissionReady ? null : (
+            <div className="flex flex-col gap-1 text-xs text-warning-foreground">
+              {plan.servers.some((server) => !server.readiness.ready) ? (
+                <>
+                  <p>{m.admin_networking_routing_plan_readiness_blocked()}</p>
+                  {plan.servers
+                    .filter((server) => !server.readiness.ready)
+                    .map((server) => (
+                      <p key={`readiness-${server.serverId}`}>
+                        {server.serverName}:{" "}
+                        {server.readiness.reasons
+                          .map(networkingReadinessReasonMessage)
+                          .join(" ")}
+                      </p>
+                    ))}
+                </>
+              ) : null}
+              {plan.servers.some((server) => !server.budget.ok) ? (
+                <p>{m.admin_networking_routing_plan_budget_blocked()}</p>
+              ) : null}
+            </div>
+          )}
           <ol className="flex flex-col gap-2">
             {plan.stages.map((stage) => (
               <li

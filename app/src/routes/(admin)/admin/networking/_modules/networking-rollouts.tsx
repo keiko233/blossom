@@ -1,7 +1,15 @@
+import { useMutation } from "@tanstack/react-query";
 import type React from "react";
 
+import { Button } from "@/components/ui/button";
+import { Confirm } from "@/components/ui/confirm";
+import { toastManager } from "@/components/ui/toast";
 import { formatDateTime } from "@/lib/format";
 import { m } from "@/paraglide/messages";
+import {
+  abortManagedRollout,
+  retryManagedRollout,
+} from "@/query/managed-rollout";
 import type { NetworkingRolloutView } from "@/query/networking-read";
 
 import {
@@ -9,12 +17,69 @@ import {
   RolloutStatusBadge,
   StageStatusBadge,
 } from "./networking-badges";
+import { networkingRolloutReasonMessage } from "./networking-write-message";
+import { useInvalidateNetworking } from "./use-networking-workspace";
+
+type RolloutAction = "retry" | "abort";
 
 export function NetworkingRollouts({
   rollouts,
+  activationEnabled,
 }: {
   rollouts: readonly NetworkingRolloutView[];
+  activationEnabled: boolean;
 }): React.ReactElement {
+  const invalidate = useInvalidateNetworking();
+  const actionMutation = useMutation({
+    mutationFn: async (input: { rolloutId: string; action: RolloutAction }) => {
+      const response =
+        input.action === "retry"
+          ? await retryManagedRollout({ data: { rolloutId: input.rolloutId } })
+          : await abortManagedRollout({ data: { rolloutId: input.rolloutId } });
+      return { ...input, response };
+    },
+    onSuccess: async ({ action, response }) => {
+      if (response.result.ok) {
+        toastManager.add({
+          type: "success",
+          title:
+            action === "retry"
+              ? response.result.action === "probe_issued"
+                ? m.admin_networking_rollout_retry_probe_issued()
+                : m.admin_networking_rollout_retry_extended()
+              : response.result.action === "finished"
+                ? m.admin_networking_rollout_abort_finished()
+                : m.admin_networking_rollout_abort_compensated(),
+        });
+      } else {
+        toastManager.add({
+          type: "error",
+          title: m.admin_networking_rollout_toast_action_failed(),
+          description: networkingRolloutReasonMessage(response.result.reason),
+        });
+      }
+      await invalidate();
+    },
+    onError: (error) => {
+      toastManager.add({
+        type: "error",
+        title: m.admin_networking_rollout_toast_action_failed(),
+        description: error instanceof Error ? error.message : String(error),
+      });
+    },
+  });
+
+  const requestAbort = async (rolloutId: string) => {
+    await Confirm.call({
+      title: m.admin_networking_rollout_abort_title(),
+      description: m.admin_networking_rollout_abort_description(),
+      confirmLabel: m.admin_networking_action_abort(),
+      cancelLabel: m.admin_networking_action_cancel(),
+      destructive: true,
+      onConfirm: () =>
+        actionMutation.mutateAsync({ rolloutId, action: "abort" }),
+    });
+  };
   return (
     <NetworkingSection
       title={m.admin_networking_rollout_title()}
@@ -94,6 +159,46 @@ export function NetworkingRollouts({
                   </span>
                 ) : null}
               </div>
+
+              {rollout.actions.retry || rollout.actions.abort ? (
+                <div className="flex flex-wrap gap-2">
+                  {rollout.actions.retry ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={!activationEnabled || actionMutation.isPending}
+                      title={
+                        activationEnabled
+                          ? undefined
+                          : m.admin_networking_activation_disabled_title()
+                      }
+                      onClick={() =>
+                        actionMutation.mutate({
+                          rolloutId: rollout.rolloutId,
+                          action: "retry",
+                        })
+                      }
+                    >
+                      {m.admin_networking_action_retry()}
+                    </Button>
+                  ) : null}
+                  {rollout.actions.abort ? (
+                    <Button
+                      size="sm"
+                      variant="destructive-outline"
+                      disabled={!activationEnabled || actionMutation.isPending}
+                      title={
+                        activationEnabled
+                          ? undefined
+                          : m.admin_networking_activation_disabled_title()
+                      }
+                      onClick={() => void requestAbort(rollout.rolloutId)}
+                    >
+                      {m.admin_networking_action_abort()}
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
             </li>
           ))}
         </ul>

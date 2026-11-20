@@ -196,6 +196,7 @@ export interface NetworkingRolloutView {
   status: string;
   lastConfirmedOrdinal: number;
   stages: NetworkingRolloutStageView[];
+  actions: { retry: boolean; abort: boolean };
   claimsHeld: boolean;
   claimedServerIds: string[];
   paused: boolean;
@@ -920,6 +921,7 @@ export async function readNetworkingWorkspace(
           snapshot?.rawStages.find((row) => row.ordinal === stage.ordinal)
             ?.probeLinkId ?? null,
       })),
+      actions: detail.view.actions,
       claimsHeld: detail.view.claimsHeld,
       claimedServerIds: detail.claimedServerIds,
       paused: detail.paused,
@@ -1197,6 +1199,7 @@ async function readServerRollouts(
             snapshot?.rawStages.find((row) => row.ordinal === stage.ordinal)
               ?.probeLinkId ?? null,
         })),
+        actions: detail.view.actions,
         claimsHeld: detail.view.claimsHeld,
         claimedServerIds: detail.claimedServerIds,
         paused: detail.paused,

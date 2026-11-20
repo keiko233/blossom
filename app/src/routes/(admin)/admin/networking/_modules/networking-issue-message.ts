@@ -57,6 +57,10 @@ export function networkingIssueMessage(issue: NetworkingIssue): string {
       return m.admin_networking_issue_rule_set_not_found({
         ruleSet: String(issue.params?.ruleSet ?? ""),
       });
+    case "server_not_found":
+      return m.admin_networking_issue_server_not_found({
+        server: String(issue.params?.server ?? issue.subjectId ?? ""),
+      });
     case "stale_topology":
       return m.admin_networking_issue_stale_topology();
     case "topology_conflict":
