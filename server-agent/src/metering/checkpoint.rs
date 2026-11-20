@@ -76,14 +76,6 @@ pub(crate) struct Checkpoint {
 }
 
 impl Checkpoint {
-    pub(crate) fn instance(&self) -> &InstanceKey {
-        &self.instance
-    }
-
-    pub(crate) fn committed_at(&self) -> DateTime<Utc> {
-        self.committed_at
-    }
-
     pub(super) fn validate(&self) -> Result<(), CheckpointError> {
         if self.schema != CHECKPOINT_SCHEMA {
             return Err(CheckpointError::UnsupportedSchema(self.schema));

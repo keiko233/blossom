@@ -6,10 +6,10 @@
 //! commits the old meter, then recovers the new one and subscribes again. Old
 //! stream messages carry a stream id and are ignored after a switch.
 //!
-//! This module is deliberately not wired into `agent_v2.rs` yet. Activation
-//! must reuse the existing v2 report sink, provide a complete inbound
-//! classification from the committed generation, and keep the processkit path
-//! unchanged until the native service lifecycle is enabled.
+//! `agent_v2.rs` wires this worker only on the opt-in native path, through the
+//! existing v2 report sink. The processkit and Docker paths keep `traffic.rs`.
+//! An observation is sent only for a serving runtime instance whose committed
+//! generation has a complete inbound classification.
 
 use std::fmt;
 use std::io;
@@ -20,7 +20,6 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use futures_util::Stream as _;
 use futures_util::StreamExt as _;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -30,13 +29,20 @@ use tracing::{error, info, warn};
 use super::checkpoint::InstanceKey;
 use super::filter::{FilterCounts, InboundClassification};
 use super::import::LegacyImport;
-use super::meter::{ApplyReport, Commit, DeferredReason, Expired, Recovery, RuntimeMeter};
+use super::meter::{
+    ApplyReport, BaselineReason, Commit, DeferredReason, Expired, Recovery, RuntimeMeter,
+};
 use super::store::{CheckpointStore, StoreError};
 use crate::service::RuntimeInstance;
 use crate::stats::{ConnectionEvents, StatsClient};
 use crate::traffic::{Batch, ReportSink, SendOutcome, create_private_dir, write_atomic};
 
 const STREAM_BACKOFF_MAX: Duration = Duration::from_secs(30);
+/// The stream's periodic UPDATE cadence (upstream default 1s). The worker's
+/// `interval` argument is the durable commit/send cadence, not the stream
+/// cadence; keeping them separate preserves the crash window documented for
+/// the existing reporter.
+const STREAM_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_SENDS_PER_CYCLE: usize = 20;
 const MAX_REJECTED_KEPT: usize = 16;
 const DEFAULT_RETENTION_DAYS: i64 = 7;
@@ -140,6 +146,13 @@ pub(crate) enum ApplyOutcome {
 #[derive(Debug, Default)]
 pub(crate) struct FlushReport {
     pub(crate) commit: Option<Commit>,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "flush expiry summary is asserted by worker fixtures"
+        )
+    )]
     pub(crate) expired: Expired,
     pub(crate) sent: usize,
     pub(crate) delivered: usize,
@@ -303,14 +316,6 @@ impl MeteringState {
                 })
             }
         }
-    }
-
-    pub(crate) fn active_stream(&self) -> Option<u64> {
-        self.active_stream
-    }
-
-    pub(crate) fn instance(&self) -> Option<&InstanceKey> {
-        self.meter.as_ref().map(RuntimeMeter::instance)
     }
 
     pub(crate) fn apply(&mut self, stream_id: u64, message: &ConnectionEvents) -> ApplyOutcome {
@@ -577,7 +582,7 @@ impl MeteringWorker {
                                     let cancel = cancel.clone();
                                     stream = Some(ActiveStream {
                                         task: tokio::spawn(async move {
-                                            run_subscription(source, endpoint, interval, stream_id, tx, cancel).await;
+                                            run_subscription(source, endpoint, STREAM_INTERVAL, stream_id, tx, cancel).await;
                                         }),
                                     });
                                 }
@@ -728,13 +733,21 @@ fn log_observation(outcome: &ObservationOutcome) {
                 "new runtime instance; traffic served by the previous instance after its last commit is unobservable"
             ),
             Recovery::Baseline {
-                reason,
+                reason: BaselineReason::Damaged(damage),
                 unobservable,
             } => warn!(
-                reason = ?reason,
+                reason = %damage,
                 window_start = ?unobservable.started_at,
                 window_end = %unobservable.ended_at,
-                "metering baseline adopted without historical recharge; earlier traffic is unobservable"
+                "metering baseline adopted from a damaged checkpoint without historical recharge; earlier traffic is unobservable"
+            ),
+            Recovery::Baseline {
+                reason: BaselineReason::NoCheckpoint,
+                unobservable,
+            } => warn!(
+                window_start = ?unobservable.started_at,
+                window_end = %unobservable.ended_at,
+                "metering baseline adopted without a checkpoint; earlier traffic is unobservable"
             ),
         }
     }

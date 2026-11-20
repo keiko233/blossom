@@ -12,12 +12,23 @@ use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
-use crate::stats::{ConnectionEvent, ConnectionEvents};
+#[cfg(test)]
+use crate::stats::ConnectionEvent;
+use crate::stats::ConnectionEvents;
 
 const IDENTITY_TAG: &str = "blz.1.";
 const MAX_IDENTITY_LEN: usize = 4096;
 const MAX_LENGTH_DIGITS: usize = 9;
+
+/// Runtime tag namespaces reserved by the managed networking contract. A
+/// committed generation can only be metered when every inbound belongs to one
+/// of them; an unrecognised tag fails closed instead of being treated as a
+/// subscriber.
+const SUBSCRIBER_INBOUND_TAG_PREFIX: &str = "node-";
+const PEER_INBOUND_TAG_PREFIX: &str = "peer-in-";
+const AGENT_OWNED_TAG_PREFIX: &str = "blossom-agent-";
 
 /// What a configured inbound is allowed to contribute to billable traffic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,25 +73,11 @@ impl InboundClassification {
     /// Marks every supplied tag as a subscriber inbound. Integration must
     /// supply the tags from the committed generation, never an observed
     /// stream value.
+    #[cfg(test)]
     pub(crate) fn subscriber_only(
         tags: impl IntoIterator<Item = String>,
     ) -> Result<Self, ClassificationError> {
         Self::new(tags.into_iter().map(|tag| (tag, InboundKind::Subscriber)))
-    }
-
-    pub(crate) fn insert(
-        &mut self,
-        tag: impl Into<String>,
-        kind: InboundKind,
-    ) -> Result<(), ClassificationError> {
-        let tag = tag.into();
-        if tag.is_empty() {
-            return Err(ClassificationError::EmptyTag);
-        }
-        if self.kinds.insert(tag.clone(), kind).is_some() {
-            return Err(ClassificationError::DuplicateTag(tag));
-        }
-        Ok(())
     }
 
     pub(crate) fn kind(&self, tag: &str) -> Option<InboundKind> {
@@ -89,6 +86,33 @@ impl InboundClassification {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.kinds.is_empty()
+    }
+
+    /// Every tag this classification proves, for the managed capability gate.
+    pub(crate) fn tags(&self) -> Vec<String> {
+        self.kinds.keys().cloned().collect()
+    }
+
+    /// Classifies the inbounds of an already-compiled, committed config. Tags
+    /// outside the managed runtime namespaces are rejected: metering must
+    /// fail closed rather than bill an unrecognised listener.
+    pub(crate) fn from_committed_config(
+        config: &Map<String, Value>,
+    ) -> Result<Self, ClassificationError> {
+        let inbounds = match config.get("inbounds") {
+            None => &[][..],
+            Some(Value::Array(inbounds)) => inbounds.as_slice(),
+            Some(_) => return Err(ClassificationError::MalformedInbounds),
+        };
+        let mut entries = Vec::with_capacity(inbounds.len());
+        for inbound in inbounds {
+            let tag = inbound
+                .get("tag")
+                .and_then(Value::as_str)
+                .ok_or(ClassificationError::EmptyTag)?;
+            entries.push((tag.to_string(), classify_committed_tag(tag)?));
+        }
+        Self::new(entries)
     }
 
     /// Proves that every tag in the committed generation is explicitly
@@ -243,8 +267,10 @@ pub(crate) enum ClassificationError {
     EmptyTag,
     DuplicateTag(String),
     MissingTag(String),
+    UnknownTag(String),
     UnexpectedTags,
     NoInbounds,
+    MalformedInbounds,
 }
 
 impl fmt::Display for ClassificationError {
@@ -258,10 +284,19 @@ impl fmt::Display for ClassificationError {
                     "inbound tag {tag} has no billable classification"
                 )
             }
+            Self::UnknownTag(tag) => {
+                write!(
+                    formatter,
+                    "inbound tag {tag} is outside the managed runtime namespaces"
+                )
+            }
             Self::UnexpectedTags => {
                 formatter.write_str("classification contains an unconfigured inbound tag")
             }
             Self::NoInbounds => formatter.write_str("the configuration has no classified inbounds"),
+            Self::MalformedInbounds => {
+                formatter.write_str("the configuration has a malformed inbounds value")
+            }
         }
     }
 }
@@ -310,6 +345,26 @@ pub(crate) fn managed_metering(
     }
 }
 
+/// Maps one committed inbound tag to the kind that owns its traffic.
+fn classify_committed_tag(tag: &str) -> Result<InboundKind, ClassificationError> {
+    if let Some(id) = tag.strip_prefix(SUBSCRIBER_INBOUND_TAG_PREFIX) {
+        return (!id.is_empty())
+            .then_some(InboundKind::Subscriber)
+            .ok_or(ClassificationError::EmptyTag);
+    }
+    if let Some(id) = tag.strip_prefix(PEER_INBOUND_TAG_PREFIX) {
+        return (!id.is_empty())
+            .then_some(InboundKind::Peer)
+            .ok_or(ClassificationError::EmptyTag);
+    }
+    if let Some(id) = tag.strip_prefix(AGENT_OWNED_TAG_PREFIX) {
+        return (!id.is_empty())
+            .then_some(InboundKind::Probe)
+            .ok_or(ClassificationError::EmptyTag);
+    }
+    Err(ClassificationError::UnknownTag(tag.to_string()))
+}
+
 /// Test-only helper mirroring a new/closed event with a tagged inbound.
 #[cfg(test)]
 pub(crate) fn test_event(
@@ -342,7 +397,6 @@ pub(crate) fn test_event(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stats::ConnectionEvent;
 
     fn snapshot(events: Vec<ConnectionEvent>) -> ConnectionEvents {
         ConnectionEvents {
@@ -403,6 +457,67 @@ mod tests {
                 ("node-n1".to_string(), InboundKind::Peer),
             ]),
             Err(ClassificationError::DuplicateTag(tag)) if tag == "node-n1"
+        ));
+    }
+
+    #[test]
+    fn committed_config_maps_runtime_namespaces_and_rejects_unrecognised_tags() {
+        let config = serde_json::json!({
+            "inbounds": [
+                { "tag": "node-n1" },
+                { "tag": "peer-in-b" },
+                { "tag": "blossom-agent-probe" }
+            ]
+        });
+        let classification =
+            InboundClassification::from_committed_config(config.as_object().unwrap()).unwrap();
+        assert_eq!(
+            classification.kind("node-n1"),
+            Some(InboundKind::Subscriber)
+        );
+        assert_eq!(classification.kind("peer-in-b"), Some(InboundKind::Peer));
+        assert_eq!(
+            classification.kind("blossom-agent-probe"),
+            Some(InboundKind::Probe)
+        );
+        assert_eq!(
+            classification.tags(),
+            vec![
+                "blossom-agent-probe".to_string(),
+                "node-n1".to_string(),
+                "peer-in-b".to_string(),
+            ]
+        );
+
+        let unknown = serde_json::json!({ "inbounds": [{ "tag": "legacy" }] });
+        assert!(matches!(
+            InboundClassification::from_committed_config(unknown.as_object().unwrap()),
+            Err(ClassificationError::UnknownTag(tag)) if tag == "legacy"
+        ));
+        let empty_namespace = serde_json::json!({ "inbounds": [{ "tag": "node-" }] });
+        assert!(matches!(
+            InboundClassification::from_committed_config(empty_namespace.as_object().unwrap()),
+            Err(ClassificationError::EmptyTag)
+        ));
+        let missing_tag = serde_json::json!({ "inbounds": [{}] });
+        assert!(matches!(
+            InboundClassification::from_committed_config(missing_tag.as_object().unwrap()),
+            Err(ClassificationError::EmptyTag)
+        ));
+        let malformed = serde_json::json!({ "inbounds": "not-an-array" });
+        assert!(matches!(
+            InboundClassification::from_committed_config(malformed.as_object().unwrap()),
+            Err(ClassificationError::MalformedInbounds)
+        ));
+        let disabled = serde_json::json!({ "inbounds": [] });
+        let classification =
+            InboundClassification::from_committed_config(disabled.as_object().unwrap()).unwrap();
+        assert!(classification.tags().is_empty());
+        assert!(matches!(
+            managed_metering(true, &classification, &classification.tags()),
+            ManagedMetering::Unsupported(MeteringCapabilityError::Classification(
+                ClassificationError::NoInbounds
+            ))
         ));
     }
 

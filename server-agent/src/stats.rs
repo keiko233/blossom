@@ -2,8 +2,8 @@
 //!
 //! The pinned verification target is sing-box 1.14.4 (`Dockerfile.test`).
 //! `StartedService` first shipped in 1.13.0 and `Connection.inbound` has been
-//! field 2 since then; this agent keeps its existing >= 1.14 capability gate
-//! until managed metering is activated.
+//! field 2 since then; this agent keeps its >= 1.14 capability gate, and native
+//! metering rejects a billable candidate when that gate is not satisfied.
 //!
 //! The service is a plain gRPC server serving `StartedService` over h2c. The
 //! client talks to it directly via tonic's low-level `Grpc` API with
@@ -175,6 +175,9 @@ mod tests {
             "update" => include_bytes!("stats/fixtures/v1.14.4-update.bin"),
             "closed" => include_bytes!("stats/fixtures/v1.14.4-closed.bin"),
             "closed-history" => include_bytes!("stats/fixtures/v1.14.4-closed-history.bin"),
+            "closed-history-1000" => {
+                include_bytes!("stats/fixtures/v1.14.4-closed-history-1000.bin")
+            }
             other => panic!("unknown stats fixture {other}"),
         };
         ConnectionEvents::decode(bytes).expect("fixture decodes as ConnectionEvents")
@@ -231,6 +234,42 @@ mod tests {
         assert_eq!(connection.inbound, "node-n1");
         assert_eq!(connection.user, "blz.1.2.5.n1sub-a");
         assert!(connection.uplink_total > 0 && connection.downlink_total > 0);
+    }
+
+    #[test]
+    fn pinned_capture_replays_a_full_closed_history_before_eviction() {
+        let events = fixture("closed-history-1000");
+        assert!(events.reset, "a reconnect snapshot starts with reset");
+        let closed = events
+            .events
+            .iter()
+            .filter(|event| {
+                event
+                    .connection
+                    .as_ref()
+                    .is_some_and(|connection| connection.closed_at != 0)
+            })
+            .count();
+        assert_eq!(
+            closed,
+            super::CLOSED_HISTORY_LIMIT,
+            "the upstream manager retains exactly the 1000-entry cap"
+        );
+        let ids: std::collections::HashSet<&str> = events
+            .events
+            .iter()
+            .map(|event| event.id.as_str())
+            .collect();
+        assert_eq!(ids.len(), events.events.len(), "history ids are unique");
+        let oldest = events
+            .events
+            .iter()
+            .filter_map(|event| event.connection.as_ref())
+            .map(|connection| connection.closed_at)
+            .min()
+            .expect("full history carries closed timestamps");
+        assert!(oldest > 0);
+        assert_eq!(events.events.len(), super::CLOSED_HISTORY_LIMIT);
     }
 
     #[test]

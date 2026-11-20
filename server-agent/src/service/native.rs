@@ -42,6 +42,17 @@ impl NativeRuntime {
         }))
     }
 
+    /// The generation the helper's journal has committed. The local active
+    /// config describes exactly this generation; a serving trial generation
+    /// differs and is not adopted as committed metering state.
+    pub(crate) async fn committed_generation(&self) -> Result<Option<Generation>, ControlError> {
+        Ok(self
+            .client
+            .committed(self.runtime)
+            .await?
+            .map(|record| record.generation))
+    }
+
     pub(crate) async fn reconcile(&self) -> Result<Option<RuntimeInstance>, ControlError> {
         self.client.reconcile(ServiceIdentity::Agent).await?;
         let instance = self.client.reconcile(self.runtime).await?;

@@ -13,32 +13,39 @@
 //! [`worker::MeteringWorker`] accepts those observations and resubscribes
 //! under a new stream id after a replacement.
 //!
-//! Nothing here is wired into the running agent yet. `traffic.rs` keeps the
-//! live accounting path, and processkit remains the Docker backend until
-//! native service activation adopts this module.
+//! The opt-in native service path in `agent_v2.rs` feeds task 04 runtime
+//! observations here; processkit and the Docker profile keep the existing
+//! `traffic.rs` reporter. [`NativeMetering`] registers a committed generation's
+//! classification and sends one observation per serving invocation, so one
+//! worker owns one meter at a time.
 
 mod checkpoint;
 mod filter;
 mod import;
 mod meter;
+mod native;
 mod store;
 #[cfg(test)]
 mod tests;
 mod worker;
 
-pub(crate) use checkpoint::{Checkpoint, InstanceKey};
-pub(crate) use filter::{
-    ClassificationError, FilterCounts, InboundClassification, InboundKind, ManagedMetering,
-    MeteringCapabilityError, SubscriberIdentity, managed_metering,
-};
+#[cfg(test)]
+pub(crate) use checkpoint::InstanceKey;
+pub(crate) use filter::InboundClassification;
+#[cfg(test)]
+pub(crate) use filter::InboundKind;
+#[cfg(test)]
 pub(crate) use import::LegacyImport;
+#[cfg(test)]
 pub(crate) use meter::{
-    ApplyReport, BaselineReason, Commit, DeferredReason, Expired, ImportError, ImportSummary,
-    Recovery, RuntimeMeter, UnobservableWindow,
+    BaselineReason, Commit, DeferredReason, Expired, ImportError, Recovery, RuntimeMeter,
+    UnobservableWindow,
 };
+pub(crate) use native::NativeMetering;
+#[cfg(test)]
 pub(crate) use store::{CheckpointStore, Damage, StoreError};
+#[cfg(test)]
+pub(crate) use worker::ApplyOutcome;
 pub(crate) use worker::{
-    ApplyOutcome, ConnectionEventSource, FlushReport, MeteringConfig, MeteringError, MeteringState,
-    MeteringWorker, ObservationOutcome, RuntimeObservation, StatsEndpoint, TonicEventSource,
-    UnattributedWindow,
+    MeteringConfig, MeteringState, MeteringWorker, StatsEndpoint, TonicEventSource,
 };

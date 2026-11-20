@@ -237,6 +237,7 @@ impl RuntimeMeter {
         &self.classification
     }
 
+    #[cfg(test)]
     pub(crate) fn filter_counts(&self) -> FilterCounts {
         self.filter_counts
     }

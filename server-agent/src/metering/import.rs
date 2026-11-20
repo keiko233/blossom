@@ -109,12 +109,9 @@ impl LegacyImport {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn batch_count(&self) -> usize {
         self.batches.len()
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.batches.is_empty()
     }
 }
 

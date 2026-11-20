@@ -25,14 +25,6 @@ fn at(seconds: i64) -> DateTime<Utc> {
     DateTime::from_timestamp(1_800_000_000 + seconds, 0).unwrap()
 }
 
-fn coded(node: &str, subscription: &str) -> String {
-    format!(
-        "blz.1.{}.{}.{node}{subscription}",
-        node.len(),
-        subscription.len()
-    )
-}
-
 fn test_dir(name: &str) -> PathBuf {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
