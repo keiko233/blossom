@@ -36,6 +36,7 @@ import { Route as userDashboardIndexRouteImport } from './routes/(user)/dashboar
 import { Route as userWelcomeIndexRouteImport } from './routes/(user)/welcome/index'
 import { Route as ApiAgentWsRouteImport } from './routes/api/agent/ws'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiMaintenanceMigrateRouteImport } from './routes/api/maintenance/migrate'
 import { Route as ApiMaintenanceServerMetricsRouteImport } from './routes/api/maintenance/server-metrics'
 import { Route as ApiRpcSplatRouteImport } from './routes/api/rpc/$'
 import { Route as ApiSubTokenRouteImport } from './routes/api/sub/$token'
@@ -228,6 +229,11 @@ const ApiAgentWsRoute = ApiAgentWsRouteImport.update({
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiMaintenanceMigrateRoute = ApiMaintenanceMigrateRouteImport.update({
+  id: '/api/maintenance/migrate',
+  path: '/api/maintenance/migrate',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiMaintenanceServerMetricsRoute =
@@ -527,6 +533,7 @@ export interface FileRoutesByFullPath {
   '/auth/signup': typeof authAuthSignupRoute
   '/api/agent/ws': typeof ApiAgentWsRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/maintenance/migrate': typeof ApiMaintenanceMigrateRoute
   '/api/maintenance/server-metrics': typeof ApiMaintenanceServerMetricsRoute
   '/api/rpc/$': typeof ApiRpcSplatRoute
   '/api/sub/$token': typeof ApiSubTokenRoute
@@ -594,6 +601,7 @@ export interface FileRoutesByTo {
   '/auth/signup': typeof authAuthSignupRoute
   '/api/agent/ws': typeof ApiAgentWsRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/maintenance/migrate': typeof ApiMaintenanceMigrateRoute
   '/api/maintenance/server-metrics': typeof ApiMaintenanceServerMetricsRoute
   '/api/rpc/$': typeof ApiRpcSplatRoute
   '/api/sub/$token': typeof ApiSubTokenRoute
@@ -669,6 +677,7 @@ export interface FileRoutesById {
   '/(auth)/auth/signup': typeof authAuthSignupRoute
   '/api/agent/ws': typeof ApiAgentWsRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/maintenance/migrate': typeof ApiMaintenanceMigrateRoute
   '/api/maintenance/server-metrics': typeof ApiMaintenanceServerMetricsRoute
   '/api/rpc/$': typeof ApiRpcSplatRoute
   '/api/sub/$token': typeof ApiSubTokenRoute
@@ -747,6 +756,7 @@ export interface FileRouteTypes {
     | '/auth/signup'
     | '/api/agent/ws'
     | '/api/auth/$'
+    | '/api/maintenance/migrate'
     | '/api/maintenance/server-metrics'
     | '/api/rpc/$'
     | '/api/sub/$token'
@@ -814,6 +824,7 @@ export interface FileRouteTypes {
     | '/auth/signup'
     | '/api/agent/ws'
     | '/api/auth/$'
+    | '/api/maintenance/migrate'
     | '/api/maintenance/server-metrics'
     | '/api/rpc/$'
     | '/api/sub/$token'
@@ -888,6 +899,7 @@ export interface FileRouteTypes {
     | '/(auth)/auth/signup'
     | '/api/agent/ws'
     | '/api/auth/$'
+    | '/api/maintenance/migrate'
     | '/api/maintenance/server-metrics'
     | '/api/rpc/$'
     | '/api/sub/$token'
@@ -953,6 +965,7 @@ export interface RootRouteChildren {
   staticIndexRoute: typeof staticIndexRoute
   ApiAgentWsRoute: typeof ApiAgentWsRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiMaintenanceMigrateRoute: typeof ApiMaintenanceMigrateRoute
   ApiMaintenanceServerMetricsRoute: typeof ApiMaintenanceServerMetricsRoute
   ApiRpcSplatRoute: typeof ApiRpcSplatRoute
   ApiSubTokenRoute: typeof ApiSubTokenRoute
@@ -1169,6 +1182,13 @@ declare module '@tanstack/react-router' {
       path: '/api/auth/$'
       fullPath: '/api/auth/$'
       preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/maintenance/migrate': {
+      id: '/api/maintenance/migrate'
+      path: '/api/maintenance/migrate'
+      fullPath: '/api/maintenance/migrate'
+      preLoaderRoute: typeof ApiMaintenanceMigrateRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/maintenance/server-metrics': {
@@ -1865,6 +1885,7 @@ const rootRouteChildren: RootRouteChildren = {
   staticIndexRoute: staticIndexRoute,
   ApiAgentWsRoute: ApiAgentWsRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiMaintenanceMigrateRoute: ApiMaintenanceMigrateRoute,
   ApiMaintenanceServerMetricsRoute: ApiMaintenanceServerMetricsRoute,
   ApiRpcSplatRoute: ApiRpcSplatRoute,
   ApiSubTokenRoute: ApiSubTokenRoute,
