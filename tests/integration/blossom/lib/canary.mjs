@@ -19,20 +19,27 @@ import { run as defaultRun } from "./util.mjs";
  */
 export function parsePinnedSingBox(dockerfile) {
   const version = /^ARG SING_BOX_VERSION=([0-9.]+)\s*$/m.exec(dockerfile)?.[1];
-  if (!version) throw new Error("Dockerfile.test does not pin SING_BOX_VERSION");
+  if (!version)
+    throw new Error("Dockerfile.test does not pin SING_BOX_VERSION");
   const digests = {};
   const pattern = new RegExp(
     `${version.replaceAll(".", "\\.")}:(amd64|arm64)\\) digest="(sha256:[0-9a-f]{64})"`,
     "g",
   );
-  for (const [, arch, digest] of dockerfile.matchAll(pattern)) digests[arch] = digest;
+  for (const [, arch, digest] of dockerfile.matchAll(pattern))
+    digests[arch] = digest;
   if (!digests.amd64 || !digests.arm64) {
-    throw new Error(`Dockerfile.test lacks amd64 and arm64 digests for sing-box ${version}`);
+    throw new Error(
+      `Dockerfile.test lacks amd64 and arm64 digests for sing-box ${version}`,
+    );
   }
   return { version, digests };
 }
 
-export const PINNED_SING_BOX_SOURCE = path.join("server-agent", "Dockerfile.test");
+export const PINNED_SING_BOX_SOURCE = path.join(
+  "server-agent",
+  "Dockerfile.test",
+);
 
 // -- Two-agent layout ------------------------------------------------------------
 
@@ -66,14 +73,25 @@ export function canaryAgentLayout(workdir) {
  * selects protocol v2 explicitly because managed networking requires it.
  * The token travels only through the environment.
  */
-export function canaryAgentLaunch(agent, { appUrl, singBox, token }) {
+export function canaryAgentLaunch(
+  agent,
+  { appUrl, singBox, token, protocol = "v2" },
+) {
+  if (protocol !== "v2" && protocol !== "legacy") {
+    throw new Error(`unsupported canary agent protocol '${protocol}'`);
+  }
   return {
     args: [
-      "--url", `${appUrl}/api`,
-      "--state-dir", agent.stateDir,
-      "--sing-box-path", singBox,
-      "--ws-protocol", "v2",
-      "--log-level", "info",
+      "--url",
+      `${appUrl}/api`,
+      "--state-dir",
+      agent.stateDir,
+      "--sing-box-path",
+      singBox,
+      "--ws-protocol",
+      protocol,
+      "--log-level",
+      "info",
     ],
     env: { HOME: agent.homeDir, AGENT_TOKEN: token },
     logFile: agent.logFile,
@@ -85,8 +103,18 @@ export function canaryAgentLaunch(agent, { appUrl, singBox, token }) {
 const AGENT_SOURCE = path.join("server-agent", "src");
 const AGENT_V2_SOURCE = path.join(AGENT_SOURCE, "agent_v2.rs");
 const PROBE_MODULE_SOURCE = path.join(AGENT_SOURCE, "probe");
-const ACTIVATION_SOURCE = path.join("packages", "domain", "src", "managed-networking.ts");
-const NETWORKING_QUERY_SOURCE = path.join("app", "src", "query", "networking.ts");
+const ACTIVATION_SOURCE = path.join(
+  "packages",
+  "domain",
+  "src",
+  "managed-networking.ts",
+);
+const NETWORKING_QUERY_SOURCE = path.join(
+  "app",
+  "src",
+  "query",
+  "networking.ts",
+);
 const MANAGED_CONTRACT_SOURCE = path.join(
   "packages",
   "contracts",
@@ -109,11 +137,12 @@ const LINK_PROBE_CAPABILITY = "managed-link-probe-v1";
 export const CANARY_PREREQUISITES = {
   "base-harness": {
     scope: "core",
-    summary: "single-agent harness preflight (Node, pnpm, local Docker, cargo, curl)",
+    summary:
+      "single-agent harness preflight (Node, pnpm, local Docker, cargo, curl)",
   },
   "pinned-sing-box": {
     scope: "core",
-    summary: `sing-box matching ${PINNED_SING_BOX_SOURCE} with the with_v2ray_api tag`,
+    summary: `sing-box version matching ${PINNED_SING_BOX_SOURCE}; the agent owns the loopback api service`,
   },
   "agent-link-probe-transport": {
     scope: "core",
@@ -136,11 +165,13 @@ export const CANARY_PREREQUISITES = {
   },
   "docker-agent-profile": {
     scope: "profile",
-    summary: "local Docker daemon to build server-agent/Dockerfile.test (processkit profile)",
+    summary:
+      "local Docker daemon to build server-agent/Dockerfile.test (processkit profile)",
   },
   "systemd-disposable-vm": {
     scope: "profile",
-    summary: "a disposable systemd VM named with --systemd-vm; this host's systemd is never used",
+    summary:
+      "a disposable systemd VM named with --systemd-vm; this host's systemd is never used",
   },
 };
 
@@ -159,7 +190,9 @@ function linkProbeTransport(repoRoot, { run, readText }) {
     (advertised.includes("MANAGED_LINK_PROBE_CAPABILITY") ||
       advertised.includes(`"${LINK_PROBE_CAPABILITY}"`));
   const users = run("grep", [
-    "-rlE", "--", 'MANAGED_LINK_PROBE_REQUEST_TYPE|"link_probe\\.request"',
+    "-rlE",
+    "--",
+    'MANAGED_LINK_PROBE_REQUEST_TYPE|"link_probe\\.request"',
     path.join(repoRoot, AGENT_SOURCE),
   ]).stdout.split("\n");
   const probeModule = path.join(repoRoot, PROBE_MODULE_SOURCE) + path.sep;
@@ -207,13 +240,7 @@ export function parseServerFnSpec(spec) {
  * the base harness preflight is merged in by the caller.
  */
 export function canaryPreflight(
-  {
-    repoRoot,
-    singBox,
-    dockerReachable,
-    systemdVm,
-    applyFn,
-  },
+  { repoRoot, singBox, dockerReachable, systemdVm, applyFn },
   probe = {},
 ) {
   const { run = defaultRun, readText } = probe;
@@ -221,7 +248,9 @@ export function canaryPreflight(
   const missing = [];
   const miss = (id, detail) => missing.push({ id, detail });
 
-  const pinned = parsePinnedSingBox(readText(path.join(repoRoot, PINNED_SING_BOX_SOURCE)));
+  const pinned = parsePinnedSingBox(
+    readText(path.join(repoRoot, PINNED_SING_BOX_SOURCE)),
+  );
   facts.pinnedSingBox = pinned.version;
   if (!singBox) {
     miss("pinned-sing-box", "no sing-box binary found; pass --sing-box <path>");
@@ -234,12 +263,15 @@ export function canaryPreflight(
         "pinned-sing-box",
         `${singBox} reports ${reported ?? "no version"}, expected ${pinned.version}`,
       );
-    } else if (!/with_v2ray_api/.test(version.stdout)) {
-      miss("pinned-sing-box", `${singBox} lacks the with_v2ray_api tag`);
     }
+    // The agent now owns the loopback `api` service used for stats; the
+    // pinned official release carries it without a legacy with_v2ray_api tag.
   }
 
-  const { advertises, handles } = linkProbeTransport(repoRoot, { run, readText });
+  const { advertises, handles } = linkProbeTransport(repoRoot, {
+    run,
+    readText,
+  });
   facts.agentLinkProbe = `capability=${advertises} handler=${handles}`;
   if (!advertises || !handles) {
     const gaps = [
@@ -274,9 +306,10 @@ export function canaryPreflight(
     );
   }
 
-  const activation = /MANAGED_NETWORKING_ACTIVATION_ENABLED\s*=\s*(true|false)/.exec(
-    readText(path.join(repoRoot, ACTIVATION_SOURCE)),
-  )?.[1];
+  const activation =
+    /MANAGED_NETWORKING_ACTIVATION_ENABLED\s*=\s*(true|false)/.exec(
+      readText(path.join(repoRoot, ACTIVATION_SOURCE)),
+    )?.[1];
   facts.activationEnabled = activation ?? "unknown";
   if (activation !== "true") {
     miss(
@@ -286,7 +319,8 @@ export function canaryPreflight(
   }
 
   facts.dockerProfile = dockerReachable ? "daemon reachable" : "unavailable";
-  if (!dockerReachable) miss("docker-agent-profile", "the Docker daemon is not reachable");
+  if (!dockerReachable)
+    miss("docker-agent-profile", "the Docker daemon is not reachable");
 
   facts.systemdVm = systemdVm ?? "none";
   if (!systemdVm) {
@@ -322,7 +356,8 @@ export const CANARY_EVIDENCE = [
   },
   {
     id: "isolated-relay",
-    title: "A-to-B relay carries the subscriber flow and nothing else reaches B",
+    title:
+      "A-to-B relay carries the subscriber flow and nothing else reaches B",
     requires: [
       "base-harness",
       "pinned-sing-box",
@@ -345,7 +380,8 @@ export const CANARY_EVIDENCE = [
       "apply-ingress",
       "activation-enabled",
     ],
-    observe: "served Clash proxies (server, port) against A's node and B's peer listener",
+    observe:
+      "served Clash proxies (server, port) against A's node and B's peer listener",
   },
   {
     id: "no-double-billing",
@@ -358,7 +394,8 @@ export const CANARY_EVIDENCE = [
       "apply-ingress",
       "activation-enabled",
     ],
-    observe: "subscription.traffic_used_bytes delta and traffic_record rows per server",
+    observe:
+      "subscription.traffic_used_bytes delta and traffic_record rows per server",
   },
   {
     id: "failure-recovery",
@@ -376,7 +413,8 @@ export const CANARY_EVIDENCE = [
   },
   {
     id: "live-revocation",
-    title: "revocation reaches the data plane while a networking candidate is failed",
+    title:
+      "revocation reaches the data plane while a networking candidate is failed",
     requires: [
       "base-harness",
       "pinned-sing-box",
@@ -385,11 +423,13 @@ export const CANARY_EVIDENCE = [
       "apply-ingress",
       "activation-enabled",
     ],
-    observe: "subscription status code and a proxied request through A after cancelling the subscription",
+    observe:
+      "subscription status code and a proxied request through A after cancelling the subscription",
   },
   {
     id: "downgrade-gate",
-    title: "unsupported agents block activation and managed state drains before downgrade",
+    title:
+      "unsupported agents block activation and managed state drains before downgrade",
     requires: [
       "base-harness",
       "pinned-sing-box",
@@ -403,7 +443,8 @@ export const CANARY_EVIDENCE = [
   },
   {
     id: "docker-processkit-profile",
-    title: "the Docker processkit profile applies, rolls back and restarts as documented",
+    title:
+      "the Docker processkit profile applies, rolls back and restarts as documented",
     requires: ["docker-agent-profile", "pinned-sing-box"],
     observe:
       "server-agent/scripts/test-managed-tls-docker.sh outcome and sing-box restarting with the agent container",
@@ -443,7 +484,10 @@ export function judgeReceiverFirst({ stages, probes, publications, servers }) {
   const senders = ordered.slice(1);
   if (!receiver || receiver.serverId !== servers.B) {
     failures.push("the first stage does not belong to B");
-  } else if (receiver.state !== "confirmed" || time(receiver.confirmedAt) === undefined) {
+  } else if (
+    receiver.state !== "confirmed" ||
+    time(receiver.confirmedAt) === undefined
+  ) {
     failures.push("B's receiver stage has no authenticated confirmation");
   }
   if (senders.length === 0 || senders.some((s) => s.serverId !== servers.A)) {
@@ -452,20 +496,27 @@ export function judgeReceiverFirst({ stages, probes, publications, servers }) {
   const receiverAt = time(receiver?.confirmedAt) ?? Infinity;
   for (const stage of senders) {
     if (!(time(stage.issuedAt) > receiverAt)) {
-      failures.push(`stage ${stage.ordinal} was issued before B's receiver was proven`);
+      failures.push(
+        `stage ${stage.ordinal} was issued before B's receiver was proven`,
+      );
     }
   }
   const probe = probes.find((p) => p.outcome === "succeeded");
   const routing = senders.at(-1);
   if (!probe) failures.push("no successful link probe was recorded");
   else if (routing && !(time(routing.issuedAt) > time(probe.recordedAt))) {
-    failures.push("A's routing stage was issued before the link probe succeeded");
+    failures.push(
+      "A's routing stage was issued before the link probe succeeded",
+    );
   }
   const routedAt = time(routing?.confirmedAt) ?? Infinity;
   for (const publication of publications) {
-    if (publication.servers.includes(servers.B)) failures.push("a subscription listed B");
+    if (publication.servers.includes(servers.B))
+      failures.push("a subscription listed B");
     if (time(publication.at) < routedAt && publication.changed) {
-      failures.push("the subscription changed before A's routing stage was confirmed");
+      failures.push(
+        "the subscription changed before A's routing stage was confirmed",
+      );
     }
   }
   return verdict(failures);
@@ -476,7 +527,13 @@ export function judgeReceiverFirst({ stages, probes, publications, servers }) {
  * sees for each server's direct egress; peerDials/statsDials: outcomes of the
  * negative dials ("refused" | "connected").
  */
-export function judgeIsolatedRelay({ token, origin, egress, peerDials, statsDials }) {
+export function judgeIsolatedRelay({
+  token,
+  origin,
+  egress,
+  peerDials,
+  statsDials,
+}) {
   const failures = [];
   if (egress.A === egress.B) {
     failures.push(
@@ -484,20 +541,27 @@ export function judgeIsolatedRelay({ token, origin, egress, peerDials, statsDial
     );
   }
   const hits = origin.filter((request) => request.token === token);
-  if (hits.length === 0) failures.push("the relayed request never reached the origin");
+  if (hits.length === 0)
+    failures.push("the relayed request never reached the origin");
   for (const hit of hits) {
     if (hit.remoteAddress !== egress.B) {
-      failures.push(`the relayed request arrived from ${hit.remoteAddress}, not B's egress`);
+      failures.push(
+        `the relayed request arrived from ${hit.remoteAddress}, not B's egress`,
+      );
     }
   }
   for (const dial of peerDials) {
     if (dial.outcome !== "refused") {
-      failures.push(`B's peer inbound accepted a ${dial.credential} credential`);
+      failures.push(
+        `B's peer inbound accepted a ${dial.credential} credential`,
+      );
     }
   }
   for (const dial of statsDials) {
     if (dial.outcome !== "refused") {
-      failures.push(`subscriber traffic reached ${dial.agent}'s stats endpoint`);
+      failures.push(
+        `subscriber traffic reached ${dial.agent}'s stats endpoint`,
+      );
     }
   }
   return verdict(failures);
@@ -508,9 +572,12 @@ export function judgeExportOnlyA({ proxies, entrance, peerListener }) {
   const failures = [];
   const key = (p) => `${p.server}:${p.port}`;
   const listed = new Set(proxies.map(key));
-  if (!listed.has(key(entrance))) failures.push("A's subscriber inbound is not exported");
-  if (listed.has(key(peerListener))) failures.push("B's peer listener is exported");
-  if (listed.size !== 1) failures.push(`expected exactly one entrance, found ${listed.size}`);
+  if (!listed.has(key(entrance)))
+    failures.push("A's subscriber inbound is not exported");
+  if (listed.has(key(peerListener)))
+    failures.push("B's peer listener is exported");
+  if (listed.size !== 1)
+    failures.push(`expected exactly one entrance, found ${listed.size}`);
   return verdict(failures);
 }
 
@@ -519,9 +586,16 @@ export function judgeExportOnlyA({ proxies, entrance, peerListener }) {
  * created by the download ({ serverId, bytes }); usedDelta: change of
  * subscription.traffic_used_bytes. `overhead` bounds protocol overhead.
  */
-export function judgeNoDoubleBilling({ bytes, usedDelta, records, servers, overhead = 0.25 }) {
+export function judgeNoDoubleBilling({
+  bytes,
+  usedDelta,
+  records,
+  servers,
+  overhead = 0.25,
+}) {
   const failures = [];
-  if (usedDelta < bytes) failures.push(`billed ${usedDelta} bytes for a ${bytes}-byte download`);
+  if (usedDelta < bytes)
+    failures.push(`billed ${usedDelta} bytes for a ${bytes}-byte download`);
   if (usedDelta > bytes * (1 + overhead)) {
     failures.push(`billed ${usedDelta} bytes, above the single-count bound`);
   }
@@ -531,7 +605,8 @@ export function judgeNoDoubleBilling({ bytes, usedDelta, records, servers, overh
   const atA = records.filter((record) => record.serverId === servers.A);
   const sum = atA.reduce((total, record) => total + record.bytes, 0);
   if (atA.length === 0) failures.push("A produced no billable traffic record");
-  else if (sum !== usedDelta) failures.push(`A's records sum to ${sum}, not ${usedDelta}`);
+  else if (sum !== usedDelta)
+    failures.push(`A's records sum to ${sum}, not ${usedDelta}`);
   return verdict(failures);
 }
 
@@ -540,12 +615,24 @@ export function judgeNoDoubleBilling({ bytes, usedDelta, records, servers, overh
  * recoveryProvenAt; trafficAfter: the subscriber's proxied request outcome;
  * newSubscriberPublished: an eligible subscriber added after recovery appears.
  */
-export function judgeFailureRecovery({ kind, rollout, stages, trafficAfter, newSubscriberPublished }) {
+export function judgeFailureRecovery({
+  kind,
+  rollout,
+  stages,
+  trafficAfter,
+  newSubscriberPublished,
+}) {
   const failures = [];
-  const expected = kind === "abort" ? ["aborted", "aborted"] : ["failed", "stage_apply_failed"];
-  if (rollout.state !== expected[0]) failures.push(`rollout ended ${rollout.state}, not ${expected[0]}`);
+  const expected =
+    kind === "abort"
+      ? ["aborted", "aborted"]
+      : ["failed", "stage_apply_failed"];
+  if (rollout.state !== expected[0])
+    failures.push(`rollout ended ${rollout.state}, not ${expected[0]}`);
   if (rollout.failureCode !== expected[1]) {
-    failures.push(`failure code ${rollout.failureCode ?? "none"}, not ${expected[1]}`);
+    failures.push(
+      `failure code ${rollout.failureCode ?? "none"}, not ${expected[1]}`,
+    );
   }
   const touched = stages.filter((stage) => stage.issuedAt != null);
   for (const stage of touched) {
@@ -553,17 +640,27 @@ export function judgeFailureRecovery({ kind, rollout, stages, trafficAfter, newS
       failures.push(`stage ${stage.ordinal} has no proven recovery`);
     }
   }
-  if (trafficAfter !== "ok") failures.push("subscriber traffic did not recover");
-  if (!newSubscriberPublished) failures.push("a new eligible subscriber was not published");
+  if (trafficAfter !== "ok")
+    failures.push("subscriber traffic did not recover");
+  if (!newSubscriberPublished)
+    failures.push("a new eligible subscriber was not published");
   return verdict(failures);
 }
 
 /** Outcomes after cancelling a subscription while a candidate is failed. */
-export function judgeLiveRevocation({ subscriptionStatus, proxyAfter, withinMs, deadlineMs }) {
+export function judgeLiveRevocation({
+  subscriptionStatus,
+  proxyAfter,
+  withinMs,
+  deadlineMs,
+}) {
   const failures = [];
-  if (subscriptionStatus !== 403) failures.push(`subscription answered ${subscriptionStatus}`);
-  if (proxyAfter !== "refused") failures.push("A still accepts the revoked credential");
-  if (!(withinMs <= deadlineMs)) failures.push(`revocation took ${withinMs} ms`);
+  if (subscriptionStatus !== 403)
+    failures.push(`subscription answered ${subscriptionStatus}`);
+  if (proxyAfter !== "refused")
+    failures.push("A still accepts the revoked credential");
+  if (!(withinMs <= deadlineMs))
+    failures.push(`revocation took ${withinMs} ms`);
   return verdict(failures);
 }
 
@@ -572,10 +669,16 @@ export function judgeLiveRevocation({ subscriptionStatus, proxyAfter, withinMs, 
  * legacyConfigStatus: HTTP status of a legacy config request for managed A;
  * drained: rollout state after removing the link before downgrade.
  */
-export function judgeDowngradeGate({ unsupportedApply, legacyConfigStatus, drained }) {
+export function judgeDowngradeGate({
+  unsupportedApply,
+  legacyConfigStatus,
+  drained,
+}) {
   const failures = [];
-  if (unsupportedApply.accepted) failures.push("apply was accepted for an unsupported agent");
-  if (legacyConfigStatus < 400) failures.push("a legacy config request for a managed server succeeded");
+  if (unsupportedApply.accepted)
+    failures.push("apply was accepted for an unsupported agent");
+  if (legacyConfigStatus < 400)
+    failures.push("a legacy config request for a managed server succeeded");
   if (drained.state !== "completed" || drained.activeLinks !== 0) {
     failures.push("managed links were not drained before downgrade");
   }

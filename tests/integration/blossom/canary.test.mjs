@@ -28,9 +28,14 @@ import {
 } from "./lib/canary.mjs";
 import { run as defaultRun } from "./lib/util.mjs";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const repoRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../..",
+);
 const servers = { A: "srv-a", B: "srv-b" };
-const pinned = parsePinnedSingBox(readFileSync(path.join(repoRoot, PINNED_SING_BOX_SOURCE), "utf8"));
+const pinned = parsePinnedSingBox(
+  readFileSync(path.join(repoRoot, PINNED_SING_BOX_SOURCE), "utf8"),
+);
 
 test("the canary reads the same sing-box pin as the agent test image", () => {
   assert.match(pinned.version, /^\d+\.\d+\.\d+$/);
@@ -41,7 +46,11 @@ test("the canary reads the same sing-box pin as the agent test image", () => {
 
 test("the two agents share no state, home, log or credential", () => {
   const layout = canaryAgentLayout("/tmp/blossom-it-00000000-x");
-  const paths = Object.values(layout).flatMap((a) => [a.stateDir, a.homeDir, a.logFile]);
+  const paths = Object.values(layout).flatMap((a) => [
+    a.stateDir,
+    a.homeDir,
+    a.logFile,
+  ]);
   assert.equal(new Set(paths).size, paths.length);
   assert.equal(layout.A.exportsSubscriberInbound, true);
   assert.equal(layout.B.exportsSubscriberInbound, false);
@@ -51,12 +60,33 @@ test("the two agents share no state, home, log or credential", () => {
     singBox: "/bin/sing-box",
     token: "token-b",
   });
-  assert.deepEqual(launch.args.slice(launch.args.indexOf("--ws-protocol"), -2), [
-    "--ws-protocol",
-    "v2",
-  ]);
+  assert.deepEqual(
+    launch.args.slice(launch.args.indexOf("--ws-protocol"), -2),
+    ["--ws-protocol", "v2"],
+  );
   assert.ok(!launch.args.includes("token-b"), "the token stays out of argv");
   assert.equal(launch.env.AGENT_TOKEN, "token-b");
+
+  const legacy = canaryAgentLaunch(layout.B, {
+    appUrl: "http://127.0.0.1:1",
+    singBox: "/bin/sing-box",
+    token: "token-b",
+    protocol: "legacy",
+  });
+  assert.deepEqual(
+    legacy.args.slice(legacy.args.indexOf("--ws-protocol"), -2),
+    ["--ws-protocol", "legacy"],
+  );
+  assert.throws(
+    () =>
+      canaryAgentLaunch(layout.B, {
+        appUrl: "http://127.0.0.1:1",
+        singBox: "/bin/sing-box",
+        token: "token-b",
+        protocol: "v3",
+      }),
+    /unsupported/,
+  );
 });
 
 const contractFile = path.join(repoRoot, "server-agent/src/probe/contract.rs");
@@ -68,7 +98,11 @@ function fakeProbe({ version, wired = false, activation = "false" }) {
   return {
     run(command) {
       if (command === "grep") {
-        const files = [contractFile, reexportFile, ...(wired ? [sessionFile] : [])];
+        const files = [
+          contractFile,
+          reexportFile,
+          ...(wired ? [sessionFile] : []),
+        ];
         return { status: 0, stdout: `${files.join("\n")}\n` };
       }
       return { status: 0, stdout: version };
@@ -97,11 +131,19 @@ function fakeProbe({ version, wired = false, activation = "false" }) {
 
 test("the task 08 indicator runs against the real agent sources", () => {
   const { facts } = canaryPreflight(
-    { repoRoot, singBox: "/bin/sing-box", dockerReachable: true, systemdVm: "vm" },
+    {
+      repoRoot,
+      singBox: "/bin/sing-box",
+      dockerReachable: true,
+      systemdVm: "vm",
+    },
     { run: defaultRun, readText: (file) => readFileSync(file, "utf8") },
   );
   // Recorded against the real tree: true once task 08 lands, false before.
-  assert.match(facts.agentLinkProbe, /^capability=(true|false) handler=(true|false)$/);
+  assert.match(
+    facts.agentLinkProbe,
+    /^capability=(true|false) handler=(true|false)$/,
+  );
 });
 
 test("preflight names every missing prerequisite explicitly", () => {
@@ -118,16 +160,28 @@ test("preflight names every missing prerequisite explicitly", () => {
     "pinned-sing-box",
     "systemd-disposable-vm",
   ]);
-  for (const entry of missing) assert.ok(CANARY_PREREQUISITES[entry.id], entry.id);
-  assert.match(missing.find((m) => m.id === "agent-link-probe-transport").detail, /advertise .* or handle/);
-  assert.match(missing.find((m) => m.id === "apply-ingress").detail, /task 09 Apply/);
+  for (const entry of missing)
+    assert.ok(CANARY_PREREQUISITES[entry.id], entry.id);
+  assert.match(
+    missing.find((m) => m.id === "agent-link-probe-transport").detail,
+    /advertise .* or handle/,
+  );
+  assert.match(
+    missing.find((m) => m.id === "apply-ingress").detail,
+    /task 09 Apply/,
+  );
   assert.equal(facts.activationEnabled, "false");
   assert.equal(facts.applyIngress, "missing");
 });
 
 test("preflight passes once the pin, task 08 transport, gate and profiles are present", () => {
   const { missing } = canaryPreflight(
-    { repoRoot, singBox: "/bin/sing-box", dockerReachable: true, systemdVm: "canary-vm" },
+    {
+      repoRoot,
+      singBox: "/bin/sing-box",
+      dockerReachable: true,
+      systemdVm: "canary-vm",
+    },
     fakeProbe({
       version: `sing-box version ${pinned.version}\nTags: with_v2ray_api`,
       wired: true,
@@ -153,30 +207,70 @@ test("an explicit apply server function unblocks the apply ingress only", () => 
     }),
   );
   assert.deepEqual(missing, []);
-  assert.equal(facts.applyIngress, "explicit src/query/networking.ts#applyNetworkingRollout");
+  assert.equal(
+    facts.applyIngress,
+    "explicit src/query/networking.ts#applyNetworkingRollout",
+  );
 });
 
 test("a server-function override must be file#export", () => {
-  assert.deepEqual(parseServerFnSpec("src/query/networking.ts#applyNetworkingRollout"), [
-    "src/query/networking.ts",
-    "applyNetworkingRollout",
-  ]);
+  assert.deepEqual(
+    parseServerFnSpec("src/query/networking.ts#applyNetworkingRollout"),
+    ["src/query/networking.ts", "applyNetworkingRollout"],
+  );
   assert.throws(() => parseServerFnSpec("src/query/networking.ts"), /expected/);
   assert.throws(() => parseServerFnSpec("a#b#c"), /expected/);
 });
 
-test("preflight rejects the pinned version without the stats tag", () => {
-  const { missing } = canaryPreflight(
-    { repoRoot, singBox: "/bin/sing-box", dockerReachable: true, systemdVm: "vm" },
-    fakeProbe({ version: `sing-box version ${pinned.version}\nTags: with_quic`, activation: "true" }),
+test("preflight accepts the pinned official release without the legacy stats tag", () => {
+  const { missing, facts } = canaryPreflight(
+    {
+      repoRoot,
+      singBox: "/bin/sing-box",
+      dockerReachable: true,
+      systemdVm: "vm",
+    },
+    fakeProbe({
+      version: `sing-box version ${pinned.version}\nTags: with_quic,with_musl`,
+      wired: true,
+      activation: "true",
+    }),
   );
-  assert.match(missing.find((m) => m.id === "pinned-sing-box").detail, /with_v2ray_api/);
+  assert.equal(facts.singBoxVersion, pinned.version);
+  assert.equal(
+    missing.find((m) => m.id === "pinned-sing-box"),
+    undefined,
+  );
+});
+
+test("preflight rejects a sing-box version that is not the pin", () => {
+  const { missing } = canaryPreflight(
+    {
+      repoRoot,
+      singBox: "/bin/sing-box",
+      dockerReachable: true,
+      systemdVm: "vm",
+    },
+    fakeProbe({
+      version: "sing-box version 1.13.9\nTags: with_quic",
+      wired: true,
+      activation: "true",
+    }),
+  );
+  assert.match(
+    missing.find((m) => m.id === "pinned-sing-box").detail,
+    /expected 1\.14\.4/,
+  );
 });
 
 test("the plan blocks profile evidence only on its own prerequisites", () => {
-  assert.equal(new Set(CANARY_EVIDENCE.map((e) => e.id)).size, CANARY_EVIDENCE.length);
+  assert.equal(
+    new Set(CANARY_EVIDENCE.map((e) => e.id)).size,
+    CANARY_EVIDENCE.length,
+  );
   for (const evidence of CANARY_EVIDENCE) {
-    for (const id of evidence.requires) assert.ok(CANARY_PREREQUISITES[id], `${evidence.id}: ${id}`);
+    for (const id of evidence.requires)
+      assert.ok(CANARY_PREREQUISITES[id], `${evidence.id}: ${id}`);
   }
   const plan = planEvidence([{ id: "systemd-disposable-vm" }]);
   assert.deepEqual(
@@ -189,23 +283,64 @@ test("the plan blocks profile evidence only on its own prerequisites", () => {
 
 const t = (seconds) => new Date(Date.UTC(2026, 10, 21, 0, 0, seconds));
 const goodStages = [
-  { serverId: servers.B, ordinal: 1, state: "confirmed", issuedAt: t(0), confirmedAt: t(5) },
-  { serverId: servers.A, ordinal: 2, state: "confirmed", issuedAt: t(6), confirmedAt: t(9) },
-  { serverId: servers.A, ordinal: 3, state: "confirmed", issuedAt: t(12), confirmedAt: t(15) },
+  {
+    serverId: servers.B,
+    ordinal: 1,
+    state: "confirmed",
+    issuedAt: t(0),
+    confirmedAt: t(5),
+  },
+  {
+    serverId: servers.A,
+    ordinal: 2,
+    state: "confirmed",
+    issuedAt: t(6),
+    confirmedAt: t(9),
+  },
+  {
+    serverId: servers.A,
+    ordinal: 3,
+    state: "confirmed",
+    issuedAt: t(12),
+    confirmedAt: t(15),
+  },
 ];
-const goodProbes = [{ stageOrdinal: 2, outcome: "succeeded", recordedAt: t(11) }];
+const goodProbes = [
+  { stageOrdinal: 2, outcome: "succeeded", recordedAt: t(11) },
+];
 
 test("receiver-first passes only when B is proven before A moves", () => {
   const publications = [{ at: t(8), servers: [servers.A], changed: false }];
-  assert.ok(judgeReceiverFirst({ stages: goodStages, probes: goodProbes, publications, servers }).pass);
+  assert.ok(
+    judgeReceiverFirst({
+      stages: goodStages,
+      probes: goodProbes,
+      publications,
+      servers,
+    }).pass,
+  );
 
-  const early = goodStages.map((s) => (s.ordinal === 2 ? { ...s, issuedAt: t(4) } : s));
+  const early = goodStages.map((s) =>
+    s.ordinal === 2 ? { ...s, issuedAt: t(4) } : s,
+  );
   assert.match(
-    judgeReceiverFirst({ stages: early, probes: goodProbes, publications, servers }).failures[0],
+    judgeReceiverFirst({
+      stages: early,
+      probes: goodProbes,
+      publications,
+      servers,
+    }).failures[0],
     /issued before B's receiver/,
   );
-  const unprobed = judgeReceiverFirst({ stages: goodStages, probes: [], publications, servers });
-  assert.ok(unprobed.failures.includes("no successful link probe was recorded"));
+  const unprobed = judgeReceiverFirst({
+    stages: goodStages,
+    probes: [],
+    publications,
+    servers,
+  });
+  assert.ok(
+    unprobed.failures.includes("no successful link probe was recorded"),
+  );
   const leaked = judgeReceiverFirst({
     stages: goodStages,
     probes: goodProbes,
@@ -227,24 +362,50 @@ test("isolated relay needs distinguishable egress and refused negative dials", (
     ],
   };
   assert.ok(judgeIsolatedRelay(input).pass);
-  assert.ok(!judgeIsolatedRelay({ ...input, egress: { A: "127.0.0.1", B: "127.0.0.1" } }).pass);
   assert.ok(
-    !judgeIsolatedRelay({ ...input, origin: [{ token: "tok", remoteAddress: "127.0.0.1" }] }).pass,
+    !judgeIsolatedRelay({
+      ...input,
+      egress: { A: "127.0.0.1", B: "127.0.0.1" },
+    }).pass,
   );
-  assert.ok(!judgeIsolatedRelay({ ...input, statsDials: [{ agent: "B", outcome: "connected" }] }).pass);
+  assert.ok(
+    !judgeIsolatedRelay({
+      ...input,
+      origin: [{ token: "tok", remoteAddress: "127.0.0.1" }],
+    }).pass,
+  );
+  assert.ok(
+    !judgeIsolatedRelay({
+      ...input,
+      statsDials: [{ agent: "B", outcome: "connected" }],
+    }).pass,
+  );
 });
 
 test("export lists A's entrance and never B's peer listener", () => {
   const entrance = { server: "a.example", port: 4430 };
   const peerListener = { server: "b.example", port: 8443 };
-  assert.ok(judgeExportOnlyA({ proxies: [entrance], entrance, peerListener }).pass);
-  assert.ok(!judgeExportOnlyA({ proxies: [entrance, peerListener], entrance, peerListener }).pass);
+  assert.ok(
+    judgeExportOnlyA({ proxies: [entrance], entrance, peerListener }).pass,
+  );
+  assert.ok(
+    !judgeExportOnlyA({
+      proxies: [entrance, peerListener],
+      entrance,
+      peerListener,
+    }).pass,
+  );
   assert.ok(!judgeExportOnlyA({ proxies: [], entrance, peerListener }).pass);
 });
 
 test("a forwarded download is billed once, at A", () => {
   const bytes = 3 * 1024 * 1024;
-  const once = { bytes, usedDelta: bytes + 4096, records: [{ serverId: servers.A, bytes: bytes + 4096 }], servers };
+  const once = {
+    bytes,
+    usedDelta: bytes + 4096,
+    records: [{ serverId: servers.A, bytes: bytes + 4096 }],
+    servers,
+  };
   assert.ok(judgeNoDoubleBilling(once).pass);
   const twice = {
     ...once,
@@ -270,21 +431,48 @@ test("failure and abort recovery require proven restoration and a fresh publicat
   };
   assert.ok(judgeFailureRecovery(failed).pass);
   assert.ok(
-    judgeFailureRecovery({ ...failed, kind: "abort", rollout: { state: "aborted", failureCode: "aborted" } }).pass,
+    judgeFailureRecovery({
+      ...failed,
+      kind: "abort",
+      rollout: { state: "aborted", failureCode: "aborted" },
+    }).pass,
   );
   assert.ok(!judgeFailureRecovery({ ...failed, stages: goodStages }).pass);
-  assert.ok(!judgeFailureRecovery({ ...failed, newSubscriberPublished: false }).pass);
+  assert.ok(
+    !judgeFailureRecovery({ ...failed, newSubscriberPublished: false }).pass,
+  );
 });
 
 test("revocation and downgrade gates fail closed", () => {
-  assert.ok(judgeLiveRevocation({ subscriptionStatus: 403, proxyAfter: "refused", withinMs: 9000, deadlineMs: 30000 }).pass);
-  assert.ok(!judgeLiveRevocation({ subscriptionStatus: 403, proxyAfter: "ok", withinMs: 9000, deadlineMs: 30000 }).pass);
+  assert.ok(
+    judgeLiveRevocation({
+      subscriptionStatus: 403,
+      proxyAfter: "refused",
+      withinMs: 9000,
+      deadlineMs: 30000,
+    }).pass,
+  );
+  assert.ok(
+    !judgeLiveRevocation({
+      subscriptionStatus: 403,
+      proxyAfter: "ok",
+      withinMs: 9000,
+      deadlineMs: 30000,
+    }).pass,
+  );
   const gate = {
     unsupportedApply: { accepted: false },
     legacyConfigStatus: 409,
     drained: { state: "completed", activeLinks: 0 },
   };
   assert.ok(judgeDowngradeGate(gate).pass);
-  assert.ok(!judgeDowngradeGate({ ...gate, unsupportedApply: { accepted: true } }).pass);
-  assert.ok(!judgeDowngradeGate({ ...gate, drained: { state: "completed", activeLinks: 1 } }).pass);
+  assert.ok(
+    !judgeDowngradeGate({ ...gate, unsupportedApply: { accepted: true } }).pass,
+  );
+  assert.ok(
+    !judgeDowngradeGate({
+      ...gate,
+      drained: { state: "completed", activeLinks: 1 },
+    }).pass,
+  );
 });

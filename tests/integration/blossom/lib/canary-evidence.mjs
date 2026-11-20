@@ -129,7 +129,7 @@ export class CanaryEvidenceJournal {
     }
     const status = record.blockedBy?.length
       ? "blocked"
-      : record.status ?? verdictStatus(record.judge);
+      : (record.status ?? verdictStatus(record.judge));
     if (!CANARY_EVIDENCE_STATES.includes(status)) {
       throw new Error(`invalid canary evidence status '${status}'`);
     }
@@ -179,22 +179,24 @@ export class CanaryEvidenceJournal {
 
   entries() {
     const rows = [...this.records.values()].sort(
-      (left, right) => EVIDENCE_ORDER.get(left.id) - EVIDENCE_ORDER.get(right.id),
+      (left, right) =>
+        EVIDENCE_ORDER.get(left.id) - EVIDENCE_ORDER.get(right.id),
     );
     const recorded = new Set(rows.map((row) => row.id));
-    const missing = CANARY_EVIDENCE.filter((entry) => !recorded.has(entry.id)).map(
-      (entry) => ({
-        id: entry.id,
-        status: "not_run",
-        capturedAt: null,
-        detail: "the live scenario did not record this evidence",
-        blockedBy: [],
-        failures: [],
-        observations: {},
-      }),
-    );
+    const missing = CANARY_EVIDENCE.filter(
+      (entry) => !recorded.has(entry.id),
+    ).map((entry) => ({
+      id: entry.id,
+      status: "not_run",
+      capturedAt: null,
+      detail: "the live scenario did not record this evidence",
+      blockedBy: [],
+      failures: [],
+      observations: {},
+    }));
     return [...rows, ...missing].sort(
-      (left, right) => EVIDENCE_ORDER.get(left.id) - EVIDENCE_ORDER.get(right.id),
+      (left, right) =>
+        EVIDENCE_ORDER.get(left.id) - EVIDENCE_ORDER.get(right.id),
     );
   }
 
@@ -207,7 +209,11 @@ export class CanaryEvidenceJournal {
       ]),
     );
     const exitCode =
-      counts.failed > 0 ? 1 : entries.some((entry) => entry.status !== "passed") ? 3 : 0;
+      counts.failed > 0
+        ? 1
+        : entries.some((entry) => entry.status !== "passed")
+          ? 3
+          : 0;
     return {
       total: entries.length,
       ...counts,

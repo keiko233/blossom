@@ -15,11 +15,6 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { CANARY_EVIDENCE } from "./lib/canary.mjs";
-import {
-  CanaryEvidenceJournal,
-  sanitizeEvidence,
-} from "./lib/canary-evidence.mjs";
 import {
   buildPeerProbeClientConfig,
   normalizeRemoteAddress,
@@ -27,6 +22,17 @@ import {
   socksConnect,
   startCanaryOrigin,
 } from "./lib/canary-environment.mjs";
+import {
+  CanaryEvidenceJournal,
+  sanitizeEvidence,
+} from "./lib/canary-evidence.mjs";
+import {
+  CanaryScenarioError,
+  createServerFunctionDriver,
+  discoverApplyServerFns,
+  recordMissingPrerequisites,
+} from "./lib/canary-scenarios.mjs";
+import { CANARY_EVIDENCE } from "./lib/canary.mjs";
 
 function temporaryDirectory() {
   return mkdtempSync(path.join(os.tmpdir(), "blossom-canary-test-"));
@@ -61,7 +67,10 @@ test("an empty evidence journal is incomplete, never a pass", () => {
 test("a judge is required for a pass; a blocked evidence item can never pass", () => {
   const workdir = temporaryDirectory();
   try {
-    const journal = new CanaryEvidenceJournal({ runId: "canary-test", workdir });
+    const journal = new CanaryEvidenceJournal({
+      runId: "canary-test",
+      workdir,
+    });
     const pass = journal.judge(
       "receiver-first",
       { pass: true, failures: [] },
@@ -84,10 +93,15 @@ test("a judge is required for a pass; a blocked evidence item can never pass", (
     assert.equal(blocked.status, "blocked");
     journal.judge("no-double-billing", { pass: true, failures: [] }, {});
     assert.equal(
-      journal.entries().find((entry) => entry.id === "no-double-billing").status,
+      journal.entries().find((entry) => entry.id === "no-double-billing")
+        .status,
       "blocked",
     );
-    assert.equal(journal.summary().exitCode, 1, "a failed item outranks blocked");
+    assert.equal(
+      journal.summary().exitCode,
+      1,
+      "a failed item outranks blocked",
+    );
 
     assert.throws(
       () => journal.judge("unknown", { pass: true, failures: [] }),
@@ -175,7 +189,9 @@ test("the origin records the path token and normalised peer, and serves exact by
       assert.equal(entry.bytes, 17);
       assert.equal(entry.remoteAddress, normalizeRemoteAddress("127.0.0.1"));
       assert.equal(await probeHostEgress(origin), entry.remoteAddress);
-      const missing = await fetch(`http://${origin.host}:${origin.port}/bytes/nope`);
+      const missing = await fetch(
+        `http://${origin.host}:${origin.port}/bytes/nope`,
+      );
       assert.equal(missing.status, 404);
       assert.equal(harness.fixtures.length, 1);
     } finally {
@@ -234,7 +250,10 @@ test("socksConnect distinguishes a connected CONNECT from a refusal", async () =
   }
   const refused = await fakeSocksServer(0x05);
   try {
-    assert.equal((await socksConnect(refused.port, "127.0.0.1", 9)).outcome, "refused");
+    assert.equal(
+      (await socksConnect(refused.port, "127.0.0.1", 9)).outcome,
+      "refused",
+    );
   } finally {
     await refused.close();
   }
@@ -258,4 +277,86 @@ test("the peer probe config uses the wrong credential class", () => {
   assert.equal(config.outbounds[0][passwordKey], "subscriber-credential");
   assert.equal(config.outbounds[0].tls.insecure, true);
   assert.equal(config.inbounds[0].listen_port, 4000);
+});
+
+test("the Apply driver refuses a missing integration instead of faking a rollout", async () => {
+  const driver = createServerFunctionDriver({});
+  await assert.rejects(driver.apply({ serverIds: ["a", "b"] }), (error) => {
+    assert.ok(error instanceof CanaryScenarioError);
+    assert.deepEqual(error.blockedBy, ["apply-ingress"]);
+    return true;
+  });
+  assert.equal(await driver.read("rollout"), null);
+  assert.deepEqual(await driver.drain({}), {
+    ok: false,
+    blockedBy: ["drain-integration"],
+  });
+});
+
+test("the Apply driver normalises accepted and refused server-function results", async () => {
+  const calls = [];
+  const client = {
+    async call(fn, input) {
+      calls.push({ fn, input });
+      if (input.rejected)
+        return { result: { ok: false, reason: "unsupported_agent" } };
+      return { result: { ok: true, rolloutId: "rollout-1" } };
+    },
+  };
+  const driver = createServerFunctionDriver(client, {
+    applyFn: ["src/query/networking.ts", "applyNetworkingRollout"],
+  });
+  assert.deepEqual(await driver.apply({ serverIds: ["a"] }), {
+    accepted: true,
+    rolloutId: "rollout-1",
+    raw: { ok: true, rolloutId: "rollout-1" },
+  });
+  assert.deepEqual(await driver.apply({ serverIds: ["a"], rejected: true }), {
+    accepted: false,
+    reason: "unsupported_agent",
+    detail: null,
+  });
+  assert.equal(calls.length, 2);
+});
+
+test("apply discovery finds a uniquely named rollout export", () => {
+  const found = discoverApplyServerFns("/repo", (file) => {
+    if (file.endsWith("query/networking.ts")) {
+      return 'export const applyNetworkingRollout = createServerFn({ method: "POST" })\n  .handler(async () => {});\nexport const getNetworkingWorkspace = createServerFn({ method: "GET" });';
+    }
+    return "";
+  });
+  assert.deepEqual(found, [
+    ["src/query/networking.ts", "applyNetworkingRollout"],
+  ]);
+  assert.deepEqual(
+    discoverApplyServerFns("/repo", () => ""),
+    [],
+  );
+});
+
+test("missing prerequisites block their evidence and cannot be recorded as a pass", () => {
+  const workdir = temporaryDirectory();
+  try {
+    const journal = new CanaryEvidenceJournal({ runId: "blocked", workdir });
+    recordMissingPrerequisites(journal, [
+      { id: "apply-ingress" },
+      { id: "docker-agent-profile" },
+    ]);
+    const entries = journal.entries();
+    assert.ok(
+      entries.find((entry) => entry.id === "receiver-first").status ===
+        "blocked",
+    );
+    assert.ok(
+      entries.find((entry) => entry.id === "docker-processkit-profile")
+        .status === "blocked",
+    );
+    assert.equal(
+      entries.find((entry) => entry.id === "systemd-lifecycle").status,
+      "not_run",
+    );
+  } finally {
+    rmSync(workdir, { recursive: true, force: true });
+  }
 });

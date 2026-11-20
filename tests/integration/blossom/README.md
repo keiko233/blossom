@@ -29,14 +29,14 @@ Options: `--reuse-build` (reuse an existing `app/.output`; the default rebuilds 
 
 ## Prerequisites
 
-| Need | Why |
-| --- | --- |
-| Node.js 26+, pnpm, installed workspace | harness, app build, `db:migrate` |
+| Need                                            | Why                                                                                                                                                                                     |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Node.js 26+, pnpm, installed workspace          | harness, app build, `db:migrate`                                                                                                                                                        |
 | Local Docker daemon (unix socket or named pipe) | disposable PostgreSQL (image is pulled if missing: network access once). Preflight rejects a remote `DOCKER_HOST`/context, because the database is reached on a published loopback port |
-| Rust toolchain (`cargo`) | builds `server-agent` with `--locked` (not needed with `--agent-bin`) |
-| `sing-box` built with `with_v2ray_api` | server and client; traffic accounting needs the tag. `--check` verifies it |
-| `curl` | drives traffic through the client's SOCKS inbound |
-| **127.0.0.1:8080 free** | the app hard-codes sing-box's stats API there (`V2RAY_API_LISTEN` in `app/src/orpc/proxy/singbox.ts`); the agent cannot be told otherwise. Preflight fails if it is taken |
+| Rust toolchain (`cargo`)                        | builds `server-agent` with `--locked` (not needed with `--agent-bin`)                                                                                                                   |
+| `sing-box` built with `with_v2ray_api`          | server and client; traffic accounting needs the tag. `--check` verifies it                                                                                                              |
+| `curl`                                          | drives traffic through the client's SOCKS inbound                                                                                                                                       |
+| **127.0.0.1:8080 free**                         | the app hard-codes sing-box's stats API there (`V2RAY_API_LISTEN` in `app/src/orpc/proxy/singbox.ts`); the agent cannot be told otherwise. Preflight fails if it is taken               |
 
 ## What the scenario covers
 
@@ -74,26 +74,48 @@ Checked by reading the current sources (commit `20068a0` plus this directory): t
 - Some assertions read the database directly.
 - The host sing-box is whatever is on the machine; the agent's Docker image builds its own.
 - Not wired into CI or `package.json`: it needs Docker, a Rust build and sing-box, and takes minutes.
-- No browser UI, email, OAuth/MCP, certificate issuance, multi-server or multi-agent behaviour.
+- The single-agent scenario does not cover a browser UI, email, OAuth/MCP or certificate issuance. Multi-server behaviour is covered only by the two-agent canary section below, and only when its prerequisites are present.
 
 ## Two-agent canary
 
-Scaffold for the managed-networking canary (task 10 of the [networking workspace plan](../../../docs/spec/2026-11-20-admin-networking-workspace/implementation-plan.md)): A is the only exported entrance and relays to B, which serves a peer inbound and the egress. It does **not** run the live scenario yet and starts nothing.
+Task 10 of the [networking workspace plan](../../../docs/spec/2026-11-20-admin-networking-workspace/implementation-plan.md) runs two real agents over one disposable control plane:
 
-```bash
-node scripts/blossom-canary.mjs --check [--sing-box <path>] [--agent-bin <path>] [--systemd-vm <name>]
-node --test tests/integration/blossom/canary.test.mjs   # fixtures, preflight and evidence judges; no Docker or sing-box
+```text
+subscriber ──▶ A: subscriber inbound ── peer link ──▶ B: peer inbound ── direct ──▶ loopback origin
 ```
 
-`--check` prints facts, every missing prerequisite and which evidence it blocks; it exits 2 while a core prerequisite is missing. Without `--check` it exits 3 once all prerequisites are present, because the live steps are not implemented.
+A is the only exported entrance. B owns the peer listener and the egress. The harness provisions both servers and the link through the same admin server functions the browser uses, starts each agent with its own state directory, HOME, log and token, and records each judge observation in `canary-evidence.json` (mode 0600, secrets redacted).
 
-| Prerequisite | Scope | Detected by |
-| --- | --- | --- |
-| `base-harness` | core | the single-agent harness preflight above |
-| `pinned-sing-box` | core | `sing-box version` equals `SING_BOX_VERSION` in `server-agent/Dockerfile.test` and has `with_v2ray_api` |
-| `agent-link-probe-transport` | core | `managed-link-probe-v1` in the agent's `V2_CAPABILITIES` and `link_probe.request` used outside `server-agent/src/probe/` (static indicator; the live run must read `server.agent_capabilities`) |
-| `activation-enabled` | core | `MANAGED_NETWORKING_ACTIVATION_ENABLED` is `true`; use a disposable canary build and never commit the flip |
-| `docker-agent-profile` | profile | local Docker daemon for the processkit profile (`server-agent/scripts/test-managed-tls-docker.sh`) |
-| `systemd-disposable-vm` | profile | an explicit `--systemd-vm`; this host's systemd is never used, and the fake-systemd sandbox (`app/src/lib/agent-installer-e2e.test.ts`) is the only local coverage |
+```bash
+node scripts/blossom-canary.mjs --check [--sing-box <path>] [--agent-bin <path>]
+node scripts/blossom-canary.mjs [--keep] [--reuse-build] [--systemd-vm <name>] [--recovery-kind failure|abort]
+node --test tests/integration/blossom/canary.test.mjs tests/integration/blossom/canary-harness.test.mjs
+```
 
-The evidence and its pass criteria live in `lib/canary.mjs` (`CANARY_EVIDENCE` and the `judge*` functions): receiver-first stage proof, isolated A-to-B relay, export of A only, single billing at A, failed and aborted recovery, live revocation, the downgrade gate, and the Docker and systemd profiles. Each agent gets its own state directory, HOME, log and token (`canaryAgentLayout`, `canaryAgentLaunch`). The relay judge refuses to pass when A and B share an egress address, so B needs a distinct egress (container or loopback alias) for the origin to tell relay from direct.
+`--check` prints facts, every missing prerequisite and which evidence it blocks; it exits 2 while a core prerequisite is missing. A live run exits 0 only when every evidence item passed, 1 when a judge failed or cleanup left something behind, 2 when a core prerequisite or the initial setup failed, and 3 when evidence is blocked or not run. It never reports a blocked prerequisite as a pass.
+
+| Prerequisite                 | Scope   | Detected by                                                                                                                                                                                     |
+| ---------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `base-harness`               | core    | the single-agent harness preflight above                                                                                                                                                        |
+| `pinned-sing-box`            | core    | `sing-box version` equals `SING_BOX_VERSION` in `server-agent/Dockerfile.test`; the legacy `with_v2ray_api` tag is not required because the agent owns the loopback `api` service               |
+| `agent-link-probe-transport` | core    | `managed-link-probe-v1` in the agent's `V2_CAPABILITIES` and `link_probe.request` used outside `server-agent/src/probe/` (static indicator; the live run must read `server.agent_capabilities`) |
+| `managed-probe-bindings`     | core    | the managed snapshot compiler emits `probeBindings` for sender links, so the Rust executor can derive its loopback ingress and fixed responder                                                  |
+| `apply-ingress`              | core    | an audited admin Apply creates a rollout, or `--apply-fn <file>#<export>` names the separately landed integration                                                                               |
+| `activation-enabled`         | core    | `MANAGED_NETWORKING_ACTIVATION_ENABLED` is `true`; use a disposable canary build and never commit the flip                                                                                      |
+| `docker-agent-profile`       | profile | local Docker daemon for the processkit profile (`server-agent/scripts/test-managed-tls-docker.sh`)                                                                                              |
+| `systemd-disposable-vm`      | profile | an explicit `--systemd-vm`; this host's systemd is never used, and the fake-systemd sandbox (`app/src/lib/agent-installer-e2e.test.ts`) is the only local coverage                              |
+
+The shared single-agent preflight still mentions the legacy `with_v2ray_api` tag and a hard-coded 8080; `CanaryHarness` filters only those two stale checks because the current agent injects its own loopback `api` service on an OS-allocated port. All other Harness prerequisites still apply.
+
+The evidence and its pass criteria live in `lib/canary.mjs` (`CANARY_EVIDENCE` and the `judge*` functions): receiver-first stage proof, isolated A-to-B relay, export of A only, single billing at A, failed and aborted recovery, live revocation while recovering, the downgrade gate, and the Docker and systemd profiles. Each agent gets its own state directory, HOME, log and token (`canaryAgentLayout`, `canaryAgentLaunch`). The relay judge refuses to pass when A and B share an egress address, so B needs a distinct egress (a container or network-namespace profile) for the origin to tell relay from direct.
+
+### Running after the integration lands
+
+1. Use a disposable checkout and database. Never point the canary at a deployed app or a host whose services you depend on.
+2. Enable the compile-time gate only in that disposable checkout, run `node scripts/blossom-canary.mjs`, then restore the file. Do not commit the flip or copy a canary build into a real deployment.
+3. If task 09 uses another export name, pass `--apply-fn <file>#<export>`; abort/retry default to the existing audited functions and `--drain-fn` is required before the downgrade gate can pass a drain. The driver expects an apply result with `{ ok: true, rolloutId }` and a refusal with `{ ok: false, reason }`; it does not write rollout rows itself.
+   The failure and abort recovery variants each run their own disposable topology; use `--recovery-kind abort` for the second pass. A combined report is not synthesized from two runs.
+
+4. Inspect `canary-evidence.json` in the printed work directory (or the kept directory with `--keep`). With `--keep` the log files are not redacted; they contain only that run's throwaway values and the directory is mode 0700.
+
+The current blocked stages at this base are listed in the [task 10 handoff](../../../docs/spec/2026-11-20-admin-networking-workspace/task-10-canary-handoff.md): task 08's Rust probe transport and compiler bindings, task 09's Apply ingress, the activation gate, and the profile verification. The live runner is implemented, but those dependencies were not present in this checkout, so no live evidence is claimed here.

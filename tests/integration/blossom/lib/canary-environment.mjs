@@ -7,7 +7,12 @@
 // isolation. It starts nothing by itself; the live scenario and the CLI decide
 // when the environment is complete.
 
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import path from "node:path";
@@ -41,6 +46,23 @@ export class CanaryHarness extends Harness {
     this.canaryOrigins = [];
   }
 
+  /**
+   * The single-agent preflight still asks for the legacy `with_v2ray_api`
+   * build tag and a free 127.0.0.1:8080. The agent now injects its own `api`
+   * service on an OS-allocated loopback port, and the pinned official release
+   * carries that service without the tag. Filter only those two stale checks;
+   * every other Harness prerequisite still applies.
+   */
+  async preflight() {
+    const result = await super.preflight();
+    const problems = result.problems.filter(
+      (problem) =>
+        !/with_v2ray_api/.test(problem) &&
+        !/hard-codes it as sing-box's stats/.test(problem),
+    );
+    return { ...result, problems, ok: problems.length === 0 };
+  }
+
   async start() {
     await super.start();
     this.layout = canaryAgentLayout(this.workdir);
@@ -48,7 +70,10 @@ export class CanaryHarness extends Harness {
       mkdirSync(agent.stateDir, { recursive: true, mode: 0o700 });
       mkdirSync(agent.homeDir, { recursive: true, mode: 0o700 });
     }
-    mkdirSync(path.join(this.workdir, "logs"), { recursive: true, mode: 0o700 });
+    mkdirSync(path.join(this.workdir, "logs"), {
+      recursive: true,
+      mode: 0o700,
+    });
     return this;
   }
 
@@ -57,7 +82,7 @@ export class CanaryHarness extends Harness {
    * `canaryAgentLaunch` deliberately keeps it out of argv. Each agent has its
    * own state, HOME and log under the one disposable work directory.
    */
-  startCanaryAgent(name, { appUrl, singBox, token }) {
+  startCanaryAgent(name, { appUrl, singBox, token, protocol = "v2" }) {
     if (this.stopping) throw new Error("the harness is shutting down");
     const agent = this.layout?.[name];
     if (!agent) throw new Error(`unknown canary agent '${name}'`);
@@ -65,9 +90,14 @@ export class CanaryHarness extends Harness {
       throw new Error(`canary agent ${name} is already running`);
     }
     this.secret(token);
-    const launch = canaryAgentLaunch(agent, { appUrl, singBox, token });
+    const launch = canaryAgentLaunch(agent, {
+      appUrl,
+      singBox,
+      token,
+      protocol,
+    });
     const proc = new ManagedProcess(
-      `agent-${name}`,
+      protocol === "v2" ? `agent-${name}` : `agent-${name}-legacy`,
       this.agentBin,
       launch.args,
       {
@@ -154,7 +184,11 @@ export class CanaryHarness extends Harness {
     const api = (config.services ?? []).find(
       (service) => service?.type === "api",
     );
-    if (!api || typeof api.listen !== "string" || !Number.isInteger(api.listen_port)) {
+    if (
+      !api ||
+      typeof api.listen !== "string" ||
+      !Number.isInteger(api.listen_port)
+    ) {
       throw new Error(`canary agent ${name} has no committed api service`);
     }
     return {
@@ -183,7 +217,8 @@ export function startCanaryOrigin({
   const logFile = harness?.workdir
     ? path.join(harness.workdir, "logs", "origin.jsonl")
     : undefined;
-  if (logFile) mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 });
+  if (logFile)
+    mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 });
   const record = (entry) => {
     requests.push(entry);
     if (requests.length > 10_000) requests.shift();
@@ -191,10 +226,13 @@ export function startCanaryOrigin({
   };
 
   const server = http.createServer((request, response) => {
-    const pathname = new URL(request.url ?? "/", "http://canary.invalid").pathname;
+    const pathname = new URL(request.url ?? "/", "http://canary.invalid")
+      .pathname;
     const match = /^\/bytes\/([A-Za-z0-9_-]{1,128})\/(\d{1,9})$/.exec(pathname);
     if (!match) {
-      response.writeHead(404, { "content-type": "text/plain" }).end("not found");
+      response
+        .writeHead(404, { "content-type": "text/plain" })
+        .end("not found");
       return;
     }
     const token = match[1];
@@ -248,14 +286,18 @@ export function startCanaryOrigin({
 }
 
 /** Fetch the origin directly from the harness host and return its peer. */
-export async function probeHostEgress(origin, { token = origin.newToken() } = {}) {
+export async function probeHostEgress(
+  origin,
+  { token = origin.newToken() } = {},
+) {
   await fetch(origin.url(token, 1));
   await waitFor(
     `origin to record direct egress ${token}`,
     () => origin.requests.find((request) => request.token === token),
     { timeoutMs: 5_000, intervalMs: 50 },
   );
-  return origin.requests.find((request) => request.token === token).remoteAddress;
+  return origin.requests.find((request) => request.token === token)
+    .remoteAddress;
 }
 
 /** A sing-box client whose outbound is derived from a served subscription. */
@@ -306,15 +348,24 @@ export async function startCanaryClient(harness, name, config, secrets = []) {
   harness.processes.push(proc);
   harness.started.push(proc);
   const listenPort = config.inbounds[0].listen_port;
-  await waitFor(`client ${name} to listen`, () => isPortFree(listenPort).then((free) => !free), {
-    timeoutMs: 15_000,
-    intervalMs: 200,
-  });
+  await waitFor(
+    `client ${name} to listen`,
+    () => isPortFree(listenPort).then((free) => !free),
+    {
+      timeoutMs: 15_000,
+      intervalMs: 200,
+    },
+  );
   return { port: listenPort, process: proc };
 }
 
 /** A plain TCP+SOCKS5 CONNECT result: the data plane either accepted or not. */
-export function socksConnect(proxyPort, host, port, { timeoutMs = 5_000 } = {}) {
+export function socksConnect(
+  proxyPort,
+  host,
+  port,
+  { timeoutMs = 5_000 } = {},
+) {
   return new Promise((resolve) => {
     const socket = net.createConnection({ host: "127.0.0.1", port: proxyPort });
     let buffer = Buffer.alloc(0);
