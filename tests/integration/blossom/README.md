@@ -75,3 +75,25 @@ Checked by reading the current sources (commit `20068a0` plus this directory): t
 - The host sing-box is whatever is on the machine; the agent's Docker image builds its own.
 - Not wired into CI or `package.json`: it needs Docker, a Rust build and sing-box, and takes minutes.
 - No browser UI, email, OAuth/MCP, certificate issuance, multi-server or multi-agent behaviour.
+
+## Two-agent canary
+
+Scaffold for the managed-networking canary (task 10 of the [networking workspace plan](../../../docs/spec/2026-11-20-admin-networking-workspace/implementation-plan.md)): A is the only exported entrance and relays to B, which serves a peer inbound and the egress. It does **not** run the live scenario yet and starts nothing.
+
+```bash
+node scripts/blossom-canary.mjs --check [--sing-box <path>] [--agent-bin <path>] [--systemd-vm <name>]
+node --test tests/integration/blossom/canary.test.mjs   # fixtures, preflight and evidence judges; no Docker or sing-box
+```
+
+`--check` prints facts, every missing prerequisite and which evidence it blocks; it exits 2 while a core prerequisite is missing. Without `--check` it exits 3 once all prerequisites are present, because the live steps are not implemented.
+
+| Prerequisite | Scope | Detected by |
+| --- | --- | --- |
+| `base-harness` | core | the single-agent harness preflight above |
+| `pinned-sing-box` | core | `sing-box version` equals `SING_BOX_VERSION` in `server-agent/Dockerfile.test` and has `with_v2ray_api` |
+| `agent-link-probe-transport` | core | `managed-link-probe-v1` in the agent's `V2_CAPABILITIES` and `link_probe.request` used outside `server-agent/src/probe/` (static indicator; the live run must read `server.agent_capabilities`) |
+| `activation-enabled` | core | `MANAGED_NETWORKING_ACTIVATION_ENABLED` is `true`; use a disposable canary build and never commit the flip |
+| `docker-agent-profile` | profile | local Docker daemon for the processkit profile (`server-agent/scripts/test-managed-tls-docker.sh`) |
+| `systemd-disposable-vm` | profile | an explicit `--systemd-vm`; this host's systemd is never used, and the fake-systemd sandbox (`app/src/lib/agent-installer-e2e.test.ts`) is the only local coverage |
+
+The evidence and its pass criteria live in `lib/canary.mjs` (`CANARY_EVIDENCE` and the `judge*` functions): receiver-first stage proof, isolated A-to-B relay, export of A only, single billing at A, failed and aborted recovery, live revocation, the downgrade gate, and the Docker and systemd profiles. Each agent gets its own state directory, HOME, log and token (`canaryAgentLayout`, `canaryAgentLaunch`). The relay judge refuses to pass when A and B share an egress address, so B needs a distinct egress (container or loopback alias) for the origin to tell relay from direct.
