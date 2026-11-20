@@ -60,6 +60,7 @@ export const ADMIN_AUDIT_ACTIONS = [
   "networking.rule_set_import",
   "networking.routing_save",
   "networking.rollout_plan",
+  "networking.rollout_apply",
   "node.create",
   "node.update",
   "node.delete",

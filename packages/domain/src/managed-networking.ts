@@ -22,6 +22,118 @@ export const MANAGED_TOPOLOGY_ID = "global";
 export const MANAGED_NETWORKING_AGENT_CAPABILITY =
   "managed-networking-v1" as const;
 
+/**
+ * Minimum sing-box release for managed activation. The managed canary runs on
+ * the pinned 1.14.4 test binary; 1.14 is the floor for the stats/probe runtime
+ * surface the surrounding rollout workflow relies on.
+ */
+export const MANAGED_NETWORKING_MIN_SING_BOX_VERSION = "1.14.0" as const;
+
+const MIN_SING_BOX_VERSION_PARTS = [1, 14, 0] as const;
+
+export interface SingBoxVersionParts {
+  major: number;
+  minor: number;
+  patch: number;
+}
+
+/** Parses the agent-reported `sing-box version`; unknown formats return null. */
+export function parseSingBoxVersion(
+  value: string | null | undefined,
+): SingBoxVersionParts | null {
+  if (!value) return null;
+  const match = /^\s*v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?\s*$/.exec(value);
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+  };
+}
+
+export type ManagedNetworkingReadinessReason =
+  | "server_disabled"
+  | "agent_offline"
+  | "capability_missing"
+  | "sing_box_version_unknown"
+  | "sing_box_version_unsupported"
+  | "runtime_state_unknown"
+  | "runtime_not_running"
+  | "config_state_unknown"
+  | "config_not_applied"
+  | "managed_state_unsettled";
+
+export interface ManagedNetworkingReadinessInput {
+  enabled: boolean;
+  agentConnected: boolean;
+  agentCapabilities: readonly string[];
+  singBoxVersion: string | null;
+  runtimeState: string;
+  configState: string;
+  desiredConfigVersionId: string | null;
+  appliedConfigVersionId: string | null;
+}
+
+export interface ManagedNetworkingReadiness {
+  ready: boolean;
+  reasons: ManagedNetworkingReadinessReason[];
+  minSingBoxVersion: typeof MANAGED_NETWORKING_MIN_SING_BOX_VERSION;
+}
+
+/**
+ * Admission readiness for one affected server. Missing or unknown state blocks
+ * activation instead of being treated as compatible. Capability, runtime,
+ * applied config and an unsettled managed pointer are independent checks so the
+ * operator can see every reason rather than only the first.
+ */
+export function evaluateManagedNetworkingReadiness(
+  input: ManagedNetworkingReadinessInput,
+): ManagedNetworkingReadiness {
+  const reasons: ManagedNetworkingReadinessReason[] = [];
+  if (!input.enabled) reasons.push("server_disabled");
+  if (!input.agentConnected) reasons.push("agent_offline");
+  if (!input.agentCapabilities.includes(MANAGED_NETWORKING_AGENT_CAPABILITY)) {
+    reasons.push("capability_missing");
+  }
+
+  const version = parseSingBoxVersion(input.singBoxVersion);
+  if (!version) {
+    reasons.push("sing_box_version_unknown");
+  } else {
+    const minimum = MIN_SING_BOX_VERSION_PARTS;
+    const supported =
+      version.major > minimum[0] ||
+      (version.major === minimum[0] && version.minor > minimum[1]) ||
+      (version.major === minimum[0] &&
+        version.minor === minimum[1] &&
+        version.patch >= minimum[2]);
+    if (!supported) reasons.push("sing_box_version_unsupported");
+  }
+
+  if (input.runtimeState === "unknown") {
+    reasons.push("runtime_state_unknown");
+  } else if (input.runtimeState !== "running") {
+    reasons.push("runtime_not_running");
+  }
+  if (input.configState === "unknown") {
+    reasons.push("config_state_unknown");
+  } else if (input.configState !== "applied") {
+    reasons.push("config_not_applied");
+  }
+  if (
+    input.desiredConfigVersionId !== null &&
+    input.desiredConfigVersionId !== input.appliedConfigVersionId
+  ) {
+    reasons.push("managed_state_unsettled");
+  }
+
+  return {
+    ready: reasons.length === 0,
+    reasons,
+    minSingBoxVersion: MANAGED_NETWORKING_MIN_SING_BOX_VERSION,
+  };
+}
+
 /** Schema version for `managed_config_version.intent`. */
 export const MANAGED_CONFIG_INTENT_SCHEMA_VERSION = 1 as const;
 

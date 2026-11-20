@@ -167,6 +167,15 @@ export type PlanNetworkingRolloutInput = z.infer<
   typeof planNetworkingRolloutSchema
 >;
 
+export const applyNetworkingRolloutSchema = planNetworkingRolloutSchema.extend({
+  /** Topology generation the plan was frozen against. */
+  expectedTopologyGeneration: z.number().int().min(0),
+});
+
+export type ApplyNetworkingRolloutInput = z.infer<
+  typeof applyNetworkingRolloutSchema
+>;
+
 export const managedStageIntentSchemaVersion =
   MANAGED_STAGE_INTENT_SCHEMA_VERSION;
 
@@ -189,6 +198,7 @@ export const NETWORKING_ISSUE_CODES = [
   "peer_port_conflict",
   "referenced_resource",
   "rule_set_not_found",
+  "server_not_found",
   "stale_topology",
   "topology_conflict",
   "udp_peer_route",

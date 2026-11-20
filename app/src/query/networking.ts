@@ -8,6 +8,7 @@ import { fromInput, fromResult } from "@/lib/admin-audit";
 import { adminAudit } from "@/lib/admin-audit-middleware";
 import { ensureAdmin } from "@/lib/ensure-admin";
 import {
+  applyNetworkingRolloutSchema,
   createPeerLinkSchema,
   deleteManagedOutboundSchema,
   deletePeerInboundSchema,
@@ -21,11 +22,7 @@ import {
   updatePeerLinkSchema,
   type NetworkingIssue,
 } from "@/lib/networking-schema";
-import {
-  diffRoutingDrafts,
-  planManagedRolloutStages,
-  type RolloutStagePlan,
-} from "@/lib/networking-workspace";
+import type { RolloutStagePlan } from "@/lib/networking-workspace";
 import {
   buildServerIntent,
   nextConfigVersion,
@@ -33,6 +30,13 @@ import {
   readServerRouting,
   type ServerRoutingView,
 } from "@/query/networking-read";
+import {
+  applyNetworkingRollout as applyNetworkingRolloutService,
+  planNetworkingRollout as planNetworkingRolloutService,
+  type NetworkingRolloutApplyResult,
+  type NetworkingRolloutPlanResult,
+  type PlannedServerView,
+} from "@/query/networking-rollout";
 import {
   createPeerLinkDraft,
   deleteManagedOutboundDraft,
@@ -49,9 +53,10 @@ import {
 /**
  * Admin server functions for Networking (Task 09). Reads use Task 06
  * persistence and Task 08's stable rollout readers; drafts are written through
- * the topology-fenced draft writers. Rollout admission, stage issuance,
- * Retry/Abort, probe delivery and agent notification remain Task 08's surface
- * and are deliberately not duplicated here.
+ * the topology-fenced draft writers. Apply delegates to the server-only
+ * admission service, which freezes the previewed stages and hands them to the
+ * Task 06/08 atomic writer. Stage issuance, Retry/Abort, probe delivery and
+ * agent notification remain the Task 08 surface.
  *
  * Managed activation stays off by default: Apply is refused with
  * `activation_disabled`, while draft CRUD, previews and stage planning work.
@@ -312,53 +317,9 @@ async function currentTopology(): Promise<number> {
   return workspace.topologyGeneration;
 }
 
-export interface PlannedServerView {
-  serverId: string;
-  serverName: string;
-  configVersionId: string;
-  version: number;
-  topologyGeneration: number;
-  intentDigest: string;
-  managedFingerprint: string;
-  ruleCount: number;
-  requiredRuntimeTags: string[];
-  removedRuntimeTags: string[];
-  peerInboundCount: number;
-  outboundCount: number;
-  ruleSetCount: number;
-  issues: NetworkingIssue[];
-  diff: ReturnType<typeof diffRoutingDrafts>;
-}
-
-export interface NetworkingRolloutPlanResult {
-  ok: boolean;
-  activationEnabled: boolean;
-  direction: "apply";
-  topologyGeneration: number;
-  stages: {
-    ordinal: number;
-    serverId: string;
-    serverName: string;
-    roles: ("receiver" | "sender" | "routing")[];
-    probeLinkIds: string[];
-    dependsOnServerIds: string[];
-    processImpact: "listener_change" | "route_change" | "routing_change";
-    configVersionId: string;
-    managedFingerprint: string;
-    changedRuleCount: number;
-    removedRuntimeTagCount: number;
-  }[];
-  plan: RolloutStagePlan;
-  servers: PlannedServerView[];
-  issues: NetworkingIssue[];
-  /** Stable failure code: `validation` or `cycle`; null on success. */
-  reason: "validation" | "cycle" | null;
-}
-
 /**
- * Computes a receiver-first rollout skeleton without claiming servers or
- * writing a rollout. The unsaved draft, when supplied, is only used to plan the
- * named server; every other server uses its latest immutable draft.
+ * Computes the frozen receiver-first plan without claiming servers, inserting
+ * config versions or writing a rollout. Preview and Apply share this service.
  */
 export const planNetworkingRollout = createServerFn({ method: "POST" })
   .middleware([
@@ -370,148 +331,35 @@ export const planNetworkingRollout = createServerFn({ method: "POST" })
   .validator(planNetworkingRolloutSchema)
   .handler(async ({ data }): Promise<NetworkingRolloutPlanResult> => {
     await ensureAdmin();
-    const workspace = await readNetworkingWorkspace(
-      db,
-      MANAGED_NETWORKING_ACTIVATION_ENABLED,
-    );
-    const serverNames = new Map(
-      workspace.servers.map((row) => [row.id, row.name]),
-    );
-    const serverIds = [...new Set(data.serverIds)];
-    const built = [];
-    for (const serverId of serverIds) {
-      const draft =
-        data.draft && data.draft.serverId === serverId ? data.draft : null;
-      const view = await readServerRouting(
-        serverId,
-        db,
-        MANAGED_NETWORKING_ACTIVATION_ENABLED,
-      );
-      const rules = draft?.rules ?? view.routing?.rules ?? [];
-      const finalOutboundTag =
-        draft?.finalOutboundTag ?? view.routing?.finalOutboundTag ?? "direct";
-      const version = draft
-        ? await nextConfigVersion(serverId, db)
-        : (view.routing?.version ?? (await nextConfigVersion(serverId, db)));
-      const configVersionId = draft
-        ? randomUUID()
-        : (view.routing?.configVersionId ?? randomUUID());
-      const result = await buildServerIntent(
-        serverId,
-        {
-          configVersionId,
-          version,
-          topologyGeneration: view.topologyGeneration,
-          rules,
-          finalOutboundTag,
-        },
-        db,
-        MANAGED_NETWORKING_ACTIVATION_ENABLED,
-      );
-      built.push({ serverId, view, result, rules, finalOutboundTag });
-    }
+    return planNetworkingRolloutService(data);
+  });
 
-    const issues = built.flatMap(({ result }) => result.issues);
-    const blocking = built.some(({ result }) => !result.ok || !result.intent);
-    const linkPlanInput = workspace.links
-      .filter(
-        (link) =>
-          serverIds.includes(link.sourceServerId) &&
-          serverIds.includes(link.destinationServerId),
-      )
-      .map((link) => ({
-        id: link.id,
-        sourceServerId: link.sourceServerId,
-        destinationServerId: link.destinationServerId,
-      }));
-    const plan = planManagedRolloutStages({
-      serverIds,
-      links: linkPlanInput,
-      direction: "apply",
+/**
+ * Audited Apply admission. The activation gate is checked inside the service
+ * before any write, so the default-off build cannot admit even if a caller
+ * bypasses the disabled button. Config versions, stages, server claims and
+ * applied-pointer expectations are inserted by one Task 06/08 statement.
+ */
+export const applyNetworkingRollout = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("networking.rollout_apply", {
+      targetType: "managed_rollout",
+      targetId: fromResult("rolloutId"),
+      metadata: fromInput("serverIds"),
+    }),
+  ])
+  .validator(applyNetworkingRolloutSchema)
+  .handler(async ({ data }): Promise<NetworkingRolloutApplyResult> => {
+    const session = await ensureAdmin();
+    return applyNetworkingRolloutService(data, {
+      requestedByUserId: session.user.id,
     });
-    if (blocking || !plan.ok) {
-      return {
-        ok: false,
-        activationEnabled: MANAGED_NETWORKING_ACTIVATION_ENABLED,
-        direction: "apply",
-        topologyGeneration: workspace.topologyGeneration,
-        stages: [],
-        plan,
-        servers: [],
-        issues,
-        reason: plan.ok ? "validation" : "cycle",
-      };
-    }
-
-    const servers = built.map(
-      ({ serverId, result, rules, finalOutboundTag }) => {
-        const previousRules =
-          result.context.previousIntent?.routingPolicy.rules ?? [];
-        const previousFinal =
-          result.context.previousIntent?.routingPolicy.finalOutboundTag ??
-          "direct";
-        const diff = diffRoutingDrafts(
-          { rules: previousRules, finalOutboundTag: previousFinal },
-          { rules, finalOutboundTag },
-        );
-        return {
-          serverId,
-          serverName: serverNames.get(serverId) ?? serverId,
-          configVersionId: result.intent!.configVersionId,
-          version: result.intent!.version,
-          topologyGeneration: result.intent!.topologyGeneration,
-          intentDigest: result.intentDigest!,
-          managedFingerprint: result.managedFingerprint!,
-          ruleCount: rules.length,
-          requiredRuntimeTags:
-            result.intent!.stageExpectations.requiredRuntimeTags,
-          removedRuntimeTags:
-            result.intent!.stageExpectations.removedRuntimeTags,
-          peerInboundCount: result.intent!.peerInbounds.length,
-          outboundCount: result.intent!.outbounds.length,
-          ruleSetCount: result.intent!.ruleSets.length,
-          issues: result.issues,
-          diff,
-        } satisfies PlannedServerView;
-      },
-    );
-    const serverById = new Map(servers.map((row) => [row.serverId, row]));
-    const stages = plan.stages.map((stage) => {
-      const row = serverById.get(stage.serverId)!;
-      const changedRuleCount =
-        row.diff.addedRuleIds.length +
-        row.diff.removedRuleIds.length +
-        row.diff.changedRuleIds.length;
-      return {
-        ordinal: stage.ordinal,
-        serverId: stage.serverId,
-        serverName: row.serverName,
-        roles: stage.roles,
-        probeLinkIds: stage.probeLinkIds,
-        dependsOnServerIds: stage.dependsOnServerIds,
-        processImpact: stage.roles.includes("receiver")
-          ? ("listener_change" as const)
-          : stage.roles.includes("sender")
-            ? ("route_change" as const)
-            : ("routing_change" as const),
-        configVersionId: row.configVersionId,
-        managedFingerprint: row.managedFingerprint,
-        changedRuleCount,
-        removedRuntimeTagCount: row.removedRuntimeTags.length,
-      };
-    });
-    return {
-      ok: true,
-      activationEnabled: MANAGED_NETWORKING_ACTIVATION_ENABLED,
-      direction: "apply",
-      topologyGeneration: workspace.topologyGeneration,
-      stages,
-      plan,
-      servers,
-      issues,
-      reason: null,
-    };
   });
 
 export type ServerRoutingData = ServerRoutingView;
-export type { RolloutStagePlan };
+export type {
+  NetworkingRolloutApplyResult,
+  NetworkingRolloutPlanResult,
+  PlannedServerView,
+  RolloutStagePlan,
+};

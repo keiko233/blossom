@@ -1,5 +1,6 @@
 import { compareStableIds } from "@blossom/domain/group-membership";
 import {
+  MANAGED_CONFIG_INTENT_SCHEMA_VERSION,
   MANAGED_NETWORKING_ACTIVATION_ENABLED,
   MANAGED_TOPOLOGY_ID,
   type ManagedRolloutState,
@@ -449,6 +450,22 @@ export interface ManagedRolloutAdmissionStage {
   subscriberIntent?: JsonValue | null;
 }
 
+/** Immutable intent inserted by the same admission statement as its stage. */
+export interface ManagedConfigVersionAdmission {
+  configVersionId: string;
+  serverId: string;
+  version: number;
+  intent: JsonValue;
+  intentDigest: string;
+  subscriberNodeIds: readonly string[];
+}
+
+/** Applied pointer a caller planned against; admission rejects a changed one. */
+export interface ManagedServerStateAdmission {
+  serverId: string;
+  appliedConfigVersionId: string | null;
+}
+
 export interface ManagedRolloutAdmissionInput {
   rolloutId: string;
   expectedTopologyGeneration: number;
@@ -458,6 +475,18 @@ export interface ManagedRolloutAdmissionInput {
   serverIds: readonly string[];
   /** Optional stages inserted atomically with the claims. */
   stages?: readonly ManagedRolloutAdmissionStage[];
+  /**
+   * Immutable routing inputs frozen by the caller. They are inserted in the
+   * same compare-and-swap statement as the rollout, so a stale graph or a
+   * duplicate version leaves neither config rows nor claims behind.
+   */
+  configVersions?: readonly ManagedConfigVersionAdmission[];
+  /**
+   * Applied config versions the caller read before planning. A concurrent
+   * pointer change makes the admission compare-and-swap fail instead of
+   * overwriting an intended recovery target.
+   */
+  serverStates?: readonly ManagedServerStateAdmission[];
 }
 
 export type ManagedRolloutAdmissionResult =
@@ -466,6 +495,8 @@ export type ManagedRolloutAdmissionResult =
       rolloutId: string;
       topologyGeneration: number;
       serverIds: string[];
+      /** Present only when the caller supplied frozen config versions. */
+      configVersionIds?: string[];
     }
   | { ok: false; reason: "activation_disabled" }
   | { ok: false; reason: "topology_conflict"; currentGeneration: number }
@@ -475,6 +506,20 @@ export type ManagedRolloutAdmissionResult =
       reason: "rollout_claim_conflict";
       serverId: string;
       rolloutId: string;
+    }
+  | {
+      ok: false;
+      reason: "config_version_conflict";
+      configVersionId: string | null;
+      serverId: string;
+      version: number;
+    }
+  | {
+      ok: false;
+      reason: "state_conflict";
+      serverId: string;
+      expectedAppliedConfigVersionId: string | null;
+      currentAppliedConfigVersionId: string | null;
     }
   | { ok: false; reason: "invalid_admission"; message: string };
 
@@ -488,13 +533,45 @@ function validateAdmission(input: ManagedRolloutAdmissionInput): string | null {
   if (new Set(input.serverIds).size !== input.serverIds.length) {
     return "serverIds must be distinct";
   }
+  const claimedServers = new Set(input.serverIds);
+  const configVersions = input.configVersions ?? [];
+  if (configVersions.length > 0) {
+    const configIds = new Set<string>();
+    for (const config of configVersions) {
+      if (!claimedServers.has(config.serverId)) {
+        return `config version ${config.configVersionId} server is not claimed`;
+      }
+      if (configIds.has(config.configVersionId)) {
+        return `duplicate config version ${config.configVersionId}`;
+      }
+      if (!Number.isInteger(config.version) || config.version < 1) {
+        return `config version ${config.configVersionId} version must be positive`;
+      }
+      configIds.add(config.configVersionId);
+    }
+  }
+  const serverStates = input.serverStates ?? [];
+  if (serverStates.length > 0) {
+    const stateServers = new Set<string>();
+    for (const state of serverStates) {
+      if (!claimedServers.has(state.serverId)) {
+        return `server state ${state.serverId} is not claimed`;
+      }
+      if (stateServers.has(state.serverId)) {
+        return `duplicate server state ${state.serverId}`;
+      }
+      stateServers.add(state.serverId);
+    }
+  }
   const stages = input.stages ?? [];
   if (stages.length > input.stageCount) {
     return "stages exceed stageCount";
   }
   if (stages.length > 0) {
     const ordinals = new Set<number>();
-    const claimedServers = new Set(input.serverIds);
+    const configById = new Map(
+      configVersions.map((config) => [config.configVersionId, config]),
+    );
     for (const stage of stages) {
       if (
         !Number.isInteger(stage.ordinal) ||
@@ -508,6 +585,15 @@ function validateAdmission(input: ManagedRolloutAdmissionInput): string | null {
       }
       if (!claimedServers.has(stage.serverId)) {
         return `stage ${stage.ordinal} server is not claimed`;
+      }
+      if (configVersions.length > 0) {
+        const config = configById.get(stage.configVersionId);
+        if (!config) {
+          return `stage ${stage.ordinal} config version is not supplied`;
+        }
+        if (config.serverId !== stage.serverId) {
+          return `stage ${stage.ordinal} config version belongs to another server`;
+        }
       }
       ordinals.add(stage.ordinal);
     }
@@ -529,10 +615,122 @@ function constraintName(error: unknown): string | undefined {
   return errorField(error, "constraint");
 }
 
+function serverStateGuardSql(
+  states: readonly ManagedServerStateAdmission[],
+): SQL {
+  const rows = states.map((state) => ({
+    server_id: state.serverId,
+    applied_config_version_id: state.appliedConfigVersionId,
+  }));
+  return sql`NOT EXISTS (
+    SELECT 1
+    FROM jsonb_to_recordset(${jsonParam(rows)}::jsonb)
+      AS expected(server_id text, applied_config_version_id text)
+    LEFT JOIN ${managedServerState} state
+      ON state.server_id = expected.server_id
+    WHERE coalesce(state.applied_config_version_id, '') IS DISTINCT FROM
+          coalesce(expected.applied_config_version_id, '')
+  )`;
+}
+
+async function findStateConflict(
+  database: Database,
+  states: readonly ManagedServerStateAdmission[],
+): Promise<Extract<
+  ManagedRolloutAdmissionResult,
+  { reason: "state_conflict" }
+> | null> {
+  if (states.length === 0) return null;
+  const rows = await database
+    .select({
+      serverId: managedServerState.serverId,
+      appliedConfigVersionId: managedServerState.appliedConfigVersionId,
+    })
+    .from(managedServerState)
+    .where(
+      inArray(
+        managedServerState.serverId,
+        states.map((state) => state.serverId),
+      ),
+    );
+  const current = new Map(
+    rows.map((row) => [row.serverId, row.appliedConfigVersionId ?? null]),
+  );
+  for (const state of states) {
+    const currentApplied = current.get(state.serverId) ?? null;
+    if (currentApplied !== state.appliedConfigVersionId) {
+      return {
+        ok: false,
+        reason: "state_conflict",
+        serverId: state.serverId,
+        expectedAppliedConfigVersionId: state.appliedConfigVersionId,
+        currentAppliedConfigVersionId: currentApplied,
+      };
+    }
+  }
+  return null;
+}
+
+async function findConfigVersionConflict(
+  database: Database,
+  configs: readonly ManagedConfigVersionAdmission[],
+): Promise<Extract<
+  ManagedRolloutAdmissionResult,
+  { reason: "config_version_conflict" }
+> | null> {
+  if (configs.length === 0) return null;
+  const byId = await database
+    .select({
+      id: managedConfigVersion.id,
+      serverId: managedConfigVersion.serverId,
+      version: managedConfigVersion.version,
+    })
+    .from(managedConfigVersion)
+    .where(
+      inArray(
+        managedConfigVersion.id,
+        configs.map((config) => config.configVersionId),
+      ),
+    )
+    .limit(1);
+  const byVersion = byId[0]
+    ? byId
+    : await database
+        .select({
+          id: managedConfigVersion.id,
+          serverId: managedConfigVersion.serverId,
+          version: managedConfigVersion.version,
+        })
+        .from(managedConfigVersion)
+        .where(
+          and(
+            inArray(
+              managedConfigVersion.serverId,
+              configs.map((config) => config.serverId),
+            ),
+            inArray(
+              managedConfigVersion.version,
+              configs.map((config) => config.version),
+            ),
+          ),
+        )
+        .limit(1);
+  const conflict = byVersion[0];
+  if (!conflict) return null;
+  return {
+    ok: false,
+    reason: "config_version_conflict",
+    configVersionId: conflict.id ?? null,
+    serverId: conflict.serverId,
+    version: numeric(conflict.version),
+  };
+}
+
 /**
- * Admits one rollout and its server claims. The topology CAS, rollout insert
- * and ordered claim insert are one statement on both drivers; a port/server
- * claim conflict cannot leave a partial admission behind.
+ * Admits one rollout, its frozen config versions, stages and server claims.
+ * The topology CAS, applied-pointer guard, config inserts, rollout insert and
+ * ordered claim insert are one statement on both drivers, so a stale graph or
+ * a claim/version conflict cannot leave a partial admission behind.
  */
 export async function admitManagedRollout(
   input: ManagedRolloutAdmissionInput,
@@ -573,6 +771,53 @@ export async function admitManagedRollout(
       rolloutId: existingClaims[0].rolloutId,
     };
   }
+
+  const configVersions = input.configVersions ?? [];
+  const configVersionRows = configVersions.map((config) => ({
+    config_version_id: config.configVersionId,
+    server_id: config.serverId,
+    version: config.version,
+    intent: config.intent,
+    intent_digest: config.intentDigest,
+    subscriber_node_ids: config.subscriberNodeIds,
+  }));
+  const configVersionRowset =
+    configVersions.length > 0
+      ? sql`config_rows AS (
+          INSERT INTO ${managedConfigVersion} (
+            ${sql.identifier(managedConfigVersion.id.name)},
+            ${sql.identifier(managedConfigVersion.serverId.name)},
+            ${sql.identifier(managedConfigVersion.version.name)},
+            ${sql.identifier(managedConfigVersion.schemaVersion.name)},
+            ${sql.identifier(managedConfigVersion.intent.name)},
+            ${sql.identifier(managedConfigVersion.intentDigest.name)},
+            ${sql.identifier(managedConfigVersion.subscriberNodeIds.name)}
+          )
+          SELECT configs.config_version_id,
+                 configs.server_id,
+                 configs.version,
+                 ${MANAGED_CONFIG_INTENT_SCHEMA_VERSION}::integer,
+                 configs.intent,
+                 configs.intent_digest,
+                 configs.subscriber_node_ids
+          FROM topology_cas
+          CROSS JOIN jsonb_to_recordset(${jsonParam(configVersionRows)}::jsonb)
+            AS configs(
+              config_version_id text,
+              server_id text,
+              version integer,
+              intent jsonb,
+              intent_digest text,
+              subscriber_node_ids jsonb
+            )
+          ORDER BY configs.server_id, configs.version
+          RETURNING ${managedConfigVersion.id} AS id
+        )`
+      : sql``;
+  const configVersionGate =
+    configVersions.length > 0
+      ? sql`AND (SELECT count(*) FROM config_rows) = ${configVersions.length}::integer`
+      : sql``;
 
   const stages = (input.stages ?? []).map((stage) => ({
     ordinal: stage.ordinal,
@@ -623,8 +868,17 @@ export async function admitManagedRollout(
         )`
       : sql``;
 
+  const serverStates = input.serverStates ?? [];
+  const stateGuard =
+    serverStates.length > 0 ? serverStateGuardSql(serverStates) : null;
   const ctes: SQL[] = [
-    topologyGenerationCasCte(input.expectedTopologyGeneration),
+    topologyGenerationCasCte(
+      input.expectedTopologyGeneration,
+      stateGuard ?? undefined,
+    ),
+  ];
+  if (configVersions.length > 0) ctes.push(configVersionRowset);
+  const createdCtes: SQL[] = [
     sql`created AS (
       INSERT INTO ${managedRollout} (
         ${sql.identifier(managedRollout.id.name)},
@@ -637,6 +891,7 @@ export async function admitManagedRollout(
              ${input.stageCount}::integer,
              ${input.requestedByUserId ?? null}::text
       FROM topology_cas
+      WHERE TRUE ${configVersionGate}
       RETURNING ${managedRollout}.*
     )`,
     sql`claimed AS (
@@ -652,6 +907,7 @@ export async function admitManagedRollout(
       RETURNING ${managedRolloutClaim.serverId} AS server_id
     )`,
   ];
+  ctes.push(...createdCtes);
   if (stages.length > 0) ctes.push(stageRowset);
 
   let rows: Record<string, unknown>[];
@@ -674,8 +930,15 @@ export async function admitManagedRollout(
     const unique =
       errorField(error, "code") === "23505" ||
       constraint === "managed_rollout_pkey" ||
-      constraint === "managed_rollout_claim_pkey";
+      constraint === "managed_rollout_claim_pkey" ||
+      constraint === "managed_config_version_pkey" ||
+      constraint === "managed_config_version_server_version_unique";
     if (unique) {
+      const configConflict = await findConfigVersionConflict(
+        database,
+        configVersions,
+      );
+      if (configConflict) return configConflict;
       const [existing] = await database
         .select({ id: managedRollout.id })
         .from(managedRollout)
@@ -709,10 +972,20 @@ export async function admitManagedRollout(
   }
 
   if (!rows[0]) {
+    const currentGeneration = await readTopologyGeneration(database);
+    if (currentGeneration !== input.expectedTopologyGeneration) {
+      return {
+        ok: false,
+        reason: "topology_conflict",
+        currentGeneration,
+      };
+    }
+    const stateConflict = await findStateConflict(database, serverStates);
+    if (stateConflict) return stateConflict;
     return {
       ok: false,
       reason: "topology_conflict",
-      currentGeneration: await readTopologyGeneration(database),
+      currentGeneration,
     };
   }
   return {
@@ -720,6 +993,13 @@ export async function admitManagedRollout(
     rolloutId: input.rolloutId,
     topologyGeneration: numeric(rows[0].topology_generation),
     serverIds,
+    ...(configVersions.length > 0
+      ? {
+          configVersionIds: configVersions.map(
+            (config) => config.configVersionId,
+          ),
+        }
+      : {}),
   };
 }
 
