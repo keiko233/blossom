@@ -154,6 +154,10 @@ pub struct CandidateConfig {
     /// Local overlay written into the candidate. A commit records this as the
     /// effective sing-box level; a later policy change stages another reload.
     pub log_level: LogLevelPolicy,
+    /// Stage-equivalence fingerprint carried by the managed extension. It is
+    /// durable only after commit, so link probes can bind to what is actually
+    /// serving across a restart. Legacy candidates carry `None`.
+    pub managed_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -233,6 +237,10 @@ struct PersistedState {
     active_node_ids: Vec<String>,
     applied_at: Option<chrono::DateTime<chrono::Utc>>,
     deployments: Vec<DeploymentRecord>,
+    /// Managed stage fingerprint of the committed configuration. Absent for
+    /// legacy and pre-managed state, and never written before probation commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    managed_fingerprint: Option<String>,
 }
 
 pub struct ConfigManager {
@@ -379,6 +387,35 @@ impl ConfigManager {
 
     pub fn applied_revision(&self) -> Option<&str> {
         self.persisted.applied_revision.as_deref()
+    }
+
+    /// Managed stage fingerprint of the committed configuration, if the
+    /// current generation carries one. Used by probe execution and status;
+    /// it never changes the applied revision.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Task 08 probe integration reads the committed managed generation"
+        )
+    )]
+    pub fn managed_fingerprint(&self) -> Option<&str> {
+        self.persisted.managed_fingerprint.as_deref()
+    }
+
+    /// Publish-gate sequence prefix of the served revision. `None` while
+    /// disabled, unapplied, or malformed.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Task 08 probe integration binds results to the served sequence"
+        )
+    )]
+    pub fn served_revision_seq(&self) -> Option<u64> {
+        let revision = self.served_revision()?;
+        let (prefix, _) = revision.split_once(':')?;
+        prefix.parse().ok()
     }
 
     pub fn active_node_ids(&self) -> &[String] {
@@ -577,6 +614,7 @@ impl ConfigManager {
         self.persisted.active_node_ids.clear();
         self.persisted.applied_at = Some(chrono::Utc::now());
         self.persisted.disabled = true;
+        self.persisted.managed_fingerprint = None;
         self.needs_reapply = false;
         self.recompute_installed_deployments();
         self.refresh_credentials_or_warn();
@@ -619,6 +657,7 @@ impl ConfigManager {
             referenced_generations: Vec::new(),
             managed_files: Vec::new(),
             log_level: self.log_policy.overlay(chrono::Utc::now()).effective,
+            managed_fingerprint: None,
         })
     }
 
@@ -976,6 +1015,9 @@ impl ConfigManager {
                 referenced_generations,
                 managed_files,
                 log_level: overlay.effective,
+                managed_fingerprint: managed
+                    .as_ref()
+                    .map(|managed| managed.managed_fingerprint.clone()),
             },
         })
     }
@@ -1151,6 +1193,7 @@ impl ConfigManager {
         self.persisted.applied_revision = Some(candidate.revision.clone());
         self.persisted.active_node_ids = candidate.materialized_node_ids.clone();
         self.persisted.applied_at = Some(chrono::Utc::now());
+        self.persisted.managed_fingerprint = candidate.managed_fingerprint.clone();
         self.api_endpoint = candidate.api_endpoint.clone();
         let referenced: HashSet<&CertificateRef> =
             candidate.referenced_generations.iter().collect();
@@ -1197,6 +1240,7 @@ impl ConfigManager {
             self.persisted.applied_revision = None;
             self.persisted.active_node_ids.clear();
             self.persisted.applied_at = None;
+            self.persisted.managed_fingerprint = None;
             self.api_endpoint = ApiEndpoint::generate();
             self.recompute_installed_deployments();
             self.refresh_credentials_or_warn();
@@ -1853,6 +1897,7 @@ mod tests {
         )
         .unwrap();
         assert!(!legacy.disabled);
+        assert!(legacy.managed_fingerprint.is_none());
     }
 
     #[test]
@@ -1909,6 +1954,8 @@ mod tests {
             .expect("teardown persists");
         assert_eq!(teardown.revision, "server-disabled");
         assert!(manager.administratively_disabled());
+        assert!(manager.managed_fingerprint().is_none());
+        assert!(manager.served_revision_seq().is_none());
         assert!(!manager.needs_reapply());
         assert!(manager.applied_revision().is_none());
         assert!(manager.served_revision().is_none());
@@ -2411,6 +2458,10 @@ mod tests {
                 .iter()
                 .any(|file| file.sha256.as_deref() == Some(srs_sha.as_str()))
         );
+        assert_eq!(
+            candidate.managed_fingerprint.as_deref(),
+            Some("sha256:2222222222222222222222222222222222222222222222222222222222222222")
+        );
         let active = read_config_map(manager.candidate_path()).unwrap();
         let tls = active["outbounds"][1]["tls"].as_object().unwrap();
         let certificate_path = tls["certificate_path"].as_str().unwrap();
@@ -2438,6 +2489,27 @@ mod tests {
                 String::from_utf8_lossy(&output.stderr)
             );
         }
+        manager.promote_candidate().unwrap();
+        manager.commit_applied(&candidate).unwrap();
+        assert_eq!(
+            manager.managed_fingerprint(),
+            Some("sha256:2222222222222222222222222222222222222222222222222222222222222222")
+        );
+        assert_eq!(manager.served_revision_seq(), Some(11));
+
+        let restarted = ConfigManager::new(
+            crate::client::new_client("http://127.0.0.1:1/api", "test-token")
+                .expect("client builds"),
+            dir.clone(),
+            crate::logs::LogStore::default(),
+            test_policy(&dir),
+        )
+        .expect("config manager restarts");
+        assert_eq!(
+            restarted.managed_fingerprint(),
+            Some("sha256:2222222222222222222222222222222222222222222222222222222222222222")
+        );
+        assert_eq!(restarted.served_revision_seq(), Some(11));
     }
 
     #[test]

@@ -2602,6 +2602,7 @@ mod tests {
             referenced_generations: vec![],
             managed_files: vec![],
             log_level: PolicyLevel::Default,
+            managed_fingerprint: None,
         };
         assert_eq!(
             node_id_from_error(
