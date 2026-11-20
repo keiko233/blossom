@@ -6,6 +6,7 @@ import type React from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Spinner } from "@/components/ui/spinner";
 import { diffSelection, isGroupUnused } from "@/lib/access-impact";
+import { isMembershipDraftDirty } from "@/lib/group-membership-draft";
 import { m } from "@/paraglide/messages";
 import { getGroupImpact, GROUPS_QUERY_KEY } from "@/query/groups";
 
@@ -42,6 +43,10 @@ export function GroupImpactPanel({
     queryFn: () => getGroupImpact({ data: { id: groupId } }),
   });
   const change = diffSelection(savedNodeIds, selectedNodeIds);
+  const reorderOnly =
+    change.added.length === 0 &&
+    change.removed.length === 0 &&
+    isMembershipDraftDirty(savedNodeIds, selectedNodeIds);
 
   return (
     <section
@@ -129,6 +134,22 @@ export function GroupImpactPanel({
                 })}
               </p>
             ) : null}
+            {change.added.length > 0 ? (
+              <p>{m.admin_access_group_change_gate_added()}</p>
+            ) : null}
+            {change.removed.length > 0 ? (
+              <p>{m.admin_access_group_change_gate_removed()}</p>
+            ) : null}
+          </AlertDescription>
+        </Alert>
+      ) : reorderOnly ? (
+        <Alert role="status" variant="info">
+          <InfoIcon />
+          <AlertDescription>
+            <p className="font-medium text-foreground">
+              {m.admin_access_group_change_title()}
+            </p>
+            <p>{m.admin_access_group_change_order_only()}</p>
           </AlertDescription>
         </Alert>
       ) : null}

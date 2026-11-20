@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   addEntrance,
   applyEntranceDrop,
+  diffMembershipOrder,
   isMembershipColumn,
   isMembershipDraftDirty,
   moveEntrance,
@@ -67,11 +68,39 @@ describe("group membership draft", () => {
     expect(isMembershipDraftDirty(["a"], ["a", "b"])).toBe(true);
   });
 
-  it("splits nodes into draft-ordered selected and available columns", () => {
+  it("keeps missing selected IDs in place instead of dropping them", () => {
     const nodes = [{ id: "a" }, { id: "b" }, { id: "c" }];
     expect(splitMembershipColumns(nodes, ["c", "gone", "a"])).toEqual({
-      selected: [{ id: "c" }, { id: "a" }],
+      selected: [
+        { id: "c", node: { id: "c" } },
+        { id: "gone", node: null },
+        { id: "a", node: { id: "a" } },
+      ],
       available: [{ id: "b" }],
+      missingIds: ["gone"],
+    });
+  });
+
+  it("compares saved and draft orders for the conflict panel", () => {
+    expect(diffMembershipOrder(["a", "b", "c"], ["a", "b", "c"])).toEqual({
+      added: [],
+      removed: [],
+      moved: [],
+    });
+    expect(diffMembershipOrder(["a", "b", "c"], ["c", "a", "b"])).toEqual({
+      added: [],
+      removed: [],
+      moved: ["c", "a", "b"],
+    });
+    expect(diffMembershipOrder(["a", "b"], ["b", "a", "d"])).toEqual({
+      added: ["d"],
+      removed: [],
+      moved: ["b", "a"],
+    });
+    expect(diffMembershipOrder(["a", "gone", "b"], ["a", "b"])).toEqual({
+      added: [],
+      removed: ["gone"],
+      moved: [],
     });
   });
 

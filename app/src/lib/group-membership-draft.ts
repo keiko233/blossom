@@ -87,11 +87,24 @@ export function isMembershipDraftDirty(
   );
 }
 
+export interface SelectedEntrance<T extends { id: string }> {
+  /** Always the draft ID, even when the node row is gone. */
+  id: string;
+  /** Null for an ID the node list no longer contains (deleted meanwhile). */
+  node: T | null;
+}
+
 export interface MembershipColumns<T extends { id: string }> {
-  /** Draft order. IDs missing from `nodes` (deleted meanwhile) are dropped. */
-  selected: T[];
+  /**
+   * Draft order, including IDs missing from `nodes`. A stale ID keeps its
+   * position so a refetch or concurrent delete never drops it from the draft
+   * without an explicit Remove.
+   */
+  selected: SelectedEntrance<T>[];
   /** Unselected nodes in their list order. */
   available: T[];
+  /** Selected IDs with no matching node, in draft order. */
+  missingIds: string[];
 }
 
 export function splitMembershipColumns<T extends { id: string }>(
@@ -100,8 +113,35 @@ export function splitMembershipColumns<T extends { id: string }>(
 ): MembershipColumns<T> {
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const selectedIds = new Set(draft);
+  const selected = draft.map((id) => ({ id, node: byId.get(id) ?? null }));
   return {
-    selected: draft.flatMap((id) => byId.get(id) ?? []),
+    selected,
     available: nodes.filter((node) => !selectedIds.has(node.id)),
+    missingIds: selected.flatMap(({ id, node }) => (node ? [] : [id])),
+  };
+}
+
+export interface MembershipOrderDiff {
+  /** Draft IDs absent from the saved order. */
+  added: string[];
+  /** Saved IDs absent from the draft. */
+  removed: string[];
+  /** IDs in both orders whose relative position changed. */
+  moved: string[];
+}
+
+/** Compares two membership orders for the stale-draft conflict panel. */
+export function diffMembershipOrder(
+  saved: readonly string[],
+  draft: readonly string[],
+): MembershipOrderDiff {
+  const savedIds = new Set(saved);
+  const draftIds = new Set(draft);
+  const savedCommon = saved.filter((id) => draftIds.has(id));
+  const draftCommon = draft.filter((id) => savedIds.has(id));
+  return {
+    added: draft.filter((id) => !savedIds.has(id)),
+    removed: saved.filter((id) => !draftIds.has(id)),
+    moved: draftCommon.filter((id, index) => savedCommon[index] !== id),
   };
 }
