@@ -217,6 +217,59 @@ describe("agent WebSocket v2 payloads", () => {
   });
 });
 
+describe("managed link probe v2 frames", () => {
+  const fixtures = JSON.parse(
+    readFileSync(
+      new URL(
+        "../fixtures/agent-ws-v2-link-probe.frames.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  ) as {
+    subprotocol: string;
+    frames: {
+      name: string;
+      sender: AgentWsV2Sender;
+      expect: string;
+      frame: unknown;
+    }[];
+  };
+
+  it("registers both directions and decodes the shared fixtures", () => {
+    expect(fixtures.subprotocol).toBe(AGENT_WS_V2_SUBPROTOCOL);
+    for (const fixture of fixtures.frames) {
+      const result = parseAgentWsV2Frame(
+        JSON.stringify(fixture.frame),
+        fixture.sender,
+      );
+      expect(result, fixture.name).toMatchObject({
+        ok: true,
+        message: { kind: expect.any(String) },
+      });
+      expect(result.ok ? result.message.kind : null, fixture.name).not.toBe(
+        "unknown",
+      );
+    }
+  });
+
+  it("rejects a probe frame sent in the wrong direction", () => {
+    const request = fixtures.frames.find(
+      (fixture) =>
+        fixture.frame &&
+        (fixture.frame as { type?: string }).type === "link_probe.request",
+    );
+    if (!request) throw new Error("link_probe.request fixture is missing");
+    expect(
+      parseAgentWsV2Frame(JSON.stringify(request.frame), "agent"),
+    ).toMatchObject({
+      ok: false,
+      code: "invalid-direction",
+      type: "link_probe.request",
+    });
+  });
+});
+
 describe("agent WebSocket v2 wire fixtures", () => {
   const fixtures = JSON.parse(
     readFileSync(

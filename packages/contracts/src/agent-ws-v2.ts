@@ -28,6 +28,10 @@ import {
   logPolicyNotifyPayloadSchema,
   logPolicySnapshotPayloadSchema,
 } from "./log-policy";
+import {
+  managedLinkProbeRequestSchema,
+  managedLinkProbeResultSchema,
+} from "./managed-link-probe";
 
 /**
  * Agent WebSocket protocol v2: WebSocket-first desired-state sync, status, and
@@ -129,6 +133,7 @@ export const AGENT_WS_V2_AGENT_MESSAGE_TYPES = [
   ...AGENT_WS_V2_LOGS_AGENT_MESSAGE_TYPES,
   "telemetry.sample",
   "telemetry.snapshot",
+  "link_probe.result",
 ] as const;
 
 export const AGENT_WS_V2_CONTROL_MESSAGE_TYPES = [
@@ -154,6 +159,7 @@ export const AGENT_WS_V2_CONTROL_MESSAGE_TYPES = [
   "pty.resize",
   "pty.close",
   ...AGENT_WS_V2_LOGS_CONTROL_MESSAGE_TYPES,
+  "link_probe.request",
 ] as const;
 
 /**
@@ -631,6 +637,8 @@ export const agentWsV2PayloadSchemas = {
   "telemetry.inspect": agentWsV2TelemetryInspectPayloadSchema,
   "telemetry.sample": agentWsV2TelemetrySamplePayloadSchema,
   "telemetry.snapshot": agentWsV2TelemetrySnapshotPayloadSchema,
+  "link_probe.request": managedLinkProbeRequestSchema,
+  "link_probe.result": managedLinkProbeResultSchema,
   error: agentWsV2ErrorPayloadSchema,
   ...agentWsV2LogsPayloadSchemas,
 } as const satisfies Record<AgentWsV2MessageType, z.ZodType>;

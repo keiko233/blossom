@@ -92,6 +92,22 @@ byte-for-byte unchanged.
   connected agent lacks the capability. Task 08 owns rollout issue/confirm/
   recovery, probes and notification; Task 07 only delivers and applies the
   current pointer.
+- **Established contract, activation disabled.** `link_probe.request`
+  (control plane to agent) and `link_probe.result` (agent to control plane)
+  carry the bounded payloads from `@blossom/contracts/managed-link-probe`.
+  Both ends must advertise `managed-link-probe-v1`. A request names only the
+  probe, rollout, stage, link, credential generation and the two endpoint
+  generations; the agent keeps endpoints local. The control plane sends it
+  only to the source server's exact current v2 session. Results are accepted
+  only from that authenticated source session, for the probe still current for
+  the stage attempt, before expiry, and only a `succeeded` result at or above
+  the requested source generation is usable. Duplicate results are idempotent
+  and a conflicting replay is rejected. `agent.status`/`hello`/`config.ack`
+  remain the proof channel for rollout stages; a probe result never confirms a
+  stage by itself. The shared frames are checked by
+  `packages/contracts/src/agent-ws-v2.test.ts` and
+  `packages/contracts/fixtures/agent-ws-v2-link-probe.frames.json`; the Rust
+  probe executor consumes the same fixture in its own Task 08 handoff.
 
 - `agent.status` `{reason, runtimeState?, configState?, singBoxVersion?, activeNodeIds?, error?, certificateDeployments, updates?}` reports only the fields present. `error: null` clears the last error.
 - `agent.status.ack` `{desired, updatePolicy, logPolicyRevision?}` carries the control plane's identifier. If it differs from the applied identifier, send `config.get`. This is how a lost `config.notify` is recovered. The identifier is authoritative within the bounds in [Known limits](#known-limits-of-the-control-plane): a change that no path signalled is reflected at the first status exchange after the cached identifier's deadline. A newer `logPolicyRevision` recovers a missed policy notification through `log.policy.get`.
@@ -336,8 +352,9 @@ The control plane advertises `reconnectBeforeSeconds`. Remote delivery across in
 
 Each target is listed separately. "Not run" means the change has no evidence on that target.
 
-- **Automated, no database.** Contract schemas, direction and size checks, and both sides of the wire fixtures (`packages/contracts`), including PTY, update/ACME, log-policy, log tail/search and telemetry fixtures. Session state machine, snapshot chunking, deadline expiry, fenced snapshots, disabled servers, hub routing, telemetry normalization, the shared live sampler and the admin metric route (`app/src/lib/agent-ws-v2-*.test.ts`, `app/src/lib/realtime-hub-v2.test.ts`, `app/src/lib/live-metrics.test.ts`, `app/src/lib/realtime-hub-live-metrics.test.ts`, `app/src/lib/admin-metrics-route.test.ts`).
+- **Automated, no database.** Contract schemas, direction and size checks, and both sides of the wire fixtures (`packages/contracts`), including PTY, update/ACME, log-policy, log tail/search, telemetry and managed link probe fixtures. Session state machine, snapshot chunking, deadline expiry, fenced snapshots, disabled servers, hub routing, telemetry normalization, the shared live sampler, exact-session probe addressing, managed rollout ingress and post-commit dispatch (`app/src/lib/agent-ws-v2-*.test.ts`, `app/src/lib/realtime-hub-v2.test.ts`, `app/src/lib/live-metrics.test.ts`, `app/src/lib/realtime-hub-live-metrics.test.ts`, `app/src/lib/admin-metrics-route.test.ts`, `app/src/lib/managed-rollout-*.test.ts`).
 - **Disposable PostgreSQL, node-postgres and neon-http.** Fenced acknowledgements, status, update status, traffic, the version fence on cached identifiers, token rotation, the token-bound start, and v1/v2 disconnect identity (`app/src/query/agent-ws-v2-state.integration.test.ts`, `app/src/query/agent-ws-session.integration.test.ts`). Log-policy revision CAS, expiry normalization, stale and replaced ACKs, failed-apply status and reconnect snapshots (`app/src/query/log-policy.integration.test.ts`). Convergence through the real store adapter and compiler: a routing-rule change with no notification is recovered by the status exchange after the deadline, an invalidated change is reported on the next status, and a rotated credential, a disabled server and a snapshot each stop or serve as specified (`app/src/query/agent-ws-v2-convergence.integration.test.ts`). The neon-http runs use a local `/sql` proxy in front of the same database, not Neon's hosted service.
+- **Disposable PostgreSQL, managed rollouts.** `query/managed-rollout-write.integration.test.ts` runs on node-postgres and, through a local `/sql` proxy, neon-http: stage issuance versus authenticated applied/failed proof, omitted-fingerprint evidence, stale/duplicate/foreign/replaced-session reports, deadlines, link probes, audited retry/abort, reverse-order recovery and claim release. Managed activation remains disabled in production.
 - **Disposable PostgreSQL, OAuth.** `agent-ws-v2-oauth.integration.test.ts` uses real provider tokens for the pending proof, first promotion, generation replacement, interrupted-rotation recovery, replay refusal, revocation, expiry, certificate-deployment fencing, and server deletion cleanup. Ran on node-postgres and on neon-http through a local `/sql` proxy in front of the same database.
 - **Disposable PostgreSQL, v2 metric history.** A write with the exact `ws_session_id` succeeds, a replaced session id and a disabled server are fenced, and the newer receipt wins within a minute (`app/src/query/server-metric-history.integration.test.ts`, node-postgres).
 - **Rust lifecycle.** `server-agent/tests/ws_v2_lifecycle.rs` runs the real agent binary with no `--ws-protocol` flag (and with an inherited `AGENT_WS_PROTOCOL` removed) against a local v2 WebSocket control plane and a fake sing-box with disposable state. It covers a cold multi-chunk snapshot apply, an unacknowledged traffic report replayed byte-for-byte under the same id, missed-notification recovery through `agent.status.ack`, a failed candidate rolling back to the last-known-good config, an offline restart from that config, history before any live viewer, a live sample with counter-derived network rates, inspection and unsubscribe, and redacted log tail/search with session reset. The control plane records and fails every plain HTTP agent API request; the test asserts none occurred.

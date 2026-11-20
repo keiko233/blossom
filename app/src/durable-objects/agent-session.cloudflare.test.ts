@@ -196,6 +196,29 @@ describe("AgentSessionDO v2 replacement", () => {
     expect(pty.closed).toEqual([]);
   });
 
+  it("delivers an exact-session v2 probe only to that socket", async () => {
+    const first = v2Socket("session-a");
+    const second = v2Socket("session-b");
+    const ctx = contextWith([first, second]);
+    const session = new AgentSessionDO(ctx as never, {} as never);
+
+    const response = await session.fetch(
+      new Request("https://agent-session.internal/internal/notify", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          frame: '{"v":2}',
+          protocol: "v2",
+          agentSessionId: "session-b",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(204);
+    expect(first.sent).toEqual([]);
+    expect(second.sent).toEqual(['{"v":2}']);
+  });
+
   it("leaves v1 and terminal sockets untouched", async () => {
     const v1 = v1Socket();
     const pty = ptySocket();

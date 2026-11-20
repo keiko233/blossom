@@ -6,6 +6,7 @@ import type {
   AgentWsWelcomePayload,
 } from "@blossom/contracts/agent-ws";
 import type { LogPolicyNotifyPayload } from "@blossom/contracts/log-policy";
+import type { ManagedLinkProbeRequest } from "@blossom/contracts/managed-link-probe";
 
 import type { Server } from "@/db/proxy-schema";
 import type { AgentSessionCredential } from "@/query/agent";
@@ -74,6 +75,16 @@ export interface RealtimeHub {
     serverId: string,
     payload: LogPolicyNotifyPayload,
   ): Promise<void>;
+  /**
+   * Delivers one bounded link-probe request to the source server's exact
+   * current v2 session. Returns false when no such socket is reachable; the
+   * request then expires and only an audited Retry issues another attempt.
+   */
+  sendLinkProbe(
+    serverId: string,
+    sessionId: string,
+    request: ManagedLinkProbeRequest,
+  ): Promise<boolean>;
 }
 
 export interface RealtimeBackplaneMessage {

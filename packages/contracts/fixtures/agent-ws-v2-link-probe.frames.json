@@ -1,0 +1,58 @@
+{
+  "$comment": "Task 08 v2 link-probe wire fixtures. The payloads are registered in agent-ws-v2.ts behind `managed-link-probe-v1`; this file is the shared reference for the Rust probe executor handoff, which adds decoding after the control-plane integration. `sender` is the side that produced the frame; `expect` is the result the receiver must report.",
+  "subprotocol": "blossom-agent.v2",
+  "frames": [
+    {
+      "name": "control plane asks the source agent to probe one link",
+      "sender": "control-plane",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "link_probe.request",
+        "ts": "2026-11-20T00:00:00.000Z",
+        "payload": {
+          "probeId": "probe-1",
+          "rolloutId": "rollout-1",
+          "stageOrdinal": 2,
+          "linkId": "link-1",
+          "credentialGeneration": 1,
+          "source": {
+            "serverId": "srv-a",
+            "managedFingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "minRevisionSeq": 20
+          },
+          "destination": {
+            "serverId": "srv-b",
+            "managedFingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "minRevisionSeq": 10
+          },
+          "issuedAt": "2026-11-20T00:00:00.000Z",
+          "expiresAt": "2026-11-20T00:01:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "agent returns a bounded probe result",
+      "sender": "agent",
+      "expect": "ok",
+      "frame": {
+        "v": 2,
+        "type": "link_probe.result",
+        "ts": "2026-11-20T00:00:05.000Z",
+        "payload": {
+          "probeId": "probe-1",
+          "rolloutId": "rollout-1",
+          "stageOrdinal": 2,
+          "linkId": "link-1",
+          "outcome": "succeeded",
+          "applied": {
+            "desiredRevisionSeq": 21,
+            "managedFingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "latencyMs": 42,
+          "completedAt": "2026-11-20T00:00:05.000Z"
+        }
+      }
+    }
+  ]
+}

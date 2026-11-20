@@ -10,13 +10,15 @@ import { z } from "zod";
  * endpoints local. The result carries a bounded outcome and no free-form error
  * text, so nothing unsanitized reaches the control plane or browser.
  *
- * These payloads are not yet registered in the v2 message tables or the
- * OpenAPI surface; that wiring is gated on the capability below.
+ * The two payloads are registered as the v2 `link_probe.request` (control
+ * plane to agent) and `link_probe.result` (agent to control plane) messages in
+ * `agent-ws-v2.ts`. Delivery stays behind the capability below and managed
+ * activation, which is disabled by default.
  */
 
 export const MANAGED_LINK_PROBE_CAPABILITY = "managed-link-probe-v1" as const;
 
-/** Proposed v2 message types (control plane -> agent, agent -> control plane). */
+/** Registered v2 message types (control plane -> agent, agent -> control plane). */
 export const MANAGED_LINK_PROBE_MESSAGE_TYPES = {
   request: "link_probe.request",
   result: "link_probe.result",
@@ -42,16 +44,35 @@ export const MANAGED_LINK_PROBE_OUTCOMES = [
 export type ManagedLinkProbeOutcome =
   (typeof MANAGED_LINK_PROBE_OUTCOMES)[number];
 
-const idSchema = z.string().min(1).max(128);
-const fingerprintSchema = z.string().min(1).max(128);
+const idSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .refine(
+    (value) =>
+      [...value].every((character) => {
+        const code = character.codePointAt(0) ?? 0;
+        return code > 0x1f && code !== 0x7f;
+      }),
+    { message: "probe identifiers must not contain control characters" },
+  );
+/** `sha256:<hex>`; the Rust contract validates the same prefixed digest. */
+const fingerprintSchema = z
+  .string()
+  .regex(
+    /^sha256:[0-9a-f]{64}$/,
+    "managedFingerprint must be a lowercase SHA-256 digest",
+  );
 const timestampSchema = z.iso.datetime();
 
 /** Applied generation a probe is bound to on one side of the link. */
-export const managedLinkProbeEndpointSchema = z.object({
-  serverId: idSchema,
-  managedFingerprint: fingerprintSchema,
-  minRevisionSeq: z.number().int().min(0),
-});
+export const managedLinkProbeEndpointSchema = z
+  .object({
+    serverId: idSchema,
+    managedFingerprint: fingerprintSchema,
+    minRevisionSeq: z.number().int().min(0),
+  })
+  .strict();
 export type ManagedLinkProbeEndpoint = z.infer<
   typeof managedLinkProbeEndpointSchema
 >;
@@ -68,6 +89,7 @@ export const managedLinkProbeRequestSchema = z
     issuedAt: timestampSchema,
     expiresAt: timestampSchema,
   })
+  .strict()
   .superRefine((value, context) => {
     const ttl = Date.parse(value.expiresAt) - Date.parse(value.issuedAt);
     if (!(ttl > 0 && ttl <= MANAGED_LINK_PROBE_LIMITS.maxTtlMs)) {
@@ -89,25 +111,29 @@ export type ManagedLinkProbeRequest = z.infer<
   typeof managedLinkProbeRequestSchema
 >;
 
-export const managedLinkProbeResultSchema = z.object({
-  probeId: idSchema,
-  rolloutId: idSchema,
-  stageOrdinal: z.number().int().min(1),
-  linkId: idSchema,
-  outcome: z.enum(MANAGED_LINK_PROBE_OUTCOMES),
-  /** What the source agent had committed when it ran the probe. */
-  applied: z.object({
-    desiredRevisionSeq: z.number().int().min(0),
-    managedFingerprint: fingerprintSchema.nullable(),
-  }),
-  latencyMs: z
-    .number()
-    .int()
-    .min(0)
-    .max(MANAGED_LINK_PROBE_LIMITS.maxLatencyMs)
-    .optional(),
-  completedAt: timestampSchema,
-});
+export const managedLinkProbeResultSchema = z
+  .object({
+    probeId: idSchema,
+    rolloutId: idSchema,
+    stageOrdinal: z.number().int().min(1),
+    linkId: idSchema,
+    outcome: z.enum(MANAGED_LINK_PROBE_OUTCOMES),
+    /** What the source agent had committed when it ran the probe. */
+    applied: z
+      .object({
+        desiredRevisionSeq: z.number().int().min(0),
+        managedFingerprint: fingerprintSchema.nullable(),
+      })
+      .strict(),
+    latencyMs: z
+      .number()
+      .int()
+      .min(0)
+      .max(MANAGED_LINK_PROBE_LIMITS.maxLatencyMs)
+      .optional(),
+    completedAt: timestampSchema,
+  })
+  .strict();
 export type ManagedLinkProbeResult = z.infer<
   typeof managedLinkProbeResultSchema
 >;

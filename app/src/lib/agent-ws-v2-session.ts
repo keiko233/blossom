@@ -37,6 +37,11 @@ import {
   type LogPolicyNotifyPayload,
   type LogPolicySnapshotPayload,
 } from "@blossom/contracts/log-policy";
+import type {
+  ManagedLinkProbeRequest,
+  ManagedLinkProbeResult,
+} from "@blossom/contracts/managed-link-probe";
+import { MANAGED_LINK_PROBE_CAPABILITY } from "@blossom/contracts/managed-link-probe";
 import { parseRevisionSeq } from "@blossom/domain/config-revision";
 
 import type { Server } from "@/db/proxy-schema";
@@ -76,6 +81,25 @@ export type AgentWsV2MetricOutcome =
   | "superseded"
   | "fenced"
   | "invalid";
+
+/** Event emitted after an authenticated apply/status handshake report. */
+export interface AgentWsV2ManagedReport {
+  serverId: string;
+  sessionId: string;
+}
+
+export interface AgentWsV2ManagedAckReport extends AgentWsV2ManagedReport {
+  ack: AgentWsV2ConfigAckPayload;
+  outcome: "applied" | "failed";
+}
+export interface AgentWsV2ManagedAppliedReport extends AgentWsV2ManagedReport {
+  /** Applied identifier from `hello`, or null for an empty cache. */
+  applied: AgentWsV2ConfigIdentifier | null;
+  capabilities: readonly string[];
+}
+export interface AgentWsV2ManagedProbeReport extends AgentWsV2ManagedReport {
+  result: ManagedLinkProbeResult;
+}
 
 /**
  * Persistence port for one v2 session. Every write names the session, and the
@@ -245,6 +269,23 @@ export interface OpenAgentWsV2SessionOptions {
   onSnapshot?: (snapshot: AgentWsV2TelemetrySnapshotPayload) => void;
   /** Called after `welcome` is sent, for subscriptions held by viewers. */
   onWelcome?: () => void;
+  /**
+   * Managed rollout ingress. Every callback is bound to this exact server
+   * session; a replaced session's report is fenced by the database adapter.
+   * Failures are logged and never close the agent session.
+   */
+  onManagedHello?: (
+    report: AgentWsV2ManagedAppliedReport,
+  ) => void | Promise<void>;
+  /** A status exchange is a reachable heartbeat for deadline reconciliation. */
+  onManagedStatus?: (report: AgentWsV2ManagedReport) => void | Promise<void>;
+  onManagedConfigAck?: (
+    report: AgentWsV2ManagedAckReport,
+  ) => void | Promise<void>;
+  /** Receives a validated `link_probe.result` from a capable agent. */
+  onManagedProbeResult?: (
+    report: AgentWsV2ManagedProbeReport,
+  ) => void | Promise<void>;
 }
 
 export interface AgentWsV2Session {
@@ -288,6 +329,15 @@ export function encodeAgentWsV2LogPolicyNotify(
 ): string {
   return encodeAgentWsV2Frame(
     createAgentWsV2Frame("log.policy.notify", payload),
+  );
+}
+
+/** Encodes a bounded link-probe request for the source agent's exact session. */
+export function encodeAgentWsV2LinkProbeRequest(
+  request: ManagedLinkProbeRequest,
+): string {
+  return encodeAgentWsV2Frame(
+    createAgentWsV2Frame("link_probe.request", request),
   );
 }
 
@@ -540,6 +590,14 @@ export function openAgentWsV2Session(
         intervalMs: 60_000,
       });
     }
+    await safely("managed hello report", async () => {
+      await options.onManagedHello?.({
+        serverId,
+        sessionId,
+        applied: hello.applied,
+        capabilities,
+      });
+    });
   }
 
   async function onStatus(status: AgentWsV2StatusPayload, id?: string) {
@@ -572,6 +630,9 @@ export function openAgentWsV2Session(
       },
       id,
     );
+    await safely("managed status sweep", async () => {
+      await options.onManagedStatus?.({ serverId, sessionId });
+    });
   }
 
   async function onConfigGet(requestId: string) {
@@ -650,7 +711,29 @@ export function openAgentWsV2Session(
     const outcome = await store.recordConfigAck(serverId, sessionId, ack);
     if (outcome === "replaced") {
       stop("session_replaced", "a newer session is active");
+      return;
     }
+    if (outcome === "applied" || outcome === "failed") {
+      await safely("managed config acknowledgement", async () => {
+        await options.onManagedConfigAck?.({
+          serverId,
+          sessionId,
+          ack,
+          outcome,
+        });
+      });
+    }
+  }
+
+  async function onLinkProbeResult(result: ManagedLinkProbeResult) {
+    // Older agents ignore this frame, and an agent that did not advertise the
+    // capability in this session has no probe to answer.
+    if (!capabilities.includes(MANAGED_LINK_PROBE_CAPABILITY)) {
+      return;
+    }
+    await safely("managed link probe result", async () => {
+      await options.onManagedProbeResult?.({ serverId, sessionId, result });
+    });
   }
 
   async function onTrafficReport(report: AgentWsV2TrafficReportPayload) {
@@ -868,6 +951,9 @@ export function openAgentWsV2Session(
             return;
           case "telemetry.snapshot":
             onTelemetrySnapshot(message.payload);
+            return;
+          case "link_probe.result":
+            await onLinkProbeResult(message.payload);
             return;
         }
       } catch (error) {

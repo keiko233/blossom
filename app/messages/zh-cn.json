@@ -1636,6 +1636,7 @@
   "user_redeem_error_generic": "兑换失败，请重试。",
   "admin_nav_settings": "系统设置",
   "admin_audit_target_setting": "设置",
+  "admin_audit_target_managed_rollout": "托管发布",
   "admin_plans_delete_blocked_trial": "该套餐正被用作新用户试用套餐，请先在系统设置中更换试用套餐",
   "admin_settings_title": "系统设置",
   "admin_settings_description": "注册、新用户试用、订阅输出和站点通知。更改会立即生效。",

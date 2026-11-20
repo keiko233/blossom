@@ -12,6 +12,7 @@ import {
   encodeAgentWsV2Frame,
 } from "@blossom/contracts/agent-ws-v2";
 import type { LogPolicyNotifyPayload } from "@blossom/contracts/log-policy";
+import type { ManagedLinkProbeRequest } from "@blossom/contracts/managed-link-probe";
 import { env } from "cloudflare:workers";
 
 import type { Server } from "@/db/proxy-schema";
@@ -27,6 +28,7 @@ import type { TelemetryKind, TelemetryResult } from "./agent-telemetry";
 import { createAgentWsV2Store } from "./agent-ws-store";
 import {
   encodeAgentWsV2ConfigNotify,
+  encodeAgentWsV2LinkProbeRequest,
   encodeAgentWsV2LogPolicyNotify,
 } from "./agent-ws-v2-session";
 import type { AdminLogsAcceptContext } from "./logs-relay-types";
@@ -309,17 +311,35 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     );
   }
 
+  async sendLinkProbe(
+    serverId: string,
+    sessionId: string,
+    request: ManagedLinkProbeRequest,
+  ): Promise<boolean> {
+    return this.sendFrame(
+      serverId,
+      encodeAgentWsV2LinkProbeRequest(request),
+      "v2",
+      sessionId,
+    );
+  }
+
   private async sendFrame(
     serverId: string,
     frame: string,
     protocol?: "v2",
-  ): Promise<void> {
+    agentSessionId?: string,
+  ): Promise<boolean> {
     try {
       const response = await durableObjectStub(serverId).fetch(
         new Request("https://agent-session.internal/internal/notify", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ frame, ...(protocol ? { protocol } : {}) }),
+          body: JSON.stringify({
+            frame,
+            ...(protocol ? { protocol } : {}),
+            ...(agentSessionId ? { agentSessionId } : {}),
+          }),
         }),
       );
       if (!response.ok) {
@@ -327,9 +347,11 @@ export class CloudflareRealtimeHub implements RealtimeHub {
           `agent session notification returned ${response.status}`,
         );
       }
+      return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`agent websocket notification failed: ${message}`);
+      return false;
     }
   }
 }

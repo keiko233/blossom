@@ -47,6 +47,8 @@ export const ADMIN_AUDIT_ACTIONS = [
   "group.create",
   "group.update",
   "group.delete",
+  "managed.rollout_retry",
+  "managed.rollout_abort",
   "node.create",
   "node.update",
   "node.delete",
@@ -112,6 +114,7 @@ export const ADMIN_AUDIT_ACTION_FAMILIES = [
   "redeem",
   "audit",
   "settings",
+  "managed",
 ] as const;
 
 export type AdminAuditActionFamily =
@@ -132,6 +135,7 @@ export const ADMIN_AUDIT_TARGET_TYPES = [
   "redeem_code",
   "audit_log",
   "setting",
+  "managed_rollout",
 ] as const;
 
 export type AdminAuditTargetType = (typeof ADMIN_AUDIT_TARGET_TYPES)[number];

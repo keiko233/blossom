@@ -301,6 +301,57 @@ describe("NitroRealtimeHub v2 sessions", () => {
     );
   });
 
+  it("addresses a link probe to the exact current v2 session", async () => {
+    const { hub, backplane } = makeHub();
+    const hooks = await acceptV2(hub);
+    const peer = makePeer("probe-source");
+    await hooks.open(peer);
+    await hooks.message(
+      peer,
+      agentFrame("hello", {
+        agentVersion: "0.4.0",
+        agentBuildId: "build-1",
+        capabilities: ["managed-link-probe-v1"],
+        applied: null,
+        certificateDeployments: [],
+      }),
+    );
+
+    const request = {
+      probeId: "probe-1",
+      rolloutId: "rollout-1",
+      stageOrdinal: 1,
+      linkId: "link-1",
+      credentialGeneration: 1,
+      source: {
+        serverId: "srv-1",
+        managedFingerprint: `sha256:${"a".repeat(64)}`,
+        minRevisionSeq: 1,
+      },
+      destination: {
+        serverId: "srv-b",
+        managedFingerprint: `sha256:${"b".repeat(64)}`,
+        minRevisionSeq: 1,
+      },
+      issuedAt: "2026-11-20T00:00:00.000Z",
+      expiresAt: "2026-11-20T00:01:00.000Z",
+    };
+    expect(await hub.sendLinkProbe("srv-1", SESSION_ID, request)).toBe(true);
+    expect(sentTypes(peer).at(-1)).toBe("link_probe.request");
+    // A different session is never handed to the local socket; it only goes
+    // out on the addressed backplane relay.
+    expect(await hub.sendLinkProbe("srv-1", "session-old", request)).toBe(true);
+    expect(
+      sentTypes(peer).filter((type) => type === "link_probe.request"),
+    ).toHaveLength(1);
+    expect(backplane.publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        protocol: "v2",
+        agentSessionId: "session-old",
+      }),
+    );
+  });
+
   it("keeps v1 frames off v2 sessions", async () => {
     const { hub } = makeHub();
     const hooks = await acceptV2(hub);

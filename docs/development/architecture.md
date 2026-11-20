@@ -144,10 +144,14 @@ viewer. v1 agents keep transient live telemetry and do not write host history.
 Each write also removes one bounded batch of minutes older than the 30-day
 retention. A scheduler can call `GET` or `POST
 /api/maintenance/server-metrics` with `Authorization: Bearer
-$MAINTENANCE_TOKEN`; batch size and batch count are clamped. No platform
-scheduler is configured in this repository: Node deployments need an external
-systemd timer, CronJob or equivalent; Vercel Cron can call the route with its
-secret; Cloudflare needs an operator-added Cron Trigger or external scheduler.
+$MAINTENANCE_TOKEN`; batch size and batch count are clamped. The same token
+authenticates `GET` or `POST /api/maintenance/managed-rollouts`, which runs a
+bounded managed-rollout sweep (limit clamped to 50) and delivers its
+post-commit follow-ups; it is a no-op while managed activation is disabled. No
+platform scheduler is configured in this repository: Node deployments need an
+external systemd timer, CronJob or equivalent; Vercel Cron can call either route
+with its secret; Cloudflare needs an operator-added Cron Trigger or external
+scheduler.
 
 ## Runtimes and deploy targets
 

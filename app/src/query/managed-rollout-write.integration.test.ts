@@ -346,6 +346,23 @@ describe.skipIf(!PG_URL)("managed rollout transitions", () => {
           action: "ignored",
           reason: "fingerprint_mismatch",
         });
+        // A future sequence was never issued, so it cannot prove anything.
+        expect(
+          await recordManagedStageReport(
+            {
+              authenticatedServerId: "srv-b",
+              sessionId: "session-b",
+              outcome: "applied",
+              desiredRevisionSeq: 999,
+              managedFingerprint: FP_B1,
+            },
+            { database, activationEnabled: true },
+          ),
+        ).toMatchObject({
+          ok: true,
+          action: "ignored",
+          reason: "not_current_identifier",
+        });
 
         const confirmed = await recordManagedStageReport(
           {
@@ -353,7 +370,6 @@ describe.skipIf(!PG_URL)("managed rollout transitions", () => {
             sessionId: "session-b",
             outcome: "applied",
             desiredRevisionSeq: 1,
-            managedFingerprint: FP_B1,
           },
           { database, activationEnabled: true },
         );
@@ -861,6 +877,24 @@ describe.skipIf(!PG_URL)("managed rollout transitions", () => {
           action: "ignored",
           reason: "fingerprint_mismatch",
         });
+        // A failed recovery apply names the issued recovery identifier; the
+        // omitted fingerprint resolves to the recovery target, not the fence.
+        expect(
+          await recordManagedStageReport(
+            {
+              authenticatedServerId: "srv-a",
+              sessionId: "session-a",
+              outcome: "failed",
+              desiredRevisionSeq: recoverySeq!,
+            },
+            { database, activationEnabled: true },
+          ),
+        ).toMatchObject({
+          ok: true,
+          action: "recovery_apply_failed",
+          ordinal: 2,
+        });
+
         expect(
           await recordManagedStageReport(
             {
@@ -868,7 +902,6 @@ describe.skipIf(!PG_URL)("managed rollout transitions", () => {
               sessionId: "session-a",
               outcome: "applied",
               desiredRevisionSeq: recoverySeq!,
-              managedFingerprint: FP_R1,
             },
             { database, activationEnabled: true },
           ),

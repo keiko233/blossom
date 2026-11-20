@@ -84,6 +84,36 @@ describe("managed link probe schemas", () => {
         .success,
     ).toBe(false);
   });
+
+  it("requires the prefixed lowercase SHA-256 fingerprint the agent enforces", () => {
+    expect(
+      managedLinkProbeRequestSchema.safeParse({
+        ...request,
+        source: { ...request.source, managedFingerprint: "sha256:abc" },
+      }).success,
+    ).toBe(false);
+    expect(
+      managedLinkProbeRequestSchema.safeParse({
+        ...request,
+        source: {
+          ...request.source,
+          managedFingerprint: `sha256:${"A".repeat(64)}`,
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      managedLinkProbeResultSchema.safeParse({
+        ...result,
+        applied: { ...result.applied, managedFingerprint: "local-cache" },
+      }).success,
+    ).toBe(false);
+    expect(
+      managedLinkProbeResultSchema.safeParse({
+        ...result,
+        extra: "ignored by the receiver",
+      }).success,
+    ).toBe(false);
+  });
 });
 
 describe("correlateLinkProbeResult", () => {

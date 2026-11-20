@@ -69,7 +69,7 @@ Server env vars are validated at runtime on the first request, so production bui
 | `CLOUDFLARE_DNS_API_TOKEN` | No | Runtime | Cloudflare token with DNS Edit on the zone, for automatic ACME DNS-01 validation. Set together with `CLOUDFLARE_DNS_ZONE_ID`. |
 | `CLOUDFLARE_DNS_ZONE_ID` | No | Runtime | Cloudflare zone ID used with the token above. |
 | `REDIS_URL` | No | Runtime | Redis pub/sub backplane for agent WebSocket fan-out across multiple Node or Vercel instances. Cloudflare Durable Objects do not use it. |
-| `MAINTENANCE_TOKEN` | No | Runtime | Bearer token accepted by `/api/maintenance/server-metrics` for bounded retention cleanup. Unset disables the route. |
+| `MAINTENANCE_TOKEN` | No | Runtime | Bearer token accepted by `/api/maintenance/server-metrics` for bounded retention cleanup and `/api/maintenance/managed-rollouts` for the bounded managed-rollout sweep. Unset disables both routes. |
 
 Copy `app/.env.example` to `app/.env.local` for local development.
 
@@ -102,7 +102,7 @@ pnpm --filter @blossom/app db:migrate
 
 The command reads `DATABASE_URL` from the environment. Run it manually or in CI before deploying. When using Docker Compose, a one-shot `migrate` service runs automatically before the `app` service starts.
 
-Host metric history is retained for 30 days. Ingestion prunes one bounded batch after each write, but a deployment that can be idle for long periods should also call `GET` or `POST /api/maintenance/server-metrics` with `Authorization: Bearer $MAINTENANCE_TOKEN` from a scheduler. `batchSize` is clamped to 5000 and `maxBatches` to 100 per call. This repository does not create a scheduler: use an external timer on Node, Vercel Cron or an operator-added Cloudflare Cron Trigger/external scheduler, and allow for the platform's minimum interval and execution limit.
+Host metric history is retained for 30 days. Ingestion prunes one bounded batch after each write, but a deployment that can be idle for long periods should also call `GET` or `POST /api/maintenance/server-metrics` with `Authorization: Bearer $MAINTENANCE_TOKEN` from a scheduler. `batchSize` is clamped to 5000 and `maxBatches` to 100 per call. Managed rollout deadlines and missed post-commit pushes are reconciled by `GET` or `POST /api/maintenance/managed-rollouts` with the same token; `limit` is clamped to 50. Managed activation is disabled by default, so the sweep is a no-op until it is enabled. This repository does not create a scheduler: use an external timer on Node, Vercel Cron or an operator-added Cloudflare Cron Trigger/external scheduler, and allow for the platform's minimum interval and execution limit.
 
 ## Self-hosting quickstart
 

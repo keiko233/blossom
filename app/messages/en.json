@@ -1636,6 +1636,7 @@
   "user_redeem_error_generic": "Could not redeem the code. Please try again.",
   "admin_nav_settings": "Settings",
   "admin_audit_target_setting": "Setting",
+  "admin_audit_target_managed_rollout": "Managed rollout",
   "admin_plans_delete_blocked_trial": "This plan is the new-user trial plan. Choose another trial plan in Settings first.",
   "admin_settings_title": "System settings",
   "admin_settings_description": "Registration, new-user trial, subscription output and site notices. Changes apply immediately.",

@@ -371,7 +371,11 @@ export interface ManagedStageReportInput {
   sessionId: string;
   outcome: "applied" | "failed";
   desiredRevisionSeq: number;
-  /** Applied fingerprint; ignored for a failure report. */
+  /**
+   * Fingerprint evidence for the reported identifier. Omitted by the v2
+   * transport so the adapter resolves the issued stage (or recovery target)
+   * itself; tests may supply one to exercise an explicit mismatch.
+   */
   managedFingerprint?: string | null;
 }
 
@@ -438,6 +442,90 @@ async function findActiveRolloutId(
       ),
     );
   return row?.rolloutId ?? null;
+}
+
+/**
+ * Active rollout whose claim names this server, or null. Transport ingress and
+ * the heartbeat sweep use this to resume the same persisted rollout without
+ * keeping a process-local state machine.
+ */
+export async function findActiveManagedRolloutId(
+  serverId: string,
+  database: Database = db,
+): Promise<string | null> {
+  return findActiveRolloutId(database, serverId);
+}
+
+/**
+ * Bounded rollout ids the maintenance sweep may still act on: every active
+ * rollout, plus a terminal rollout whose claims were not released yet (for
+ * example after a topology conflict). A terminal rollout with nothing left to
+ * do is a cheap no-op.
+ */
+export async function listActiveManagedRolloutIds(
+  limit: number,
+  database: Database = db,
+): Promise<string[]> {
+  const bounded = Math.min(Math.max(limit, 1), 100);
+  const rows = await database
+    .select({ id: managedRollout.id })
+    .from(managedRollout)
+    .where(
+      sql`${inArray(managedRollout.state, [...ACTIVE_ROLLOUT_STATES])}
+        OR EXISTS (
+          SELECT 1 FROM ${managedRolloutClaim}
+          WHERE ${managedRolloutClaim.rolloutId} = ${managedRollout.id}
+        )`,
+    )
+    .orderBy(managedRollout.updatedAt, managedRollout.id)
+    .limit(bounded);
+  return rows.map((row) => row.id);
+}
+
+/**
+ * Resolves the managed fingerprint the control plane issued for a report at
+ * `desiredRevisionSeq`. The stage row records the pair at issuance; later
+ * subscriber-only compiles preserve stage equivalence, and a recovery target
+ * names its own fingerprint and sequence. This is the evidence passed to
+ * `evaluateAgentStageReport`, so an agent never supplies its own verdict.
+ */
+function issuedFingerprintForReport(
+  snapshot: ManagedRolloutSnapshot,
+  serverId: string,
+  desiredRevisionSeq: number,
+): string | null {
+  if (snapshot.rollout.state === "recovering") {
+    const recoveryStage = [...snapshot.rawStages]
+      .filter(
+        (stage) =>
+          stage.serverId === serverId &&
+          stage.recoveryIssuedRevisionSeq !== null &&
+          stage.recoveryProvenAt === null,
+      )
+      .sort((left, right) => left.ordinal - right.ordinal)[0];
+    if (
+      recoveryStage &&
+      recoveryStage.recoveryMinRevisionSeq !== null &&
+      desiredRevisionSeq >= recoveryStage.recoveryMinRevisionSeq
+    ) {
+      return recoveryStage.recoveryManagedFingerprint;
+    }
+    return null;
+  }
+  const stage = snapshot.rawStages.find(
+    (row) =>
+      row.serverId === serverId &&
+      row.ordinal === snapshot.rollout.currentOrdinal,
+  );
+  if (
+    !stage ||
+    stage.state !== "issued" ||
+    stage.minRevisionSeq === null ||
+    desiredRevisionSeq < stage.minRevisionSeq
+  ) {
+    return null;
+  }
+  return stage.managedFingerprint;
 }
 
 interface CurrentSessionRow {
@@ -710,6 +798,15 @@ export async function recordManagedStageReport(
     if (!current || current.wsSessionId !== input.sessionId) {
       return { ok: false, reason: "session_fenced" };
     }
+    if (input.desiredRevisionSeq > current.desiredRevisionSeq) {
+      // No identifier above the server's issued sequence exists, so it cannot
+      // prove a stage or authorize recovery.
+      return {
+        ok: true,
+        action: "ignored",
+        reason: "not_current_identifier",
+      };
+    }
     const snapshot = await readManagedRolloutSnapshot(
       rolloutId,
       context.database,
@@ -717,25 +814,33 @@ export async function recordManagedStageReport(
     if (!snapshot) {
       return { ok: true, action: "ignored", reason: "no_active_rollout" };
     }
-    const issuedStage = snapshot.rawStages.find(
-      (stage) => stage.ordinal === snapshot.rollout.currentOrdinal,
-    );
     const report =
       input.outcome === "applied"
         ? {
             outcome: "applied" as const,
             serverId: input.authenticatedServerId,
             desiredRevisionSeq: input.desiredRevisionSeq,
-            managedFingerprint: input.managedFingerprint ?? null,
+            managedFingerprint:
+              input.managedFingerprint === undefined
+                ? issuedFingerprintForReport(
+                    snapshot,
+                    input.authenticatedServerId,
+                    input.desiredRevisionSeq,
+                  )
+                : input.managedFingerprint,
           }
         : {
             outcome: "failed" as const,
             serverId: input.authenticatedServerId,
             desiredRevisionSeq: input.desiredRevisionSeq,
             issuedManagedFingerprint:
-              issuedStage?.serverId === input.authenticatedServerId
-                ? issuedStage.managedFingerprint
-                : null,
+              input.managedFingerprint === undefined
+                ? issuedFingerprintForReport(
+                    snapshot,
+                    input.authenticatedServerId,
+                    input.desiredRevisionSeq,
+                  )
+                : input.managedFingerprint,
           };
     const decision = evaluateAgentStageReport({
       rollout: snapshot.facts,
@@ -754,7 +859,8 @@ export async function recordManagedStageReport(
         serverId: input.authenticatedServerId,
         sessionId: input.sessionId,
         desiredRevisionSeq: input.desiredRevisionSeq,
-        managedFingerprint: issuedStage?.managedFingerprint ?? "",
+        managedFingerprint:
+          report.outcome === "applied" ? (report.managedFingerprint ?? "") : "",
       });
       if (confirmed.ok) {
         return {
@@ -808,7 +914,8 @@ export async function recordManagedStageReport(
         serverId: input.authenticatedServerId,
         sessionId: input.sessionId,
         desiredRevisionSeq: input.desiredRevisionSeq,
-        managedFingerprint: input.managedFingerprint ?? null,
+        managedFingerprint:
+          report.outcome === "applied" ? report.managedFingerprint : null,
       });
       if (proven.ok) {
         return {
