@@ -44,6 +44,7 @@ import {
   withoutNodeTlsMaterial,
 } from "@/orpc/proxy/sing-box-registry";
 import { recordConfigChange } from "@/query/config-change";
+import { deleteNodeWithMembershipCascade } from "@/query/group-membership-write";
 
 /** TanStack Query key for the admin node list. */
 export const NODES_QUERY_KEY = ["admin", "nodes"] as const;
@@ -725,23 +726,23 @@ export const deleteNode = createServerFn({ method: "POST" })
     await ensureAdmin();
     const { db, getDatabaseDriver } = await import("@/db");
     const databaseDriver = getDatabaseDriver();
-    // Snapshot before the delete so the agent revision bump carries the
-    // removed node's identity. (Subscriptions stop offering a deleted node
-    // immediately — the safe direction — so no gate snapshot is needed for
-    // replay; the change record only tracks the agent-side removal.)
-    const [existing] = await db.select().from(node).where(eq(node.id, data.id));
-    if (!existing) {
-      throw new Error("Not found");
-    }
     let changedServerIds: string[] = [];
     const run = async (tx: DbHandle) => {
-      const [row] = await tx
-        .delete(node)
-        .where(eq(node.id, data.id))
-        .returning();
-      if (!row) {
+      // Delete the node and compact every affected group's membership in one
+      // statement. The removed node's identity rides on the publish-gate
+      // record below; subscriptions omit a deleted node immediately.
+      const cascade = await deleteNodeWithMembershipCascade(
+        { nodeId: data.id },
+        {
+          database: tx,
+          driver: databaseDriver,
+          interactive: supportsInteractiveTransactions(databaseDriver),
+        },
+      );
+      if (!cascade) {
         throw new Error("Not found");
       }
+      const row = cascade.node;
       if (row.enabled) {
         const change = await recordConfigChange(tx, {
           kind: "node",

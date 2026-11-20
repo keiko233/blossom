@@ -567,6 +567,9 @@ export const nodeGroup = pgTable(
   (table) => [
     primaryKey({ columns: [table.nodeId, table.groupId] }),
     index("node_group_group_idx").on(table.groupId),
+    // The membership-order migration installs this as DEFERRABLE INITIALLY
+    // IMMEDIATE so a row-set position swap can run in one statement. Drizzle's
+    // table DSL cannot express deferrability; keep the migration authoritative.
     unique("node_group_group_position_unique").on(
       table.groupId,
       table.position,

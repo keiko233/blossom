@@ -1,3 +1,7 @@
+import {
+  buildEntranceOrderRanks,
+  orderGatedEntrances,
+} from "@blossom/domain/group-membership";
 import { and, asc, eq, gt, inArray, isNull, lt, or } from "drizzle-orm";
 
 import { type Database, db } from "@/db";
@@ -10,6 +14,7 @@ import {
   type Node,
   node,
   nodeGroup,
+  proxyGroup,
   server,
 } from "@/db/proxy-schema";
 import {
@@ -102,9 +107,13 @@ export async function getSubscriptionAccessibleNodes(
         address: server.address,
       },
       certificateKind: managedCertificate.kind,
+      groupId: proxyGroup.id,
+      groupSortOrder: proxyGroup.sortOrder,
+      position: nodeGroup.position,
     })
     .from(subscription)
     .innerJoin(planGroup, eq(planGroup.planId, subscription.planId))
+    .innerJoin(proxyGroup, eq(proxyGroup.id, planGroup.groupId))
     .innerJoin(nodeGroup, eq(nodeGroup.groupId, planGroup.groupId))
     .innerJoin(node, eq(node.id, nodeGroup.nodeId))
     .innerJoin(server, eq(server.id, node.serverId))
@@ -117,11 +126,27 @@ export async function getSubscriptionAccessibleNodes(
       ),
     );
 
+  // Subscription order: plan groups by (sort_order, group id), then each
+  // group's member positions with the stable node id as the final tie-breaker.
+  // Rank only this currently visible set; the publish gate later filters it
+  // without adding a pending, revoked, or disabled entrance back.
+  const ranks = buildEntranceOrderRanks(
+    rows.map((row) => ({
+      groupId: row.groupId,
+      groupSortOrder: row.groupSortOrder,
+      nodeId: row.node.id,
+      position: row.position,
+    })),
+  );
   const byId = new Map<string, ResolvedNode>();
   for (const { node: n, server: s, certificateKind } of rows) {
     byId.set(n.id, resolve(n, s, certificateKind));
   }
-  return [...byId.values()];
+  return orderGatedEntrances(
+    [...byId.values()],
+    ranks,
+    (resolved) => resolved.node.id,
+  );
 }
 
 /**
@@ -234,6 +259,7 @@ export async function getUserAccessibleNodes(
     })
     .from(subscription)
     .innerJoin(planGroup, eq(planGroup.planId, subscription.planId))
+    .innerJoin(proxyGroup, eq(proxyGroup.id, planGroup.groupId))
     .innerJoin(nodeGroup, eq(nodeGroup.groupId, planGroup.groupId))
     .innerJoin(node, eq(node.id, nodeGroup.nodeId))
     .innerJoin(server, eq(server.id, node.serverId))
@@ -246,6 +272,13 @@ export async function getUserAccessibleNodes(
         eq(node.enabled, true),
         eq(server.enabled, true),
       ),
+    )
+    .orderBy(
+      asc(subscription.id),
+      asc(proxyGroup.sortOrder),
+      asc(proxyGroup.id),
+      asc(nodeGroup.position),
+      asc(nodeGroup.nodeId),
     );
 
   // Dedupe in JS: DISTINCT over jsonb columns is awkward, and overlapping

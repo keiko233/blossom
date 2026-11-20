@@ -32,6 +32,9 @@ export interface PreviewNode {
 export interface PreviewGroup {
   id: string;
   name: string;
+  /** Lower sorts first; ties fall back to the stable group id. */
+  sortOrder?: number;
+  /** Current membership order (`position ASC, nodeId ASC`). */
   nodeIds: readonly string[];
 }
 
@@ -49,7 +52,10 @@ export interface EffectiveNode {
 }
 
 export interface EffectiveNodePreview {
-  /** Unique nodes, ordered by server name, node name and id. */
+  /**
+   * Unique nodes. Group previews sort by server name, node name and id;
+   * direct selections keep their first-occurrence membership order.
+   */
   nodes: EffectiveNode[];
   /** Nodes dropped from subscriptions because the node or server is disabled. */
   filteredCount: number;
@@ -78,6 +84,8 @@ function buildPreview(input: {
   memberships: ReadonlyArray<{ groupId: string; nodeIds: readonly string[] }>;
   nodes: readonly PreviewNode[];
   now: number;
+  /** Keeps membership order when false; group previews stay deterministic. */
+  sortNodes?: boolean;
 }): Pick<EffectiveNodePreview, "nodes" | "missingNodeIds"> {
   const nodeById = new Map(input.nodes.map((node) => [node.id, node]));
   const viaGroups = new Map<string, string[]>();
@@ -110,12 +118,14 @@ function buildPreview(input: {
       groupIds,
     };
   });
-  nodes.sort(
-    (a, b) =>
-      a.node.serverSummary.name.localeCompare(b.node.serverSummary.name) ||
-      a.node.name.localeCompare(b.node.name) ||
-      a.node.id.localeCompare(b.node.id),
-  );
+  if (input.sortNodes !== false) {
+    nodes.sort(
+      (a, b) =>
+        a.node.serverSummary.name.localeCompare(b.node.serverSummary.name) ||
+        a.node.name.localeCompare(b.node.name) ||
+        a.node.id.localeCompare(b.node.id),
+    );
+  }
   return { nodes, missingNodeIds: dedupe(missing) };
 }
 
@@ -146,10 +156,15 @@ export function previewEffectiveNodes(input: {
 }): EffectiveNodePreview {
   const groupById = new Map(input.groups.map((group) => [group.id, group]));
   const selected = dedupe(input.groupIds);
-  const known = selected.flatMap((id) => {
-    const group = groupById.get(id);
-    return group ? [group] : [];
-  });
+  const known = selected
+    .flatMap((id) => {
+      const group = groupById.get(id);
+      return group ? [group] : [];
+    })
+    .sort(
+      (a, b) =>
+        (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.id.localeCompare(b.id),
+    );
   return finish(
     buildPreview({
       memberships: known.map((group) => ({
@@ -158,6 +173,7 @@ export function previewEffectiveNodes(input: {
       })),
       nodes: input.nodes,
       now: input.now ?? Date.now(),
+      sortNodes: false,
     }),
     {
       unknownGroupIds: selected.filter((id) => !groupById.has(id)),
@@ -179,6 +195,7 @@ export function previewNodeSelection(input: {
       memberships: [{ groupId: "", nodeIds: input.nodeIds }],
       nodes: input.nodes,
       now: input.now ?? Date.now(),
+      sortNodes: false,
     }),
     { unknownGroupIds: [], emptyGroupIds: [] },
   );

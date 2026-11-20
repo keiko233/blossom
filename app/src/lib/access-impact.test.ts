@@ -207,31 +207,41 @@ describe("previewEffectiveNodes", () => {
     expect(onlyEmpty.nodes).toEqual([]);
   });
 
-  it("orders nodes deterministically by server, name and id", () => {
+  it("follows group sort and membership order instead of server/name sorting", () => {
     const nodes = [
       makeNode("3", { serverName: "beta", name: "z" }),
       makeNode("2", { serverName: "alpha", name: "b" }),
       makeNode("1", { serverName: "alpha", name: "a" }),
     ];
-    const ids = ["3", "2", "1"];
-    const forward = previewEffectiveNodes({
-      groupIds: ["g"],
-      groups: [group("g", ids)],
+    const groups = [
+      { ...group("g2", ["2", "1"]), sortOrder: 20 },
+      { ...group("g1", ["3", "2"]), sortOrder: 10 },
+    ];
+    const preview = previewEffectiveNodes({
+      groupIds: ["g2", "g1"],
+      groups,
       nodes,
       now: NOW,
     });
-    const reversed = previewEffectiveNodes({
-      groupIds: ["g"],
-      groups: [group("g", [...ids].reverse())],
-      nodes: [...nodes].reverse(),
-      now: NOW,
-    });
-    expect(forward.nodes.map((e) => e.node.id)).toEqual(["1", "2", "3"]);
-    expect(reversed.nodes.map((e) => e.node.id)).toEqual(["1", "2", "3"]);
+    // g1 first: 3, then 2. g2's 2 is already ranked; 1 follows.
+    expect(preview.nodes.map((e) => e.node.id)).toEqual(["3", "2", "1"]);
   });
 });
 
 describe("previewNodeSelection", () => {
+  it("keeps the draft membership order for the group editor preview", () => {
+    const preview = previewNodeSelection({
+      nodeIds: ["c", "a", "b"],
+      nodes: [makeNode("a"), makeNode("b"), makeNode("c")],
+      now: NOW,
+    });
+    expect(preview.nodes.map((entry) => entry.node.id)).toEqual([
+      "c",
+      "a",
+      "b",
+    ]);
+  });
+
   it("previews directly selected nodes with the same state rules", () => {
     const preview = previewNodeSelection({
       nodeIds: ["a", "off", "a", "ghost"],
