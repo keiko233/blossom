@@ -6,6 +6,7 @@
     "./agent-status": "./src/agent-status.ts",
     "./certificate-domain": "./src/certificate-domain.ts",
     "./config-revision": "./src/config-revision.ts",
+    "./group-membership": "./src/group-membership.ts",
     "./registration-policy": "./src/registration-policy.ts"
   }
 }

@@ -155,6 +155,12 @@ export const createGroupSchema = groupMetaSchema;
 
 export const updateGroupSchema = groupMetaSchema.partial().extend({
   id: z.string().min(1),
+  /**
+   * Optional optimistic-concurrency token (`proxy_group.revision`).
+   * Ordered group editor writes supply this so concurrent edits fail with a
+   * revision conflict; legacy compatibility callers may omit it.
+   */
+  expectedRevision: z.number().int().min(1).optional(),
 });
 
 export type CreateGroupInput = z.infer<typeof createGroupSchema>;

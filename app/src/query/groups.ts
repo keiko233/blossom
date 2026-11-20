@@ -1,3 +1,4 @@
+import { planGroupMembershipWrite } from "@blossom/domain/group-membership";
 import { createServerFn } from "@tanstack/react-start";
 import { asc, count, desc, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
@@ -17,9 +18,12 @@ import {
 } from "@/orpc/proxy/schema";
 import {
   listServerIdsForGroupIds,
-  listServerIdsForNodeIds,
   recordConfigChange,
 } from "@/query/config-change";
+import {
+  applyPlannedGroupMembershipUpdate,
+  listOrderedGroupMembers,
+} from "@/query/group-membership-write";
 
 /** TanStack Query key for the admin group list. */
 export const GROUPS_QUERY_KEY = ["admin", "groups"] as const;
@@ -33,8 +37,17 @@ export const listGroups = createServerFn({ method: "GET" }).handler(
         .from(proxyGroup)
         .orderBy(asc(proxyGroup.sortOrder), desc(proxyGroup.createdAt)),
       db
-        .select({ groupId: nodeGroup.groupId, nodeId: nodeGroup.nodeId })
-        .from(nodeGroup),
+        .select({
+          groupId: nodeGroup.groupId,
+          nodeId: nodeGroup.nodeId,
+          position: nodeGroup.position,
+        })
+        .from(nodeGroup)
+        .orderBy(
+          asc(nodeGroup.groupId),
+          asc(nodeGroup.position),
+          asc(nodeGroup.nodeId),
+        ),
       db
         .select({ groupId: planGroup.groupId, count: count() })
         .from(planGroup)
@@ -77,10 +90,7 @@ export const getGroup = createServerFn({ method: "GET" })
     if (!row) {
       throw new Error("Not found");
     }
-    const members = await db
-      .select({ nodeId: nodeGroup.nodeId })
-      .from(nodeGroup)
-      .where(eq(nodeGroup.groupId, data.id));
+    const members = await listOrderedGroupMembers(data.id);
     return { ...row, nodeIds: members.map((member) => member.nodeId) };
   });
 
@@ -120,6 +130,20 @@ export const createGroup = createServerFn({ method: "POST" })
     await ensureAdmin();
     const { nodeIds, ...meta } = data;
 
+    const planned = planGroupMembershipWrite({
+      currentMembers: [],
+      targetNodeIds: nodeIds,
+      mode: "ordered",
+    });
+    if (!planned.ok) {
+      if (planned.duplicateNodeIds.length > 0) {
+        throw new Error(
+          `Duplicate entrance IDs in group membership: ${planned.duplicateNodeIds.join(", ")}`,
+        );
+      }
+      throw new Error("Invalid empty entrance ID in group membership");
+    }
+
     // Sequential statements: the neon-http driver has no interactive
     // transactions. Parent row goes first so a partial failure never leaves
     // orphaned junction rows (they cascade on group delete anyway).
@@ -128,10 +152,14 @@ export const createGroup = createServerFn({ method: "POST" })
       .values({ id: randomUUID(), ...meta })
       .returning();
 
-    if (nodeIds.length > 0) {
-      await db
-        .insert(nodeGroup)
-        .values(nodeIds.map((nodeId) => ({ nodeId, groupId: row.id })));
+    if (planned.plan.insertedMembers.length > 0) {
+      await db.insert(nodeGroup).values(
+        planned.plan.insertedMembers.map((member) => ({
+          nodeId: member.nodeId,
+          groupId: row.id,
+          position: member.position,
+        })),
+      );
     }
     return row;
   });
@@ -146,52 +174,14 @@ export const updateGroup = createServerFn({ method: "POST" })
   .validator(updateGroupSchema)
   .handler(async ({ data }) => {
     await ensureAdmin();
-    const { id, nodeIds, ...meta } = data;
+    const { id, nodeIds, expectedRevision, ...meta } = data;
 
-    const [row] = await db
-      .update(proxyGroup)
-      .set(meta)
-      .where(eq(proxyGroup.id, id))
-      .returning();
-    if (!row) {
-      throw new Error("Not found");
-    }
-
-    // Replace the full membership: delete + insert beats diffing at this scale.
-    if (nodeIds !== undefined) {
-      const previousNodeIds = (
-        await db
-          .select({ nodeId: nodeGroup.nodeId })
-          .from(nodeGroup)
-          .where(eq(nodeGroup.groupId, id))
-      ).map((member) => member.nodeId);
-      await db.delete(nodeGroup).where(eq(nodeGroup.groupId, id));
-      if (nodeIds.length > 0) {
-        await db
-          .insert(nodeGroup)
-          .values(nodeIds.map((nodeId) => ({ nodeId, groupId: id })));
-      }
-      // Publish gate: newly membered nodes stay out of subscriptions until
-      // the hosting agents apply the change; removed nodes drop immediately.
-      const unchanged =
-        previousNodeIds.length === nodeIds.length &&
-        previousNodeIds.every((nodeId) => nodeIds.includes(nodeId));
-      if (!unchanged) {
-        const change = await recordConfigChange(db, {
-          kind: "authorization",
-          subjectId: id,
-          prevRow: { nodeIds: previousNodeIds },
-          serverIds: await listServerIdsForNodeIds(db, [
-            ...new Set([...previousNodeIds, ...nodeIds]),
-          ]),
-        });
-        await notifyAgentConfigChanged(
-          change.serverIds,
-          "group membership changed",
-        );
-      }
-    }
-    return row;
+    return applyPlannedGroupMembershipUpdate({
+      groupId: id,
+      expectedRevision,
+      metadata: meta,
+      nodeIds,
+    });
   });
 
 export const deleteGroup = createServerFn({ method: "POST" })
@@ -206,12 +196,9 @@ export const deleteGroup = createServerFn({ method: "POST" })
     await ensureAdmin();
     // Publish gate: capture membership before the cascade wipes it so the
     // affected servers' agents get a revision bump for the removal.
-    const previousNodeIds = (
-      await db
-        .select({ nodeId: nodeGroup.nodeId })
-        .from(nodeGroup)
-        .where(eq(nodeGroup.groupId, data.id))
-    ).map((member) => member.nodeId);
+    const previousNodeIds = (await listOrderedGroupMembers(data.id)).map(
+      (member) => member.nodeId,
+    );
     const serverIds = await listServerIdsForGroupIds(db, [data.id]);
     const [row] = await db
       .delete(proxyGroup)
