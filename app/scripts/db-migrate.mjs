@@ -1,8 +1,9 @@
 import { config as loadDotenv } from "dotenv";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
 
@@ -256,29 +257,180 @@ export function verifyHyperdriveAlignment({
   }
 }
 
-export async function verifyAppliedMigrations(connectionString, drizzleDir) {
+const DEFAULT_MIGRATE_MAX_ATTEMPTS = 3;
+const DEFAULT_RETRY_BASE_DELAY_MS = 1000;
+
+const TRANSIENT_DB_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ECONNREFUSED",
+  "EPIPE",
+  "EAI_AGAIN",
+  "ENOTFOUND",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "57P01", // admin_shutdown
+  "57P02", // crash_shutdown
+  "57P03", // cannot_connect_now
+]);
+
+const TRANSIENT_DB_ERROR_PATTERN =
+  /\b(ECONNRESET|ETIMEDOUT|ECONNREFUSED|EPIPE|EAI_AGAIN|ENOTFOUND|ENETUNREACH|EHOSTUNREACH)\b|Connection terminated unexpectedly|Client has encountered a connection error|socket hang up|the database system is starting up|the database system is shutting down|terminating connection due to administrator command/i;
+
+export function isTransientDbError(errorOrOutput) {
+  if (!errorOrOutput) {
+    return false;
+  }
+  if (typeof errorOrOutput === "string") {
+    return TRANSIENT_DB_ERROR_PATTERN.test(errorOrOutput);
+  }
+  if (typeof errorOrOutput === "object") {
+    const code = "code" in errorOrOutput ? errorOrOutput.code : undefined;
+    if (typeof code === "string" && TRANSIENT_DB_ERROR_CODES.has(code)) {
+      return true;
+    }
+    const message =
+      "message" in errorOrOutput ? errorOrOutput.message : undefined;
+    if (
+      typeof message === "string" &&
+      TRANSIENT_DB_ERROR_PATTERN.test(message)
+    ) {
+      return true;
+    }
+    if ("cause" in errorOrOutput && errorOrOutput.cause) {
+      return isTransientDbError(errorOrOutput.cause);
+    }
+  }
+  return false;
+}
+
+function spawnStreaming(command, args, { cwd, spawnImpl = spawn }) {
+  return new Promise((resolve, reject) => {
+    const child = spawnImpl(command, args, {
+      cwd,
+      stdio: ["inherit", "pipe", "pipe"],
+    });
+    let output = "";
+
+    child.stdout?.on("data", (chunk) => {
+      const text = chunk.toString();
+      output += text;
+      process.stdout.write(chunk);
+    });
+    child.stderr?.on("data", (chunk) => {
+      const text = chunk.toString();
+      output += text;
+      process.stderr.write(chunk);
+    });
+
+    child.on("error", (err) => {
+      reject(err);
+    });
+    child.on("close", (code) => {
+      resolve({ status: code ?? 1, output });
+    });
+  });
+}
+
+export async function runDrizzleMigrate({
+  appDir,
+  args = [],
+  maxAttempts = DEFAULT_MIGRATE_MAX_ATTEMPTS,
+  baseDelayMs = DEFAULT_RETRY_BASE_DELAY_MS,
+  sleep = delay,
+  spawnImpl = spawn,
+  logger = console,
+}) {
+  const drizzleKitBin = path.join(appDir, "node_modules/.bin/drizzle-kit");
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let status;
+    let output = "";
+    try {
+      ({ status, output } = await spawnStreaming(
+        drizzleKitBin,
+        ["migrate", ...args],
+        { cwd: appDir, spawnImpl },
+      ));
+    } catch (err) {
+      if (attempt < maxAttempts && isTransientDbError(err)) {
+        const waitMs = baseDelayMs * 2 ** (attempt - 1);
+        logger.warn(
+          `Transient error spawning drizzle-kit migrate (attempt ${attempt}/${maxAttempts}); retrying in ${waitMs}ms...`,
+        );
+        await sleep(waitMs);
+        continue;
+      }
+      throw err;
+    }
+
+    if (status === 0) {
+      return 0;
+    }
+
+    if (attempt < maxAttempts && isTransientDbError(output)) {
+      const waitMs = baseDelayMs * 2 ** (attempt - 1);
+      logger.warn(
+        `Transient database connection error during drizzle-kit migrate (attempt ${attempt}/${maxAttempts}); retrying in ${waitMs}ms...`,
+      );
+      await sleep(waitMs);
+      continue;
+    }
+
+    return status;
+  }
+
+  return 1;
+}
+
+export async function verifyAppliedMigrations(
+  connectionString,
+  drizzleDir,
+  {
+    maxAttempts = DEFAULT_MIGRATE_MAX_ATTEMPTS,
+    baseDelayMs = DEFAULT_RETRY_BASE_DELAY_MS,
+    sleep = delay,
+    createClient = (connStr) => new Client({ connectionString: connStr }),
+    logger = console,
+  } = {},
+) {
   const localMigrations = collectLocalMigrations(drizzleDir);
   if (localMigrations.length === 0) {
     return localMigrations;
   }
 
-  const client = new Client({ connectionString });
-  await client.connect();
-  try {
-    const res = await client.query(
-      "SELECT hash FROM drizzle.__drizzle_migrations",
-    );
-    const appliedHashes = new Set(res.rows.map((row) => row.hash));
-    const missing = findMissingMigrationHashes(localMigrations, appliedHashes);
-    if (missing.length > 0) {
-      const names = missing.map((m) => m.name).join(", ");
-      throw new Error(
-        `Migration verification failed: ${missing.length} migration(s) are not recorded in drizzle.__drizzle_migrations (${names}).`,
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const client = createClient(connectionString);
+    try {
+      await client.connect();
+      const res = await client.query(
+        "SELECT hash FROM drizzle.__drizzle_migrations",
       );
+      const appliedHashes = new Set(res.rows.map((row) => row.hash));
+      const missing = findMissingMigrationHashes(
+        localMigrations,
+        appliedHashes,
+      );
+      if (missing.length > 0) {
+        const names = missing.map((m) => m.name).join(", ");
+        throw new Error(
+          `Migration verification failed: ${missing.length} migration(s) are not recorded in drizzle.__drizzle_migrations (${names}).`,
+        );
+      }
+      return localMigrations;
+    } catch (err) {
+      if (attempt < maxAttempts && isTransientDbError(err)) {
+        const waitMs = baseDelayMs * 2 ** (attempt - 1);
+        logger.warn(
+          `Transient database connection error verifying applied migrations (attempt ${attempt}/${maxAttempts}); retrying in ${waitMs}ms...`,
+        );
+        await sleep(waitMs);
+        continue;
+      }
+      throw err;
+    } finally {
+      await client.end().catch(() => {});
     }
-    return localMigrations;
-  } finally {
-    await client.end();
   }
 }
 
@@ -297,21 +449,12 @@ async function main() {
     verifyHyperdriveAlignment({ appDir, databaseTarget });
   }
 
-  const drizzleKitBin = path.join(appDir, "node_modules/.bin/drizzle-kit");
-  const result = spawnSync(
-    drizzleKitBin,
-    ["migrate", ...process.argv.slice(2)],
-    {
-      cwd: appDir,
-      stdio: "inherit",
-    },
-  );
-
-  if (result.error) {
-    throw result.error;
-  }
-  if ((result.status ?? 1) !== 0) {
-    process.exit(result.status ?? 1);
+  const status = await runDrizzleMigrate({
+    appDir,
+    args: process.argv.slice(2),
+  });
+  if (status !== 0) {
+    process.exit(status);
   }
 
   const applied = await verifyAppliedMigrations(
