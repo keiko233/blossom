@@ -235,6 +235,7 @@ export const createServerBootstrapGrant = createServerFn({ method: "POST" })
       release,
       createdById: session.user.id,
       now: new Date(),
+      disableBackupOnPromote: data.migrateFromStaticToken ?? false,
     });
 
     setResponseHeaders(

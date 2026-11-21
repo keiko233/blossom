@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   check,
   integer,
   index,
@@ -59,6 +60,11 @@ export const agentEnrollmentGrant = pgTable(
     tokenHash: text("token_hash").notNull().unique(),
     capabilities: jsonb("capabilities").$type<string[]>().default([]).notNull(),
     release: text("release"),
+    // When true, promoting the identity this grant created clears the server's
+    // legacy static backup token in the same statement that moves the fence.
+    disableBackupOnPromote: boolean("disable_backup_on_promote")
+      .default(false)
+      .notNull(),
     status: text("status")
       .$type<AgentEnrollmentGrantStatus>()
       .default("issued")

@@ -540,7 +540,7 @@ export async function promoteAgentV2WsSession(
   const rows = await database.execute<{ id: string }>(
     sql`
       WITH proof AS MATERIALIZED (
-        SELECT s.id AS server_id, a.id AS identity_id, a.generation
+        SELECT s.id AS server_id, a.id AS identity_id, a.generation, a.grant_id
         FROM server s
         JOIN agent_identity a ON a.server_id = s.id
         JOIN oauth_client oc ON oc.client_id = a.oauth_client_id
@@ -607,6 +607,22 @@ export async function promoteAgentV2WsSession(
             ws_pending_identity_id = NULL,
             ws_pending_generation = NULL,
             ws_pending_expires_at = NULL,
+            agent_token_hash = CASE
+              WHEN EXISTS (
+                SELECT 1 FROM agent_enrollment_grant g
+                JOIN proof p ON p.grant_id = g.id
+                WHERE g.disable_backup_on_promote = true
+              ) THEN NULL
+              ELSE s.agent_token_hash
+            END,
+            agent_token_prefix = CASE
+              WHEN EXISTS (
+                SELECT 1 FROM agent_enrollment_grant g
+                JOIN proof p ON p.grant_id = g.id
+                WHERE g.disable_backup_on_promote = true
+              ) THEN NULL
+              ELSE s.agent_token_prefix
+            END,
             updated_at = timezone('utc', now())
         WHERE s.id = ${serverId}::text
           AND EXISTS (SELECT 1 FROM proof)
