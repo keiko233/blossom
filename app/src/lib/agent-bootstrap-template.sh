@@ -78,6 +78,11 @@ install_docker() {
   volume=blossom-agent-data
   docker volume create "$volume" >/dev/null
 
+  # Remove any stale agent binary so entrypoint.sh downloads the requested
+  # AGENT_VERSION (preserving /data/state and /data/certificates on upgrades).
+  docker run --rm -v "$volume:/data" --entrypoint sh "$IMAGE" -c \
+    'rm -f /data/bin/server-agent' >/dev/null 2>&1 || true
+
   # The image downloads both binaries into /data on first start. `--version`
   # prints the version and exits before any network call; a placeholder
   # AGENT_TOKEN satisfies entrypoint.sh's pre-exec check without touching
