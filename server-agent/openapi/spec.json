@@ -61,6 +61,365 @@
           "status",
           "message"
         ]
+      },
+      "CertificateArtifact": {
+        "type": "object",
+        "properties": {
+          "certificateId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "fingerprintSha256": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "notBefore": {
+            "type": "string"
+          },
+          "notAfter": {
+            "type": "string"
+          },
+          "certificatePem": {
+            "type": "string",
+            "minLength": 1
+          },
+          "privateKeyPem": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "certificateId",
+          "generation",
+          "domains",
+          "fingerprintSha256",
+          "notBefore",
+          "notAfter",
+          "certificatePem",
+          "privateKeyPem"
+        ]
+      },
+      "ManagedTlsBinding": {
+        "type": "object",
+        "properties": {
+          "nodeId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "inboundTag": {
+            "type": "string",
+            "minLength": 1
+          },
+          "certificateId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "serverName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "nodeId",
+          "inboundTag",
+          "certificateId",
+          "generation",
+          "serverName"
+        ]
+      },
+      "ManagedPeerTlsBinding": {
+        "type": "object",
+        "properties": {
+          "bindingId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "runtimeTag": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "direction": {
+            "enum": [
+              "inbound",
+              "outbound"
+            ],
+            "type": "string"
+          },
+          "ownerKind": {
+            "enum": [
+              "peer_inbound",
+              "peer_outbound"
+            ],
+            "type": "string"
+          },
+          "ownerId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "certificateId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "fingerprintSha256": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "serverName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 253
+          },
+          "usage": {
+            "enum": [
+              "identity_fullchain_and_key",
+              "peer_ca_trust"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "bindingId",
+          "runtimeTag",
+          "direction",
+          "ownerKind",
+          "ownerId",
+          "certificateId",
+          "generation",
+          "fingerprintSha256",
+          "serverName",
+          "usage"
+        ]
+      },
+      "ManagedPeerTrustArtifact": {
+        "type": "object",
+        "properties": {
+          "certificateId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "fingerprintSha256": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "notBefore": {
+            "type": "string"
+          },
+          "notAfter": {
+            "type": "string"
+          },
+          "certificatePem": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "certificateId",
+          "generation",
+          "domains",
+          "fingerprintSha256",
+          "notBefore",
+          "notAfter",
+          "certificatePem"
+        ]
+      },
+      "ManagedRuleSetBinding": {
+        "type": "object",
+        "properties": {
+          "runtimeTag": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "ruleSetId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "format": {
+            "enum": [
+              "binary"
+            ],
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 524288
+          }
+        },
+        "required": [
+          "runtimeTag",
+          "ruleSetId",
+          "version",
+          "format",
+          "sha256",
+          "sizeBytes"
+        ]
+      },
+      "ManagedRuleSetArtifact": {
+        "type": "object",
+        "properties": {
+          "ruleSetId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "format": {
+            "enum": [
+              "binary"
+            ],
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 524288
+          },
+          "contentBase64": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 699052
+          }
+        },
+        "required": [
+          "ruleSetId",
+          "version",
+          "format",
+          "sha256",
+          "sizeBytes",
+          "contentBase64"
+        ]
+      },
+      "ManagedSnapshotExtension": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "enum": [
+              1
+            ]
+          },
+          "configVersionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "intentDigest": {
+            "type": "string",
+            "minLength": 71,
+            "maxLength": 71
+          },
+          "managedFingerprint": {
+            "type": "string",
+            "minLength": 71,
+            "maxLength": 71
+          },
+          "tlsBindings": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "$ref": "#/components/schemas/ManagedPeerTlsBinding"
+            }
+          },
+          "peerTrustArtifacts": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "$ref": "#/components/schemas/ManagedPeerTrustArtifact"
+            }
+          },
+          "ruleSetBindings": {
+            "type": "array",
+            "maxItems": 256,
+            "items": {
+              "$ref": "#/components/schemas/ManagedRuleSetBinding"
+            }
+          },
+          "ruleSetArtifacts": {
+            "type": "array",
+            "maxItems": 256,
+            "items": {
+              "$ref": "#/components/schemas/ManagedRuleSetArtifact"
+            }
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "configVersionId",
+          "intentDigest",
+          "managedFingerprint",
+          "tlsBindings",
+          "peerTrustArtifacts",
+          "ruleSetBindings",
+          "ruleSetArtifacts"
+        ]
       }
     }
   },
@@ -129,97 +488,17 @@
                     "managedTlsBindings": {
                       "type": "array",
                       "items": {
-                        "type": "object",
-                        "properties": {
-                          "nodeId": {
-                            "type": "string",
-                            "minLength": 1
-                          },
-                          "inboundTag": {
-                            "type": "string",
-                            "minLength": 1
-                          },
-                          "certificateId": {
-                            "type": "string",
-                            "minLength": 1
-                          },
-                          "generation": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 9007199254740991
-                          },
-                          "serverName": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "required": [
-                          "nodeId",
-                          "inboundTag",
-                          "certificateId",
-                          "generation",
-                          "serverName"
-                        ]
+                        "$ref": "#/components/schemas/ManagedTlsBinding"
                       }
                     },
                     "certificateArtifacts": {
                       "type": "array",
                       "items": {
-                        "type": "object",
-                        "properties": {
-                          "certificateId": {
-                            "type": "string",
-                            "minLength": 1
-                          },
-                          "generation": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 9007199254740991
-                          },
-                          "domains": {
-                            "type": "array",
-                            "items": {
-                              "type": "string",
-                              "minLength": 1
-                            }
-                          },
-                          "fingerprintSha256": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 256
-                          },
-                          "notBefore": {
-                            "type": "string"
-                          },
-                          "notAfter": {
-                            "type": "string"
-                          },
-                          "certificatePem": {
-                            "type": "string",
-                            "minLength": 1
-                          },
-                          "privateKeyPem": {
-                            "type": "string",
-                            "minLength": 1
-                          }
-                        },
-                        "required": [
-                          "certificateId",
-                          "generation",
-                          "domains",
-                          "fingerprintSha256",
-                          "notBefore",
-                          "notAfter",
-                          "certificatePem",
-                          "privateKeyPem"
-                        ]
+                        "$ref": "#/components/schemas/CertificateArtifact"
                       }
+                    },
+                    "managed": {
+                      "$ref": "#/components/schemas/ManagedSnapshotExtension"
                     }
                   },
                   "required": [

@@ -90,10 +90,7 @@ impl CertificateManager {
 
     /// Validates the artifact and stages it under the exact generation
     /// directory. Idempotent: identical validated material is not rewritten.
-    pub fn stage(
-        &self,
-        artifact: &types::GetAgentConfigV3ResponseCertificateArtifactsItem,
-    ) -> Result<StagedMaterial> {
+    pub fn stage(&self, artifact: &types::CertificateArtifact) -> Result<StagedMaterial> {
         let certificate_id = artifact.certificate_id.to_string();
         validate_certificate_id(&certificate_id)?;
         let generation = artifact.generation.get();
@@ -940,9 +937,9 @@ fUqnbG2/fNsWS1o7VTewVDOEFmYemJcFvnFfoq3ynjXQGJ5UAfOOFv1yo8n8CgAm
     fn artifact(
         generation: u64,
         certificate_id: &str,
-    ) -> crate::client::types::GetAgentConfigV3ResponseCertificateArtifactsItem {
+    ) -> crate::client::types::CertificateArtifact {
         let (certificate_pem, private_key_pem) = test_material();
-        crate::client::types::GetAgentConfigV3ResponseCertificateArtifactsItem {
+        crate::client::types::CertificateArtifact {
             certificate_id: certificate_id.parse().unwrap(),
             generation: std::num::NonZeroU64::new(generation).unwrap(),
             domains: vec![

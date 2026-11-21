@@ -17,6 +17,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Server } from "@/db/proxy-schema";
+import { ManagedCompileError } from "@/orpc/proxy/managed-singbox";
 
 import {
   encodeAgentWsV2ConfigNotify,
@@ -928,6 +929,61 @@ describe("agent WebSocket v2 status and configuration", () => {
         }),
       },
     ]);
+    expect(store.cacheDesiredRevision).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a managed server's agent did not negotiate the capability", async () => {
+    const fallback = `7:sha256:${"f".repeat(64)}`;
+    const store = makeStore({
+      loadCurrentServer: vi.fn(async () =>
+        server({ desiredConfigRevision: null, desiredConfigValidUntil: null }),
+      ),
+      recordHello: vi.fn(async () =>
+        server({ desiredConfigRevision: null, desiredConfigValidUntil: null }),
+      ),
+      compile: vi.fn(async () => {
+        throw new ManagedCompileError(
+          "unsupported_agent",
+          "the connected agent did not advertise the managed capability",
+          fallback,
+          7,
+        );
+      }),
+    });
+    const peer = makePeer();
+    const session = await welcomed(store, peer);
+
+    const welcome = received(peer)[0];
+    expect(welcome).toMatchObject({
+      kind: "welcome",
+      payload: {
+        desired: {
+          desiredRevisionSeq: 7,
+          desiredRevision: fallback,
+        },
+      },
+    });
+
+    await session.handleText(
+      agentFrame("config.get", {
+        requestId: "snap-managed",
+        reason: "mismatch",
+      }),
+    );
+
+    expect(received(peer).slice(1)).toEqual([
+      {
+        kind: "config.snapshot.error",
+        payload: expect.objectContaining({
+          requestId: "snap-managed",
+          code: "unavailable",
+          message: expect.stringContaining("managed capability"),
+        }),
+      },
+    ]);
+    expect(store.compile).toHaveBeenCalledWith(expect.anything(), {
+      agentCapabilities: ["config-v3"],
+    });
     expect(store.cacheDesiredRevision).not.toHaveBeenCalled();
   });
 

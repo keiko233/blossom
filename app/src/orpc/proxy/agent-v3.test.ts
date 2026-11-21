@@ -1,3 +1,8 @@
+import {
+  agentConfigV3OutputSchema,
+  managedStageIntentSchema,
+} from "@blossom/contracts/agent-config-v3";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import type { Node } from "@/db/proxy-schema";
@@ -9,8 +14,13 @@ import {
   canonicalize,
   compileServerConfig,
   computeDesiredRevision,
+  computeManagedStageIntentDigest,
+  computeManagedStateFingerprint,
   decideCertificateDeployment,
+  doesAppliedSnapshotProveStage,
   filterCertificateArtifactsForBindings,
+  intersectManagedRouteRulesWithMaterializedInbounds,
+  validateMaterializedSnapshotAgainstIntent,
   type CertificateArtifact,
   type CertificateArtifactContext,
   type ManagedTlsBinding,
@@ -527,5 +537,207 @@ describe("decideCertificateDeployment", () => {
 
   it("rejects when no active certificate material exists to verify against", () => {
     expect(decideCertificateDeployment(deployment, binding, null)).toBeNull();
+  });
+});
+
+describe("managed stage intent versus materialized snapshot (Task 07)", () => {
+  const fixtureFile = JSON.parse(
+    readFileSync(
+      new URL(
+        "../../../../packages/contracts/fixtures/agent-config-v3.snapshots.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  ) as {
+    stageIntent: unknown;
+    snapshots: {
+      name: string;
+      expect: string;
+      kind: string;
+      document: unknown;
+    }[];
+  };
+
+  it("separates pinned stage intent digest, stage-equivalence managed fingerprint, and materialized desiredRevision", () => {
+    const intent = managedStageIntentSchema.parse(fixtureFile.stageIntent);
+    const managedEntry = fixtureFile.snapshots.find(
+      (entry) => entry.name === "managed-v3-single-unit",
+    )!;
+    const snapshot = agentConfigV3OutputSchema.parse(managedEntry.document);
+
+    const intentDigest = computeManagedStageIntentDigest(intent);
+    const managedFingerprint = computeManagedStateFingerprint(intent);
+
+    expect(snapshot.managed?.intentDigest).toBe(intentDigest);
+    expect(snapshot.managed?.managedFingerprint).toBe(managedFingerprint);
+
+    const validation = validateMaterializedSnapshotAgainstIntent(
+      intent,
+      snapshot,
+    );
+    expect(validation).toEqual({
+      ok: true,
+      intentDigest,
+      managedFingerprint,
+      materializedRuntimeTags: [
+        "direct",
+        "direct-dprof1",
+        "node-n1",
+        "peer-in-pin1",
+        "peer-out-pout1",
+        "rule-set-geoip-cn",
+      ],
+      prunedZeroUserSubscriberTags: ["node-n2"],
+      issues: [],
+    });
+
+    // Subscriber certificate rotation or zero-user structural edits do not
+    // move the stage-equivalence managedFingerprint, while changing a peer
+    // credential generation or required runtime tag does.
+    const subscriberRotatedIntent = {
+      ...intent,
+      subscriberInbounds: intent.subscriberInbounds.map((inbound) =>
+        inbound.nodeId === "n1"
+          ? {
+              ...inbound,
+              settingsDigest: `sha256:${"9".repeat(64)}`,
+            }
+          : inbound,
+      ),
+    };
+    expect(computeManagedStageIntentDigest(subscriberRotatedIntent)).not.toBe(
+      intentDigest,
+    );
+    expect(computeManagedStateFingerprint(subscriberRotatedIntent)).toBe(
+      managedFingerprint,
+    );
+
+    const peerRotatedIntent = {
+      ...intent,
+      peerInbounds: intent.peerInbounds.map((peer) => ({
+        ...peer,
+        admissions: peer.admissions.map((admission) => ({
+          ...admission,
+          credentialGeneration: admission.credentialGeneration + 1,
+        })),
+      })),
+    };
+    expect(computeManagedStateFingerprint(peerRotatedIntent)).not.toBe(
+      managedFingerprint,
+    );
+
+    // Materialized revision includes the managed extension metadata when
+    // present, and preserves the exact legacy hash when omitted.
+    const config = compiledConfig();
+    const bindings = sampleBindings();
+    const artifacts = sampleArtifacts();
+    const legacyRev = computeDesiredRevision(config, bindings, artifacts, [
+      "n1",
+    ]);
+    const managedRev = computeDesiredRevision(
+      config,
+      bindings,
+      artifacts,
+      ["n1"],
+      snapshot.managed,
+    );
+    expect(managedRev).not.toBe(legacyRev);
+    expect(
+      computeDesiredRevision(config, bindings, artifacts, ["n1"], null),
+    ).toBe(legacyRev);
+  });
+
+  it("intersects route scopes with materialized inbounds and drops rules with an empty intersection", () => {
+    const intent = managedStageIntentSchema.parse(fixtureFile.stageIntent);
+    const scoped = intersectManagedRouteRulesWithMaterializedInbounds(
+      intent.routingPolicy.rules,
+      new Set(["node-n1", "peer-in-pin1"]),
+    );
+    expect(scoped).toHaveLength(1);
+    expect(scoped[0]?.ruleId).toBe("rule-cn-to-b");
+    expect(scoped[0]?.inboundTags).toEqual(["node-n1"]);
+  });
+
+  it("rejects materialization when a required peer tag is missing, a removed tag lingers, or an artifact is absent", () => {
+    const intent = managedStageIntentSchema.parse(fixtureFile.stageIntent);
+    const managedEntry = fixtureFile.snapshots.find(
+      (entry) => entry.name === "managed-v3-single-unit",
+    )!;
+    const snapshot = agentConfigV3OutputSchema.parse(managedEntry.document);
+
+    const brokenSnapshot: typeof snapshot = {
+      ...snapshot,
+      singboxConfig: {
+        ...snapshot.singboxConfig,
+        inbounds: [
+          {
+            type: "vless",
+            tag: "node-n1",
+          },
+        ],
+        outbounds: [
+          { type: "direct", tag: "direct" },
+          { type: "trojan", tag: "peer-out-retired0" },
+        ],
+      },
+      managed: {
+        ...snapshot.managed!,
+        peerTrustArtifacts: [],
+        ruleSetArtifacts: [],
+      },
+    };
+
+    const validation = validateMaterializedSnapshotAgainstIntent(
+      intent,
+      brokenSnapshot,
+    );
+    expect(validation.ok).toBe(false);
+    expect(validation.issues.map((issue) => issue.code)).toEqual([
+      "missing_required_runtime_tag",
+      "missing_required_runtime_tag",
+      "missing_required_runtime_tag",
+      "present_removed_runtime_tag",
+      "unresolved_route_outbound",
+      "missing_peer_tls_artifact",
+      "missing_rule_set_artifact",
+    ]);
+  });
+
+  it("proves a rollout stage only at or above minRevisionSeq with the matching managedFingerprint", () => {
+    const stage = {
+      minRevisionSeq: 12,
+      managedFingerprint: `sha256:${"a".repeat(64)}`,
+    };
+    expect(
+      doesAppliedSnapshotProveStage(stage, {
+        desiredRevisionSeq: 12,
+        managedFingerprint: stage.managedFingerprint,
+      }),
+    ).toBe(true);
+    expect(
+      doesAppliedSnapshotProveStage(stage, {
+        desiredRevisionSeq: 15,
+        managedFingerprint: stage.managedFingerprint,
+      }),
+    ).toBe(true);
+    expect(
+      doesAppliedSnapshotProveStage(stage, {
+        desiredRevisionSeq: 11,
+        managedFingerprint: stage.managedFingerprint,
+      }),
+    ).toBe(false);
+    expect(
+      doesAppliedSnapshotProveStage(stage, {
+        desiredRevisionSeq: 15,
+        managedFingerprint: `sha256:${"b".repeat(64)}`,
+      }),
+    ).toBe(false);
+    expect(
+      doesAppliedSnapshotProveStage(stage, {
+        desiredRevisionSeq: 15,
+        managedFingerprint: null,
+      }),
+    ).toBe(false);
   });
 });

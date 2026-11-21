@@ -61,7 +61,37 @@ Discard a partial snapshot on disconnect and request a new one after reconnect. 
 - `desired.desiredRevisionSeq` is the publish-gate sequence. `desired.desiredRevision` is `"<seq>:sha256:<hex>"` and must begin with that same sequence.
 - A version-target change travels in `welcome.updatePolicy` and `agent.status.ack.updatePolicy`. It does not change the configuration identifier, so it does not cause a configuration transfer.
 
-## Status
+## Managed networking snapshot extension
+
+**Established contract, activation disabled.** The V3 body carries an optional
+`managed` object for the single-unit managed-networking extension. It is
+omitted for legacy servers, so their document and `desiredRevision` hash are
+byte-for-byte unchanged.
+
+- The compiler reads the server sequence and `managed_server_state`
+  `desired_config_version_id` in one statement, then loads that immutable
+  `managed_config_version.intent`. Live subscriber users and certificates stay
+  live; the intent supplies peer structure, routing policy, link generations
+  and artifact references.
+- `intentDigest` hashes the frozen structural intent before dynamic admission
+  and zero-user pruning. `managedFingerprint` is the stage-equivalence value:
+  it ignores subscriber admission/pruning and subscriber certificate rotation,
+  but changes on a peer generation or required/removed runtime tag.
+  `desiredRevision` still hashes the materialized config, users, certificates
+  and extension metadata.
+- Route scopes are intersected with materialized inbounds. A rule scoped only
+  to a zero-user listener is dropped rather than widened, and a catch-all peer
+  route is TCP-only with an ingress-scoped UDP/QUIC reject.
+- Receiver certificate fullchains and keys stay in `certificateArtifacts` and
+  are scoped to the receiver's peer inbound binding. Sender trust is public-only
+  `peerTrustArtifacts`; rule sets are digest-verified binary SRS artifacts bound
+  by runtime tag, within the 512 KiB per-asset, 2 MiB aggregate, 6 MiB preview
+  and 8 MiB wire budgets.
+- A v2 agent advertises `managed-networking-v1`. A server with managed desired
+  or last-known-good state refuses HTTP/v1 delivery and fails closed when the
+  connected agent lacks the capability. Task 08 owns rollout issue/confirm/
+  recovery, probes and notification; Task 07 only delivers and applies the
+  current pointer.
 
 - `agent.status` `{reason, runtimeState?, configState?, singBoxVersion?, activeNodeIds?, error?, certificateDeployments, updates?}` reports only the fields present. `error: null` clears the last error.
 - `agent.status.ack` `{desired, updatePolicy, logPolicyRevision?}` carries the control plane's identifier. If it differs from the applied identifier, send `config.get`. This is how a lost `config.notify` is recovered. The identifier is authoritative within the bounds in [Known limits](#known-limits-of-the-control-plane): a change that no path signalled is reflected at the first status exchange after the cached identifier's deadline. A newer `logPolicyRevision` recovers a missed policy notification through `log.policy.get`.

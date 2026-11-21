@@ -1,3 +1,52 @@
+import {
+  agentConfigV3OutputSchema,
+  type AgentConfigV3Output,
+  certificateArtifactSchema,
+  type CertificateArtifact,
+  formatManagedPeerTlsBindingId,
+  MANAGED_NETWORKING_V2_CAPABILITY,
+  MANAGED_PEER_TLS_DIRECTIONS,
+  MANAGED_PEER_TLS_OWNER_KINDS,
+  MANAGED_PEER_TLS_USAGES,
+  MANAGED_RULE_SET_FORMATS,
+  MANAGED_SNAPSHOT_LIMITS,
+  MANAGED_SNAPSHOT_SCHEMA_VERSION,
+  MANAGED_STAGE_INTENT_SCHEMA_VERSION,
+  managedIntentOutboundSchema,
+  type ManagedIntentOutbound,
+  managedIntentPeerAdmissionSchema,
+  type ManagedIntentPeerAdmission,
+  managedIntentPeerInboundSchema,
+  type ManagedIntentPeerInbound,
+  managedIntentPeerTrustRefSchema,
+  type ManagedIntentPeerTrustRef,
+  managedIntentRouteRuleSchema,
+  type ManagedIntentRouteRule,
+  managedIntentSubscriberInboundSchema,
+  type ManagedIntentSubscriberInbound,
+  managedPeerCertificateDeploymentSchema,
+  type ManagedPeerCertificateDeployment,
+  managedPeerTlsBindingSchema,
+  type ManagedPeerTlsBinding,
+  type ManagedPeerTlsDirection,
+  type ManagedPeerTlsOwnerKind,
+  type ManagedPeerTlsUsage,
+  managedPeerTrustArtifactSchema,
+  type ManagedPeerTrustArtifact,
+  managedRuleSetArtifactSchema,
+  type ManagedRuleSetArtifact,
+  managedRuleSetBindingSchema,
+  type ManagedRuleSetBinding,
+  type ManagedRuleSetFormat,
+  managedSnapshotExtensionSchema,
+  type ManagedSnapshotExtension,
+  managedStageExpectationsSchema,
+  type ManagedStageExpectations,
+  managedStageIntentSchema,
+  type ManagedStageIntent,
+  managedTlsBindingSchema,
+  type ManagedTlsBinding,
+} from "@blossom/contracts/agent-config-v3";
 import { z } from "zod";
 
 import {
@@ -326,56 +375,55 @@ export const heartbeatSchema = z.object({
     .optional(),
 });
 
-/**
- * One managed TLS binding: an enabled node whose inbound serves a managed
- * certificate. `generation` is the certificate material version the node is
- * expected to serve; the agent matches this against `certificateArtifacts` and
- * reports progress back through heartbeat `certificateDeployments`.
- */
-export const managedTlsBindingSchema = z.object({
-  nodeId: z.string().min(1),
-  inboundTag: z.string().min(1),
-  certificateId: z.string().min(1),
-  generation: z.number().int().min(1),
-  serverName: z.string().nullable(),
-});
-
-/**
- * Certificate material the agent is allowed to install on the calling server,
- * plus the fingerprint used for acknowledgement matching. PEM bytes are carried
- * only here (never hashed into the revision — the fingerprint stands in).
- */
-export const certificateArtifactSchema = z.object({
-  certificateId: z.string().min(1),
-  generation: z.number().int().min(1),
-  domains: z.array(z.string().min(1)),
-  fingerprintSha256: z.string().min(1).max(256),
-  notBefore: z.string(),
-  notAfter: z.string(),
-  certificatePem: z.string().min(1),
-  privateKeyPem: z.string().min(1),
-});
-
-/**
- * V3 agent desired-state document. Fully typed except the sing-box base config
- * object itself, which the agent treats as opaque JSON.
- */
-export const agentConfigV3OutputSchema = z.object({
-  apiVersion: z.literal(3),
-  agent: z.object({
-    configPollIntervalSeconds: z.number().int(),
-    heartbeatIntervalSeconds: z.number().int(),
-    desiredAgentVersion: z.string().min(1).max(64).optional(),
-    desiredSingBoxVersion: z.string().min(1).max(64).optional(),
-  }),
-  desiredRevision: z.string().min(1),
-  materializedNodeIds: z.array(z.string().min(1)),
-  singboxConfig: z.looseObject({}),
-  managedTlsBindings: z.array(managedTlsBindingSchema),
-  certificateArtifacts: z.array(certificateArtifactSchema),
-});
-
-export type AgentConfigV3Output = z.infer<typeof agentConfigV3OutputSchema>;
+export {
+  agentConfigV3OutputSchema,
+  type AgentConfigV3Output,
+  certificateArtifactSchema,
+  type CertificateArtifact,
+  formatManagedPeerTlsBindingId,
+  MANAGED_NETWORKING_V2_CAPABILITY,
+  MANAGED_PEER_TLS_DIRECTIONS,
+  MANAGED_PEER_TLS_OWNER_KINDS,
+  MANAGED_PEER_TLS_USAGES,
+  MANAGED_RULE_SET_FORMATS,
+  MANAGED_SNAPSHOT_LIMITS,
+  MANAGED_SNAPSHOT_SCHEMA_VERSION,
+  MANAGED_STAGE_INTENT_SCHEMA_VERSION,
+  managedIntentOutboundSchema,
+  type ManagedIntentOutbound,
+  managedIntentPeerAdmissionSchema,
+  type ManagedIntentPeerAdmission,
+  managedIntentPeerInboundSchema,
+  type ManagedIntentPeerInbound,
+  managedIntentPeerTrustRefSchema,
+  type ManagedIntentPeerTrustRef,
+  managedIntentRouteRuleSchema,
+  type ManagedIntentRouteRule,
+  managedIntentSubscriberInboundSchema,
+  type ManagedIntentSubscriberInbound,
+  managedPeerCertificateDeploymentSchema,
+  type ManagedPeerCertificateDeployment,
+  managedPeerTlsBindingSchema,
+  type ManagedPeerTlsBinding,
+  type ManagedPeerTlsDirection,
+  type ManagedPeerTlsOwnerKind,
+  type ManagedPeerTlsUsage,
+  managedPeerTrustArtifactSchema,
+  type ManagedPeerTrustArtifact,
+  managedRuleSetArtifactSchema,
+  type ManagedRuleSetArtifact,
+  managedRuleSetBindingSchema,
+  type ManagedRuleSetBinding,
+  type ManagedRuleSetFormat,
+  managedSnapshotExtensionSchema,
+  type ManagedSnapshotExtension,
+  managedStageExpectationsSchema,
+  type ManagedStageExpectations,
+  managedStageIntentSchema,
+  type ManagedStageIntent,
+  managedTlsBindingSchema,
+  type ManagedTlsBinding,
+};
 export type CertificateDeployment = z.infer<typeof certificateDeploymentSchema>;
 
 /**

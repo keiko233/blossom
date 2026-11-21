@@ -2599,6 +2599,7 @@ mod tests {
                 secret: None,
             },
             referenced_generations: vec![],
+            managed_files: vec![],
             log_level: PolicyLevel::Default,
         };
         assert_eq!(

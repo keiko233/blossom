@@ -12,6 +12,7 @@ import {
 import { authenticateStaticAgentToken } from "@/lib/agent-static-auth";
 import { parseBearerToken } from "@/lib/agent-token";
 import { getServerEnv } from "@/lib/env";
+import { ManagedNetworkingRequiresV2Error } from "@/lib/managed-compile-error";
 import { getOAuthResourceIdentifiers } from "@/lib/oauth-provider-config";
 import { getRealtimeHub } from "@/lib/realtime-hub";
 import { buildAgentWelcome } from "@/orpc/proxy/agent-desired-state";
@@ -324,6 +325,9 @@ export async function handleAgentWsRequest(
     const welcome = await dependencies.buildWelcome(server);
     return await dependencies.hub.acceptAgent(request, server, welcome);
   } catch (error) {
+    if (error instanceof ManagedNetworkingRequiresV2Error) {
+      return rejectUpgrade(request, plainResponse(409, error.message));
+    }
     const message = error instanceof Error ? error.message : String(error);
     console.warn(`agent websocket upgrade failed: ${message}`);
     return rejectUpgrade(request, plainResponse(503, "WebSocket unavailable"));

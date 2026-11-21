@@ -218,13 +218,16 @@ export function createAgentWsV2Store(
         database,
       );
     },
-    compile: async (server) => {
+    compile: async (server, options) => {
       const desired = await buildAgentDesiredState(server, {
         database,
         advanceCertificates: false,
+        managedDelivery: "v2",
+        agentCapabilities: options?.agentCapabilities ?? [],
       });
       return {
         desiredRevision: desired.desiredRevision,
+        desiredRevisionSeq: desired.desiredRevisionSeq,
         document: buildAgentConfigV3Output(server, desired),
         validUntil: desired.validUntil,
       };

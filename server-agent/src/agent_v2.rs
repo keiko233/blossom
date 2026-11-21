@@ -30,6 +30,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::acme::solver_dns01::DnsAck;
+use crate::config::managed::MANAGED_NETWORKING_CAPABILITY;
 use crate::config::{AgentPolicy, ConfigError, ConfigManager};
 use crate::log_policy::{LogPolicy, PolicyAction, PolicyRequest, SOURCES, Source as PolicySource};
 use crate::logs::{LogStore, SecretScope};
@@ -73,6 +74,7 @@ const V2_CAPABILITIES: &[&str] = &[
     "connection-stream-traffic",
     "acme-v1",
     "log-policy-v1",
+    MANAGED_NETWORKING_CAPABILITY,
     "ws-v2",
     "traffic-v2",
     LOGS_TAIL_CAPABILITY,
