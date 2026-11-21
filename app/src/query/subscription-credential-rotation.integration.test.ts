@@ -221,9 +221,9 @@ async function resetAndSeed() {
     },
   ]);
   await adminDb.insert(nodeGroup).values([
-    { nodeId: "n-a", groupId: "g1" },
-    { nodeId: "n-b", groupId: "g1" },
-    { nodeId: "n-d", groupId: "g1" },
+    { nodeId: "n-a", groupId: "g1", position: 0 },
+    { nodeId: "n-b", groupId: "g1", position: 1 },
+    { nodeId: "n-d", groupId: "g1", position: 2 },
   ]);
   const sub = (
     id: string,

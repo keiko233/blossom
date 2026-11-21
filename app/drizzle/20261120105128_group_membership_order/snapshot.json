@@ -1,0 +1,92 @@
+{
+  "type": "diff",
+  "version": "9",
+  "dialect": "postgres",
+  "id": "56063215-cafc-4dd0-b3bf-149346bc05a6",
+  "prevIds": ["fc11599a-53ff-4ed2-afef-c2799468f877"],
+  "footprints": [
+    {
+      "statementType": "add_column",
+      "statementTarget": ["column", "public", "node_group", "position"],
+      "writes": [
+        "s|col|public.node_group.position",
+        "n|col|public.node_group.position",
+        "e|col|public.node_group.position"
+      ],
+      "reads": ["n|tbl|public.node_group", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": ["column", "public", "proxy_group", "revision"],
+      "writes": [
+        "s|col|public.proxy_group.revision",
+        "n|col|public.proxy_group.revision",
+        "e|col|public.proxy_group.revision"
+      ],
+      "reads": ["n|tbl|public.proxy_group", "n|sch|public"]
+    },
+    {
+      "statementType": "add_unique",
+      "statementTarget": ["table", "public", "node_group"],
+      "writes": [
+        "s|uq|public.node_group.node_group_group_position_unique",
+        "n|uq|public.node_group.node_group_group_position_unique",
+        "e|uq|public.node_group.node_group_group_position_unique",
+        "n|con|public.node_group.node_group_group_position_unique",
+        "n|rel|public.node_group_group_position_unique"
+      ],
+      "reads": [
+        "n|tbl|public.node_group",
+        "n|sch|public",
+        "n|col|public.node_group.group_id",
+        "n|col|public.node_group.position"
+      ]
+    }
+  ],
+  "deltas": [
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "node_group",
+        "name": "position",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "0",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "proxy_group",
+        "name": "revision",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "1",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "node_group",
+        "name": "node_group_group_position_unique",
+        "nameExplicit": true,
+        "columns": ["group_id", "position"],
+        "nullsNotDistinct": false,
+        "entityType": "uniques"
+      }
+    }
+  ]
+}

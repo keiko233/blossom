@@ -42,6 +42,7 @@ export interface RecordConfigChangeInput {
 
 export interface RecordConfigChangeResult {
   serverIds: string[];
+  changeId: string | null;
 }
 
 /**
@@ -55,7 +56,7 @@ export async function recordConfigChange(
 ): Promise<RecordConfigChangeResult> {
   const serverIds = [...new Set(input.serverIds)];
   if (serverIds.length === 0) {
-    return { serverIds: [] };
+    return { serverIds: [], changeId: null };
   }
   // Bump the desired seq FIRST. Callers record after the mutation itself, and
   // on neon-http (no interactive transactions) each statement commits
@@ -78,7 +79,7 @@ export async function recordConfigChange(
     }
   }
   if (seqByServer.size === 0) {
-    return { serverIds: [] };
+    return { serverIds: [], changeId: null };
   }
   const changeId = randomUUID();
   await tx.insert(configChange).values({
@@ -94,7 +95,7 @@ export async function recordConfigChange(
       revisionSeq,
     })),
   );
-  return { serverIds: [...seqByServer.keys()] };
+  return { serverIds: [...seqByServer.keys()], changeId };
 }
 
 // --- Affected-server resolution ---------------------------------------------

@@ -18,6 +18,10 @@ import {
   listServerIdsForUserId,
   recordConfigChange,
 } from "@/query/config-change";
+import {
+  deleteNodeWithMembershipCascade,
+  withDatabaseTransaction,
+} from "@/query/group-membership-write";
 import { deleteServerRecord } from "@/query/server-deletion";
 import { type ServerDTO, toServerDTO } from "@/query/server-dto";
 
@@ -422,17 +426,32 @@ export async function deleteNodeMCP(
   nodeId: string,
 ): Promise<{ id: string }> {
   await requireActorAdmin(actorUserId);
-  const [row] = await db.delete(node).where(eq(node.id, nodeId)).returning();
-  if (!row) throw new Error("Not found");
-  if (row.enabled) {
-    await recordMCPConfigChange({
-      kind: "node",
-      subjectId: row.id,
-      prevRow: null,
-      serverIds: [row.serverId],
-    });
-  }
-  return { id: row.id };
+  const driver = getDatabaseDriver();
+  let changedServerIds: string[] = [];
+  const result = await withDatabaseTransaction(db, driver, async (tx) => {
+    const cascade = await deleteNodeWithMembershipCascade(
+      { nodeId },
+      {
+        database: tx,
+        driver,
+        interactive: supportsInteractiveTransactions(driver),
+      },
+    );
+    if (!cascade) throw new Error("Not found");
+    const row = cascade.node;
+    if (row.enabled) {
+      const change = await recordConfigChange(tx, {
+        kind: "node",
+        subjectId: row.id,
+        prevRow: null,
+        serverIds: [row.serverId],
+      });
+      changedServerIds = change.serverIds;
+    }
+    return { id: row.id };
+  });
+  await notifyAgentConfigChanged(changedServerIds, "MCP node change");
+  return result;
 }
 
 export async function updateServerMCP(

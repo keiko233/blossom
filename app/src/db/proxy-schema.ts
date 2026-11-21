@@ -540,6 +540,10 @@ export const proxyGroup = pgTable("proxy_group", {
   name: text("name").notNull(),
   remark: text("remark"),
   sortOrder: integer("sort_order").default(0).notNull(),
+  // Monotonic optimistic-concurrency revision bumped on every group metadata
+  // or membership change (including compatibility writes and node deletion
+  // cascades).
+  revision: integer("revision").default(1).notNull(),
 
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at")
@@ -548,7 +552,7 @@ export const proxyGroup = pgTable("proxy_group", {
     .notNull(),
 });
 
-/** Node <-> group membership (many-to-many). */
+/** Node <-> group membership (many-to-many) with explicit per-group position. */
 export const nodeGroup = pgTable(
   "node_group",
   {
@@ -558,15 +562,25 @@ export const nodeGroup = pgTable(
     groupId: text("group_id")
       .notNull()
       .references(() => proxyGroup.id, { onDelete: "cascade" }),
+    position: integer("position").default(0).notNull(),
   },
   (table) => [
     primaryKey({ columns: [table.nodeId, table.groupId] }),
     index("node_group_group_idx").on(table.groupId),
+    // The membership-order migration installs this as DEFERRABLE INITIALLY
+    // IMMEDIATE so a row-set position swap can run in one statement. Drizzle's
+    // table DSL cannot express deferrability; keep the migration authoritative.
+    unique("node_group_group_position_unique").on(
+      table.groupId,
+      table.position,
+    ),
   ],
 );
 
 export type ProxyGroup = typeof proxyGroup.$inferSelect;
 export type NewProxyGroup = typeof proxyGroup.$inferInsert;
+export type NodeGroup = typeof nodeGroup.$inferSelect;
+export type NewNodeGroup = typeof nodeGroup.$inferInsert;
 
 // --- Config publish gate ----------------------------------------------------
 
