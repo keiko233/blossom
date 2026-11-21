@@ -3,9 +3,7 @@
  * and (optionally) neon-http. Skipped unless BLOSSOM_TEST_PG_URL is set; the
  * public schema is DROPPED and rebuilt.
  *
- * The default build must refuse admission. The explicit
- * `activationEnabled: true` option here is the canary/service-boundary fixture
- * opt-in; it does not change `MANAGED_NETWORKING_ACTIVATION_ENABLED`.
+ * Covers default admission and explicit disablement through the same service.
  */
 import type { ManagedIntentRouteRule } from "@blossom/contracts/agent-config-v3";
 import { managedStageIntentSchema } from "@blossom/contracts/agent-config-v3";
@@ -204,9 +202,10 @@ describe.skipIf(!PG_URL)("networking rollout admission", () => {
         database = driver.make();
       });
 
-      it("refuses admission while the default activation gate is off", async () => {
+      it("refuses admission when activation is explicitly disabled", async () => {
         const result = await applyNetworkingRollout(ROLLOUT_INPUT, {
           database,
+          activationEnabled: false,
         });
         expect(result).toMatchObject({
           ok: false,
@@ -264,7 +263,6 @@ describe.skipIf(!PG_URL)("networking rollout admission", () => {
       it("freezes receiver-first stages and admits config versions, stages and claims atomically", async () => {
         const plan = await planNetworkingRollout(ROLLOUT_INPUT, {
           database,
-          activationEnabled: true,
         });
         expect(plan).toMatchObject({
           ok: true,
@@ -290,7 +288,6 @@ describe.skipIf(!PG_URL)("networking rollout admission", () => {
 
         const result = await applyNetworkingRollout(ROLLOUT_INPUT, {
           database,
-          activationEnabled: true,
         });
         expect(result.ok).toBe(true);
         expect(result.reason).toBeNull();

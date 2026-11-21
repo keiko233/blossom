@@ -1105,10 +1105,13 @@ describe.skipIf(!PG_URL)("managed rollout transitions", () => {
         });
       });
 
-      it("keeps managed rollout writes disabled by default", async () => {
+      it("keeps managed rollout writes disabled when explicitly disabled", async () => {
         await admitReceiverFirstRollout(database, "rollout-disabled");
         expect(
-          await reconcileManagedRollout("rollout-disabled", { database }),
+          await reconcileManagedRollout("rollout-disabled", {
+            database,
+            activationEnabled: false,
+          }),
         ).toEqual({ ok: false, reason: "activation_disabled" });
         expect(
           await recordManagedStageReport(
@@ -1119,7 +1122,7 @@ describe.skipIf(!PG_URL)("managed rollout transitions", () => {
               desiredRevisionSeq: 1,
               managedFingerprint: FP_B1,
             },
-            { database },
+            { database, activationEnabled: false },
           ),
         ).toEqual({ ok: false, reason: "activation_disabled" });
         expect(
@@ -1140,7 +1143,7 @@ describe.skipIf(!PG_URL)("managed rollout transitions", () => {
                 completedAt: new Date().toISOString(),
               },
             },
-            { database },
+            { database, activationEnabled: false },
           ),
         ).toEqual({ ok: false, reason: "activation_disabled" });
       });

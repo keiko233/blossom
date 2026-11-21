@@ -58,8 +58,7 @@ import {
  * Task 06/08 atomic writer. Stage issuance, Retry/Abort, probe delivery and
  * agent notification remain the Task 08 surface.
  *
- * Managed activation stays off by default: Apply is refused with
- * `activation_disabled`, while draft CRUD, previews and stage planning work.
+ * Apply requires an administrator request and passes through rollout admission checks.
  */
 
 export const NETWORKING_QUERY_KEY = ["admin", "networking"] as const;
@@ -336,8 +335,7 @@ export const planNetworkingRollout = createServerFn({ method: "POST" })
 
 /**
  * Audited Apply admission. The activation gate is checked inside the service
- * before any write, so the default-off build cannot admit even if a caller
- * bypasses the disabled button. Config versions, stages, server claims and
+ * before any write. A disabled build cannot admit a rollout. Config versions, stages, server claims and
  * applied-pointer expectations are inserted by one Task 06/08 statement.
  */
 export const applyNetworkingRollout = createServerFn({ method: "POST" })

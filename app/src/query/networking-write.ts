@@ -37,9 +37,7 @@ import type { JsonValue } from "@/orpc/proxy/schema";
  * admission, stage issuance and agent notification remain in the Task 06/08
  * writers and are not duplicated here.
  *
- * Managed activation stays off by default. These writers create draft
- * resources but never a rollout, never a stage pointer and never a peer
- * listener claim.
+ * These writers only create or update draft resources.
  */
 
 export type NetworkingWriteResult<T> =
