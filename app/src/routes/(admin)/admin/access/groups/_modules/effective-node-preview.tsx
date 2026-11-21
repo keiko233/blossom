@@ -2,38 +2,12 @@ import { Link } from "@tanstack/react-router";
 import { AlertTriangleIcon } from "lucide-react";
 import type React from "react";
 
+import { NodeHealthBadge } from "@/components/node-health-badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
 import type { EffectiveNodePreview } from "@/lib/access-impact";
 import { m } from "@/paraglide/messages";
-
-type NodeHealth = EffectiveNodePreview["nodes"][number]["health"];
-
-function healthLabel(health: NodeHealth): string {
-  return {
-    server_disabled: m.admin_proxies_nodes_status_server_disabled(),
-    disabled: m.admin_proxies_nodes_status_disabled(),
-    agent_offline: m.admin_proxies_nodes_status_agent_offline(),
-    runtime_error: m.admin_proxies_nodes_status_runtime_error(),
-    config_error: m.admin_proxies_nodes_status_config_error(),
-    serving_stale: m.admin_proxies_nodes_status_serving_stale(),
-    serving: m.admin_proxies_nodes_status_serving(),
-    idle: m.admin_proxies_nodes_status_idle(),
-    unknown: m.admin_proxies_nodes_status_unknown(),
-  }[health];
-}
-
-function healthDotClass(health: NodeHealth): string {
-  if (health === "serving") return "bg-emerald-500";
-  if (health === "disabled" || health === "server_disabled") {
-    return "bg-muted-foreground/64";
-  }
-  if (health === "serving_stale" || health === "idle" || health === "unknown") {
-    return "bg-amber-500";
-  }
-  return "bg-red-500";
-}
 
 export interface EffectiveNodePreviewPanelProps {
   /** Undefined while the node (and group) lists are loading. */
@@ -109,13 +83,7 @@ export function EffectiveNodePreviewPanel({
                       {node.name}
                     </Link>
                     <Badge variant="outline">{node.protocol}</Badge>
-                    <Badge variant="outline">
-                      <span
-                        aria-hidden="true"
-                        className={`size-1.5 rounded-full ${healthDotClass(health)}`}
-                      />
-                      {healthLabel(health)}
-                    </Badge>
+                    <NodeHealthBadge health={health} />
                     {filtered ? (
                       <span className="text-xs text-muted-foreground">
                         {m.admin_access_preview_withheld()}

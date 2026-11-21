@@ -78,6 +78,7 @@ vi.mock("@/lib/ensure-admin", () => ({
 }));
 vi.mock("@/lib/admin-audit-middleware", () => ({ adminAudit: () => ({}) }));
 
+import { previewNodeSelection } from "@/lib/access-impact";
 import {
   createGroupWithMembership,
   deleteGroupWithMembership,
@@ -85,8 +86,9 @@ import {
   writeGroupMembership,
   withDatabaseTransaction,
 } from "@/query/group-membership-write";
+import { getGroup } from "@/query/groups";
 import { deleteNodeMCP } from "@/query/mcp-tools";
-import { deleteNode as deleteNodeFromUi } from "@/query/nodes";
+import { deleteNode as deleteNodeFromUi, listNodes } from "@/query/nodes";
 import {
   getGatedSubscriptionView,
   getSubscriptionAccessibleNodes,
@@ -717,6 +719,60 @@ describe.skipIf(!PG_URL)(
         it("orders exports by group sort/member position with first occurrence winning", async () => {
           const nodes = await getSubscriptionAccessibleNodes("sub-alice");
           expect(nodes.map((entry) => entry.node.id)).toEqual(["c", "a", "b"]);
+        });
+
+        it("aligns the group editor preview with the actual ordered export", async () => {
+          await fx.adminDb.insert(plan).values({
+            id: "p-preview",
+            name: "Preview",
+            priceCents: 0,
+            durationDays: 30,
+            trafficBytes: 0,
+          });
+          await fx.adminDb.insert(planGroup).values({
+            planId: "p-preview",
+            groupId: "g1",
+          });
+          // The disabled node stays in the saved group but must not reach the
+          // exported subscription. It keeps its position so the preview can
+          // flag it without reordering the eligible entrances.
+          await fx.adminDb
+            .insert(nodeGroup)
+            .values({ nodeId: "d", groupId: "g1", position: 3 });
+          await fx.adminDb.insert(subscription).values({
+            id: "sub-preview",
+            userId: "alice",
+            planId: "p-preview",
+            expiresAt: FUTURE,
+            trafficQuotaBytes: 0,
+            deviceLimit: 0,
+            credentialUuid: "00000000-0000-4000-8000-0000000000a2",
+            credentialPassword: "fake-password",
+            token: "fake-token-sub-preview",
+          });
+
+          const group = await getGroup({ data: { id: "g1" } });
+          const nodes = await listNodes();
+          const preview = previewNodeSelection({
+            nodeIds: group.nodeIds,
+            nodes,
+            now: Date.now(),
+          });
+          const exported = await getSubscriptionAccessibleNodes("sub-preview");
+
+          expect(exported.map((entry) => entry.node.id)).toEqual([
+            "a",
+            "b",
+            "c",
+          ]);
+          expect(preview.nodes.map((entry) => entry.node.id)).toEqual([
+            "a",
+            "b",
+            "c",
+            "d",
+          ]);
+          expect(preview.filteredCount).toBe(1);
+          expect(preview.missingNodeIds).toEqual([]);
         });
 
         it("keeps a pending membership addition out of the gated export, then publishes it after apply", async () => {
