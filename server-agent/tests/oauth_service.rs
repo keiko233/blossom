@@ -488,13 +488,18 @@ async fn enroll_writes_the_response_verbatim_without_printing_secrets() {
         "enrollment must use the /api/agent/enrollment/redeem route: {:?}",
         server.other_http
     );
-    assert_eq!(
-        server.redeem_requests[0],
-        serde_json::to_vec(&json!({
-            "enrollmentGrant": GRANT
-        }))
-        .unwrap()
+    let body: serde_json::Value =
+        serde_json::from_slice(&server.redeem_requests[0]).expect("redeem body is JSON");
+    assert_eq!(body["enrollmentGrant"], GRANT);
+    let host = &body["hostInfo"];
+    assert_eq!(host["os"], std::env::consts::OS);
+    assert_eq!(host["arch"], std::env::consts::ARCH);
+    assert_eq!(host["agentVersion"], env!("CARGO_PKG_VERSION"));
+    assert!(
+        matches!(host["installMode"].as_str(), Some("docker" | "host")),
+        "installMode must be one of the contract values: {host}"
     );
+    assert!(host["ips"].is_array(), "ips must be a JSON array: {host}");
     let expected = server.last_redeem_body.as_ref().expect("redeem response");
     assert_eq!(&fs::read(&credentials).unwrap(), expected);
     drop(server);
