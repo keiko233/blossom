@@ -2,6 +2,9 @@ interface CloudflareEnv {
   HYPERDRIVE?: {
     connectionString: string;
   };
+  HYPERDRIVE_FRESH?: {
+    connectionString: string;
+  };
   DATABASE_URL?: string;
   AGENT_SESSION_DO?: DurableObjectNamespace;
 }

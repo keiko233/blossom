@@ -39,11 +39,19 @@ const config = defineConfig(({ mode, command }) => {
   if (
     deployTarget === "cloudflare" &&
     command === "serve" &&
-    runtimeEnv.DATABASE_URL &&
-    !process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE
+    runtimeEnv.DATABASE_URL
   ) {
-    process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE =
-      runtimeEnv.DATABASE_URL;
+    if (!process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE) {
+      process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE =
+        runtimeEnv.DATABASE_URL;
+    }
+    if (
+      !process.env
+        .CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_FRESH
+    ) {
+      process.env.CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE_FRESH =
+        runtimeEnv.DATABASE_URL;
+    }
   }
   clientEnvSchema.parse(runtimeEnv); // client VITE_* vars are baked into the bundle -> validate at build
   if (command === "serve" && !process.env.SKIP_ENV_VALIDATION) {

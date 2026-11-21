@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { stringify } from "yaml";
 
+import { dbCached } from "@/db";
 import type { Subscription } from "@/db/plan-schema";
 import { buildClashConfig, toClashOutputOptions } from "@/lib/clash-config";
 import { getClientIp } from "@/lib/client-ip";
@@ -85,7 +86,7 @@ export const Route = createFileRoute("/api/sub/$token")({
         }
 
         const [enabledRules, { subscription_output: output }] =
-          await Promise.all([listEnabledRules(), getSettings()]);
+          await Promise.all([listEnabledRules(dbCached), getSettings()]);
         const rules = toClashRules(enabledRules);
 
         let config: unknown;

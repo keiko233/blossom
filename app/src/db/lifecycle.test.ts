@@ -2,22 +2,28 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   request: undefined as Request | undefined,
-  created: 0,
+  created: [] as string[],
+  freshHyperdriveUrl: "postgresql://hyperdrive-fresh/test",
+  cachedHyperdriveUrl: "postgresql://hyperdrive/test",
 }));
 
 vi.mock("@/lib/database-connection", () => ({
   getDatabaseRequest: () => state.request,
+  getFreshHyperdriveConnectionString: () =>
+    state.request ? state.freshHyperdriveUrl : undefined,
   getHyperdriveConnectionString: () =>
-    state.request ? "postgresql://hyperdrive/test" : undefined,
+    state.request ? state.cachedHyperdriveUrl : undefined,
 }));
 vi.mock("@/lib/env", () => ({
   getServerEnv: () => ({ DATABASE_URL: "postgresql://localhost/test" }),
 }));
 vi.mock("drizzle-orm/node-postgres", () => ({
-  drizzle: () => {
-    const id = ++state.created;
+  drizzle: (connectionString: string) => {
+    state.created.push(connectionString);
+    const id = state.created.length;
     return {
       id,
+      connectionString,
       select() {
         return this.id;
       },
@@ -30,12 +36,12 @@ describe("database lifecycle", () => {
   beforeEach(() => {
     vi.resetModules();
     state.request = undefined;
-    state.created = 0;
+    state.created = [];
   });
 
   it("creates nothing during import and reuses the Node database", async () => {
     const { db } = await import("./index");
-    expect(state.created).toBe(0);
+    expect(state.created).toHaveLength(0);
     expect(db.select()).toBe(1);
     expect(db.select()).toBe(1);
   });
@@ -51,6 +57,17 @@ describe("database lifecycle", () => {
     expect(db.select()).toBe(2);
     state.request = first;
     expect(db.select()).toBe(1);
-    expect(state.created).toBe(2);
+    expect(state.created).toHaveLength(2);
+  });
+
+  it("routes db to HYPERDRIVE_FRESH and dbCached to HYPERDRIVE", async () => {
+    const { db, dbCached } = await import("./index");
+    state.request = new Request("https://example.test/dual");
+    expect(db.select()).toBe(1);
+    expect(dbCached.select()).toBe(2);
+    expect(state.created).toEqual([
+      state.freshHyperdriveUrl,
+      state.cachedHyperdriveUrl,
+    ]);
   });
 });

@@ -22,6 +22,10 @@
       "binding": "HYPERDRIVE",
       "id": "8d00a6bf46b24b74a1c833dc992e3ef5",
     },
+    {
+      "binding": "HYPERDRIVE_FRESH",
+      "id": "f671efd043854dc9887eba3941ec0cbe",
+    },
   ],
   "main": "./src/server.ts",
   // Preserve dashboard-managed plaintext vars across `wrangler deploy`

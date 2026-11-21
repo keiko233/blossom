@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { asc, desc, eq, ilike, or, type SQL, sql } from "drizzle-orm";
 
-import { db } from "@/db";
+import { dbCached as db } from "@/db";
 import { user } from "@/db/auth-schema";
 import { plan, subscription } from "@/db/plan-schema";
 import { node, server } from "@/db/proxy-schema";

@@ -307,7 +307,9 @@ export class AgentSessionDO extends DurableObject {
     run: (database: Database) => Promise<T>,
   ): Promise<T> {
     const connectionString =
-      env.HYPERDRIVE?.connectionString ?? env.DATABASE_URL;
+      env.HYPERDRIVE_FRESH?.connectionString ??
+      env.HYPERDRIVE?.connectionString ??
+      env.DATABASE_URL;
     if (!connectionString) {
       throw new Error("No database binding is available to AgentSessionDO");
     }
