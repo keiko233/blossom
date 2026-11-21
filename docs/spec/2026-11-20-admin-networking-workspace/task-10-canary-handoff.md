@@ -40,7 +40,7 @@ The live canary is implemented but not runnable on the prepared base `bbe474b` p
 | `agent-link-probe-transport` | Blocked. `server-agent/src/agent_v2.rs` does not advertise `managed-link-probe-v1`, and the probe handler is not wired outside `server-agent/src/probe/`.        | The task 08 Rust probe wiring lands and a live `hello` records the capability on both servers.                                                                                          |
 | `managed-probe-bindings`     | Blocked. Neither `packages/contracts/src/agent-config-v3.ts` nor `app/src/orpc/proxy/managed-singbox.ts` emits the sender's `probeBindings`.                     | The task 08/07 integration emits the loopback ingress/responder manifest the Rust executor consumes. A successful `managed_link_probe` row is the live proof.                           |
 | `apply-ingress`              | Blocked. `app/src/query/networking.ts` does not call rollout admission; the current networking UI only plans and refuses activation.                             | The task 09 Apply integration exposes an audited server function (default discovery name or `--apply-fn <file>#<export>`) that creates a rollout and returns `{ ok: true, rolloutId }`. |
-| `activation-enabled`         | Blocked. `MANAGED_NETWORKING_ACTIVATION_ENABLED` is `false`, intentionally.                                                                                      | A disposable checkout flips it locally, builds and runs; the flip is restored and never committed or deployed.                                                                          |
+| `activation-enabled` | Ready. Managed networking is enabled by default. | Keep the default setting in the disposable build. |
 | `base-harness`               | Not satisfied on the authoring host: the Docker daemon was unavailable (dependencies were installed to run the unit checks). The repository itself is unchanged. | A local Docker daemon, plus a pinned `sing-box` path (`--sing-box`).                                                                                                                    |
 | `docker-agent-profile`       | Profile only; Docker was unavailable.                                                                                                                            | Run `server-agent/scripts/test-managed-tls-docker.sh` with the pinned test image; do not automate it against a real daemon/host without an explicit disposable profile.                 |
 | `systemd-lifecycle`          | Profile only; no `--systemd-vm` was supplied and this host's systemd is never used.                                                                              | A disposable VM with real systemd and the task 04 units; record the runtime InvocationID before/after an agent restart and one long-flow traffic report.                                |
@@ -64,7 +64,7 @@ The canary does not import app internals or write rollout rows. It calls the app
 
 ## Activation and safety
 
-- Never commit `MANAGED_NETWORKING_ACTIVATION_ENABLED = true`. Perform the one-line flip in a disposable checkout, run `node scripts/blossom-canary.mjs`, restore the file, and confirm `git diff` is clean before handing off.
+- Managed networking is enabled by default. Run `node scripts/blossom-canary.mjs` only against the disposable canary environment.
 - Use `--keep` only for a failed local run. Kept logs are not redacted but hold only that run's throwaway values; the temp directory is mode 0700. The evidence report is always redacted.
 - Tokens travel in `AGENT_TOKEN` or HTTP headers, never argv. The harness does not print database URLs, agent tokens, subscription tokens, certificate keys or peer credentials; `redact` covers printed failure excerpts.
 - The canary starts its own PostgreSQL container, app, agents, clients and origins under the existing Harness lock. It does not touch a real host's systemd units, sing-box process, database or deployment.
@@ -80,7 +80,7 @@ From the repository root:
 - `node scripts/blossom-canary.mjs --check --sing-box /tmp/sing-box-canary` against the downloaded official 1.14.4 musl archive (SHA-256 `8f7c5f…57ca`) — the pinned-sing-box stage passes and the remaining blockers are Docker and the task 08/09 integrations.
 - `git diff --check`.
 
-Not run: any live scenario. This host has no Docker daemon, and the task 08/09 integrations and the activation flip are not in this checkout. The actual first live run is still the real verification for the admin wire format, certificate/peer TLS, probe bindings, apply ingress, failure injection, drain and egress separation.
+Not run: any live scenario. This host has no Docker daemon, and no systemd VM was available. The actual first live run is still the real verification for the admin wire format, certificate/peer TLS, probe bindings, apply ingress, failure injection, drain and egress separation.
 
 ## Exit evidence still owed
 

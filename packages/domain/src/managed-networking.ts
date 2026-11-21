@@ -11,9 +11,9 @@
  * Single switch for managed networking activation. While false, no writer may
  * create a rollout, advance a stage pointer or claim a listener for a peer
  * resource, and every compile path keeps the legacy single-direct snapshot.
- * Flip it only together with the rollout gate in Task 08.
+ * Enabled by default. Rollouts still require explicit administrator admission.
  */
-export const MANAGED_NETWORKING_ACTIVATION_ENABLED = false;
+export const MANAGED_NETWORKING_ACTIVATION_ENABLED = true;
 
 /** Primary key of the singleton `managed_topology` row. */
 export const MANAGED_TOPOLOGY_ID = "global";

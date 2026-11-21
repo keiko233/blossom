@@ -254,7 +254,7 @@ describe.skipIf(!PG_URL)("managed topology boundary", () => {
         expect(await listListenerClaims("srv-a", database)).toEqual([]);
       });
 
-      it("keeps managed writes disabled until the activation flag is set", async () => {
+      it("keeps managed writes disabled when explicitly disabled", async () => {
         expect(
           await reservePeerListenerClaim(
             {
@@ -263,7 +263,7 @@ describe.skipIf(!PG_URL)("managed topology boundary", () => {
               ownerId: "peer-1",
               expectedTopologyGeneration: 0,
             },
-            { database },
+            { database, activationEnabled: false },
           ),
         ).toEqual({ ok: false, reason: "activation_disabled" });
         expect(
@@ -274,7 +274,7 @@ describe.skipIf(!PG_URL)("managed topology boundary", () => {
               stageCount: 1,
               serverIds: ["srv-a"],
             },
-            { database },
+            { database, activationEnabled: false },
           ),
         ).toEqual({ ok: false, reason: "activation_disabled" });
         expect(
@@ -284,7 +284,7 @@ describe.skipIf(!PG_URL)("managed topology boundary", () => {
               expectedOrdinal: 0,
               expectedTopologyGeneration: 0,
             },
-            { database },
+            { database, activationEnabled: false },
           ),
         ).toEqual({ ok: false, reason: "activation_disabled" });
       });

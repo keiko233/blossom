@@ -153,8 +153,8 @@ describe("evaluateManagedSnapshotByteBudget", () => {
 });
 
 describe("managed activation", () => {
-  it("stays disabled until the rollout gate ships", () => {
-    expect(MANAGED_NETWORKING_ACTIVATION_ENABLED).toBe(false);
+  it("enables managed rollout by default", () => {
+    expect(MANAGED_NETWORKING_ACTIVATION_ENABLED).toBe(true);
   });
 });
 

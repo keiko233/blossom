@@ -70,7 +70,7 @@ import {
  *  - Agent-side probe isolation, the loopback ingress/responder and capability
  *    advertisement remain with the Task 07 agent work.
  *
- * Managed activation stays off by default (`MANAGED_NETWORKING_ACTIVATION_ENABLED`).
+ * Defaults to `MANAGED_NETWORKING_ACTIVATION_ENABLED`.
  */
 
 const ACTIVE_ROLLOUT_STATES = ["applying", "stalled", "recovering"] as const;

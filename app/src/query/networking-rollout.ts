@@ -51,15 +51,13 @@ import {
  * expectations to the Task 06/08 atomic admission writer. Preview performs the
  * same checks and writes nothing.
  *
- * Managed activation stays off by default. The only way to exercise admission
- * in a disposable canary is the explicit `activationEnabled` fixture option;
- * no committed rollout activation path reads that option.
+ * The administrator path uses the shared activation setting.
  */
 
 export interface NetworkingRolloutOptions {
   database?: Database;
   /**
-   * Test/canary seam. Defaults to the domain switch, which is false. The admin
+   * Test/canary seam. Defaults to the domain switch. The admin
    * server function never passes an override.
    */
   activationEnabled?: boolean;

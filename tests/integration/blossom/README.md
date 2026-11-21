@@ -101,7 +101,7 @@ node --test tests/integration/blossom/canary.test.mjs tests/integration/blossom/
 | `agent-link-probe-transport` | core    | `managed-link-probe-v1` in the agent's `V2_CAPABILITIES` and `link_probe.request` used outside `server-agent/src/probe/` (static indicator; the live run must read `server.agent_capabilities`) |
 | `managed-probe-bindings`     | core    | the managed snapshot compiler emits `probeBindings` for sender links, so the Rust executor can derive its loopback ingress and fixed responder                                                  |
 | `apply-ingress`              | core    | an audited admin Apply creates a rollout, or `--apply-fn <file>#<export>` names the separately landed integration                                                                               |
-| `activation-enabled`         | core    | `MANAGED_NETWORKING_ACTIVATION_ENABLED` is `true`; use a disposable canary build and never commit the flip                                                                                      |
+| `activation-enabled`         | core    | `MANAGED_NETWORKING_ACTIVATION_ENABLED` is `true`; use a disposable canary build                                                                                      |
 | `docker-agent-profile`       | profile | local Docker daemon for the processkit profile (`server-agent/scripts/test-managed-tls-docker.sh`)                                                                                              |
 | `systemd-disposable-vm`      | profile | an explicit `--systemd-vm`; this host's systemd is never used, and the fake-systemd sandbox (`app/src/lib/agent-installer-e2e.test.ts`) is the only local coverage                              |
 
@@ -112,7 +112,7 @@ The evidence and its pass criteria live in `lib/canary.mjs` (`CANARY_EVIDENCE` a
 ### Running after the integration lands
 
 1. Use a disposable checkout and database. Never point the canary at a deployed app or a host whose services you depend on.
-2. Enable the compile-time gate only in that disposable checkout, run `node scripts/blossom-canary.mjs`, then restore the file. Do not commit the flip or copy a canary build into a real deployment.
+2. Run `node scripts/blossom-canary.mjs` in that disposable checkout with the default activation setting.
 3. If task 09 uses another export name, pass `--apply-fn <file>#<export>`; abort/retry default to the existing audited functions and `--drain-fn` is required before the downgrade gate can pass a drain. The driver expects an apply result with `{ ok: true, rolloutId }` and a refusal with `{ ok: false, reason }`; it does not write rollout rows itself.
    The failure and abort recovery variants each run their own disposable topology; use `--recovery-kind abort` for the second pass. A combined report is not synthesized from two runs.
 
