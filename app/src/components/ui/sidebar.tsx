@@ -75,6 +75,7 @@ export function useSidebar(): SidebarContextProps {
 
 export function SidebarProvider({
   defaultOpen = true,
+  disableToggle = false,
   open: openProp,
   onOpenChange: setOpenProp,
   className,
@@ -83,6 +84,7 @@ export function SidebarProvider({
   ...props
 }: React.ComponentProps<"div"> & {
   defaultOpen?: boolean;
+  disableToggle?: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }): React.ReactElement {
@@ -115,11 +117,19 @@ export function SidebarProvider({
 
   // Helper to toggle the sidebar.
   const toggleSidebar = React.useCallback(() => {
+    if (disableToggle) {
+      return;
+    }
+
     return isMobile ? setOpenMobile((open) => !open) : setOpen((open) => !open);
-  }, [isMobile, setOpen]);
+  }, [disableToggle, isMobile, setOpen]);
 
   // Adds a keyboard shortcut to toggle the sidebar.
   React.useEffect(() => {
+    if (disableToggle) {
+      return;
+    }
+
     const handleKeyDown = (event: KeyboardEvent): void => {
       if (
         event.key === SIDEBAR_KEYBOARD_SHORTCUT &&
@@ -132,7 +142,7 @@ export function SidebarProvider({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [toggleSidebar]);
+  }, [disableToggle, toggleSidebar]);
 
   // We add a state so that we can do data-state="expanded" or "collapsed".
   // This makes it easier to style the sidebar with Tailwind classes.
@@ -178,10 +188,13 @@ export function Sidebar({
   side = "left",
   variant = "sidebar",
   collapsible = "offcanvas",
+  mobile = "sheet",
   className,
   children,
   ...props
 }: React.ComponentProps<"div"> & {
+  /** On narrow screens, show the icon rail or the default slide-over sheet. */
+  mobile?: "sheet" | "icon";
   side?: "left" | "right";
   variant?: "sidebar" | "floating" | "inset";
   collapsible?: "offcanvas" | "icon" | "none";
@@ -203,7 +216,7 @@ export function Sidebar({
     );
   }
 
-  if (isMobile) {
+  if (isMobile && mobile === "sheet") {
     return (
       <Sheet onOpenChange={setOpenMobile} open={openMobile} {...props}>
         <SheetPopup
@@ -230,7 +243,10 @@ export function Sidebar({
 
   return (
     <div
-      className="group peer hidden text-sidebar-foreground md:block"
+      className={cn(
+        "group peer text-sidebar-foreground",
+        mobile === "icon" ? "block" : "hidden md:block",
+      )}
       data-collapsible={state === "collapsed" ? collapsible : ""}
       data-side={side}
       data-slot="sidebar"
@@ -251,7 +267,8 @@ export function Sidebar({
       />
       <div
         className={cn(
-          "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear md:flex",
+          "fixed inset-y-0 z-10 h-svh w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear",
+          mobile === "icon" ? "flex" : "hidden md:flex",
           side === "left"
             ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
             : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",

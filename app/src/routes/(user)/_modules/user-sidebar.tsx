@@ -5,13 +5,11 @@ import DashboardLine from "~icons/mingcute/dashboard-3-line";
 import WalletLine from "~icons/mingcute/wallet-line";
 
 import { usePublicSettings } from "@/components/app-shell/site-notices";
-import { RoleSwitcher } from "@/components/role-switcher";
 import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
-  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -76,10 +74,6 @@ export function UserSidebar({ user, ...props }: UserSidebarProps) {
 
   return (
     <Sidebar collapsible="icon" {...props}>
-      <SidebarHeader>
-        <RoleSwitcher role="user" isAdmin={user.role === "admin"} />
-      </SidebarHeader>
-
       <SidebarContent>
         <SidebarGroup>
           <SidebarMenu>

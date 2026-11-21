@@ -37,13 +37,13 @@ function RouteComponent() {
   const { user } = Route.useRouteContext();
 
   return (
-    <SidebarProvider className="h-dvh" defaultOpen={false}>
+    <SidebarProvider className="h-dvh" defaultOpen={false} disableToggle>
       <AdminSidebar user={user} />
 
       {/* The shell fills the viewport and pages scroll inside the admin
           viewport, so workspaces can bound their own scroll regions. */}
       <SidebarInset className="min-h-0">
-        <AppShellHeader>
+        <AppShellHeader showSidebarTrigger={false}>
           <AutoBreadcrumb />
         </AppShellHeader>
 

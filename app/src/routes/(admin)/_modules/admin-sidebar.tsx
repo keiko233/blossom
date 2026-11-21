@@ -8,7 +8,6 @@ import {
 } from "lucide-react";
 import type { ComponentProps } from "react";
 
-import { RoleSwitcher } from "@/components/role-switcher";
 import {
   Sidebar,
   SidebarContent,
@@ -29,8 +28,8 @@ export interface AdminSidebarProps extends ComponentProps<typeof Sidebar> {
 
 /**
  * Icon-only activity rail. Each workspace has one icon link with a localized
- * name and a tooltip in the shared Sidebar icon mode; account and role
- * controls stay at the bottom.
+ * name and a tooltip in the shared Sidebar icon mode; the account menu that
+ * also holds role switching stays at the bottom.
  */
 export function AdminSidebar({ user, ...props }: AdminSidebarProps) {
   const { pathname } = useLocation();
@@ -70,7 +69,7 @@ export function AdminSidebar({ user, ...props }: AdminSidebarProps) {
   ] as const;
 
   return (
-    <Sidebar collapsible="icon" {...props}>
+    <Sidebar collapsible="icon" mobile="icon" {...props}>
       <SidebarContent>
         <SidebarGroup>
           <SidebarMenu>
@@ -97,7 +96,6 @@ export function AdminSidebar({ user, ...props }: AdminSidebarProps) {
       </SidebarContent>
 
       <SidebarFooter className="gap-1">
-        <RoleSwitcher role="admin" isAdmin={user.role === "admin"} />
         <UserProfileMenu user={user} />
       </SidebarFooter>
     </Sidebar>

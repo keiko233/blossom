@@ -4,7 +4,14 @@ import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
 
-export function AppShellHeader({ children }: PropsWithChildren) {
+export interface AppShellHeaderProps extends PropsWithChildren {
+  showSidebarTrigger?: boolean;
+}
+
+export function AppShellHeader({
+  children,
+  showSidebarTrigger = true,
+}: AppShellHeaderProps) {
   return (
     <header
       className={cn(
@@ -16,10 +23,13 @@ export function AppShellHeader({ children }: PropsWithChildren) {
       )}
     >
       <div className="flex items-center gap-2 px-4">
-        <SidebarTrigger className="-ml-1" />
+        {showSidebarTrigger && (
+          <>
+            <SidebarTrigger className="-ml-1" />
 
-        <Separator orientation="vertical" className="h-4" />
-
+            <Separator orientation="vertical" className="h-4" />
+          </>
+        )}
         {children}
       </div>
     </header>

@@ -1,7 +1,10 @@
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { useTheme } from "tanstack-theme-kit";
 import LogoutLine from "~icons/majesticons/logout-line";
+import CheckLine from "~icons/mingcute/check-line";
 import MenuLine from "~icons/mingcute/menu-line";
+import UserFill from "~icons/mingcute/user-2-fill";
+import UserSecurityFill from "~icons/mingcute/user-security-fill";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -48,6 +51,47 @@ const ThemeMenu = () => {
             {m.component_user_profile_menu_theme_system()}
           </MenuRadioItem>
         </MenuRadioGroup>
+      </MenuSubPopup>
+    </MenuSub>
+  );
+};
+
+const roleMeta = {
+  user: {
+    url: "/dashboard",
+    logo: UserFill,
+    name: () => m.component_role_switcher_role_user(),
+  },
+  admin: {
+    url: "/admin",
+    logo: UserSecurityFill,
+    name: () => m.component_role_switcher_role_admin(),
+  },
+} as const;
+
+const roles = ["user", "admin"] as const;
+
+const RoleMenu = () => {
+  const { pathname } = useLocation();
+  const currentRole = pathname.startsWith("/admin") ? "admin" : "user";
+
+  return (
+    <MenuSub>
+      <MenuSubTrigger>{m.component_role_switcher_title()}</MenuSubTrigger>
+
+      <MenuSubPopup>
+        {roles.map((role) => {
+          const { url, logo: Logo, name } = roleMeta[role];
+          const current = role === currentRole;
+
+          return (
+            <MenuItem key={role} render={<Link to={url} />}>
+              <Logo className="size-4" />
+              <span aria-current={current ? "page" : undefined}>{name()}</span>
+              {current && <CheckLine className="ml-auto" />}
+            </MenuItem>
+          );
+        })}
       </MenuSubPopup>
     </MenuSub>
   );
@@ -132,6 +176,8 @@ export function UserProfileMenu({ user }: UserProfileMenuProps) {
       </MenuTrigger>
 
       <MenuPopup align="end">
+        {user.role === "admin" && <RoleMenu />}
+
         <ThemeMenu />
         <LanguageMenu />
 
