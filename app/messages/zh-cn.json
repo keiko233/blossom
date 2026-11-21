@@ -1354,6 +1354,7 @@
   "admin_proxies_servers_connection_installer_pending_phase_note": "待激活身份必须完成握手或被撤销，之后才能创建新的授权。",
   "admin_proxies_servers_connection_installer_replace_title": "轮换保留当前代际",
   "admin_proxies_servers_connection_installer_replace_description": "第 {generation} 代保持激活并保持连接，直到替换身份完成 OAuth WebSocket 握手。替换失败时它仍继续服务。",
+  "admin_proxies_servers_connection_installer_migrate_static_token": "将旧静态令牌迁移到 OAuth（新的 OAuth 身份连接后自动停用静态备用令牌）",
   "admin_proxies_servers_connection_installer_generate": "生成安装 / 升级命令",
   "admin_proxies_servers_connection_installer_generate_replace": "生成替换命令",
   "admin_proxies_servers_connection_installer_regenerate": "重新生成命令",

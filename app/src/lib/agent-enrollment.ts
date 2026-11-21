@@ -122,6 +122,7 @@ export const createBootstrapGrantInputSchema = z
     mode: z.enum(["enroll", "replace"]),
     confirmReplace: z.literal(true).optional(),
     release: z.string().trim().max(64).optional(),
+    migrateFromStaticToken: z.boolean().optional(),
   })
   .superRefine((input, ctx) => {
     if (input.mode === "replace" && input.confirmReplace !== true) {

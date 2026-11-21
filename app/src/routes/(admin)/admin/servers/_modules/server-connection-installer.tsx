@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectItem,
@@ -46,6 +47,8 @@ export interface ConnectionInstallerRequest {
   mode: "enroll" | "replace";
   /** `latest` or a bare version such as `1.5.0`. */
   release: string;
+  /** Clear the legacy static backup token when the new identity promotes. */
+  migrateFromStaticToken: boolean;
 }
 
 export interface ServerConnectionInstallerProps {
@@ -57,6 +60,8 @@ export interface ServerConnectionInstallerProps {
   mode: "enroll" | "replace";
   /** Active generation that stays connected until a replacement proves. */
   activeGeneration: number | null;
+  /** The server still accepts the legacy static backup token. */
+  backupTokenEnabled: boolean;
   lifetimeMinutes: number;
   creating: boolean;
   /** Commands generated in this session; cleared or replaced on request. */
@@ -144,6 +149,7 @@ export function ServerConnectionInstaller({
   phase,
   mode,
   activeGeneration,
+  backupTokenEnabled,
   lifetimeMinutes,
   creating,
   command,
@@ -151,6 +157,9 @@ export function ServerConnectionInstaller({
   onClear,
 }: ServerConnectionInstallerProps): React.ReactElement {
   const [requestedVersion, setRequestedVersion] = useState("latest");
+  const [migrateFromStaticToken, setMigrateFromStaticToken] = useState(
+    backupTokenEnabled && mode === "enroll",
+  );
 
   const selectedVersion =
     versions?.find((version) => version.value === requestedVersion) ??
@@ -161,7 +170,11 @@ export function ServerConnectionInstaller({
     if (block !== null || creating) {
       return;
     }
-    onCreate({ mode, release: selectedVersion?.value ?? "latest" });
+    onCreate({
+      mode,
+      release: selectedVersion?.value ?? "latest",
+      migrateFromStaticToken,
+    });
   };
 
   return (
@@ -224,6 +237,20 @@ export function ServerConnectionInstaller({
           <AlertTitle>{blockTitle[block]()}</AlertTitle>
           <AlertDescription>{blockDescription[block]()}</AlertDescription>
         </Alert>
+      ) : null}
+
+      {backupTokenEnabled ? (
+        <label className="flex items-start gap-2 text-sm">
+          <Checkbox
+            checked={migrateFromStaticToken}
+            onCheckedChange={(checked) =>
+              setMigrateFromStaticToken(checked === true)
+            }
+          />
+          <span className="text-xs text-muted-foreground">
+            {m.admin_proxies_servers_connection_installer_migrate_static_token()}
+          </span>
+        </label>
       ) : null}
 
       {phase === "pending_activation" ? (

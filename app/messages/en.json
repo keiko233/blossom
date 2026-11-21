@@ -1354,6 +1354,7 @@
   "admin_proxies_servers_connection_installer_pending_phase_note": "The pending identity must finish its handshake or be revoked before another grant can be created.",
   "admin_proxies_servers_connection_installer_replace_title": "Rotation keeps the current generation",
   "admin_proxies_servers_connection_installer_replace_description": "Generation {generation} stays active and connected until the replacement completes its OAuth WebSocket handshake. A failed replacement leaves it in service.",
+  "admin_proxies_servers_connection_installer_migrate_static_token": "Migrate the legacy static token to OAuth (automatically disable the static backup token once the new OAuth identity connects)",
   "admin_proxies_servers_connection_installer_generate": "Generate install / upgrade command",
   "admin_proxies_servers_connection_installer_generate_replace": "Generate replacement command",
   "admin_proxies_servers_connection_installer_regenerate": "Generate a new command",

@@ -84,13 +84,18 @@ export function ServerConnectionPanel({
     queryClient.invalidateQueries({ queryKey: identityQueryKey });
 
   const createGrant = useMutation({
-    mutationFn: (input: { mode: "enroll" | "replace"; release: string }) =>
+    mutationFn: (input: {
+      mode: "enroll" | "replace";
+      release: string;
+      migrateFromStaticToken: boolean;
+    }) =>
       createServerBootstrapGrant({
         data: {
           serverId: server.id,
           mode: input.mode,
           confirmReplace: input.mode === "replace" ? true : undefined,
           release: input.release,
+          migrateFromStaticToken: input.migrateFromStaticToken,
         },
       }),
   });
@@ -212,6 +217,7 @@ export function ServerConnectionPanel({
       const result = await createGrant.mutateAsync({
         mode: request.mode,
         release: request.release,
+        migrateFromStaticToken: request.migrateFromStaticToken,
       });
       createGrant.reset();
       toastManager.add({
@@ -376,6 +382,7 @@ export function ServerConnectionPanel({
             phase={phase}
             mode={replacementMode}
             activeGeneration={activeIdentity?.generation ?? null}
+            backupTokenEnabled={liveServer.backupTokenEnabled}
             lifetimeMinutes={versionsQuery.data?.grantLifetimeMinutes ?? 15}
             creating={creating}
             command={command}
