@@ -183,7 +183,7 @@ interface GroupSnapshot {
   members: GroupMemberPosition[];
 }
 
-interface NodeCascadeSnapshot {
+export interface NodeCascadeSnapshot {
   node: Node;
   plans: AffectedGroupCascadePlan[];
 }
@@ -257,7 +257,7 @@ function mapGroupRow(raw: Record<string, unknown>): ProxyGroup {
   return mapColumns(proxyGroup, raw) as ProxyGroup;
 }
 
-function mapNodeRow(raw: Record<string, unknown>): Node {
+export function mapNodeRow(raw: Record<string, unknown>): Node {
   return mapColumns(node, raw) as Node;
 }
 
@@ -499,10 +499,24 @@ function deleteGroupMutationStatement(input: {
   `;
 }
 
-function deleteNodeCascadeStatement(input: {
+export interface NodeDeleteCascadeInput {
   nodeId: string;
   plans: readonly AffectedGroupCascadePlan[];
-}): SQL {
+  /** Extra gate evaluated before the node row is removed. */
+  guard?: SQL;
+  /** CTE name holding the deleted row. Defaults to `target`. */
+  targetName?: string;
+}
+
+/**
+ * Data-modifying CTEs for one node deletion and its group-membership cascade.
+ * Exported so the managed stage writer and the legacy structural fence can
+ * embed the same SQL under their own topology/gate CTEs. Callers that do not
+ * supply `targetName` keep the task-02 `target` CTE name.
+ */
+export function deleteNodeCascadeCtes(input: NodeDeleteCascadeInput): SQL[] {
+  const targetName = input.targetName ?? "target";
+  const targetId = sql.identifier(targetName);
   const guards = input.plans.map((plan) => ({
     group_id: plan.groupId,
     revision: plan.previousRevision,
@@ -515,7 +529,7 @@ function deleteNodeCascadeStatement(input: {
     })),
   );
   const ctes: SQL[] = [
-    sql`target AS (
+    sql`${targetId} AS (
       DELETE FROM ${node}
       WHERE ${node.id} = ${input.nodeId}::text
         AND NOT EXISTS (
@@ -525,6 +539,7 @@ function deleteNodeCascadeStatement(input: {
           JOIN ${proxyGroup} ON ${proxyGroup.id} = guards.group_id
           WHERE ${proxyGroup.revision} <> guards.revision
         )
+        ${input.guard ? sql`AND ${input.guard}` : sql``}
       RETURNING ${node}.*
     )`,
   ];
@@ -537,7 +552,7 @@ function deleteNodeCascadeStatement(input: {
       WHERE ${nodeGroup.groupId} = updates.group_id
         AND ${nodeGroup.nodeId} = updates.node_id
         AND ${nodeGroup.position} <> updates.position
-        AND EXISTS (SELECT 1 FROM target)
+        AND EXISTS (SELECT 1 FROM ${targetId})
       RETURNING 1
     )`);
   }
@@ -550,13 +565,19 @@ function deleteNodeCascadeStatement(input: {
         FROM jsonb_to_recordset(${JSON.stringify(guards)}::jsonb)
           AS guards(group_id text, revision integer)
       )
-        AND EXISTS (SELECT 1 FROM target)
+        AND EXISTS (SELECT 1 FROM ${targetId})
       RETURNING ${proxyGroup.id} AS id
     )`);
   }
+  return ctes;
+}
+
+function deleteNodeCascadeStatement(input: NodeDeleteCascadeInput): SQL {
+  const targetName = input.targetName ?? "target";
+  const targetId = sql.identifier(targetName);
   return sql`
-    WITH ${sql.join(ctes, sql`, `)}
-    SELECT target.* FROM target
+    WITH ${sql.join(deleteNodeCascadeCtes(input), sql`, `)}
+    SELECT ${targetId}.* FROM ${targetId}
   `;
 }
 
@@ -1047,7 +1068,7 @@ export async function deleteGroupWithMembership(
   return result;
 }
 
-async function readNodeCascadeSnapshot(
+export async function readNodeCascadeSnapshot(
   database: DbHandle,
   nodeId: string,
   lock: boolean,

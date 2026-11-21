@@ -18,10 +18,14 @@ import {
   listServerIdsForUserId,
   recordConfigChange,
 } from "@/query/config-change";
+import { withDatabaseTransaction } from "@/query/group-membership-write";
 import {
-  deleteNodeWithMembershipCascade,
-  withDatabaseTransaction,
-} from "@/query/group-membership-write";
+  deleteLegacySubscriberNode,
+  isLegacyNodeStructuralChange,
+  LegacyNodeWriteRejectedError,
+  type LegacyNodeWriteRejection,
+  writeLegacySubscriberNode,
+} from "@/query/managed-topology-write";
 import { deleteServerRecord } from "@/query/server-deletion";
 import { type ServerDTO, toServerDTO } from "@/query/server-dto";
 
@@ -298,28 +302,34 @@ export async function createNodeMCP(
     enabled?: boolean;
     address?: string | null;
   },
-): Promise<Node> {
+): Promise<Node | LegacyNodeWriteRejection> {
   await requireActorAdmin(actorUserId);
 
-  const validatedSettings = parseNodeSettings(input.protocol, input.settings);
-
-  const [row] = await db
-    .insert(node)
-    .values({
-      id: crypto.randomUUID(),
-      name: input.name,
-      remark: input.remark ?? null,
-      tags: input.tags ?? [],
-      enabled: input.enabled ?? true,
-      serverId: input.serverId,
-      address: input.address ?? null,
-      listenPort: input.listenPort,
-      protocol: input.protocol,
-      settings: validatedSettings,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .returning();
+  const written = await writeLegacySubscriberNode(
+    {
+      kind: "create",
+      values: {
+        id: crypto.randomUUID(),
+        name: input.name,
+        remark: input.remark ?? null,
+        tags: input.tags ?? [],
+        enabled: input.enabled ?? true,
+        serverId: input.serverId,
+        address: input.address ?? null,
+        listenPort: input.listenPort,
+        protocol: input.protocol,
+        settings: parseNodeSettings(input.protocol, input.settings),
+      },
+    },
+    { database: db },
+  );
+  if (!written.ok) {
+    if (written.reason === "not_found") {
+      throw new Error("Failed to create node");
+    }
+    return written;
+  }
+  const row = written.node;
   // Publish gate: hold a newly enabled node out of subscriptions until the
   // agent confirms the revision that first serves it.
   if (row.enabled) {
@@ -347,7 +357,7 @@ export async function updateNodeMCP(
     serverId: string;
     settings: Record<string, unknown>;
   }>,
-): Promise<Node> {
+): Promise<Node | LegacyNodeWriteRejection> {
   await requireActorAdmin(actorUserId);
 
   if (Object.keys(input).length === 0) {
@@ -395,20 +405,43 @@ export async function updateNodeMCP(
     enabled: rest.enabled ?? existingNode.enabled,
   };
   const configChanged = isNodeConfigChange(existingNode, after);
+  const structural = isLegacyNodeStructuralChange(existingNode, after);
   const prevRow = configChanged
     ? await snapshotNodeForGate(db, existingNode)
     : null;
 
-  const [row] = await db
-    .update(node)
-    .set({
-      ...rest,
-      ...(protocol ? { protocol } : {}),
-      ...settingsUpdate,
-      ...addressUpdate,
-    })
-    .where(eq(node.id, nodeId))
-    .returning();
+  let row: Node | undefined;
+  if (structural) {
+    const written = await writeLegacySubscriberNode(
+      {
+        kind: "update",
+        nodeId,
+        values: {
+          ...rest,
+          ...(protocol ? { protocol } : {}),
+          ...settingsUpdate,
+          ...addressUpdate,
+        },
+      },
+      { database: db },
+    );
+    if (!written.ok) {
+      if (written.reason === "not_found") throw new Error("Not found");
+      return written;
+    }
+    row = written.node;
+  } else {
+    [row] = await db
+      .update(node)
+      .set({
+        ...rest,
+        ...(protocol ? { protocol } : {}),
+        ...settingsUpdate,
+        ...addressUpdate,
+      })
+      .where(eq(node.id, nodeId))
+      .returning();
+  }
   if (!row) throw new Error("Not found");
   if (configChanged) {
     await recordMCPConfigChange({
@@ -424,32 +457,39 @@ export async function updateNodeMCP(
 export async function deleteNodeMCP(
   actorUserId: string,
   nodeId: string,
-): Promise<{ id: string }> {
+): Promise<{ id: string } | LegacyNodeWriteRejection> {
   await requireActorAdmin(actorUserId);
   const driver = getDatabaseDriver();
   let changedServerIds: string[] = [];
-  const result = await withDatabaseTransaction(db, driver, async (tx) => {
-    const cascade = await deleteNodeWithMembershipCascade(
-      { nodeId },
-      {
-        database: tx,
-        driver,
-        interactive: supportsInteractiveTransactions(driver),
-      },
-    );
-    if (!cascade) throw new Error("Not found");
-    const row = cascade.node;
-    if (row.enabled) {
-      const change = await recordConfigChange(tx, {
-        kind: "node",
-        subjectId: row.id,
-        prevRow: null,
-        serverIds: [row.serverId],
-      });
-      changedServerIds = change.serverIds;
+  let result: { id: string };
+  try {
+    result = await withDatabaseTransaction(db, driver, async (tx) => {
+      const deleted = await deleteLegacySubscriberNode(
+        { nodeId },
+        { database: tx },
+      );
+      if (!deleted.ok) {
+        if (deleted.reason === "not_found") throw new Error("Not found");
+        throw new LegacyNodeWriteRejectedError(deleted);
+      }
+      const row = deleted.node;
+      if (row.enabled) {
+        const change = await recordConfigChange(tx, {
+          kind: "node",
+          subjectId: row.id,
+          prevRow: null,
+          serverIds: [row.serverId],
+        });
+        changedServerIds = change.serverIds;
+      }
+      return { id: row.id };
+    });
+  } catch (error) {
+    if (error instanceof LegacyNodeWriteRejectedError) {
+      return error.rejection;
     }
-    return { id: row.id };
-  });
+    throw error;
+  }
   await notifyAgentConfigChanged(changedServerIds, "MCP node change");
   return result;
 }

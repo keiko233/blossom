@@ -142,10 +142,16 @@ export function useNodeFormController({
     mutationFn: async (values: NodeFormValues) => {
       const payload = toPayload(values);
       if (node) {
-        await updateNode({ data: { id: node.id, ...payload } });
+        const result = await updateNode({ data: { id: node.id, ...payload } });
+        if (result && typeof result === "object" && "ok" in result) {
+          throw new Error(result.reason);
+        }
         return;
       }
-      await createNode({ data: payload });
+      const result = await createNode({ data: payload });
+      if (result && typeof result === "object" && "ok" in result) {
+        throw new Error(result.reason);
+      }
     },
     onSuccess: async (_result, values) => {
       await queryClient.invalidateQueries({ queryKey: NODES_QUERY_KEY });

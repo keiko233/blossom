@@ -7,6 +7,7 @@
     "./certificate-domain": "./src/certificate-domain.ts",
     "./config-revision": "./src/config-revision.ts",
     "./group-membership": "./src/group-membership.ts",
+    "./managed-networking": "./src/managed-networking.ts",
     "./registration-policy": "./src/registration-policy.ts"
   }
 }
