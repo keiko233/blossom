@@ -4,12 +4,17 @@ import {
   agentOwnedRuntimeTag,
   BUILTIN_DIRECT_OUTBOUND_TAG,
   classifyManagedRuntimeTag,
+  directProfileIpFamilyDialFields,
   estimateBase64EncodedBytes,
+  evaluateManagedNetworkingReadiness,
   evaluateManagedSnapshotByteBudget,
   isReservedRuntimeTag,
   MANAGED_NETWORKING_ACTIVATION_ENABLED,
+  MANAGED_NETWORKING_AGENT_CAPABILITY,
+  MANAGED_NETWORKING_MIN_SING_BOX_VERSION,
   MANAGED_SNAPSHOT_BYTE_BUDGETS,
   managedRuntimeTag,
+  parseSingBoxVersion,
   subscriberInboundTag,
 } from "./managed-networking";
 
@@ -150,5 +155,86 @@ describe("evaluateManagedSnapshotByteBudget", () => {
 describe("managed activation", () => {
   it("stays disabled until the rollout gate ships", () => {
     expect(MANAGED_NETWORKING_ACTIVATION_ENABLED).toBe(false);
+  });
+});
+
+describe("managed activation readiness", () => {
+  const ready = {
+    enabled: true,
+    agentConnected: true,
+    agentCapabilities: [MANAGED_NETWORKING_AGENT_CAPABILITY],
+    singBoxVersion: "1.14.4",
+    runtimeState: "running",
+    configState: "applied",
+    desiredConfigVersionId: null,
+    appliedConfigVersionId: null,
+  };
+
+  it("accepts a connected capability-bearing agent on a settled runtime", () => {
+    expect(evaluateManagedNetworkingReadiness(ready)).toEqual({
+      ready: true,
+      reasons: [],
+      minSingBoxVersion: MANAGED_NETWORKING_MIN_SING_BOX_VERSION,
+    });
+  });
+
+  it("reports every blocking reason instead of treating unknown state as compatible", () => {
+    expect(
+      evaluateManagedNetworkingReadiness({
+        enabled: false,
+        agentConnected: false,
+        agentCapabilities: [],
+        singBoxVersion: null,
+        runtimeState: "unknown",
+        configState: "unknown",
+        desiredConfigVersionId: "cfg-new",
+        appliedConfigVersionId: "cfg-old",
+      }),
+    ).toMatchObject({
+      ready: false,
+      reasons: [
+        "server_disabled",
+        "agent_offline",
+        "capability_missing",
+        "sing_box_version_unknown",
+        "runtime_state_unknown",
+        "config_state_unknown",
+        "managed_state_unsettled",
+      ],
+    });
+  });
+
+  it("rejects a version below the managed floor", () => {
+    expect(
+      evaluateManagedNetworkingReadiness({
+        ...ready,
+        singBoxVersion: "1.13.9",
+      }).reasons,
+    ).toEqual(["sing_box_version_unsupported"]);
+  });
+});
+
+describe("parseSingBoxVersion", () => {
+  it("accepts the agent's plain and v-prefixed versions", () => {
+    expect(parseSingBoxVersion("1.14.4")).toEqual({
+      major: 1,
+      minor: 14,
+      patch: 4,
+    });
+    expect(parseSingBoxVersion("v1.14.4-beta.1")).toEqual({
+      major: 1,
+      minor: 14,
+      patch: 4,
+    });
+    expect(parseSingBoxVersion("sing-box 1.14.4")).toBeNull();
+    expect(parseSingBoxVersion(null)).toBeNull();
+  });
+});
+
+describe("directProfileIpFamilyDialFields", () => {
+  it("maps only the explicit family, leaving any at the sing-box defaults", () => {
+    expect(directProfileIpFamilyDialFields("any")).toEqual({});
+    expect(directProfileIpFamilyDialFields("ipv4")).toEqual({ inet6: false });
+    expect(directProfileIpFamilyDialFields("ipv6")).toEqual({ inet4: false });
   });
 });
