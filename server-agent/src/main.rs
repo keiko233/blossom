@@ -17,6 +17,7 @@ mod logs;
 mod oauth;
 mod process;
 mod pty;
+mod service;
 mod stats;
 #[cfg(target_os = "linux")]
 mod telemetry;
@@ -53,6 +54,7 @@ use crate::log_policy::{
 };
 use crate::logs::{CaptureLayer, LogStore, SecretScope};
 use crate::process::{ProcessState, SingBoxManager, check_config, resolve_binary, singbox_version};
+use crate::service::NativeRuntime;
 use crate::traffic::TrafficReporter;
 use crate::update::{
     AGENT_RESTART_EXIT_CODE, UpdateConfig, UpdateManager, UpdateStatus, supports_singbox_version,
@@ -103,6 +105,10 @@ struct Cli {
 enum Command {
     /// Redeem one enrollment grant and write a protected credential file.
     Enroll(oauth::EnrollArgs),
+    /// Installer-owned local service lifecycle boundary. Hidden from ordinary
+    /// operation; the agent never invokes this subcommand directly.
+    #[command(hide = true)]
+    ServiceControl(service::ServiceControlArgs),
 }
 
 #[derive(clap::Args)]
@@ -217,6 +223,34 @@ struct Args {
     /// OAuth credentials are refused with `legacy`.
     #[arg(long, value_enum, env = "AGENT_WS_PROTOCOL")]
     ws_protocol: Option<WsProtocol>,
+
+    /// Opt in to the installed native service lifecycle. The agent talks to
+    /// the root-owned `blossom-service-control` helper instead of supervising
+    /// sing-box as a child. Requires protocol v2; the installer enables it only
+    /// on native Linux hosts after task 05 metering is ready.
+    #[arg(
+        long,
+        default_value_t = false,
+        env = "AGENT_NATIVE_SERVICE_CONTROL",
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
+    native_service_control: bool,
+
+    /// Local control socket of the privileged service-control helper.
+    #[arg(
+        long,
+        default_value = "/run/blossom-service-control/control.sock",
+        env = "AGENT_SERVICE_CONTROL_SOCKET"
+    )]
+    service_control_socket: PathBuf,
+
+    /// Root-owned release tree used by the native helper.
+    #[arg(
+        long,
+        default_value = "/var/lib/blossom-service-control",
+        env = "AGENT_SERVICE_CONTROL_RELEASE_DIR"
+    )]
+    service_control_release_dir: PathBuf,
 
     /// Probation before a v2 candidate config is committed. A test harness knob.
     #[arg(
@@ -397,6 +431,11 @@ impl Args {
                 "protocol v2 is the WebSocket path and cannot run with --ws-enabled=false; use --ws-protocol legacy with a static token for HTTP-only mode"
             ));
         }
+        if self.native_service_control && protocol != WsProtocol::V2 {
+            return Err(anyhow::anyhow!(
+                "the native service lifecycle requires protocol v2; legacy HTTP-only mode keeps processkit supervision"
+            ));
+        }
         if implicit_legacy {
             warn!(WS_DISABLED_DEPRECATION);
         }
@@ -533,8 +572,11 @@ impl AgentFilter for ReloadingFilter {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    if let Some(Command::Enroll(enroll)) = &cli.command {
-        return oauth::run_enroll(enroll).await;
+    if let Some(command) = cli.command {
+        return match command {
+            Command::Enroll(enroll) => oauth::run_enroll(&enroll).await,
+            Command::ServiceControl(args) => service::run_control(args).await,
+        };
     }
     let args = cli.service;
     let startup = args.startup()?;
@@ -1055,7 +1097,16 @@ async fn sync_config(
         record_config_error(config, status, &error);
         anyhow::Error::new(error)
     })?;
-    apply_fetched(config, manager, bin, status, fetched, RUNTIME_PROBATION).await
+    apply_fetched(
+        config,
+        manager,
+        bin,
+        status,
+        fetched,
+        RUNTIME_PROBATION,
+        None,
+    )
+    .await
 }
 
 /// Records a failed reconcile so the next heartbeat or config acknowledgement
@@ -1101,6 +1152,148 @@ async fn start_last_known_good(
     }
 }
 
+/// Native counterpart of [`apply_fetched`]. The local candidate is preflighted
+/// with the committed release binary, copied into protected storage, trialled
+/// through the helper, and committed only after the helper proves the same
+/// invocation still serves. The local active/last-known-good files advance only
+/// after the service commit succeeds.
+async fn apply_native_fetched(
+    config: &mut ConfigManager,
+    bin: &Path,
+    status: &mut AgentStatus,
+    fetched: FetchStatus,
+    probation: Duration,
+    native: &NativeRuntime,
+) -> Result<AgentPolicy> {
+    let (policy, candidate) = match fetched {
+        FetchStatus::Unchanged(policy) => {
+            status.observed_revision = config.observed_revision().map(str::to_owned);
+            let instance = match native.runtime_instance().await {
+                Ok(instance) => instance,
+                Err(error) => {
+                    status.config_state = "apply_failed";
+                    status.error = Some(ReportedError {
+                        phase: "native_reconcile",
+                        code: "SERVICE_CONTROL_UNAVAILABLE",
+                        message: error.to_string(),
+                        node_id: None,
+                        occurred_at: Utc::now(),
+                    });
+                    return Ok(policy);
+                }
+            };
+            if instance.is_some() && config.applied_revision().is_some() {
+                status.config_state = "applied";
+                status.error = None;
+            }
+            return Ok(policy);
+        }
+        FetchStatus::Updated { policy, candidate } => (policy, candidate),
+    };
+    status.observed_revision = Some(candidate.revision.clone());
+
+    let preflight_binary = match native.committed_binary().await {
+        Ok(Some(path)) => path,
+        Ok(None) => bin.to_path_buf(),
+        Err(error) => {
+            status.config_state = "apply_failed";
+            status.error = Some(ReportedError {
+                phase: "native_reconcile",
+                code: "SERVICE_CONTROL_UNAVAILABLE",
+                message: error.to_string(),
+                node_id: None,
+                occurred_at: Utc::now(),
+            });
+            return Ok(policy);
+        }
+    };
+    if let Err(error) = check_config(&preflight_binary, config.candidate_path()).await {
+        let message = error.to_string();
+        let node_id = node_id_from_error(&message, &candidate);
+        status.config_state = "rejected";
+        config.mark_candidate_error(&candidate, "preflight", &message);
+        status.error = Some(ReportedError {
+            phase: "preflight",
+            code: "SINGBOX_CONFIG_INVALID",
+            node_id,
+            message,
+            occurred_at: Utc::now(),
+        });
+        return Ok(policy);
+    }
+
+    if let Err(error) = native.enable().await {
+        status.config_state = "apply_failed";
+        config.mark_candidate_error(&candidate, "native_enable", &error.to_string());
+        status.error = Some(ReportedError {
+            phase: "apply",
+            code: "SERVICE_CONTROL_UNAVAILABLE",
+            message: error.to_string(),
+            node_id: None,
+            occurred_at: Utc::now(),
+        });
+        return Ok(policy);
+    }
+
+    let record = match native.stage_candidate_config(config.candidate_path()).await {
+        Ok(record) => record,
+        Err(error) => {
+            status.config_state = "apply_failed";
+            config.mark_candidate_error(&candidate, "native_promote", &error.to_string());
+            status.error = Some(ReportedError {
+                phase: "promote",
+                code: "CONFIG_PROMOTE_FAILED",
+                message: error.to_string(),
+                node_id: None,
+                occurred_at: Utc::now(),
+            });
+            return Ok(policy);
+        }
+    };
+    if let Err(error) = native.begin_trial(record.clone(), probation).await {
+        let _ = native.rollback().await;
+        status.config_state = "apply_failed";
+        config.mark_candidate_error(&candidate, "native_trial", &error.to_string());
+        status.error = Some(ReportedError {
+            phase: "apply",
+            code: "SINGBOX_START_FAILED",
+            message: error.to_string(),
+            node_id: None,
+            occurred_at: Utc::now(),
+        });
+        return Ok(policy);
+    }
+
+    tokio::time::sleep(probation).await;
+    match native.commit_and_confirm(record.generation).await {
+        Ok(()) => {
+            config.promote_candidate()?;
+            config.commit_applied(&candidate)?;
+            config.set_runtime_confirmed(true);
+            status.config_state = "applied";
+            status.error = None;
+            info!(revision = %candidate.revision, "sing-box config {} applied natively", candidate.revision);
+        }
+        Err(error) => {
+            let _ = native.rollback().await;
+            config.mark_candidate_error(
+                &candidate,
+                "health",
+                "native candidate did not survive probation or the invocation changed",
+            );
+            status.config_state = "apply_failed";
+            status.error = Some(ReportedError {
+                phase: "health",
+                code: "SINGBOX_HEALTH_CHECK_FAILED",
+                message: error.to_string(),
+                node_id: None,
+                occurred_at: Utc::now(),
+            });
+        }
+    }
+    Ok(policy)
+}
+
 /// Applies a compiled desired state with every safety invariant: candidate
 /// preflight, promotion, process replacement, probation, then commit or
 /// rollback. The HTTP poll path and the WebSocket v2 snapshot path both use it.
@@ -1111,7 +1304,11 @@ async fn apply_fetched(
     status: &mut AgentStatus,
     fetched: FetchStatus,
     probation: Duration,
+    native: Option<&NativeRuntime>,
 ) -> Result<AgentPolicy> {
+    if let Some(native) = native {
+        return apply_native_fetched(config, bin, status, fetched, probation, native).await;
+    }
     let (policy, candidate) = match fetched {
         FetchStatus::Unchanged(policy) => {
             status.observed_revision = config.observed_revision().map(str::to_owned);

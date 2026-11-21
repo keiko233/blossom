@@ -35,6 +35,7 @@ use crate::log_policy::{LogPolicy, PolicyAction, PolicyRequest, SOURCES, Source 
 use crate::logs::{LogStore, SecretScope};
 use crate::oauth::OAuthTokenProvider;
 use crate::process::{ProcessState, SingBoxManager, resolve_binary, singbox_version};
+use crate::service::{ActiveState, NativeRuntime};
 use crate::traffic::TrafficReporter;
 use crate::update::{AGENT_RESTART_EXIT_CODE, UpdateManager, supports_singbox_version};
 use crate::ws::RandomJitter;
@@ -137,10 +138,26 @@ pub async fn run(
         ConfigManager::new(client, state_dir.clone(), logs.clone(), log_policy.clone())?;
     logs.replace_secrets(SecretScope::StatsApi, config.api_endpoint().secret.iter())?;
     let mut updates = new_update_manager(args, sing_box_version.clone())?;
+    let native = args.native_service_control.then(|| {
+        NativeRuntime::new(
+            &args.service_control_socket,
+            &args.service_control_release_dir,
+        )
+    });
 
     // The committed config starts sing-box before the network is touched, so
     // a cold link leaves the proxy running on its last applied configuration.
-    let (mut manager, startup_error) = start_last_known_good(&mut config, &bin).await;
+    // In native mode systemd already made that decision in its own
+    // `ExecStartPre=+` step before this process started.
+    let (mut manager, startup_error) = match &native {
+        Some(native) => {
+            if let Err(error) = native.reconcile().await {
+                warn!("native service reconcile failed at startup: {error}");
+            }
+            (None, None)
+        }
+        None => start_last_known_good(&mut config, &bin).await,
+    };
     let mut status = AgentStatus::from_config(&config);
     if let Some(message) = startup_error {
         status.error = Some(ReportedError {
@@ -158,6 +175,7 @@ pub async fn run(
     let initial = snapshot(
         &config,
         manager.as_ref(),
+        native.as_ref().and_then(NativeRuntime::active_state),
         &status,
         sing_box_version.as_deref(),
         &updates,
@@ -243,28 +261,41 @@ pub async fn run(
                 let Some(job) = job else {
                     break;
                 };
-                let result = apply_job(job, &mut config, &mut manager, &bin, &mut status, probation).await;
+                let result = apply_job(
+                    job,
+                    &mut config,
+                    &mut manager,
+                    &bin,
+                    &mut status,
+                    probation,
+                    native.as_ref(),
+                )
+                .await;
                 if core.results.send(result).await.is_err() {
                     break;
                 }
             }
             Some(()) = core.disabled.recv() => {
-                apply_administrative_disable(&mut config, &mut manager, &bin).await;
+                apply_administrative_disable(&mut config, &mut manager, &bin, native.as_ref()).await;
             }
             job = core.log_jobs.recv() => {
                 let Some(job) = job else {
                     break;
                 };
-                apply_log_policy_job(
-                    &log_policy,
-                    &mut config,
-                    &mut manager,
-                    &bin,
-                    probation,
-                    job,
-                    &mut log_policy_errors,
-                )
-                .await;
+                if native.is_some() {
+                    warn!("log-level policy is not served by the native runtime adapter yet");
+                } else {
+                    apply_log_policy_job(
+                        &log_policy,
+                        &mut config,
+                        &mut manager,
+                        &bin,
+                        probation,
+                        job,
+                        &mut log_policy_errors,
+                    )
+                    .await;
+                }
             }
             changed = core.policy.changed() => {
                 if changed.is_err() {
@@ -276,15 +307,16 @@ pub async fn run(
                     desired_sing_box_version: desired.desired_sing_box_version,
                     ..policy.clone()
                 };
-                if reconcile_updates(
-                    &mut updates,
-                    &targets,
-                    &mut manager,
-                    &bin,
-                    &mut config,
-                    &mut sing_box_version,
-                )
-                .await
+                if native.is_none()
+                    && reconcile_updates(
+                        &mut updates,
+                        &targets,
+                        &mut manager,
+                        &bin,
+                        &mut config,
+                        &mut sing_box_version,
+                    )
+                    .await
                 {
                     restart_for_update(manager.take()).await;
                 }
@@ -306,18 +338,22 @@ pub async fn run(
                             force = trigger.force,
                             "update push received on v2; reconciling immediately"
                         );
-                        let exit = apply_update_trigger(
-                            trigger,
-                            &mut updates,
-                            &mut manager,
-                            &bin,
-                            &mut config,
-                            &mut sing_box_version,
-                            &policy,
-                        )
-                        .await;
-                        if exit {
-                            restart_for_update(manager.take()).await;
+                        if native.is_some() {
+                            warn!("native runtime updates require the installer promoter; update trigger ignored");
+                        } else {
+                            let exit = apply_update_trigger(
+                                trigger,
+                                &mut updates,
+                                &mut manager,
+                                &bin,
+                                &mut config,
+                                &mut sing_box_version,
+                                &policy,
+                            )
+                            .await;
+                            if exit {
+                                restart_for_update(manager.take()).await;
+                            }
                         }
                     }
                     Command::AcmeIssue(issue) => {
@@ -382,7 +418,11 @@ pub async fn run(
                 )
                 .await;
             }
-            _ = runtime_tick.tick() => {}
+            _ = runtime_tick.tick() => {
+                if let Some(native) = native.as_ref() {
+                    native.refresh_observation().await;
+                }
+            }
         }
         publish(
             &core.status,
@@ -390,6 +430,7 @@ pub async fn run(
             snapshot(
                 &config,
                 manager.as_ref(),
+                native.as_ref().and_then(NativeRuntime::active_state),
                 &status,
                 sing_box_version.as_deref(),
                 &updates,
@@ -426,8 +467,14 @@ async fn apply_administrative_disable(
     config: &mut ConfigManager,
     manager: &mut Option<SingBoxManager>,
     bin: &Path,
+    native: Option<&NativeRuntime>,
 ) {
     if config.administratively_disabled() {
+        if let Some(native) = native
+            && let Err(error) = native.disable().await
+        {
+            error!("failed to repeat native disable intent: {error}");
+        }
         return;
     }
     let candidate = match config.apply_administrative_teardown() {
@@ -440,6 +487,17 @@ async fn apply_administrative_disable(
     // Persist the teardown before stopping the process that still serves the
     // previous memory configuration. A failed write therefore leaves the proxy
     // untouched and the signal can safely be retried by the next link.
+    if let Some(native) = native {
+        if let Err(error) = native.disable().await {
+            error!("failed to record native disable intent: {error}");
+            return;
+        }
+        info!(
+            revision = %candidate.revision,
+            "control plane disabled this server; durable native disable intent applied"
+        );
+        return;
+    }
     if let Some(current) = manager.take() {
         current.shutdown().await;
     }
@@ -557,6 +615,7 @@ async fn apply_job(
     bin: &Path,
     status: &mut AgentStatus,
     probation: Duration,
+    native: Option<&NativeRuntime>,
 ) -> ApplyResult {
     let ApplyJob {
         request_id,
@@ -573,7 +632,7 @@ async fn apply_job(
             failed_from_config(&error)
         }
         Ok(fetched) => {
-            match apply_fetched(config, manager, bin, status, fetched, probation).await {
+            match apply_fetched(config, manager, bin, status, fetched, probation, native).await {
                 Err(error) => {
                     error!(revision = %desired.desired_revision, "configuration commit failed: {error}");
                     ApplyOutcome::Failed {
@@ -651,6 +710,7 @@ fn record_refusal(status: &mut AgentStatus, refusal: SnapshotRefusal) {
 fn snapshot(
     config: &ConfigManager,
     manager: Option<&SingBoxManager>,
+    native_active: Option<ActiveState>,
     status: &AgentStatus,
     sing_box_version: Option<&str>,
     updates: &UpdateManager,
@@ -686,7 +746,10 @@ fn snapshot(
                 .served_revision()
                 .and_then(ConfigIdentifier::from_revision)
         },
-        runtime_state: runtime.map_or(RuntimeState::Stopped, runtime_state_of),
+        runtime_state: runtime
+            .map(runtime_state_of)
+            .or_else(|| native_active.map(native_runtime_state_of))
+            .unwrap_or(RuntimeState::Stopped),
         config_state: config_state_of(status.config_state),
         sing_box_version: sing_box_version.map(str::to_owned),
         active_node_ids: config.active_node_ids().to_vec(),
@@ -697,6 +760,17 @@ fn snapshot(
             .map(certificate_deployment)
             .collect(),
         updates: update_status_payload_from(updates.agent_status(), updates.singbox_status()),
+    }
+}
+
+fn native_runtime_state_of(state: ActiveState) -> RuntimeState {
+    match state {
+        ActiveState::Active | ActiveState::Reloading | ActiveState::Refreshing => {
+            RuntimeState::Running
+        }
+        ActiveState::Activating => RuntimeState::Starting,
+        ActiveState::Inactive | ActiveState::Deactivating => RuntimeState::Stopped,
+        ActiveState::Failed | ActiveState::Maintenance => RuntimeState::CrashLoop,
     }
 }
 

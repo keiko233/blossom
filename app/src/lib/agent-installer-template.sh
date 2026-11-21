@@ -29,6 +29,28 @@ SING_BOX_FILE=$INSTALL_DIR/sing-box
 CREDENTIALS_FILE=$CONFIG_DIR/credentials.json
 METADATA_FILE=$CONFIG_DIR/installation.json
 
+# Native service lifecycle is an explicit installer opt-in. The default path
+# keeps the existing processkit child supervision and unit unchanged.
+NATIVE_SERVICE=${BLOSSOM_NATIVE_SERVICE:-0}
+case "$NATIVE_SERVICE" in
+  0|1) ;;
+  *) printf '[blossom-install] error: BLOSSOM_NATIVE_SERVICE must be 0 or 1\n' >&2; exit 1 ;;
+esac
+NATIVE_DIR=/usr/local/lib/blossom-service-control
+NATIVE_HELPER=$NATIVE_DIR/blossom-service-control
+NATIVE_KEY_DIR=/etc/blossom-service-control
+NATIVE_KEY=$NATIVE_KEY_DIR/release-signing.pub
+NATIVE_LIB=/var/lib/blossom-service-control
+NATIVE_JOURNAL=$NATIVE_LIB/journal
+NATIVE_RELEASES=$NATIVE_LIB/releases
+NATIVE_RUN=/run/blossom-service-control
+NATIVE_SOCKET=$NATIVE_RUN/control.sock
+NATIVE_CONTROL_UNIT=/etc/systemd/system/blossom-service-control.service
+NATIVE_RUNTIME_UNIT=/etc/systemd/system/blossom-sing-box.service
+NATIVE_RUNTIME_USER=blossom-runtime
+NATIVE_RUNTIME_GROUP=blossom-runtime
+NATIVE_RELEASE_PUBLIC_KEY=${BLOSSOM_RELEASE_PUBLIC_KEY:-}
+
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 umask 077
@@ -42,6 +64,10 @@ had_singbox=0
 had_unit=0
 had_credentials=0
 had_metadata=0
+had_native_helper=0
+had_native_key=0
+had_native_control_unit=0
+had_native_runtime_unit=0
 reset_state=0
 state_archived=
 
@@ -53,6 +79,14 @@ fail() {
   log "error: $*"
   exit 1
 }
+
+if [ "$NATIVE_SERVICE" = 1 ]; then
+  case "$NATIVE_RELEASE_PUBLIC_KEY" in
+    *[!0-9a-f]*|"") fail "BLOSSOM_RELEASE_PUBLIC_KEY must be 64 lowercase hex characters when native service lifecycle is enabled" ;;
+  esac
+  [ "${#NATIVE_RELEASE_PUBLIC_KEY}" -eq 64 ] || fail "BLOSSOM_RELEASE_PUBLIC_KEY must be 64 lowercase hex characters"
+fi
+
 
 backup_file() {
   src=$1
@@ -80,6 +114,10 @@ rollback() {
   rollback_done=1
   log "installation failed; restoring the previous service"
   set +e
+  if [ "$NATIVE_SERVICE" = 1 ]; then
+    systemctl stop blossom-agent blossom-sing-box blossom-service-control >/dev/null 2>&1
+    systemctl disable blossom-sing-box blossom-service-control >/dev/null 2>&1
+  fi
   systemctl stop "$SERVICE" >/dev/null 2>&1
   if [ -n "$state_archived" ] && [ -e "$state_archived" ]; then
     rm -rf "$STATE_DIR"
@@ -90,6 +128,12 @@ rollback() {
   restore_file "$had_unit" "$staging/unit.backup" "$UNIT_FILE"
   restore_file "$had_credentials" "$staging/credentials.backup" "$CREDENTIALS_FILE"
   restore_file "$had_metadata" "$staging/metadata.backup" "$METADATA_FILE"
+  if [ "$NATIVE_SERVICE" = 1 ]; then
+    restore_file "$had_native_helper" "$staging/helper.backup" "$NATIVE_HELPER"
+    restore_file "$had_native_key" "$staging/key.backup" "$NATIVE_KEY"
+    restore_file "$had_native_control_unit" "$staging/control-unit.backup" "$NATIVE_CONTROL_UNIT"
+    restore_file "$had_native_runtime_unit" "$staging/runtime-unit.backup" "$NATIVE_RUNTIME_UNIT"
+  fi
   systemctl daemon-reload >/dev/null 2>&1
   if [ "$had_install" -eq 1 ]; then
     systemctl enable "$SERVICE" >/dev/null 2>&1
@@ -197,11 +241,16 @@ existing_server=
 existing_origin=
 existing_release=
 existing_grant=
+existing_native=
 if [ -f "$METADATA_FILE" ]; then
   existing_server=$(sed -n 's/^server_id=//p' "$METADATA_FILE")
   existing_origin=$(sed -n 's/^origin=//p' "$METADATA_FILE")
   existing_release=$(sed -n 's/^release=//p' "$METADATA_FILE")
   existing_grant=$(sed -n 's/^grant_id=//p' "$METADATA_FILE")
+  existing_native=$(sed -n 's/^native_service=//p' "$METADATA_FILE")
+fi
+if [ "$existing_native" = 1 ] && [ "${BLOSSOM_NATIVE_SERVICE:-}" != 1 ]; then
+  fail "this host uses the native service lifecycle; rerun with BLOSSOM_NATIVE_SERVICE=1 and the pinned key to keep it"
 fi
 
 if [ -e "$UNIT_FILE" ] || [ -e "$AGENT_FILE" ] || [ -e "$CREDENTIALS_FILE" ] || [ -e "$METADATA_FILE" ]; then
@@ -221,11 +270,29 @@ already_installed() {
 }
 
 if [ "$had_install" -eq 1 ] && [ "$existing_grant" = "$GRANT_ID" ] && [ "$existing_release" = "$RELEASE_VERSION" ] && [ -x "$AGENT_FILE" ]; then
+  if [ "$NATIVE_SERVICE" = 1 ] &&
+    { ! systemctl is-active --quiet blossom-service-control || ! systemctl is-active --quiet blossom-sing-box; }; then
+    log "the grant is already installed but a native unit is inactive; restarting the installed units"
+    systemctl enable blossom-service-control blossom-sing-box "$SERVICE" >/dev/null
+    systemctl restart blossom-service-control
+    systemctl restart blossom-sing-box
+    systemctl restart "$SERVICE"
+    [ "$health_seconds" -eq 0 ] || sleep "$health_seconds"
+    systemctl is-active --quiet blossom-service-control || fail "the service-control helper did not become active"
+    systemctl is-active --quiet blossom-sing-box || fail "the native sing-box runtime did not become active"
+    systemctl is-active --quiet "$SERVICE" || fail "existing service did not become active"
+    already_installed
+  fi
   if systemctl is-active --quiet "$SERVICE"; then
     already_installed
   fi
   log "the grant is already installed but the service is inactive; restarting the existing service"
   systemctl enable "$SERVICE" >/dev/null
+  if [ "$NATIVE_SERVICE" = 1 ]; then
+    systemctl enable blossom-service-control blossom-sing-box >/dev/null
+    systemctl start blossom-service-control
+    systemctl start blossom-sing-box
+  fi
   systemctl start "$SERVICE"
   [ "$health_seconds" -eq 0 ] || sleep "$health_seconds"
   systemctl is-active --quiet "$SERVICE" || fail "existing service did not become active"
@@ -235,6 +302,10 @@ fi
 if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --user-group --home-dir "$STATE_DIR" --shell /usr/sbin/nologin "$SERVICE_USER" ||
     fail "cannot create the $SERVICE_USER service account"
+fi
+if [ "$NATIVE_SERVICE" = 1 ] && ! id -u "$NATIVE_RUNTIME_USER" >/dev/null 2>&1; then
+  useradd --system --user-group --home-dir "$NATIVE_LIB" --shell /usr/sbin/nologin "$NATIVE_RUNTIME_USER" ||
+    fail "cannot create the $NATIVE_RUNTIME_USER runtime account"
 fi
 
 install -d -m 0755 "$INSTALL_DIR"
@@ -273,6 +344,28 @@ sing_box_candidates=$(find "$staging/sing-box" -type f -name sing-box | wc -l)
 [ "$sing_box_candidates" -eq 1 ] || fail "sing-box archive must contain exactly one sing-box binary"
 staged_sing_box=$(find "$staging/sing-box" -type f -name sing-box)
 chmod 0755 "$staged_sing_box"
+sing_box_binary_sha256=$(sha256sum "$staged_sing_box" | cut -d' ' -f1)
+case "$sing_box_binary_sha256" in
+  *[!0-9a-f]*|"") fail "staged sing-box SHA-256 is invalid" ;;
+esac
+[ "${#sing_box_binary_sha256}" -eq 64 ] || fail "staged sing-box SHA-256 is invalid"
+
+native_agent_config_source=$staging/native-agent-config.json
+printf '{"component":"agent"}\n' >"$native_agent_config_source"
+chmod 0600 "$native_agent_config_source"
+native_sing_box_config_source=$staging/native-sing-box-config.json
+if [ -f "$STATE_DIR/config.json" ]; then
+  cp "$STATE_DIR/config.json" "$native_sing_box_config_source"
+else
+  cat >"$native_sing_box_config_source" <<'EOF_NATIVE_CONFIG'
+{"log":{"level":"info"},"outbounds":[{"type":"direct","tag":"direct"}]}
+EOF_NATIVE_CONFIG
+fi
+chmod 0600 "$native_sing_box_config_source"
+if [ "$NATIVE_SERVICE" = 1 ]; then
+  "$staged_sing_box" check -c "$native_sing_box_config_source" ||
+    fail "the staged sing-box cannot load the initial native config"
+fi
 
 agent_version_output=$("$staging/server-agent" --version 2>&1) ||
   fail "the downloaded server-agent does not run"
@@ -347,8 +440,119 @@ if backup_file "$SING_BOX_FILE" "$staging/singbox.backup"; then had_singbox=1; f
 if backup_file "$UNIT_FILE" "$staging/unit.backup"; then had_unit=1; fi
 if backup_file "$CREDENTIALS_FILE" "$staging/credentials.backup"; then had_credentials=1; fi
 if backup_file "$METADATA_FILE" "$staging/metadata.backup"; then had_metadata=1; fi
+if [ "$NATIVE_SERVICE" = 1 ]; then
+  if backup_file "$NATIVE_HELPER" "$staging/helper.backup"; then had_native_helper=1; fi
+  if backup_file "$NATIVE_KEY" "$staging/key.backup"; then had_native_key=1; fi
+  if backup_file "$NATIVE_CONTROL_UNIT" "$staging/control-unit.backup"; then had_native_control_unit=1; fi
+  if backup_file "$NATIVE_RUNTIME_UNIT" "$staging/runtime-unit.backup"; then had_native_runtime_unit=1; fi
+fi
 
-cat >"$staging/blossom-agent.service" <<EOF_UNIT
+if [ "$NATIVE_SERVICE" = 1 ]; then
+  cat >"$staging/blossom-agent.service" <<EOF_UNIT
+[Unit]
+Description=Blossom server agent
+After=network-online.target blossom-service-control.service
+Wants=network-online.target
+Requires=blossom-service-control.service
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+Group=$SERVICE_GROUP
+WorkingDirectory=$STATE_DIR
+ExecStartPre=+$NATIVE_HELPER boot-select --service agent --journal-dir $NATIVE_JOURNAL --selection-dir $NATIVE_RUN
+ExecStart=$NATIVE_HELPER boot-exec --service agent --selection-dir $NATIVE_RUN --release-dir $NATIVE_LIB -- --url $ORIGIN/api --credentials-file $CREDENTIALS_FILE --state-dir $STATE_DIR --sing-box-path $NATIVE_RELEASES/sing-box/$sing_box_binary_sha256/sing-box --download-dir $STATE_DIR/downloads --self-update=false --native-service-control --service-control-socket $NATIVE_SOCKET --service-control-release-dir $NATIVE_LIB
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=77 78 79
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+ReadWritePaths=$STATE_DIR $NATIVE_LIB $NATIVE_RUN
+
+[Install]
+WantedBy=multi-user.target
+EOF_UNIT
+
+  cat >"$staging/blossom-service-control.service" <<EOF_UNIT
+[Unit]
+Description=Blossom privileged service-control helper
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+RuntimeDirectory=blossom-service-control
+RuntimeDirectoryMode=0755
+ExecStart=$NATIVE_HELPER serve --socket $NATIVE_SOCKET --journal-dir $NATIVE_JOURNAL --release-dir $NATIVE_LIB --agent-state-dir $STATE_DIR --trust-key $NATIVE_KEY --agent-uid $(id -u "$SERVICE_USER") --runtime-gid $(id -g "$NATIVE_RUNTIME_USER") --socket-gid $(id -g "$SERVICE_USER")
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+ReadWritePaths=$NATIVE_LIB /run/blossom-service-control
+
+[Install]
+WantedBy=multi-user.target
+EOF_UNIT
+
+  cat >"$staging/blossom-sing-box.service" <<EOF_UNIT
+[Unit]
+Description=Blossom managed sing-box runtime
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$NATIVE_RUNTIME_USER
+Group=$NATIVE_RUNTIME_GROUP
+ExecStartPre=+$NATIVE_HELPER boot-select --service sing-box --journal-dir $NATIVE_JOURNAL --selection-dir $NATIVE_RUN
+ExecStart=$NATIVE_HELPER boot-exec --service sing-box --selection-dir $NATIVE_RUN --release-dir $NATIVE_LIB
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=77 78 79
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+ReadWritePaths=$NATIVE_LIB $NATIVE_RUN
+
+[Install]
+WantedBy=multi-user.target
+EOF_UNIT
+else
+  cat >"$staging/blossom-agent.service" <<EOF_UNIT
 [Unit]
 Description=Blossom server agent
 After=network-online.target
@@ -382,6 +586,7 @@ ReadWritePaths=$STATE_DIR
 [Install]
 WantedBy=multi-user.target
 EOF_UNIT
+fi
 
 cat >"$staging/installation.json" <<EOF_METADATA
 server_id=$SERVER_ID
@@ -389,6 +594,7 @@ origin=$ORIGIN
 release=$RELEASE_VERSION
 grant_id=$GRANT_ID
 mode=$MODE
+native_service=$NATIVE_SERVICE
 installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF_METADATA
 
@@ -419,15 +625,56 @@ install -m 0644 "$staging/blossom-agent.service" "$UNIT_FILE.new"
 mv -f "$UNIT_FILE.new" "$UNIT_FILE"
 install -m 0600 "$staging/installation.json" "$METADATA_FILE"
 
+if [ "$NATIVE_SERVICE" = 1 ]; then
+  install -d -m 0755 "$NATIVE_DIR"
+  install -m 0755 "$staging/server-agent" "$NATIVE_DIR/.blossom-service-control.new"
+  mv -f "$NATIVE_DIR/.blossom-service-control.new" "$NATIVE_HELPER"
+  install -d -m 0755 "$NATIVE_KEY_DIR"
+  printf '%s\n' "$NATIVE_RELEASE_PUBLIC_KEY" >"$NATIVE_KEY.new"
+  chmod 0644 "$NATIVE_KEY.new"
+  mv -f "$NATIVE_KEY.new" "$NATIVE_KEY"
+  install -d -m 0750 "$NATIVE_LIB" "$NATIVE_LIB/journal" "$NATIVE_RELEASES"
+  chmod 0700 "$NATIVE_LIB/journal"
+  "$NATIVE_HELPER" bootstrap --service agent \
+    --binary-source "$staging/server-agent" \
+    --config-source "$native_agent_config_source" \
+    --journal-dir "$NATIVE_JOURNAL" \
+    --release-dir "$NATIVE_LIB" \
+    --runtime-gid "$(id -g "$NATIVE_RUNTIME_USER")" ||
+    fail "cannot bootstrap the initial agent generation"
+  "$NATIVE_HELPER" bootstrap --service sing-box \
+    --binary-source "$staged_sing_box" \
+    --config-source "$native_sing_box_config_source" \
+    --journal-dir "$NATIVE_JOURNAL" \
+    --release-dir "$NATIVE_LIB" \
+    --runtime-gid "$(id -g "$NATIVE_RUNTIME_USER")" ||
+    fail "cannot bootstrap the initial sing-box generation"
+  install -m 0644 "$staging/blossom-service-control.service" "$NATIVE_CONTROL_UNIT.new"
+  mv -f "$NATIVE_CONTROL_UNIT.new" "$NATIVE_CONTROL_UNIT"
+  install -m 0644 "$staging/blossom-sing-box.service" "$NATIVE_RUNTIME_UNIT.new"
+  mv -f "$NATIVE_RUNTIME_UNIT.new" "$NATIVE_RUNTIME_UNIT"
+fi
+
 systemctl daemon-reload
-systemctl enable "$SERVICE" >/dev/null
-if [ "$had_install" -eq 1 ]; then
+if [ "$NATIVE_SERVICE" = 1 ]; then
+  systemctl enable blossom-service-control blossom-sing-box "$SERVICE" >/dev/null
+  systemctl restart blossom-service-control
+  systemctl restart blossom-sing-box
   systemctl restart "$SERVICE"
 else
-  systemctl start "$SERVICE"
+  systemctl enable "$SERVICE" >/dev/null
+  if [ "$had_install" -eq 1 ]; then
+    systemctl restart "$SERVICE"
+  else
+    systemctl start "$SERVICE"
+  fi
 fi
 [ "$health_seconds" -eq 0 ] || sleep "$health_seconds"
 systemctl is-active --quiet "$SERVICE" || fail "the service did not remain active"
+if [ "$NATIVE_SERVICE" = 1 ]; then
+  systemctl is-active --quiet blossom-service-control || fail "the service-control helper did not remain active"
+  systemctl is-active --quiet blossom-sing-box || fail "the native sing-box runtime did not remain active"
+fi
 
 if [ "$had_agent" -eq 1 ]; then
   cp -p "$staging/agent.backup" "$INSTALL_DIR/server-agent.previous"
@@ -454,5 +701,15 @@ To uninstall this host installation:
   userdel blossom-agent
 Revoke the control-plane identity first if this host will not be reused.
 EOF_UNINSTALL
+if [ "$NATIVE_SERVICE" = 1 ]; then
+  cat >&2 <<'EOF_NATIVE_UNINSTALL'
+To also remove the native service lifecycle:
+  systemctl disable --now blossom-agent blossom-sing-box blossom-service-control
+  rm -f /etc/systemd/system/blossom-agent.service /etc/systemd/system/blossom-sing-box.service /etc/systemd/system/blossom-service-control.service
+  systemctl daemon-reload
+  rm -rf /usr/local/lib/blossom-service-control /etc/blossom-service-control /var/lib/blossom-service-control /run/blossom-service-control
+  userdel blossom-runtime
+EOF_NATIVE_UNINSTALL
+fi
 
 exit 0
