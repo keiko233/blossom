@@ -498,6 +498,10 @@ function CertificatesPage() {
                   <issueForm.Field name="kind">
                     {(field) => (
                       <Select
+                        items={{
+                          acme: kindLabels.acme,
+                          self_signed: kindLabels.self_signed,
+                        }}
                         value={field.state.value}
                         onValueChange={(value) =>
                           value &&
@@ -525,6 +529,7 @@ function CertificatesPage() {
                           <issueForm.Field name="acmeProvider">
                             {(field) => (
                               <Select
+                                items={acmeProviderLabels}
                                 value={field.state.value}
                                 onValueChange={(value) =>
                                   value &&
@@ -574,6 +579,10 @@ function CertificatesPage() {
                               {m.admin_certificates_issuer_label()}
                             </label>
                             <Select
+                              items={capableIssuers.map((issuer) => ({
+                                label: issuer.name,
+                                value: issuer.id,
+                              }))}
                               value={issuerServerId}
                               onValueChange={(value) =>
                                 value && setIssuerServerId(value)
@@ -601,6 +610,11 @@ function CertificatesPage() {
                               {m.admin_certificates_challenge_type_label()}
                             </label>
                             <Select
+                              items={{
+                                "dns-01": m.admin_certificates_challenge_dns(),
+                                "http-01":
+                                  m.admin_certificates_challenge_http(),
+                              }}
                               value={challengeType}
                               onValueChange={(value) =>
                                 value &&

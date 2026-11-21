@@ -376,7 +376,11 @@ export function NodeFormPage({
                             {m.admin_proxies_nodes_field_server()}
                           </FieldLabel>
                           <Select
-                            value={field.state.value}
+                            items={serverOptions.map((s) => ({
+                              label: s.name,
+                              value: s.id,
+                            }))}
+                            value={field.state.value || null}
                             onValueChange={(v) => {
                               const nextServerId = v ?? "";
                               if (nextServerId !== field.state.value) {
@@ -491,6 +495,10 @@ export function NodeFormPage({
                             {m.admin_proxies_nodes_field_protocol()}
                           </FieldLabel>
                           <Select
+                            items={NODE_PROTOCOLS.map((p) => ({
+                              label: p,
+                              value: p,
+                            }))}
                             value={field.state.value}
                             onValueChange={(v) => {
                               if (!v) {
@@ -602,6 +610,19 @@ export function NodeFormPage({
                                             {m.admin_proxies_nodes_field_certificate()}
                                           </FieldLabel>
                                           <Select
+                                            items={[
+                                              {
+                                                label:
+                                                  m.admin_proxies_nodes_field_certificate_none(),
+                                                value: "",
+                                              },
+                                              ...usableCertificates.map(
+                                                (certificate) => ({
+                                                  label: `${certificate.name} · ${certificate.domains.join(", ")}`,
+                                                  value: certificate.id,
+                                                }),
+                                              ),
+                                            ]}
                                             value={field.state.value}
                                             onValueChange={(id) => {
                                               field.handleChange(id ?? "");
