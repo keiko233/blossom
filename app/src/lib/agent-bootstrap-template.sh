@@ -79,11 +79,14 @@ install_docker() {
   docker volume create "$volume" >/dev/null
 
   # The image downloads both binaries into /data on first start. `--version`
-  # runs nothing else, so this only primes the volume.
+  # prints the version and exits before any network call; a placeholder
+  # AGENT_TOKEN satisfies entrypoint.sh's pre-exec check without touching
+  # /data/credentials.json.
   log "preparing the $IMAGE runtime in the $volume volume"
   docker run --rm -v "$volume:/data" \
     -e AGENT_BOOTSTRAP_VERSION="$AGENT_VERSION" \
     -e AGENT_SING_BOX_BOOTSTRAP_VERSION=latest \
+    -e AGENT_TOKEN=bootstrap-prepare \
     "$IMAGE" --version >/dev/null
 
   # The grant is written through stdin, so it is not a process argument.
