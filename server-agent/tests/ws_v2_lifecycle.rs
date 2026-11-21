@@ -14,6 +14,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -40,13 +41,16 @@ struct TestDir(PathBuf);
 
 impl TestDir {
     fn new() -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        // Parallel tests can observe the same clock tick but must never share state.
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let path =
-            std::env::temp_dir().join(format!("blossom-ws-v2-{}-{nanos}", std::process::id()));
-        fs::create_dir_all(&path).unwrap();
+            std::env::temp_dir().join(format!("blossom-ws-v2-{}-{nanos}-{id}", std::process::id()));
+        fs::create_dir(&path).unwrap();
         Self(path)
     }
 
