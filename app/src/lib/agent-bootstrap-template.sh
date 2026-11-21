@@ -71,28 +71,82 @@ download() {
     --output "$2" "$1"
 }
 
+detect_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64) printf 'amd64\n' ;;
+    aarch64|arm64) printf 'arm64\n' ;;
+    *) fail "unsupported architecture: $(uname -m)" ;;
+  esac
+}
+
+agent_download_url() {
+  if [ "$AGENT_VERSION" = latest ]; then
+    printf 'https://github.com/%s/releases/latest/download/server-agent-linux-%s\n' "$AGENT_REPO" "$1"
+  else
+    printf 'https://github.com/%s/releases/download/v%s/server-agent-linux-%s\n' "$AGENT_REPO" "${AGENT_VERSION#v}" "$1"
+  fi
+}
+
+# Resolve the latest sing-box tag via GitHub's web redirect instead of
+# api.github.com, avoiding the 60 req/hr unauthenticated API rate limit.
+resolve_sing_box_version() {
+  if [ "${SING_BOX_VERSION:-latest}" = latest ]; then
+    effective=$(curl --fail --show-error --silent --location \
+      --proto '=https' --proto-redir '=https' --tlsv1.2 \
+      --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 60 \
+      -o /dev/null -w '%{url_effective}' "https://github.com/$SING_BOX_REPO/releases/latest")
+    ver=${effective##*/}
+    ver=${ver#v}
+    [ -n "$ver" ] && [ "$ver" != latest ] || fail "cannot resolve the latest sing-box release"
+    printf '%s\n' "$ver"
+  else
+    printf '%s\n' "${SING_BOX_VERSION#v}"
+  fi
+}
+
 install_docker() {
   command -v docker >/dev/null 2>&1 ||
     fail "docker is required; install Docker or rerun with --host"
+  for tool in curl uname mktemp rm tar find wc; do
+    command -v "$tool" >/dev/null 2>&1 || fail "required tool missing: $tool"
+  done
 
+  architecture=$(detect_arch)
   volume=blossom-agent-data
   docker volume create "$volume" >/dev/null
 
-  # Remove any stale agent binary so entrypoint.sh downloads the requested
-  # AGENT_VERSION (preserving /data/state and /data/certificates on upgrades).
-  docker run --rm -v "$volume:/data" --entrypoint sh "$IMAGE" -c \
-    'rm -f /data/bin/server-agent' >/dev/null 2>&1 || true
+  staging=$(mktemp -d)
+  trap 'rm -rf "$staging"' EXIT HUP INT TERM
+  umask 077
 
-  # The image downloads both binaries into /data on first start. `--version`
-  # prints the version and exits before any network call; a placeholder
-  # AGENT_TOKEN satisfies entrypoint.sh's pre-exec check without touching
-  # /data/credentials.json.
+  log "downloading server-agent $AGENT_VERSION for $architecture"
+  download "$(agent_download_url "$architecture")" "$staging/server-agent"
+
   log "preparing the $IMAGE runtime in the $volume volume"
-  docker run --rm -v "$volume:/data" \
-    -e AGENT_BOOTSTRAP_VERSION="$AGENT_VERSION" \
-    -e AGENT_SING_BOX_BOOTSTRAP_VERSION=latest \
-    -e AGENT_TOKEN=bootstrap-prepare \
-    "$IMAGE" --version >/dev/null
+  docker run --rm -i -v "$volume:/data" --entrypoint sh "$IMAGE" -c \
+    'mkdir -p /data/bin && cat > /data/bin/server-agent.new && chmod 0755 /data/bin/server-agent.new && mv -f /data/bin/server-agent.new /data/bin/server-agent' \
+    <"$staging/server-agent"
+
+  # Seed sing-box if missing so entrypoint.sh never has to hit api.github.com.
+  if ! docker run --rm -v "$volume:/data" --entrypoint sh "$IMAGE" -c \
+    '[ -x /data/bin/sing-box ]' >/dev/null 2>&1; then
+    sing_box_version=$(resolve_sing_box_version)
+    log "downloading sing-box $sing_box_version for $architecture"
+    sing_box_url="https://github.com/$SING_BOX_REPO/releases/download/v$sing_box_version/sing-box-${sing_box_version}-linux-${architecture}-musl.tar.gz"
+    download "$sing_box_url" "$staging/sing-box.tar.gz"
+    tar -tzf "$staging/sing-box.tar.gz" >"$staging/sing-box-members"
+    if grep -Eq '(^/|(^|/)\.\.(/|$))' "$staging/sing-box-members"; then
+      fail "the sing-box archive contains an unsafe path"
+    fi
+    mkdir -m 0700 "$staging/sing-box"
+    tar -xzf "$staging/sing-box.tar.gz" -C "$staging/sing-box"
+    sing_box_candidates=$(find "$staging/sing-box" -type f -name sing-box | wc -l)
+    [ "$sing_box_candidates" -eq 1 ] || fail "the sing-box archive must contain exactly one sing-box binary"
+    staged_sing_box=$(find "$staging/sing-box" -type f -name sing-box)
+    docker run --rm -i -v "$volume:/data" --entrypoint sh "$IMAGE" -c \
+      'mkdir -p /data/bin && cat > /data/bin/sing-box.new && chmod 0755 /data/bin/sing-box.new && mv -f /data/bin/sing-box.new /data/bin/sing-box' \
+      <"$staged_sing_box"
+  fi
 
   # The grant is written through stdin, so it is not a process argument.
   printf '%s\n' "$ENROLLMENT_GRANT" |
@@ -137,17 +191,13 @@ install_docker() {
 }
 
 install_host() {
-  for tool in curl sed head grep find wc tar uname systemctl id install mkdir mktemp mv rm chmod chown useradd; do
+  for tool in curl grep find wc tar uname systemctl id install mkdir mktemp mv rm chmod chown useradd; do
     command -v "$tool" >/dev/null 2>&1 || fail "required tool missing: $tool"
   done
   [ "$(id -u)" -eq 0 ] || fail "run as root (for example: sudo sh -s -- --host)"
   systemctl --version >/dev/null 2>&1 || fail "systemd is required for --host"
 
-  case "$(uname -m)" in
-    x86_64|amd64) architecture=amd64 ;;
-    aarch64|arm64) architecture=arm64 ;;
-    *) fail "unsupported architecture: $(uname -m)" ;;
-  esac
+  architecture=$(detect_arch)
 
   AGENT_FILE=/usr/local/lib/blossom-agent/server-agent
   SING_BOX_FILE=/usr/local/lib/blossom-agent/sing-box
@@ -157,21 +207,8 @@ install_host() {
   UNIT_FILE=/etc/systemd/system/blossom-agent.service
   SERVICE_USER=blossom-agent
 
-  if [ "$AGENT_VERSION" = latest ]; then
-    agent_url="https://github.com/$AGENT_REPO/releases/latest/download/server-agent-linux-$architecture"
-  else
-    agent_url="https://github.com/$AGENT_REPO/releases/download/v$AGENT_VERSION/server-agent-linux-$architecture"
-  fi
-
-  if [ "${SING_BOX_VERSION:-latest}" = latest ]; then
-    sing_box_version=$(curl --fail --show-error --silent --location \
-      --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 60 \
-      "https://api.github.com/repos/$SING_BOX_REPO/releases/latest" |
-      sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -n 1)
-    [ -n "$sing_box_version" ] || fail "cannot resolve the latest sing-box release"
-  else
-    sing_box_version=${SING_BOX_VERSION#v}
-  fi
+  agent_url=$(agent_download_url "$architecture")
+  sing_box_version=$(resolve_sing_box_version)
   sing_box_url="https://github.com/$SING_BOX_REPO/releases/download/v$sing_box_version/sing-box-${sing_box_version}-linux-${architecture}-musl.tar.gz"
 
   staging=$(mktemp -d)
