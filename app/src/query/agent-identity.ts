@@ -14,6 +14,7 @@ import {
   normalizeBootstrapVersion,
 } from "@/lib/agent-bootstrap";
 import {
+  createBootstrapGrantInputSchema,
   createEnrollmentGrantInputSchema,
   createOnboardingGrantInputSchema,
   ENROLLMENT_GRANT_TTL_MINUTES,
@@ -205,6 +206,50 @@ export const getOnboardingGrantStatus = createServerFn({ method: "GET" })
               lastSeenAt: row.serverLastSeenAt,
               wsConnectedAt: row.serverWsConnectedAt,
             },
+    };
+  });
+
+/**
+ * Creates a one-time bootstrap grant for the Connection tab. The generated
+ * one-line command installs a new agent or upgrades an existing host through
+ * the public installer, so no approved installer catalog is required.
+ */
+export const createServerBootstrapGrant = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("server.bootstrap_grant_create", {
+      targetType: "server",
+      targetId: fromInput("serverId"),
+    }),
+  ])
+  .validator(createBootstrapGrantInputSchema)
+  .handler(async ({ data }) => {
+    const session = await ensureAdmin();
+    const origin = assertBootstrapOrigin(
+      getServerEnv().BETTER_AUTH_URL.replace(/\/$/, ""),
+    );
+    const release = normalizeBootstrapVersion(data.release).version;
+    const { grant, secret } = await createEnrollmentGrant(db, {
+      serverId: data.serverId,
+      mode: data.mode,
+      capabilities: [],
+      release,
+      createdById: session.user.id,
+      now: new Date(),
+    });
+
+    setResponseHeaders(
+      new Headers({
+        "cache-control": "private, no-store",
+        pragma: "no-cache",
+      }),
+    );
+
+    return {
+      grant,
+      ...buildBootstrapCommands({
+        publicOrigin: origin,
+        enrollmentGrant: secret,
+      }),
     };
   });
 

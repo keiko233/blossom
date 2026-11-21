@@ -14,10 +14,10 @@ import {
 import { m } from "@/paraglide/messages";
 import {
   AGENT_IDENTITY_QUERY_KEY,
-  AGENT_INSTALLER_OPTIONS_QUERY_KEY,
-  createAgentEnrollmentGrant,
+  AGENT_RELEASE_VERSION_QUERY_KEY,
+  createServerBootstrapGrant,
   getAgentIdentityState,
-  getAgentInstallerOptions,
+  getAgentReleaseVersions,
   revokeAgentEnrollmentGrant,
   revokeAgentIdentityAccess,
 } from "@/query/agent-identity";
@@ -29,11 +29,8 @@ import {
   type ServerDTO,
 } from "@/query/servers";
 
-import {
-  ConnectionRevealDialog,
-  type ConnectionReveal,
-} from "./connection-reveal-dialog";
 import type {
+  ConnectionBootstrapCommand,
   ConnectionGrantRow,
   ConnectionIdentityRow,
 } from "./connection-types";
@@ -55,34 +52,10 @@ export interface ServerConnectionPanelProps {
   server: ServerDTO;
 }
 
-type CreateGrantResult = Awaited<ReturnType<typeof createAgentEnrollmentGrant>>;
-
-function revealOf(result: CreateGrantResult): ConnectionReveal {
-  if (result.script) {
-    return {
-      kind: "script",
-      script: result.script,
-      downloadPath: result.downloadPath,
-      grantId: result.grant.id,
-      expiresAt: result.grant.expiresAt,
-    };
-  }
-  if (!result.secret) {
-    throw new Error("Enrollment grant response did not include a secret");
-  }
-  return {
-    kind: "secret",
-    secret: result.secret,
-    downloadPath: result.downloadPath,
-    grantId: result.grant.id,
-    expiresAt: result.grant.expiresAt,
-  };
-}
-
 /**
  * Connection tab: deployed agent facts, OAuth identity and enrollment state,
- * release-gated installation, and the legacy static token moved into a backup
- * area. Secrets live only in the reveal dialog's component state.
+ * the one-line bootstrap installer, and the legacy static token moved into a
+ * backup area. Generated commands live only in component state.
  */
 export function ServerConnectionPanel({
   server,
@@ -91,38 +64,33 @@ export function ServerConnectionPanel({
   const { data: servers } = useServerList();
   const liveServer = servers?.find((row) => row.id === server.id) ?? server;
   const identityQueryKey = [...AGENT_IDENTITY_QUERY_KEY, server.id];
-  const [creating, setCreating] = useState<"stdin" | "inline" | null>(null);
-  const [reveal, setReveal] = useState<ConnectionReveal | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [command, setCommand] = useState<ConnectionBootstrapCommand | null>(
+    null,
+  );
 
   const identityQuery = useQuery({
     queryKey: identityQueryKey,
     queryFn: () => getAgentIdentityState({ data: { serverId: server.id } }),
     refetchInterval: 15_000,
   });
-  const optionsQuery = useQuery({
-    queryKey: AGENT_INSTALLER_OPTIONS_QUERY_KEY,
-    queryFn: () => getAgentInstallerOptions(),
-    staleTime: 60_000,
+  const versionsQuery = useQuery({
+    queryKey: AGENT_RELEASE_VERSION_QUERY_KEY,
+    queryFn: () => getAgentReleaseVersions(),
+    staleTime: 5 * 60_000,
   });
 
   const invalidateIdentity = () =>
     queryClient.invalidateQueries({ queryKey: identityQueryKey });
 
   const createGrant = useMutation({
-    mutationFn: (input: {
-      delivery: "stdin" | "inline";
-      mode: "enroll" | "replace";
-      release: string;
-      capabilities: string[];
-    }) =>
-      createAgentEnrollmentGrant({
+    mutationFn: (input: { mode: "enroll" | "replace"; release: string }) =>
+      createServerBootstrapGrant({
         data: {
           serverId: server.id,
           mode: input.mode,
           confirmReplace: input.mode === "replace" ? true : undefined,
           release: input.release,
-          capabilities: input.capabilities,
-          delivery: input.delivery,
         },
       }),
   });
@@ -217,66 +185,44 @@ export function ServerConnectionPanel({
     },
   });
 
-  const requestCreate = async (
-    delivery: "stdin" | "inline",
-    request: ConnectionInstallerRequest,
-  ) => {
-    const minutes = optionsQuery.data?.grantLifetimeMinutes ?? 15;
-    const activeGeneration = currentIdentities(
-      identityQuery.data?.identities ?? [],
-    ).active?.generation;
-    const replace = request.mode === "replace";
-    const ok = await Confirm.call({
-      title: replace
-        ? delivery === "stdin"
-          ? m.admin_proxies_servers_connection_installer_replace_confirm_title()
-          : m.admin_proxies_servers_connection_installer_replace_inline_confirm_title()
-        : delivery === "stdin"
-          ? m.admin_proxies_servers_connection_installer_grant_confirm_title()
-          : m.admin_proxies_servers_connection_installer_inline_confirm_title(),
-      description: replace
-        ? delivery === "stdin"
-          ? m.admin_proxies_servers_connection_installer_replace_confirm_description(
-              { minutes, generation: activeGeneration ?? 1 },
-            )
-          : m.admin_proxies_servers_connection_installer_replace_inline_confirm_description(
-              { minutes, generation: activeGeneration ?? 1 },
-            )
-        : delivery === "stdin"
-          ? m.admin_proxies_servers_connection_installer_grant_confirm_description(
-              { minutes },
-            )
-          : m.admin_proxies_servers_connection_installer_inline_confirm_description(
-              { minutes },
-            ),
-      confirmLabel: replace
-        ? delivery === "stdin"
-          ? m.admin_proxies_servers_connection_installer_create_replace()
-          : m.admin_proxies_servers_connection_installer_create_replace_inline()
-        : delivery === "stdin"
-          ? m.admin_proxies_servers_connection_installer_create_grant()
-          : m.admin_proxies_servers_connection_installer_create_inline(),
-      cancelLabel: m.admin_proxies_servers_form_cancel(),
-    });
-    if (!ok) {
-      return;
+  const requestCreate = async (request: ConnectionInstallerRequest) => {
+    const minutes = versionsQuery.data?.grantLifetimeMinutes ?? 15;
+    const activeGeneration =
+      currentIdentities(identityQuery.data?.identities ?? []).active
+        ?.generation ?? null;
+    if (request.mode === "replace" && activeGeneration !== null) {
+      const ok = await Confirm.call({
+        title:
+          m.admin_proxies_servers_connection_installer_replace_confirm_title(),
+        description:
+          m.admin_proxies_servers_connection_installer_replace_confirm_description(
+            { minutes, generation: activeGeneration },
+          ),
+        confirmLabel:
+          m.admin_proxies_servers_connection_installer_generate_replace(),
+        cancelLabel: m.admin_proxies_servers_form_cancel(),
+      });
+      if (!ok) {
+        return;
+      }
     }
 
-    setCreating(delivery);
+    setCreating(true);
     try {
       const result = await createGrant.mutateAsync({
-        delivery,
         mode: request.mode,
         release: request.release,
-        capabilities: request.capabilities,
       });
-      const nextReveal = revealOf(result);
       createGrant.reset();
       toastManager.add({
         type: "success",
         title: m.admin_proxies_servers_connection_toast_grant_created(),
       });
-      setReveal(nextReveal);
+      setCommand({
+        expiresAt: result.grant.expiresAt,
+        dockerCommand: result.dockerCommand,
+        hostCommand: result.hostCommand,
+      });
       void invalidateIdentity();
     } catch {
       toastManager.add({
@@ -284,7 +230,7 @@ export function ServerConnectionPanel({
         title: m.admin_proxies_servers_connection_toast_create_failed(),
       });
     } finally {
-      setCreating(null);
+      setCreating(false);
     }
   };
 
@@ -423,19 +369,18 @@ export function ServerConnectionPanel({
             onRevoke={(identity) => void requestRevokeIdentity(identity)}
           />
           <ServerConnectionInstaller
-            releases={optionsQuery.data?.releases}
-            optionsPending={optionsQuery.isPending}
-            optionsError={optionsQuery.isError && !optionsQuery.data}
-            requiredCapabilities={optionsQuery.data?.requiredCapabilities ?? []}
+            versions={versionsQuery.data?.versions}
+            versionsPending={versionsQuery.isPending}
+            versionsError={versionsQuery.isError && !versionsQuery.data}
             block={block}
             phase={phase}
             mode={replacementMode}
             activeGeneration={activeIdentity?.generation ?? null}
-            lifetimeMinutes={optionsQuery.data?.grantLifetimeMinutes ?? 15}
+            lifetimeMinutes={versionsQuery.data?.grantLifetimeMinutes ?? 15}
             creating={creating}
-            onCreate={(delivery, request) =>
-              void requestCreate(delivery, request)
-            }
+            command={command}
+            onCreate={(request) => void requestCreate(request)}
+            onClear={() => setCommand(null)}
           />
           <ServerConnectionGrants
             grants={connection.grants}
@@ -455,8 +400,6 @@ export function ServerConnectionPanel({
         onReset={() => void requestResetBackup()}
         onDisable={() => void requestDisableBackup()}
       />
-
-      <ConnectionRevealDialog reveal={reveal} onClose={() => setReveal(null)} />
     </div>
   );
 }
