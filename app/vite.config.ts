@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import Icons from "unplugin-icons/vite";
 import { defineConfig, loadEnv } from "vite";
 
-import { clientEnvSchema, serverEnvSchema } from "./src/lib/env-schema";
+import { clientEnvSchema, serverEnvSchema } from "./src/lib/env-schema.ts";
 
 const DEPLOY_TARGETS = ["cloudflare", "vercel", "node"] as const;
 type DeployTarget = (typeof DEPLOY_TARGETS)[number];
