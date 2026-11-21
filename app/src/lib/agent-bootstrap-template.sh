@@ -252,7 +252,7 @@ EOF_UNIT
 
   install -m 0644 "$staging/blossom-agent.service" "$UNIT_FILE"
   systemctl daemon-reload
-  systemctl enable --now blossom-agent >/dev/null
+  systemctl enable blossom-agent >/dev/null && systemctl restart blossom-agent >/dev/null
   [ "${BLOSSOM_INSTALL_HEALTH_SECONDS:-5}" -eq 0 ] || sleep "${BLOSSOM_INSTALL_HEALTH_SECONDS:-5}"
   systemctl is-active --quiet blossom-agent ||
     fail "blossom-agent did not become active; inspect: systemctl status blossom-agent"

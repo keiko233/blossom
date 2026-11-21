@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import {
+  createBootstrapGrantInputSchema,
   createEnrollmentGrantInputSchema,
   generateEnrollmentGrant,
   generateMachineCredential,
@@ -74,6 +75,33 @@ describe("machine client credentials", () => {
       createHash("sha256").update(credential.clientSecret).digest("base64url"),
     );
     expect(hashMachineClientSecret("fake-value")).not.toContain("fake-value");
+  });
+});
+
+describe("bootstrap grant input", () => {
+  const parse = (input: object) =>
+    createBootstrapGrantInputSchema.safeParse({
+      serverId: "srv-a",
+      mode: "enroll",
+      ...input,
+    });
+
+  it("requires explicit confirmation to replace an identity", () => {
+    expect(parse({ mode: "replace" }).success).toBe(false);
+    expect(parse({ mode: "replace", confirmReplace: false }).success).toBe(
+      false,
+    );
+    expect(parse({ mode: "replace", confirmReplace: true }).data).toMatchObject(
+      { mode: "replace" },
+    );
+    expect(parse({ mode: "enroll" }).success).toBe(true);
+  });
+
+  it("accepts a trimmed optional release and rejects unknown modes", () => {
+    expect(parse({ release: " 1.5.0 " }).data?.release).toBe("1.5.0");
+    expect(parse({ release: "x".repeat(65) }).success).toBe(false);
+    expect(parse({ mode: "install" }).success).toBe(false);
+    expect(parse({ serverId: "" }).success).toBe(false);
   });
 });
 
