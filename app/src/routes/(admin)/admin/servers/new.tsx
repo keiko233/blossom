@@ -4,7 +4,7 @@ import type React from "react";
 import { WorkspaceViewport } from "@/components/app-shell/workspace";
 import { m } from "@/paraglide/messages";
 
-import { ServerFormPage } from "./_modules/server-form-page";
+import { ServerOnboardingPage } from "./_modules/server-onboarding-page";
 
 export const Route = createFileRoute("/(admin)/admin/servers/new")({
   staticData: {
@@ -16,7 +16,7 @@ export const Route = createFileRoute("/(admin)/admin/servers/new")({
 function RouteComponent(): React.ReactElement {
   return (
     <WorkspaceViewport scrollId="server-new">
-      <ServerFormPage />
+      <ServerOnboardingPage />
     </WorkspaceViewport>
   );
 }

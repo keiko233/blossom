@@ -1,4 +1,5 @@
 import type { Database } from "@/db";
+import { getClientIp } from "@/lib/client-ip";
 import {
   type EnrollmentRedeemFailure,
   redeemEnrollmentGrant,
@@ -86,13 +87,19 @@ export async function handleEnrollmentRedeem(
   }
   const body = redeemEnrollmentBodySchema.safeParse(json);
   if (!body.success) {
-    return errorResponse(400, "invalid_request", "Send only enrollmentGrant.");
+    return errorResponse(
+      400,
+      "invalid_request",
+      "Send enrollmentGrant and optional hostInfo.",
+    );
   }
 
   const result = await redeemEnrollmentGrant(deps.db, {
     secret: body.data.enrollmentGrant,
     resources: deps.resources,
     now: deps.now?.() ?? new Date(),
+    hostInfo: body.data.hostInfo,
+    clientIp: getClientIp(request),
   });
 
   if (!result.ok) {

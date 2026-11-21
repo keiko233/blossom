@@ -61,6 +61,7 @@ import { Route as userDashboardSubscriptionsIndexRouteImport } from './routes/(u
 import { Route as DotwellKnownOauthAuthorizationServerApiAuthRouteImport } from './routes/[.]well-known.oauth-authorization-server.api.auth'
 import { Route as DotwellKnownOauthProtectedResourceApiMcpRouteImport } from './routes/[.]well-known.oauth-protected-resource.api.mcp'
 import { Route as ApiAgentEnrollmentRedeemRouteImport } from './routes/api/agent/enrollment/redeem'
+import { Route as ApiAgentInstallTokenRouteImport } from './routes/api/agent/install/$token'
 import { Route as adminAdminAccessClientRulesIndexRouteImport } from './routes/(admin)/admin/access/client-rules/index'
 import { Route as adminAdminAccessGroupsIndexRouteImport } from './routes/(admin)/admin/access/groups/index'
 import { Route as adminAdminAccessGroupsGroupIdRouteImport } from './routes/(admin)/admin/access/groups/$groupId'
@@ -390,6 +391,11 @@ const ApiAgentEnrollmentRedeemRoute =
     path: '/api/agent/enrollment/redeem',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiAgentInstallTokenRoute = ApiAgentInstallTokenRouteImport.update({
+  id: '/api/agent/install/$token',
+  path: '/api/agent/install/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const adminAdminAccessClientRulesIndexRoute =
   adminAdminAccessClientRulesIndexRouteImport.update({
     id: '/client-rules/',
@@ -645,6 +651,7 @@ export interface FileRoutesByFullPath {
   '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
   '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
   '/api/agent/enrollment/redeem': typeof ApiAgentEnrollmentRedeemRoute
+  '/api/agent/install/$token': typeof ApiAgentInstallTokenRoute
   '/admin/access/': typeof adminAdminAccessIndexRoute
   '/admin/networking/': typeof adminAdminNetworkingIndexRoute
   '/admin/operations/': typeof adminAdminOperationsIndexRoute
@@ -717,6 +724,7 @@ export interface FileRoutesByTo {
   '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
   '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
   '/api/agent/enrollment/redeem': typeof ApiAgentEnrollmentRedeemRoute
+  '/api/agent/install/$token': typeof ApiAgentInstallTokenRoute
   '/admin/access': typeof adminAdminAccessIndexRoute
   '/admin/networking': typeof adminAdminNetworkingIndexRoute
   '/admin/operations': typeof adminAdminOperationsIndexRoute
@@ -809,6 +817,7 @@ export interface FileRoutesById {
   '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
   '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
   '/api/agent/enrollment/redeem': typeof ApiAgentEnrollmentRedeemRoute
+  '/api/agent/install/$token': typeof ApiAgentInstallTokenRoute
   '/(admin)/admin/access/': typeof adminAdminAccessIndexRoute
   '/(admin)/admin/networking/': typeof adminAdminNetworkingIndexRoute
   '/(admin)/admin/operations/': typeof adminAdminOperationsIndexRoute
@@ -899,6 +908,7 @@ export interface FileRouteTypes {
     | '/.well-known/oauth-authorization-server/api/auth'
     | '/.well-known/oauth-protected-resource/api/mcp'
     | '/api/agent/enrollment/redeem'
+    | '/api/agent/install/$token'
     | '/admin/access/'
     | '/admin/networking/'
     | '/admin/operations/'
@@ -971,6 +981,7 @@ export interface FileRouteTypes {
     | '/.well-known/oauth-authorization-server/api/auth'
     | '/.well-known/oauth-protected-resource/api/mcp'
     | '/api/agent/enrollment/redeem'
+    | '/api/agent/install/$token'
     | '/admin/access'
     | '/admin/networking'
     | '/admin/operations'
@@ -1062,6 +1073,7 @@ export interface FileRouteTypes {
     | '/.well-known/oauth-authorization-server/api/auth'
     | '/.well-known/oauth-protected-resource/api/mcp'
     | '/api/agent/enrollment/redeem'
+    | '/api/agent/install/$token'
     | '/(admin)/admin/access/'
     | '/(admin)/admin/networking/'
     | '/(admin)/admin/operations/'
@@ -1122,6 +1134,7 @@ export interface RootRouteChildren {
   ApiRpcSplatRoute: typeof ApiRpcSplatRoute
   ApiSubTokenRoute: typeof ApiSubTokenRoute
   ApiAgentEnrollmentRedeemRoute: typeof ApiAgentEnrollmentRedeemRoute
+  ApiAgentInstallTokenRoute: typeof ApiAgentInstallTokenRoute
   ApiAdminServersIdStreamRoute: typeof ApiAdminServersIdStreamRoute
   ApiAdminCertificatesCertificateIdExportPartRoute: typeof ApiAdminCertificatesCertificateIdExportPartRoute
   ApiAdminServersIdLogsWsRoute: typeof ApiAdminServersIdLogsWsRoute
@@ -1509,6 +1522,13 @@ declare module '@tanstack/react-router' {
       path: '/api/agent/enrollment/redeem'
       fullPath: '/api/agent/enrollment/redeem'
       preLoaderRoute: typeof ApiAgentEnrollmentRedeemRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/agent/install/$token': {
+      id: '/api/agent/install/$token'
+      path: '/api/agent/install/$token'
+      fullPath: '/api/agent/install/$token'
+      preLoaderRoute: typeof ApiAgentInstallTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/(admin)/admin/access/client-rules/': {
@@ -2172,6 +2192,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiRpcSplatRoute: ApiRpcSplatRoute,
   ApiSubTokenRoute: ApiSubTokenRoute,
   ApiAgentEnrollmentRedeemRoute: ApiAgentEnrollmentRedeemRoute,
+  ApiAgentInstallTokenRoute: ApiAgentInstallTokenRoute,
   ApiAdminServersIdStreamRoute: ApiAdminServersIdStreamRoute,
   ApiAdminCertificatesCertificateIdExportPartRoute:
     ApiAdminCertificatesCertificateIdExportPartRoute,

@@ -10,7 +10,7 @@ export interface ConnectionIdentityRow {
 
 export interface ConnectionGrantRow {
   id: string;
-  serverId: string;
+  serverId: string | null;
   mode: string;
   capabilities: string[];
   release: string | null;

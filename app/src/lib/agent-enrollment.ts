@@ -57,11 +57,27 @@ export function generateMachineCredential(): GeneratedMachineCredential {
   };
 }
 
+/** Host facts an agent may attach to a redemption. Optional and untrusted. */
+export const enrollmentHostInfoSchema = z
+  .object({
+    hostname: z.string().trim().min(1).max(253).optional(),
+    ips: z.array(z.string().trim().min(1).max(64)).max(8).optional(),
+    os: z.string().trim().min(1).max(64).optional(),
+    arch: z.string().trim().min(1).max(32).optional(),
+    agentVersion: z.string().trim().min(1).max(64).optional(),
+    installMode: z.enum(["docker", "host"]).optional(),
+  })
+  .strict();
+
+export type EnrollmentHostInfoInput = z.infer<typeof enrollmentHostInfoSchema>;
+
 /** Body of `POST /api/agent/enrollment/redeem`. Strict: unknown keys are refused. */
 export const redeemEnrollmentBodySchema = z
   .object({
     // "egr_" plus 32 random bytes in base64url (43 characters).
     enrollmentGrant: z.string().regex(/^egr_[A-Za-z0-9_-]{43}$/),
+    // Older agents send only the grant; both shapes stay valid.
+    hostInfo: enrollmentHostInfoSchema.optional(),
   })
   .strict();
 
@@ -94,6 +110,20 @@ export const createEnrollmentGrantInputSchema = z
       });
     }
   });
+
+/** Admin input for an unbound onboarding grant. Only first enrollment. */
+export const createOnboardingGrantInputSchema = z.object({
+  release: z.string().trim().min(1).max(64).default("latest"),
+  capabilities: z
+    .array(z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/))
+    .max(16)
+    .default([]),
+});
+
+/** Validator for the onboarding status poll. */
+export const getOnboardingGrantStatusInputSchema = z.object({
+  grantId: z.string().min(1).max(64),
+});
 
 export const revokeEnrollmentGrantInputSchema = z.object({
   grantId: z.string().min(1).max(64),

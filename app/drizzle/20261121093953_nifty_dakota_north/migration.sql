@@ -1,0 +1,1 @@
+ALTER TABLE "agent_enrollment_grant" ALTER COLUMN "server_id" DROP NOT NULL;
