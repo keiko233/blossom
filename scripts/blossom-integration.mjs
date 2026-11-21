@@ -25,7 +25,7 @@ function parseArgs(argv) {
     keep: false,
     singBox: undefined,
     agentBin: undefined,
-    postgresImage: process.env.BLOSSOM_IT_POSTGRES_IMAGE ?? "postgres:18-alpine",
+    postgresImage: process.env.BLOSSOM_IT_POSTGRES_IMAGE ?? "postgres:19-alpine",
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];

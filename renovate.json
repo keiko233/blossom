@@ -9,6 +9,13 @@
     {
       "matchPackageNames": ["drizzle-kit"],
       "automerge": false
+    },
+    {
+      "description": "PostgreSQL major upgrades require explicit data migration",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["postgres"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false
     }
   ]
 }

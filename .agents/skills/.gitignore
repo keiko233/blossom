@@ -1,1 +1,10 @@
-pnpm-*
+# pnpm
+/devtools-vite-plugin
+/drizzle
+/migrate-from-nextjs
+/migrate-from-react-router
+/react-router
+/react-start
+/router-plugin
+/router-query
+# pnpm end

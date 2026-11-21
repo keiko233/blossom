@@ -63,7 +63,7 @@ function parseArgs(argv) {
     singBox: undefined,
     agentBin: undefined,
     postgresImage:
-      process.env.BLOSSOM_IT_POSTGRES_IMAGE ?? "postgres:18-alpine",
+      process.env.BLOSSOM_IT_POSTGRES_IMAGE ?? "postgres:19-alpine",
     systemdVm: undefined,
     applyFn: undefined,
     abortFn: undefined,

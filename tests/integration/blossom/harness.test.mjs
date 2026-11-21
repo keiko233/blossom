@@ -159,7 +159,7 @@ test("preflight names every missing tool instead of failing later", async () => 
     options: {
       singBox: "/nonexistent/sing-box",
       agentBin: "/nonexistent/server-agent",
-      postgresImage: "postgres:18-alpine",
+      postgresImage: "postgres:19-alpine",
     },
   });
   const { ok, problems } = await harness.preflight();

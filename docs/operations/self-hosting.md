@@ -6,7 +6,7 @@ This guide extends the root README's [self-hosting quickstart](../../README.md#s
 
 Verified (code), from `docker-compose.yaml` and `Dockerfile`:
 
-- `db` is `postgres:18-alpine` with the user, password and database all set to `blossom`, data in the named volume `pgdata`, and **no published port** (only reachable from other Compose services).
+- `db` is `postgres:19-alpine` with the user, password and database all set to `blossom`, data in the named volume `pgdata`, and **no published port** (only reachable from other Compose services).
 - `migrate` builds the `builder` image stage and runs `pnpm db:migrate`; `app` starts only after it completes successfully.
 - `app` listens on port 3000 (`PORT=3000`, published as `3000:3000`) and runs as a non-root user.
 - `BETTER_AUTH_SECRET` is the placeholder `change-me`, `BETTER_AUTH_URL` is `http://localhost:3000`, and **`CERTIFICATE_MASTER_KEY` is not set**. Certificate features fail with "Certificate management requires CERTIFICATE_MASTER_KEY" until it is provided (`app/src/lib/certificate-crypto.ts`).

@@ -114,7 +114,7 @@ docker compose up -d
 
 This brings up:
 
-- `db` — Postgres 18 on the internal network, persisted in `pgdata`.
+- `db` — Postgres 19 on the internal network, persisted in `pgdata`.
 - `migrate` — One-shot service that runs `pnpm db:migrate` against `db`.
 - `app` — The Node server on <http://localhost:3000>, with a health check at `/api/health`.
 
