@@ -1,0 +1,402 @@
+import { useQuery } from "@tanstack/react-query";
+import { Link, useNavigate } from "@tanstack/react-router";
+import { ArrowLeftIcon } from "lucide-react";
+import * as React from "react";
+
+import {
+  PageHeader,
+  PageHeaderTitle,
+} from "@/components/app-shell/page-header";
+import { Button } from "@/components/ui/button";
+import {
+  Combobox,
+  ComboboxChip,
+  ComboboxChips,
+  ComboboxChipsInput,
+  ComboboxEmpty,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxPopup,
+  ComboboxValue,
+} from "@/components/ui/combobox";
+import { Field, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  NumberField,
+  NumberFieldDecrement,
+  NumberFieldGroup,
+  NumberFieldIncrement,
+  NumberFieldInput,
+} from "@/components/ui/number-field";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import { previewEffectiveNodes } from "@/lib/access-impact";
+import { m } from "@/paraglide/messages";
+import type { GroupListItem } from "@/query/groups";
+import { GROUPS_QUERY_KEY, listGroups } from "@/query/groups";
+import { listNodes, NODES_QUERY_KEY } from "@/query/nodes";
+import { EffectiveNodePreviewPanel } from "@/routes/(admin)/admin/access/groups/_modules/effective-node-preview";
+
+import { PlanImpactPanel } from "./plan-impact-panel";
+import { type PlanWithGroups, usePlanFormController } from "./use-plan-form";
+
+const PLANS_LIST = "/admin/access/plans" as const;
+
+export interface PlanFormPageProps {
+  /** Present when editing; absent for the create page. */
+  plan?: PlanWithGroups;
+}
+
+export function PlanFormPage({ plan }: PlanFormPageProps): React.ReactElement {
+  const navigate = useNavigate();
+  const isEdit = Boolean(plan);
+
+  const goToList = () => void navigate({ to: PLANS_LIST });
+
+  const { form } = usePlanFormController({
+    plan,
+    onSuccess: goToList,
+  });
+
+  const {
+    data: groups,
+    isError: groupsFailed,
+    isSuccess: groupsLoaded,
+  } = useQuery({
+    queryKey: GROUPS_QUERY_KEY,
+    queryFn: () => listGroups(),
+  });
+  const { data: nodes, isError: nodesFailed } = useQuery({
+    queryKey: NODES_QUERY_KEY,
+    queryFn: () => listNodes(),
+  });
+  const groupOptions = React.useMemo(() => groups ?? [], [groups]);
+  const groupNames = React.useMemo(
+    () => new Map(groupOptions.map((g) => [g.id, g.name])),
+    [groupOptions],
+  );
+  const nodeNames = React.useMemo(
+    () => new Map((nodes ?? []).map((n) => [n.id, n.name])),
+    [nodes],
+  );
+
+  return (
+    <div className="flex flex-col">
+      <PageHeader className="sticky top-0 z-10 gap-3 border-b bg-background/80 px-4 py-3 backdrop-blur">
+        <div className="flex items-center gap-3">
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={m.admin_plans_form_back()}
+            render={<Link to={PLANS_LIST} />}
+          >
+            <ArrowLeftIcon />
+          </Button>
+          <PageHeaderTitle>
+            {isEdit
+              ? m.admin_plans_form_edit_title()
+              : m.admin_plans_form_create_title()}
+          </PageHeaderTitle>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" render={<Link to={PLANS_LIST} />}>
+            {m.admin_plans_form_cancel()}
+          </Button>
+          <form.Subscribe selector={(s) => s.isSubmitting}>
+            {(isSubmitting) => (
+              <Button type="submit" form="plan-form" loading={isSubmitting}>
+                {m.admin_plans_form_save()}
+              </Button>
+            )}
+          </form.Subscribe>
+        </div>
+      </PageHeader>
+
+      <form
+        id="plan-form"
+        className="w-full"
+        onSubmit={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          void form.handleSubmit();
+        }}
+      >
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4">
+          <div className="flex flex-col gap-4 rounded-xl border bg-card p-4 shadow-xs">
+            <form.Field name="name">
+              {(field) => (
+                <Field>
+                  <FieldLabel>{m.admin_plans_field_name()}</FieldLabel>
+                  <Input
+                    value={field.state.value}
+                    onValueChange={(v) => field.handleChange(v)}
+                    onBlur={field.handleBlur}
+                    placeholder="Premium Monthly"
+                  />
+                </Field>
+              )}
+            </form.Field>
+
+            <form.Field name="description">
+              {(field) => (
+                <Field>
+                  <FieldLabel>{m.admin_plans_field_description()}</FieldLabel>
+                  <Textarea
+                    value={field.state.value}
+                    onChange={(e) => field.handleChange(e.target.value)}
+                    onBlur={field.handleBlur}
+                  />
+                </Field>
+              )}
+            </form.Field>
+
+            <div className="grid grid-cols-2 gap-3">
+              <form.Field name="price">
+                {(field) => (
+                  <Field>
+                    <FieldLabel>{m.admin_plans_field_price()}</FieldLabel>
+                    <NumberField
+                      min={0}
+                      step={0.01}
+                      value={field.state.value}
+                      onValueChange={(v) => field.handleChange(v ?? 0)}
+                    >
+                      <NumberFieldGroup>
+                        <NumberFieldDecrement />
+                        <NumberFieldInput onBlur={field.handleBlur} />
+                        <NumberFieldIncrement />
+                      </NumberFieldGroup>
+                    </NumberField>
+                  </Field>
+                )}
+              </form.Field>
+
+              <form.Field name="durationDays">
+                {(field) => (
+                  <Field>
+                    <FieldLabel>
+                      {m.admin_plans_field_duration_days()}
+                    </FieldLabel>
+                    <NumberField
+                      min={1}
+                      value={field.state.value}
+                      onValueChange={(v) => field.handleChange(v ?? 1)}
+                    >
+                      <NumberFieldGroup>
+                        <NumberFieldDecrement />
+                        <NumberFieldInput onBlur={field.handleBlur} />
+                        <NumberFieldIncrement />
+                      </NumberFieldGroup>
+                    </NumberField>
+                  </Field>
+                )}
+              </form.Field>
+
+              <form.Field name="trafficGb">
+                {(field) => (
+                  <Field>
+                    <FieldLabel>{m.admin_plans_field_traffic_gb()}</FieldLabel>
+                    <NumberField
+                      min={0}
+                      value={field.state.value}
+                      onValueChange={(v) => field.handleChange(v ?? 0)}
+                    >
+                      <NumberFieldGroup>
+                        <NumberFieldDecrement />
+                        <NumberFieldInput onBlur={field.handleBlur} />
+                        <NumberFieldIncrement />
+                      </NumberFieldGroup>
+                    </NumberField>
+                  </Field>
+                )}
+              </form.Field>
+
+              <form.Field name="deviceLimit">
+                {(field) => (
+                  <Field>
+                    <FieldLabel>
+                      {m.admin_plans_field_device_limit()}
+                    </FieldLabel>
+                    <NumberField
+                      min={0}
+                      value={field.state.value}
+                      onValueChange={(v) => field.handleChange(v ?? 0)}
+                    >
+                      <NumberFieldGroup>
+                        <NumberFieldDecrement />
+                        <NumberFieldInput onBlur={field.handleBlur} />
+                        <NumberFieldIncrement />
+                      </NumberFieldGroup>
+                    </NumberField>
+                    <p className="text-xs text-muted-foreground">
+                      {m.admin_access_device_not_enforced()}
+                    </p>
+                  </Field>
+                )}
+              </form.Field>
+            </div>
+
+            <form.Field name="sortOrder">
+              {(field) => (
+                <Field>
+                  <FieldLabel>{m.admin_plans_field_sort_order()}</FieldLabel>
+                  <NumberField
+                    value={field.state.value}
+                    onValueChange={(v) => field.handleChange(v ?? 0)}
+                  >
+                    <NumberFieldGroup>
+                      <NumberFieldDecrement />
+                      <NumberFieldInput onBlur={field.handleBlur} />
+                      <NumberFieldIncrement />
+                    </NumberFieldGroup>
+                  </NumberField>
+                </Field>
+              )}
+            </form.Field>
+
+            {/* Group binding multi-select. Form state keeps group ids; the
+                combobox works with group objects, so map at this boundary. */}
+            <form.Field name="groupIds">
+              {(field) => {
+                const selected = groupOptions.filter((g) =>
+                  field.state.value.includes(g.id),
+                );
+                return (
+                  <Field>
+                    <FieldLabel>{m.admin_plans_field_groups()}</FieldLabel>
+                    <Combobox
+                      multiple
+                      items={groupOptions}
+                      value={selected}
+                      onValueChange={(next: GroupListItem[]) =>
+                        field.handleChange(next.map((g) => g.id))
+                      }
+                      itemToStringLabel={(g: GroupListItem) => g.name}
+                    >
+                      <ComboboxChips>
+                        <ComboboxValue>
+                          {(value: GroupListItem[]) => (
+                            <>
+                              {value.map((g) => (
+                                <ComboboxChip key={g.id} aria-label={g.name}>
+                                  {g.name}
+                                </ComboboxChip>
+                              ))}
+                              <ComboboxChipsInput
+                                placeholder={
+                                  value.length
+                                    ? undefined
+                                    : m.admin_plans_field_groups_placeholder()
+                                }
+                              />
+                            </>
+                          )}
+                        </ComboboxValue>
+                      </ComboboxChips>
+                      <ComboboxPopup>
+                        <ComboboxEmpty>
+                          {m.admin_plans_field_groups_empty()}
+                        </ComboboxEmpty>
+                        <ComboboxList>
+                          {(g: GroupListItem) => (
+                            <ComboboxItem key={g.id} value={g}>
+                              <div className="flex flex-col">
+                                <span>{g.name}</span>
+                                {g.remark ? (
+                                  <span className="text-xs text-muted-foreground">
+                                    {g.remark}
+                                  </span>
+                                ) : null}
+                              </div>
+                            </ComboboxItem>
+                          )}
+                        </ComboboxList>
+                      </ComboboxPopup>
+                    </Combobox>
+                    {groupsLoaded && groupOptions.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        {m.admin_access_no_groups()}{" "}
+                        <Link
+                          className="underline underline-offset-4"
+                          rel="noopener noreferrer"
+                          target="_blank"
+                          to="/admin/access/groups/new"
+                        >
+                          {m.admin_access_create_group()}
+                        </Link>{" "}
+                        {m.admin_access_new_tab_hint()}
+                      </p>
+                    ) : selected.length > 0 ? (
+                      <p className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
+                        {selected.map((g) => (
+                          <Link
+                            key={g.id}
+                            className="underline underline-offset-4"
+                            params={{ groupId: g.id }}
+                            rel="noopener noreferrer"
+                            target="_blank"
+                            to="/admin/access/groups/$groupId"
+                          >
+                            {g.name}
+                          </Link>
+                        ))}
+                      </p>
+                    ) : null}
+                  </Field>
+                );
+              }}
+            </form.Field>
+
+            <form.Field name="visible">
+              {(field) => (
+                <div className="flex items-center gap-3">
+                  <Switch
+                    checked={field.state.value}
+                    onCheckedChange={(v) => field.handleChange(v)}
+                  />
+                  <Label>{m.admin_plans_field_visible()}</Label>
+                </div>
+              )}
+            </form.Field>
+          </div>
+
+          <form.Subscribe selector={(s) => s.values}>
+            {(values) => (
+              <>
+                {plan ? (
+                  <PlanImpactPanel
+                    groups={groupOptions}
+                    nodeNames={nodeNames}
+                    plan={plan}
+                    values={values}
+                  />
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    {m.admin_access_snapshot_note()}
+                  </p>
+                )}
+                <EffectiveNodePreviewPanel
+                  emptyMessage={m.admin_access_preview_empty_plan()}
+                  groupNames={groupNames}
+                  hasSelection={values.groupIds.length > 0}
+                  isError={groupsFailed || nodesFailed}
+                  noNodesMessage={m.admin_access_preview_no_nodes()}
+                  preview={
+                    groups && nodes
+                      ? previewEffectiveNodes({
+                          groupIds: values.groupIds,
+                          groups,
+                          nodes,
+                        })
+                      : undefined
+                  }
+                />
+              </>
+            )}
+          </form.Subscribe>
+        </div>
+      </form>
+    </div>
+  );
+}

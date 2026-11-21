@@ -211,7 +211,7 @@ function RecentActivityCard() {
           <Button
             size="sm"
             variant="outline"
-            render={<Link to="/admin/audit" />}
+            render={<Link to="/admin/operations/audit" />}
           >
             {m.admin_audit_recent_view_all()}
           </Button>
@@ -320,7 +320,7 @@ function ServersAttentionCard({
           <Button
             size="sm"
             variant="outline"
-            render={<Link to="/admin/proxies/servers" />}
+            render={<Link to="/admin/servers" />}
           >
             {m.admin_overview_servers_view_all()}
           </Button>
@@ -351,7 +351,7 @@ function ServersAttentionCard({
               {items.map((item) => (
                 <li key={item.id}>
                   <Link
-                    to="/admin/proxies/servers/$serverId"
+                    to="/admin/servers/$serverId/overview"
                     params={{ serverId: item.id }}
                     className="flex flex-wrap items-center justify-between gap-3 rounded-md py-3 outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring"
                   >
@@ -426,7 +426,7 @@ function SubscriptionListCard({
               {items.map((item) => (
                 <li key={item.id}>
                   <Link
-                    to="/admin/users/$userId"
+                    to="/admin/access/users/$userId"
                     params={{ userId: item.userId }}
                     className="flex flex-wrap items-center justify-between gap-3 rounded-md py-3 outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring"
                   >

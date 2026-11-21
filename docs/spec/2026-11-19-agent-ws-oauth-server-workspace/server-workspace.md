@@ -1,5 +1,7 @@
 # Server Operations Workspace
 
+The proposed [Admin networking workspace](../2026-11-20-admin-networking-workspace/README.md) moves server routes into `/admin/servers`, replaces the Nodes tab with Inbounds, and adds Outbounds.
+
 ## Routes and layout
 
 Put the layout in the `/admin/proxies/servers` parent route. The searchable sidebar shows servers and their online, offline, disabled, or awaiting-installation status. Support keyboard navigation and collapse the sidebar on narrow screens. The `serverId` selects the right-hand outlet. Use linkable child routes or a route index for the top tabs. Server detail links open Overview by default. Reloading, browser history, and shared URLs restore the selected tab. The server list root can restore the last accessible server. With no selection, show a server list prompt or a creation action. Keep the existing creation entry point and reuse the server form and associated node list. [Server routes](../../../app/src/routes/(admin)/admin/proxies/servers) · [App conventions](../../development/app.md)

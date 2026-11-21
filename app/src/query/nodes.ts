@@ -763,3 +763,19 @@ export const deleteNode = createServerFn({ method: "POST" })
     await notifyAgentConfigChanged(changedServerIds, "node deleted");
     return result;
   });
+
+/** Authorized lookup used by the legacy node-detail redirect. */
+export const getNodeServerId = createServerFn({ method: "GET" })
+  .validator(nodeIdSchema)
+  .handler(async ({ data }) => {
+    await ensureAdmin();
+    const { db } = await import("@/db");
+    const [row] = await db
+      .select({ serverId: node.serverId })
+      .from(node)
+      .where(eq(node.id, data.id));
+    if (!row) {
+      throw new Error("Not found");
+    }
+    return row;
+  });

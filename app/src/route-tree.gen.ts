@@ -19,14 +19,11 @@ import { Route as ApiSplatRouteImport } from './routes/api/$'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as ApiMcpRouteImport } from './routes/api/mcp'
 import { Route as adminAdminIndexRouteImport } from './routes/(admin)/admin/index'
-import { Route as adminAdminAuditRouteRouteImport } from './routes/(admin)/admin/audit/route'
-import { Route as adminAdminMcpRouteRouteImport } from './routes/(admin)/admin/mcp/route'
-import { Route as adminAdminPlansRouteRouteImport } from './routes/(admin)/admin/plans/route'
-import { Route as adminAdminProxiesRouteRouteImport } from './routes/(admin)/admin/proxies/route'
-import { Route as adminAdminRedeemRouteRouteImport } from './routes/(admin)/admin/redeem/route'
-import { Route as adminAdminSubscriptionsRouteRouteImport } from './routes/(admin)/admin/subscriptions/route'
-import { Route as adminAdminTrafficRouteRouteImport } from './routes/(admin)/admin/traffic/route'
-import { Route as adminAdminUsersRouteRouteImport } from './routes/(admin)/admin/users/route'
+import { Route as adminAdminSplatRouteImport } from './routes/(admin)/admin/$'
+import { Route as adminAdminAccessRouteRouteImport } from './routes/(admin)/admin/access/route'
+import { Route as adminAdminNetworkingRouteRouteImport } from './routes/(admin)/admin/networking/route'
+import { Route as adminAdminOperationsRouteRouteImport } from './routes/(admin)/admin/operations/route'
+import { Route as adminAdminServersRouteRouteImport } from './routes/(admin)/admin/servers/route'
 import { Route as authAuthForgotRouteImport } from './routes/(auth)/auth/forgot'
 import { Route as authAuthLoginRouteImport } from './routes/(auth)/auth/login'
 import { Route as authAuthMcpConsentRouteImport } from './routes/(auth)/auth/mcp-consent'
@@ -40,45 +37,58 @@ import { Route as ApiMaintenanceMigrateRouteImport } from './routes/api/maintena
 import { Route as ApiMaintenanceServerMetricsRouteImport } from './routes/api/maintenance/server-metrics'
 import { Route as ApiRpcSplatRouteImport } from './routes/api/rpc/$'
 import { Route as ApiSubTokenRouteImport } from './routes/api/sub/$token'
-import { Route as adminAdminAnnouncementsIndexRouteImport } from './routes/(admin)/admin/announcements/index'
-import { Route as adminAdminAuditIndexRouteImport } from './routes/(admin)/admin/audit/index'
-import { Route as adminAdminMcpIndexRouteImport } from './routes/(admin)/admin/mcp/index'
-import { Route as adminAdminPlansIndexRouteImport } from './routes/(admin)/admin/plans/index'
-import { Route as adminAdminPlansPlanIdRouteImport } from './routes/(admin)/admin/plans/$planId'
-import { Route as adminAdminPlansNewRouteImport } from './routes/(admin)/admin/plans/new'
-import { Route as adminAdminProxiesCertificatesRouteRouteImport } from './routes/(admin)/admin/proxies/certificates/route'
-import { Route as adminAdminProxiesGroupsRouteRouteImport } from './routes/(admin)/admin/proxies/groups/route'
-import { Route as adminAdminProxiesNodesRouteRouteImport } from './routes/(admin)/admin/proxies/nodes/route'
-import { Route as adminAdminProxiesServersRouteRouteImport } from './routes/(admin)/admin/proxies/servers/route'
-import { Route as adminAdminRedeemIndexRouteImport } from './routes/(admin)/admin/redeem/index'
-import { Route as adminAdminRedeemBatchIdRouteImport } from './routes/(admin)/admin/redeem/$batchId'
-import { Route as adminAdminSettingsIndexRouteImport } from './routes/(admin)/admin/settings/index'
-import { Route as adminAdminSubscriptionsIndexRouteImport } from './routes/(admin)/admin/subscriptions/index'
-import { Route as adminAdminTrafficIndexRouteImport } from './routes/(admin)/admin/traffic/index'
-import { Route as adminAdminUsersIndexRouteImport } from './routes/(admin)/admin/users/index'
-import { Route as adminAdminUsersUserIdRouteImport } from './routes/(admin)/admin/users/$userId'
+import { Route as adminAdminAccessIndexRouteImport } from './routes/(admin)/admin/access/index'
+import { Route as adminAdminAccessGroupsRouteRouteImport } from './routes/(admin)/admin/access/groups/route'
+import { Route as adminAdminAccessPlansRouteRouteImport } from './routes/(admin)/admin/access/plans/route'
+import { Route as adminAdminAccessRedeemRouteRouteImport } from './routes/(admin)/admin/access/redeem/route'
+import { Route as adminAdminAccessSubscriptionsRouteRouteImport } from './routes/(admin)/admin/access/subscriptions/route'
+import { Route as adminAdminAccessUsersRouteRouteImport } from './routes/(admin)/admin/access/users/route'
+import { Route as adminAdminNetworkingIndexRouteImport } from './routes/(admin)/admin/networking/index'
+import { Route as adminAdminNetworkingCertificatesRouteRouteImport } from './routes/(admin)/admin/networking/certificates/route'
+import { Route as adminAdminNetworkingLinksRouteImport } from './routes/(admin)/admin/networking/links'
+import { Route as adminAdminNetworkingRoutingRouteImport } from './routes/(admin)/admin/networking/routing'
+import { Route as adminAdminNetworkingRuleSetsRouteImport } from './routes/(admin)/admin/networking/rule-sets'
+import { Route as adminAdminNetworkingTopologyRouteImport } from './routes/(admin)/admin/networking/topology'
+import { Route as adminAdminOperationsIndexRouteImport } from './routes/(admin)/admin/operations/index'
+import { Route as adminAdminOperationsAuditRouteRouteImport } from './routes/(admin)/admin/operations/audit/route'
+import { Route as adminAdminOperationsMcpRouteRouteImport } from './routes/(admin)/admin/operations/mcp/route'
+import { Route as adminAdminOperationsTrafficRouteRouteImport } from './routes/(admin)/admin/operations/traffic/route'
+import { Route as adminAdminServersIndexRouteImport } from './routes/(admin)/admin/servers/index'
+import { Route as adminAdminServersServerIdRouteRouteImport } from './routes/(admin)/admin/servers/$serverId/route'
+import { Route as adminAdminServersNewRouteImport } from './routes/(admin)/admin/servers/new'
 import { Route as userDashboardSubscriptionsIndexRouteImport } from './routes/(user)/dashboard/subscriptions/index'
 import { Route as DotwellKnownOauthAuthorizationServerApiAuthRouteImport } from './routes/[.]well-known.oauth-authorization-server.api.auth'
 import { Route as DotwellKnownOauthProtectedResourceApiMcpRouteImport } from './routes/[.]well-known.oauth-protected-resource.api.mcp'
 import { Route as ApiAgentEnrollmentRedeemRouteImport } from './routes/api/agent/enrollment/redeem'
-import { Route as adminAdminProxiesCertificatesIndexRouteImport } from './routes/(admin)/admin/proxies/certificates/index'
-import { Route as adminAdminProxiesGroupsIndexRouteImport } from './routes/(admin)/admin/proxies/groups/index'
-import { Route as adminAdminProxiesGroupsGroupIdRouteImport } from './routes/(admin)/admin/proxies/groups/$groupId'
-import { Route as adminAdminProxiesGroupsNewRouteImport } from './routes/(admin)/admin/proxies/groups/new'
-import { Route as adminAdminProxiesNodesIndexRouteImport } from './routes/(admin)/admin/proxies/nodes/index'
-import { Route as adminAdminProxiesNodesNodeIdRouteImport } from './routes/(admin)/admin/proxies/nodes/$nodeId'
-import { Route as adminAdminProxiesNodesNewRouteImport } from './routes/(admin)/admin/proxies/nodes/new'
-import { Route as adminAdminProxiesRulesIndexRouteImport } from './routes/(admin)/admin/proxies/rules/index'
-import { Route as adminAdminProxiesServersIndexRouteImport } from './routes/(admin)/admin/proxies/servers/index'
-import { Route as adminAdminProxiesServersServerIdRouteRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId/route'
-import { Route as adminAdminProxiesServersNewRouteImport } from './routes/(admin)/admin/proxies/servers/new'
+import { Route as adminAdminAccessClientRulesIndexRouteImport } from './routes/(admin)/admin/access/client-rules/index'
+import { Route as adminAdminAccessGroupsIndexRouteImport } from './routes/(admin)/admin/access/groups/index'
+import { Route as adminAdminAccessGroupsGroupIdRouteImport } from './routes/(admin)/admin/access/groups/$groupId'
+import { Route as adminAdminAccessGroupsNewRouteImport } from './routes/(admin)/admin/access/groups/new'
+import { Route as adminAdminAccessPlansIndexRouteImport } from './routes/(admin)/admin/access/plans/index'
+import { Route as adminAdminAccessPlansPlanIdRouteImport } from './routes/(admin)/admin/access/plans/$planId'
+import { Route as adminAdminAccessPlansNewRouteImport } from './routes/(admin)/admin/access/plans/new'
+import { Route as adminAdminAccessRedeemIndexRouteImport } from './routes/(admin)/admin/access/redeem/index'
+import { Route as adminAdminAccessRedeemBatchIdRouteImport } from './routes/(admin)/admin/access/redeem/$batchId'
+import { Route as adminAdminAccessSubscriptionsIndexRouteImport } from './routes/(admin)/admin/access/subscriptions/index'
+import { Route as adminAdminAccessUsersIndexRouteImport } from './routes/(admin)/admin/access/users/index'
+import { Route as adminAdminAccessUsersUserIdRouteImport } from './routes/(admin)/admin/access/users/$userId'
+import { Route as adminAdminNetworkingCertificatesIndexRouteImport } from './routes/(admin)/admin/networking/certificates/index'
+import { Route as adminAdminOperationsAnnouncementsIndexRouteImport } from './routes/(admin)/admin/operations/announcements/index'
+import { Route as adminAdminOperationsAuditIndexRouteImport } from './routes/(admin)/admin/operations/audit/index'
+import { Route as adminAdminOperationsMcpIndexRouteImport } from './routes/(admin)/admin/operations/mcp/index'
+import { Route as adminAdminOperationsSettingsIndexRouteImport } from './routes/(admin)/admin/operations/settings/index'
+import { Route as adminAdminOperationsTrafficIndexRouteImport } from './routes/(admin)/admin/operations/traffic/index'
+import { Route as adminAdminServersServerIdIndexRouteImport } from './routes/(admin)/admin/servers/$serverId/index'
+import { Route as adminAdminServersServerIdConnectionRouteImport } from './routes/(admin)/admin/servers/$serverId/connection'
+import { Route as adminAdminServersServerIdLogsRouteImport } from './routes/(admin)/admin/servers/$serverId/logs'
+import { Route as adminAdminServersServerIdOutboundsRouteImport } from './routes/(admin)/admin/servers/$serverId/outbounds'
+import { Route as adminAdminServersServerIdOverviewRouteImport } from './routes/(admin)/admin/servers/$serverId/overview'
+import { Route as adminAdminServersServerIdSettingsRouteImport } from './routes/(admin)/admin/servers/$serverId/settings'
+import { Route as adminAdminServersServerIdTerminalRouteImport } from './routes/(admin)/admin/servers/$serverId/terminal'
 import { Route as ApiAdminServersIdStreamRouteImport } from './routes/api/admin/servers/$id/stream'
-import { Route as adminAdminProxiesServersServerIdIndexRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId/index'
-import { Route as adminAdminProxiesServersServerIdConnectionRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId/connection'
-import { Route as adminAdminProxiesServersServerIdLogsRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId/logs'
-import { Route as adminAdminProxiesServersServerIdNodesRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId/nodes'
-import { Route as adminAdminProxiesServersServerIdSettingsRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId/settings'
-import { Route as adminAdminProxiesServersServerIdTerminalRouteImport } from './routes/(admin)/admin/proxies/servers/$serverId/terminal'
+import { Route as adminAdminServersServerIdInboundsIndexRouteImport } from './routes/(admin)/admin/servers/$serverId/inbounds/index'
+import { Route as adminAdminServersServerIdInboundsNodeIdRouteImport } from './routes/(admin)/admin/servers/$serverId/inbounds/$nodeId'
+import { Route as adminAdminServersServerIdInboundsNewRouteImport } from './routes/(admin)/admin/servers/$serverId/inbounds/new'
 import { Route as ApiAdminCertificatesCertificateIdExportPartRouteImport } from './routes/api/admin/certificates/$certificateId/export/$part'
 import { Route as ApiAdminServersIdLogsWsRouteImport } from './routes/api/admin/servers/$id/logs/ws'
 import { Route as ApiAdminServersIdMetricsWsRouteImport } from './routes/api/admin/servers/$id/metrics/ws'
@@ -145,45 +155,31 @@ const adminAdminIndexRoute = adminAdminIndexRouteImport.update({
   path: '/',
   getParentRoute: () => adminAdminRouteRoute,
 } as any)
-const adminAdminAuditRouteRoute = adminAdminAuditRouteRouteImport.update({
-  id: '/audit',
-  path: '/audit',
+const adminAdminSplatRoute = adminAdminSplatRouteImport.update({
+  id: '/$',
+  path: '/$',
   getParentRoute: () => adminAdminRouteRoute,
 } as any)
-const adminAdminMcpRouteRoute = adminAdminMcpRouteRouteImport.update({
-  id: '/mcp',
-  path: '/mcp',
+const adminAdminAccessRouteRoute = adminAdminAccessRouteRouteImport.update({
+  id: '/access',
+  path: '/access',
   getParentRoute: () => adminAdminRouteRoute,
 } as any)
-const adminAdminPlansRouteRoute = adminAdminPlansRouteRouteImport.update({
-  id: '/plans',
-  path: '/plans',
-  getParentRoute: () => adminAdminRouteRoute,
-} as any)
-const adminAdminProxiesRouteRoute = adminAdminProxiesRouteRouteImport.update({
-  id: '/proxies',
-  path: '/proxies',
-  getParentRoute: () => adminAdminRouteRoute,
-} as any)
-const adminAdminRedeemRouteRoute = adminAdminRedeemRouteRouteImport.update({
-  id: '/redeem',
-  path: '/redeem',
-  getParentRoute: () => adminAdminRouteRoute,
-} as any)
-const adminAdminSubscriptionsRouteRoute =
-  adminAdminSubscriptionsRouteRouteImport.update({
-    id: '/subscriptions',
-    path: '/subscriptions',
+const adminAdminNetworkingRouteRoute =
+  adminAdminNetworkingRouteRouteImport.update({
+    id: '/networking',
+    path: '/networking',
     getParentRoute: () => adminAdminRouteRoute,
   } as any)
-const adminAdminTrafficRouteRoute = adminAdminTrafficRouteRouteImport.update({
-  id: '/traffic',
-  path: '/traffic',
-  getParentRoute: () => adminAdminRouteRoute,
-} as any)
-const adminAdminUsersRouteRoute = adminAdminUsersRouteRouteImport.update({
-  id: '/users',
-  path: '/users',
+const adminAdminOperationsRouteRoute =
+  adminAdminOperationsRouteRouteImport.update({
+    id: '/operations',
+    path: '/operations',
+    getParentRoute: () => adminAdminRouteRoute,
+  } as any)
+const adminAdminServersRouteRoute = adminAdminServersRouteRouteImport.update({
+  id: '/servers',
+  path: '/servers',
   getParentRoute: () => adminAdminRouteRoute,
 } as any)
 const authAuthForgotRoute = authAuthForgotRouteImport.update({
@@ -252,96 +248,116 @@ const ApiSubTokenRoute = ApiSubTokenRouteImport.update({
   path: '/api/sub/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
-const adminAdminAnnouncementsIndexRoute =
-  adminAdminAnnouncementsIndexRouteImport.update({
-    id: '/announcements/',
-    path: '/announcements/',
-    getParentRoute: () => adminAdminRouteRoute,
-  } as any)
-const adminAdminAuditIndexRoute = adminAdminAuditIndexRouteImport.update({
+const adminAdminAccessIndexRoute = adminAdminAccessIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => adminAdminAuditRouteRoute,
+  getParentRoute: () => adminAdminAccessRouteRoute,
 } as any)
-const adminAdminMcpIndexRoute = adminAdminMcpIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => adminAdminMcpRouteRoute,
-} as any)
-const adminAdminPlansIndexRoute = adminAdminPlansIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => adminAdminPlansRouteRoute,
-} as any)
-const adminAdminPlansPlanIdRoute = adminAdminPlansPlanIdRouteImport.update({
-  id: '/$planId',
-  path: '/$planId',
-  getParentRoute: () => adminAdminPlansRouteRoute,
-} as any)
-const adminAdminPlansNewRoute = adminAdminPlansNewRouteImport.update({
-  id: '/new',
-  path: '/new',
-  getParentRoute: () => adminAdminPlansRouteRoute,
-} as any)
-const adminAdminProxiesCertificatesRouteRoute =
-  adminAdminProxiesCertificatesRouteRouteImport.update({
-    id: '/certificates',
-    path: '/certificates',
-    getParentRoute: () => adminAdminProxiesRouteRoute,
-  } as any)
-const adminAdminProxiesGroupsRouteRoute =
-  adminAdminProxiesGroupsRouteRouteImport.update({
+const adminAdminAccessGroupsRouteRoute =
+  adminAdminAccessGroupsRouteRouteImport.update({
     id: '/groups',
     path: '/groups',
-    getParentRoute: () => adminAdminProxiesRouteRoute,
+    getParentRoute: () => adminAdminAccessRouteRoute,
   } as any)
-const adminAdminProxiesNodesRouteRoute =
-  adminAdminProxiesNodesRouteRouteImport.update({
-    id: '/nodes',
-    path: '/nodes',
-    getParentRoute: () => adminAdminProxiesRouteRoute,
+const adminAdminAccessPlansRouteRoute =
+  adminAdminAccessPlansRouteRouteImport.update({
+    id: '/plans',
+    path: '/plans',
+    getParentRoute: () => adminAdminAccessRouteRoute,
   } as any)
-const adminAdminProxiesServersRouteRoute =
-  adminAdminProxiesServersRouteRouteImport.update({
-    id: '/servers',
-    path: '/servers',
-    getParentRoute: () => adminAdminProxiesRouteRoute,
+const adminAdminAccessRedeemRouteRoute =
+  adminAdminAccessRedeemRouteRouteImport.update({
+    id: '/redeem',
+    path: '/redeem',
+    getParentRoute: () => adminAdminAccessRouteRoute,
   } as any)
-const adminAdminRedeemIndexRoute = adminAdminRedeemIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => adminAdminRedeemRouteRoute,
-} as any)
-const adminAdminRedeemBatchIdRoute = adminAdminRedeemBatchIdRouteImport.update({
-  id: '/$batchId',
-  path: '/$batchId',
-  getParentRoute: () => adminAdminRedeemRouteRoute,
-} as any)
-const adminAdminSettingsIndexRoute = adminAdminSettingsIndexRouteImport.update({
-  id: '/settings/',
-  path: '/settings/',
-  getParentRoute: () => adminAdminRouteRoute,
-} as any)
-const adminAdminSubscriptionsIndexRoute =
-  adminAdminSubscriptionsIndexRouteImport.update({
+const adminAdminAccessSubscriptionsRouteRoute =
+  adminAdminAccessSubscriptionsRouteRouteImport.update({
+    id: '/subscriptions',
+    path: '/subscriptions',
+    getParentRoute: () => adminAdminAccessRouteRoute,
+  } as any)
+const adminAdminAccessUsersRouteRoute =
+  adminAdminAccessUsersRouteRouteImport.update({
+    id: '/users',
+    path: '/users',
+    getParentRoute: () => adminAdminAccessRouteRoute,
+  } as any)
+const adminAdminNetworkingIndexRoute =
+  adminAdminNetworkingIndexRouteImport.update({
     id: '/',
     path: '/',
-    getParentRoute: () => adminAdminSubscriptionsRouteRoute,
+    getParentRoute: () => adminAdminNetworkingRouteRoute,
   } as any)
-const adminAdminTrafficIndexRoute = adminAdminTrafficIndexRouteImport.update({
+const adminAdminNetworkingCertificatesRouteRoute =
+  adminAdminNetworkingCertificatesRouteRouteImport.update({
+    id: '/certificates',
+    path: '/certificates',
+    getParentRoute: () => adminAdminNetworkingRouteRoute,
+  } as any)
+const adminAdminNetworkingLinksRoute =
+  adminAdminNetworkingLinksRouteImport.update({
+    id: '/links',
+    path: '/links',
+    getParentRoute: () => adminAdminNetworkingRouteRoute,
+  } as any)
+const adminAdminNetworkingRoutingRoute =
+  adminAdminNetworkingRoutingRouteImport.update({
+    id: '/routing',
+    path: '/routing',
+    getParentRoute: () => adminAdminNetworkingRouteRoute,
+  } as any)
+const adminAdminNetworkingRuleSetsRoute =
+  adminAdminNetworkingRuleSetsRouteImport.update({
+    id: '/rule-sets',
+    path: '/rule-sets',
+    getParentRoute: () => adminAdminNetworkingRouteRoute,
+  } as any)
+const adminAdminNetworkingTopologyRoute =
+  adminAdminNetworkingTopologyRouteImport.update({
+    id: '/topology',
+    path: '/topology',
+    getParentRoute: () => adminAdminNetworkingRouteRoute,
+  } as any)
+const adminAdminOperationsIndexRoute =
+  adminAdminOperationsIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => adminAdminOperationsRouteRoute,
+  } as any)
+const adminAdminOperationsAuditRouteRoute =
+  adminAdminOperationsAuditRouteRouteImport.update({
+    id: '/audit',
+    path: '/audit',
+    getParentRoute: () => adminAdminOperationsRouteRoute,
+  } as any)
+const adminAdminOperationsMcpRouteRoute =
+  adminAdminOperationsMcpRouteRouteImport.update({
+    id: '/mcp',
+    path: '/mcp',
+    getParentRoute: () => adminAdminOperationsRouteRoute,
+  } as any)
+const adminAdminOperationsTrafficRouteRoute =
+  adminAdminOperationsTrafficRouteRouteImport.update({
+    id: '/traffic',
+    path: '/traffic',
+    getParentRoute: () => adminAdminOperationsRouteRoute,
+  } as any)
+const adminAdminServersIndexRoute = adminAdminServersIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => adminAdminTrafficRouteRoute,
+  getParentRoute: () => adminAdminServersRouteRoute,
 } as any)
-const adminAdminUsersIndexRoute = adminAdminUsersIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => adminAdminUsersRouteRoute,
-} as any)
-const adminAdminUsersUserIdRoute = adminAdminUsersUserIdRouteImport.update({
-  id: '/$userId',
-  path: '/$userId',
-  getParentRoute: () => adminAdminUsersRouteRoute,
+const adminAdminServersServerIdRouteRoute =
+  adminAdminServersServerIdRouteRouteImport.update({
+    id: '/$serverId',
+    path: '/$serverId',
+    getParentRoute: () => adminAdminServersRouteRoute,
+  } as any)
+const adminAdminServersNewRoute = adminAdminServersNewRouteImport.update({
+  id: '/new',
+  path: '/new',
+  getParentRoute: () => adminAdminServersRouteRoute,
 } as any)
 const userDashboardSubscriptionsIndexRoute =
   userDashboardSubscriptionsIndexRouteImport.update({
@@ -367,112 +383,178 @@ const ApiAgentEnrollmentRedeemRoute =
     path: '/api/agent/enrollment/redeem',
     getParentRoute: () => rootRouteImport,
   } as any)
-const adminAdminProxiesCertificatesIndexRoute =
-  adminAdminProxiesCertificatesIndexRouteImport.update({
+const adminAdminAccessClientRulesIndexRoute =
+  adminAdminAccessClientRulesIndexRouteImport.update({
+    id: '/client-rules/',
+    path: '/client-rules/',
+    getParentRoute: () => adminAdminAccessRouteRoute,
+  } as any)
+const adminAdminAccessGroupsIndexRoute =
+  adminAdminAccessGroupsIndexRouteImport.update({
     id: '/',
     path: '/',
-    getParentRoute: () => adminAdminProxiesCertificatesRouteRoute,
+    getParentRoute: () => adminAdminAccessGroupsRouteRoute,
   } as any)
-const adminAdminProxiesGroupsIndexRoute =
-  adminAdminProxiesGroupsIndexRouteImport.update({
-    id: '/',
-    path: '/',
-    getParentRoute: () => adminAdminProxiesGroupsRouteRoute,
-  } as any)
-const adminAdminProxiesGroupsGroupIdRoute =
-  adminAdminProxiesGroupsGroupIdRouteImport.update({
+const adminAdminAccessGroupsGroupIdRoute =
+  adminAdminAccessGroupsGroupIdRouteImport.update({
     id: '/$groupId',
     path: '/$groupId',
-    getParentRoute: () => adminAdminProxiesGroupsRouteRoute,
+    getParentRoute: () => adminAdminAccessGroupsRouteRoute,
   } as any)
-const adminAdminProxiesGroupsNewRoute =
-  adminAdminProxiesGroupsNewRouteImport.update({
+const adminAdminAccessGroupsNewRoute =
+  adminAdminAccessGroupsNewRouteImport.update({
     id: '/new',
     path: '/new',
-    getParentRoute: () => adminAdminProxiesGroupsRouteRoute,
+    getParentRoute: () => adminAdminAccessGroupsRouteRoute,
   } as any)
-const adminAdminProxiesNodesIndexRoute =
-  adminAdminProxiesNodesIndexRouteImport.update({
+const adminAdminAccessPlansIndexRoute =
+  adminAdminAccessPlansIndexRouteImport.update({
     id: '/',
     path: '/',
-    getParentRoute: () => adminAdminProxiesNodesRouteRoute,
+    getParentRoute: () => adminAdminAccessPlansRouteRoute,
   } as any)
-const adminAdminProxiesNodesNodeIdRoute =
-  adminAdminProxiesNodesNodeIdRouteImport.update({
-    id: '/$nodeId',
-    path: '/$nodeId',
-    getParentRoute: () => adminAdminProxiesNodesRouteRoute,
+const adminAdminAccessPlansPlanIdRoute =
+  adminAdminAccessPlansPlanIdRouteImport.update({
+    id: '/$planId',
+    path: '/$planId',
+    getParentRoute: () => adminAdminAccessPlansRouteRoute,
   } as any)
-const adminAdminProxiesNodesNewRoute =
-  adminAdminProxiesNodesNewRouteImport.update({
+const adminAdminAccessPlansNewRoute =
+  adminAdminAccessPlansNewRouteImport.update({
     id: '/new',
     path: '/new',
-    getParentRoute: () => adminAdminProxiesNodesRouteRoute,
+    getParentRoute: () => adminAdminAccessPlansRouteRoute,
   } as any)
-const adminAdminProxiesRulesIndexRoute =
-  adminAdminProxiesRulesIndexRouteImport.update({
-    id: '/rules/',
-    path: '/rules/',
-    getParentRoute: () => adminAdminProxiesRouteRoute,
-  } as any)
-const adminAdminProxiesServersIndexRoute =
-  adminAdminProxiesServersIndexRouteImport.update({
+const adminAdminAccessRedeemIndexRoute =
+  adminAdminAccessRedeemIndexRouteImport.update({
     id: '/',
     path: '/',
-    getParentRoute: () => adminAdminProxiesServersRouteRoute,
+    getParentRoute: () => adminAdminAccessRedeemRouteRoute,
   } as any)
-const adminAdminProxiesServersServerIdRouteRoute =
-  adminAdminProxiesServersServerIdRouteRouteImport.update({
-    id: '/$serverId',
-    path: '/$serverId',
-    getParentRoute: () => adminAdminProxiesServersRouteRoute,
+const adminAdminAccessRedeemBatchIdRoute =
+  adminAdminAccessRedeemBatchIdRouteImport.update({
+    id: '/$batchId',
+    path: '/$batchId',
+    getParentRoute: () => adminAdminAccessRedeemRouteRoute,
   } as any)
-const adminAdminProxiesServersNewRoute =
-  adminAdminProxiesServersNewRouteImport.update({
-    id: '/new',
-    path: '/new',
-    getParentRoute: () => adminAdminProxiesServersRouteRoute,
+const adminAdminAccessSubscriptionsIndexRoute =
+  adminAdminAccessSubscriptionsIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => adminAdminAccessSubscriptionsRouteRoute,
+  } as any)
+const adminAdminAccessUsersIndexRoute =
+  adminAdminAccessUsersIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => adminAdminAccessUsersRouteRoute,
+  } as any)
+const adminAdminAccessUsersUserIdRoute =
+  adminAdminAccessUsersUserIdRouteImport.update({
+    id: '/$userId',
+    path: '/$userId',
+    getParentRoute: () => adminAdminAccessUsersRouteRoute,
+  } as any)
+const adminAdminNetworkingCertificatesIndexRoute =
+  adminAdminNetworkingCertificatesIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => adminAdminNetworkingCertificatesRouteRoute,
+  } as any)
+const adminAdminOperationsAnnouncementsIndexRoute =
+  adminAdminOperationsAnnouncementsIndexRouteImport.update({
+    id: '/announcements/',
+    path: '/announcements/',
+    getParentRoute: () => adminAdminOperationsRouteRoute,
+  } as any)
+const adminAdminOperationsAuditIndexRoute =
+  adminAdminOperationsAuditIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => adminAdminOperationsAuditRouteRoute,
+  } as any)
+const adminAdminOperationsMcpIndexRoute =
+  adminAdminOperationsMcpIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => adminAdminOperationsMcpRouteRoute,
+  } as any)
+const adminAdminOperationsSettingsIndexRoute =
+  adminAdminOperationsSettingsIndexRouteImport.update({
+    id: '/settings/',
+    path: '/settings/',
+    getParentRoute: () => adminAdminOperationsRouteRoute,
+  } as any)
+const adminAdminOperationsTrafficIndexRoute =
+  adminAdminOperationsTrafficIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => adminAdminOperationsTrafficRouteRoute,
+  } as any)
+const adminAdminServersServerIdIndexRoute =
+  adminAdminServersServerIdIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => adminAdminServersServerIdRouteRoute,
+  } as any)
+const adminAdminServersServerIdConnectionRoute =
+  adminAdminServersServerIdConnectionRouteImport.update({
+    id: '/connection',
+    path: '/connection',
+    getParentRoute: () => adminAdminServersServerIdRouteRoute,
+  } as any)
+const adminAdminServersServerIdLogsRoute =
+  adminAdminServersServerIdLogsRouteImport.update({
+    id: '/logs',
+    path: '/logs',
+    getParentRoute: () => adminAdminServersServerIdRouteRoute,
+  } as any)
+const adminAdminServersServerIdOutboundsRoute =
+  adminAdminServersServerIdOutboundsRouteImport.update({
+    id: '/outbounds',
+    path: '/outbounds',
+    getParentRoute: () => adminAdminServersServerIdRouteRoute,
+  } as any)
+const adminAdminServersServerIdOverviewRoute =
+  adminAdminServersServerIdOverviewRouteImport.update({
+    id: '/overview',
+    path: '/overview',
+    getParentRoute: () => adminAdminServersServerIdRouteRoute,
+  } as any)
+const adminAdminServersServerIdSettingsRoute =
+  adminAdminServersServerIdSettingsRouteImport.update({
+    id: '/settings',
+    path: '/settings',
+    getParentRoute: () => adminAdminServersServerIdRouteRoute,
+  } as any)
+const adminAdminServersServerIdTerminalRoute =
+  adminAdminServersServerIdTerminalRouteImport.update({
+    id: '/terminal',
+    path: '/terminal',
+    getParentRoute: () => adminAdminServersServerIdRouteRoute,
   } as any)
 const ApiAdminServersIdStreamRoute = ApiAdminServersIdStreamRouteImport.update({
   id: '/api/admin/servers/$id/stream',
   path: '/api/admin/servers/$id/stream',
   getParentRoute: () => rootRouteImport,
 } as any)
-const adminAdminProxiesServersServerIdIndexRoute =
-  adminAdminProxiesServersServerIdIndexRouteImport.update({
-    id: '/',
-    path: '/',
-    getParentRoute: () => adminAdminProxiesServersServerIdRouteRoute,
+const adminAdminServersServerIdInboundsIndexRoute =
+  adminAdminServersServerIdInboundsIndexRouteImport.update({
+    id: '/inbounds/',
+    path: '/inbounds/',
+    getParentRoute: () => adminAdminServersServerIdRouteRoute,
   } as any)
-const adminAdminProxiesServersServerIdConnectionRoute =
-  adminAdminProxiesServersServerIdConnectionRouteImport.update({
-    id: '/connection',
-    path: '/connection',
-    getParentRoute: () => adminAdminProxiesServersServerIdRouteRoute,
+const adminAdminServersServerIdInboundsNodeIdRoute =
+  adminAdminServersServerIdInboundsNodeIdRouteImport.update({
+    id: '/inbounds/$nodeId',
+    path: '/inbounds/$nodeId',
+    getParentRoute: () => adminAdminServersServerIdRouteRoute,
   } as any)
-const adminAdminProxiesServersServerIdLogsRoute =
-  adminAdminProxiesServersServerIdLogsRouteImport.update({
-    id: '/logs',
-    path: '/logs',
-    getParentRoute: () => adminAdminProxiesServersServerIdRouteRoute,
-  } as any)
-const adminAdminProxiesServersServerIdNodesRoute =
-  adminAdminProxiesServersServerIdNodesRouteImport.update({
-    id: '/nodes',
-    path: '/nodes',
-    getParentRoute: () => adminAdminProxiesServersServerIdRouteRoute,
-  } as any)
-const adminAdminProxiesServersServerIdSettingsRoute =
-  adminAdminProxiesServersServerIdSettingsRouteImport.update({
-    id: '/settings',
-    path: '/settings',
-    getParentRoute: () => adminAdminProxiesServersServerIdRouteRoute,
-  } as any)
-const adminAdminProxiesServersServerIdTerminalRoute =
-  adminAdminProxiesServersServerIdTerminalRouteImport.update({
-    id: '/terminal',
-    path: '/terminal',
-    getParentRoute: () => adminAdminProxiesServersServerIdRouteRoute,
+const adminAdminServersServerIdInboundsNewRoute =
+  adminAdminServersServerIdInboundsNewRouteImport.update({
+    id: '/inbounds/new',
+    path: '/inbounds/new',
+    getParentRoute: () => adminAdminServersServerIdRouteRoute,
   } as any)
 const ApiAdminCertificatesCertificateIdExportPartRoute =
   ApiAdminCertificatesCertificateIdExportPartRouteImport.update({
@@ -518,14 +600,11 @@ export interface FileRoutesByFullPath {
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
-  '/admin/audit': typeof adminAdminAuditRouteRouteWithChildren
-  '/admin/mcp': typeof adminAdminMcpRouteRouteWithChildren
-  '/admin/plans': typeof adminAdminPlansRouteRouteWithChildren
-  '/admin/proxies': typeof adminAdminProxiesRouteRouteWithChildren
-  '/admin/redeem': typeof adminAdminRedeemRouteRouteWithChildren
-  '/admin/subscriptions': typeof adminAdminSubscriptionsRouteRouteWithChildren
-  '/admin/traffic': typeof adminAdminTrafficRouteRouteWithChildren
-  '/admin/users': typeof adminAdminUsersRouteRouteWithChildren
+  '/admin/access': typeof adminAdminAccessRouteRouteWithChildren
+  '/admin/networking': typeof adminAdminNetworkingRouteRouteWithChildren
+  '/admin/operations': typeof adminAdminOperationsRouteRouteWithChildren
+  '/admin/servers': typeof adminAdminServersRouteRouteWithChildren
+  '/admin/$': typeof adminAdminSplatRoute
   '/auth/forgot': typeof authAuthForgotRoute
   '/auth/login': typeof authAuthLoginRoute
   '/auth/mcp-consent': typeof authAuthMcpConsentRoute
@@ -540,50 +619,63 @@ export interface FileRoutesByFullPath {
   '/admin/': typeof adminAdminIndexRoute
   '/dashboard/': typeof userDashboardIndexRoute
   '/welcome/': typeof userWelcomeIndexRoute
-  '/admin/proxies/certificates': typeof adminAdminProxiesCertificatesRouteRouteWithChildren
-  '/admin/proxies/groups': typeof adminAdminProxiesGroupsRouteRouteWithChildren
-  '/admin/proxies/nodes': typeof adminAdminProxiesNodesRouteRouteWithChildren
-  '/admin/proxies/servers': typeof adminAdminProxiesServersRouteRouteWithChildren
-  '/admin/plans/$planId': typeof adminAdminPlansPlanIdRoute
-  '/admin/plans/new': typeof adminAdminPlansNewRoute
-  '/admin/redeem/$batchId': typeof adminAdminRedeemBatchIdRoute
-  '/admin/users/$userId': typeof adminAdminUsersUserIdRoute
+  '/admin/access/groups': typeof adminAdminAccessGroupsRouteRouteWithChildren
+  '/admin/access/plans': typeof adminAdminAccessPlansRouteRouteWithChildren
+  '/admin/access/redeem': typeof adminAdminAccessRedeemRouteRouteWithChildren
+  '/admin/access/subscriptions': typeof adminAdminAccessSubscriptionsRouteRouteWithChildren
+  '/admin/access/users': typeof adminAdminAccessUsersRouteRouteWithChildren
+  '/admin/networking/certificates': typeof adminAdminNetworkingCertificatesRouteRouteWithChildren
+  '/admin/operations/audit': typeof adminAdminOperationsAuditRouteRouteWithChildren
+  '/admin/operations/mcp': typeof adminAdminOperationsMcpRouteRouteWithChildren
+  '/admin/operations/traffic': typeof adminAdminOperationsTrafficRouteRouteWithChildren
+  '/admin/servers/$serverId': typeof adminAdminServersServerIdRouteRouteWithChildren
+  '/admin/networking/links': typeof adminAdminNetworkingLinksRoute
+  '/admin/networking/routing': typeof adminAdminNetworkingRoutingRoute
+  '/admin/networking/rule-sets': typeof adminAdminNetworkingRuleSetsRoute
+  '/admin/networking/topology': typeof adminAdminNetworkingTopologyRoute
+  '/admin/servers/new': typeof adminAdminServersNewRoute
   '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
   '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
   '/api/agent/enrollment/redeem': typeof ApiAgentEnrollmentRedeemRoute
-  '/admin/announcements/': typeof adminAdminAnnouncementsIndexRoute
-  '/admin/audit/': typeof adminAdminAuditIndexRoute
-  '/admin/mcp/': typeof adminAdminMcpIndexRoute
-  '/admin/plans/': typeof adminAdminPlansIndexRoute
-  '/admin/redeem/': typeof adminAdminRedeemIndexRoute
-  '/admin/settings/': typeof adminAdminSettingsIndexRoute
-  '/admin/subscriptions/': typeof adminAdminSubscriptionsIndexRoute
-  '/admin/traffic/': typeof adminAdminTrafficIndexRoute
-  '/admin/users/': typeof adminAdminUsersIndexRoute
+  '/admin/access/': typeof adminAdminAccessIndexRoute
+  '/admin/networking/': typeof adminAdminNetworkingIndexRoute
+  '/admin/operations/': typeof adminAdminOperationsIndexRoute
+  '/admin/servers/': typeof adminAdminServersIndexRoute
   '/dashboard/subscriptions/': typeof userDashboardSubscriptionsIndexRoute
-  '/admin/proxies/servers/$serverId': typeof adminAdminProxiesServersServerIdRouteRouteWithChildren
-  '/admin/proxies/groups/$groupId': typeof adminAdminProxiesGroupsGroupIdRoute
-  '/admin/proxies/groups/new': typeof adminAdminProxiesGroupsNewRoute
-  '/admin/proxies/nodes/$nodeId': typeof adminAdminProxiesNodesNodeIdRoute
-  '/admin/proxies/nodes/new': typeof adminAdminProxiesNodesNewRoute
-  '/admin/proxies/servers/new': typeof adminAdminProxiesServersNewRoute
+  '/admin/access/groups/$groupId': typeof adminAdminAccessGroupsGroupIdRoute
+  '/admin/access/groups/new': typeof adminAdminAccessGroupsNewRoute
+  '/admin/access/plans/$planId': typeof adminAdminAccessPlansPlanIdRoute
+  '/admin/access/plans/new': typeof adminAdminAccessPlansNewRoute
+  '/admin/access/redeem/$batchId': typeof adminAdminAccessRedeemBatchIdRoute
+  '/admin/access/users/$userId': typeof adminAdminAccessUsersUserIdRoute
+  '/admin/servers/$serverId/connection': typeof adminAdminServersServerIdConnectionRoute
+  '/admin/servers/$serverId/logs': typeof adminAdminServersServerIdLogsRoute
+  '/admin/servers/$serverId/outbounds': typeof adminAdminServersServerIdOutboundsRoute
+  '/admin/servers/$serverId/overview': typeof adminAdminServersServerIdOverviewRoute
+  '/admin/servers/$serverId/settings': typeof adminAdminServersServerIdSettingsRoute
+  '/admin/servers/$serverId/terminal': typeof adminAdminServersServerIdTerminalRoute
   '/api/admin/servers/$id/stream': typeof ApiAdminServersIdStreamRoute
-  '/admin/proxies/certificates/': typeof adminAdminProxiesCertificatesIndexRoute
-  '/admin/proxies/groups/': typeof adminAdminProxiesGroupsIndexRoute
-  '/admin/proxies/nodes/': typeof adminAdminProxiesNodesIndexRoute
-  '/admin/proxies/rules/': typeof adminAdminProxiesRulesIndexRoute
-  '/admin/proxies/servers/': typeof adminAdminProxiesServersIndexRoute
-  '/admin/proxies/servers/$serverId/connection': typeof adminAdminProxiesServersServerIdConnectionRoute
-  '/admin/proxies/servers/$serverId/logs': typeof adminAdminProxiesServersServerIdLogsRoute
-  '/admin/proxies/servers/$serverId/nodes': typeof adminAdminProxiesServersServerIdNodesRoute
-  '/admin/proxies/servers/$serverId/settings': typeof adminAdminProxiesServersServerIdSettingsRoute
-  '/admin/proxies/servers/$serverId/terminal': typeof adminAdminProxiesServersServerIdTerminalRoute
+  '/admin/access/client-rules/': typeof adminAdminAccessClientRulesIndexRoute
+  '/admin/access/groups/': typeof adminAdminAccessGroupsIndexRoute
+  '/admin/access/plans/': typeof adminAdminAccessPlansIndexRoute
+  '/admin/access/redeem/': typeof adminAdminAccessRedeemIndexRoute
+  '/admin/access/subscriptions/': typeof adminAdminAccessSubscriptionsIndexRoute
+  '/admin/access/users/': typeof adminAdminAccessUsersIndexRoute
+  '/admin/networking/certificates/': typeof adminAdminNetworkingCertificatesIndexRoute
+  '/admin/operations/announcements/': typeof adminAdminOperationsAnnouncementsIndexRoute
+  '/admin/operations/audit/': typeof adminAdminOperationsAuditIndexRoute
+  '/admin/operations/mcp/': typeof adminAdminOperationsMcpIndexRoute
+  '/admin/operations/settings/': typeof adminAdminOperationsSettingsIndexRoute
+  '/admin/operations/traffic/': typeof adminAdminOperationsTrafficIndexRoute
+  '/admin/servers/$serverId/': typeof adminAdminServersServerIdIndexRoute
+  '/admin/servers/$serverId/inbounds/$nodeId': typeof adminAdminServersServerIdInboundsNodeIdRoute
+  '/admin/servers/$serverId/inbounds/new': typeof adminAdminServersServerIdInboundsNewRoute
   '/api/admin/certificates/$certificateId/export/$part': typeof ApiAdminCertificatesCertificateIdExportPartRoute
   '/api/admin/servers/$id/logs/ws': typeof ApiAdminServersIdLogsWsRoute
   '/api/admin/servers/$id/metrics/ws': typeof ApiAdminServersIdMetricsWsRoute
   '/api/admin/servers/$id/pty/status': typeof ApiAdminServersIdPtyStatusRoute
   '/api/admin/servers/$id/pty/ws': typeof ApiAdminServersIdPtyWsRoute
-  '/admin/proxies/servers/$serverId/': typeof adminAdminProxiesServersServerIdIndexRoute
+  '/admin/servers/$serverId/inbounds/': typeof adminAdminServersServerIdInboundsIndexRoute
   '/api/admin/servers/$id/installation/script/$grantId': typeof ApiAdminServersIdInstallationScriptGrantIdRoute
 }
 export interface FileRoutesByTo {
@@ -593,7 +685,7 @@ export interface FileRoutesByTo {
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
-  '/admin/proxies': typeof adminAdminProxiesRouteRouteWithChildren
+  '/admin/$': typeof adminAdminSplatRoute
   '/auth/forgot': typeof authAuthForgotRoute
   '/auth/login': typeof authAuthLoginRoute
   '/auth/mcp-consent': typeof authAuthMcpConsentRoute
@@ -608,45 +700,53 @@ export interface FileRoutesByTo {
   '/admin': typeof adminAdminIndexRoute
   '/dashboard': typeof userDashboardIndexRoute
   '/welcome': typeof userWelcomeIndexRoute
-  '/admin/plans/$planId': typeof adminAdminPlansPlanIdRoute
-  '/admin/plans/new': typeof adminAdminPlansNewRoute
-  '/admin/redeem/$batchId': typeof adminAdminRedeemBatchIdRoute
-  '/admin/users/$userId': typeof adminAdminUsersUserIdRoute
+  '/admin/networking/links': typeof adminAdminNetworkingLinksRoute
+  '/admin/networking/routing': typeof adminAdminNetworkingRoutingRoute
+  '/admin/networking/rule-sets': typeof adminAdminNetworkingRuleSetsRoute
+  '/admin/networking/topology': typeof adminAdminNetworkingTopologyRoute
+  '/admin/servers/new': typeof adminAdminServersNewRoute
   '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
   '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
   '/api/agent/enrollment/redeem': typeof ApiAgentEnrollmentRedeemRoute
-  '/admin/announcements': typeof adminAdminAnnouncementsIndexRoute
-  '/admin/audit': typeof adminAdminAuditIndexRoute
-  '/admin/mcp': typeof adminAdminMcpIndexRoute
-  '/admin/plans': typeof adminAdminPlansIndexRoute
-  '/admin/redeem': typeof adminAdminRedeemIndexRoute
-  '/admin/settings': typeof adminAdminSettingsIndexRoute
-  '/admin/subscriptions': typeof adminAdminSubscriptionsIndexRoute
-  '/admin/traffic': typeof adminAdminTrafficIndexRoute
-  '/admin/users': typeof adminAdminUsersIndexRoute
+  '/admin/access': typeof adminAdminAccessIndexRoute
+  '/admin/networking': typeof adminAdminNetworkingIndexRoute
+  '/admin/operations': typeof adminAdminOperationsIndexRoute
+  '/admin/servers': typeof adminAdminServersIndexRoute
   '/dashboard/subscriptions': typeof userDashboardSubscriptionsIndexRoute
-  '/admin/proxies/groups/$groupId': typeof adminAdminProxiesGroupsGroupIdRoute
-  '/admin/proxies/groups/new': typeof adminAdminProxiesGroupsNewRoute
-  '/admin/proxies/nodes/$nodeId': typeof adminAdminProxiesNodesNodeIdRoute
-  '/admin/proxies/nodes/new': typeof adminAdminProxiesNodesNewRoute
-  '/admin/proxies/servers/new': typeof adminAdminProxiesServersNewRoute
+  '/admin/access/groups/$groupId': typeof adminAdminAccessGroupsGroupIdRoute
+  '/admin/access/groups/new': typeof adminAdminAccessGroupsNewRoute
+  '/admin/access/plans/$planId': typeof adminAdminAccessPlansPlanIdRoute
+  '/admin/access/plans/new': typeof adminAdminAccessPlansNewRoute
+  '/admin/access/redeem/$batchId': typeof adminAdminAccessRedeemBatchIdRoute
+  '/admin/access/users/$userId': typeof adminAdminAccessUsersUserIdRoute
+  '/admin/servers/$serverId/connection': typeof adminAdminServersServerIdConnectionRoute
+  '/admin/servers/$serverId/logs': typeof adminAdminServersServerIdLogsRoute
+  '/admin/servers/$serverId/outbounds': typeof adminAdminServersServerIdOutboundsRoute
+  '/admin/servers/$serverId/overview': typeof adminAdminServersServerIdOverviewRoute
+  '/admin/servers/$serverId/settings': typeof adminAdminServersServerIdSettingsRoute
+  '/admin/servers/$serverId/terminal': typeof adminAdminServersServerIdTerminalRoute
   '/api/admin/servers/$id/stream': typeof ApiAdminServersIdStreamRoute
-  '/admin/proxies/certificates': typeof adminAdminProxiesCertificatesIndexRoute
-  '/admin/proxies/groups': typeof adminAdminProxiesGroupsIndexRoute
-  '/admin/proxies/nodes': typeof adminAdminProxiesNodesIndexRoute
-  '/admin/proxies/rules': typeof adminAdminProxiesRulesIndexRoute
-  '/admin/proxies/servers': typeof adminAdminProxiesServersIndexRoute
-  '/admin/proxies/servers/$serverId/connection': typeof adminAdminProxiesServersServerIdConnectionRoute
-  '/admin/proxies/servers/$serverId/logs': typeof adminAdminProxiesServersServerIdLogsRoute
-  '/admin/proxies/servers/$serverId/nodes': typeof adminAdminProxiesServersServerIdNodesRoute
-  '/admin/proxies/servers/$serverId/settings': typeof adminAdminProxiesServersServerIdSettingsRoute
-  '/admin/proxies/servers/$serverId/terminal': typeof adminAdminProxiesServersServerIdTerminalRoute
+  '/admin/access/client-rules': typeof adminAdminAccessClientRulesIndexRoute
+  '/admin/access/groups': typeof adminAdminAccessGroupsIndexRoute
+  '/admin/access/plans': typeof adminAdminAccessPlansIndexRoute
+  '/admin/access/redeem': typeof adminAdminAccessRedeemIndexRoute
+  '/admin/access/subscriptions': typeof adminAdminAccessSubscriptionsIndexRoute
+  '/admin/access/users': typeof adminAdminAccessUsersIndexRoute
+  '/admin/networking/certificates': typeof adminAdminNetworkingCertificatesIndexRoute
+  '/admin/operations/announcements': typeof adminAdminOperationsAnnouncementsIndexRoute
+  '/admin/operations/audit': typeof adminAdminOperationsAuditIndexRoute
+  '/admin/operations/mcp': typeof adminAdminOperationsMcpIndexRoute
+  '/admin/operations/settings': typeof adminAdminOperationsSettingsIndexRoute
+  '/admin/operations/traffic': typeof adminAdminOperationsTrafficIndexRoute
+  '/admin/servers/$serverId': typeof adminAdminServersServerIdIndexRoute
+  '/admin/servers/$serverId/inbounds/$nodeId': typeof adminAdminServersServerIdInboundsNodeIdRoute
+  '/admin/servers/$serverId/inbounds/new': typeof adminAdminServersServerIdInboundsNewRoute
   '/api/admin/certificates/$certificateId/export/$part': typeof ApiAdminCertificatesCertificateIdExportPartRoute
   '/api/admin/servers/$id/logs/ws': typeof ApiAdminServersIdLogsWsRoute
   '/api/admin/servers/$id/metrics/ws': typeof ApiAdminServersIdMetricsWsRoute
   '/api/admin/servers/$id/pty/status': typeof ApiAdminServersIdPtyStatusRoute
   '/api/admin/servers/$id/pty/ws': typeof ApiAdminServersIdPtyWsRoute
-  '/admin/proxies/servers/$serverId': typeof adminAdminProxiesServersServerIdIndexRoute
+  '/admin/servers/$serverId/inbounds': typeof adminAdminServersServerIdInboundsIndexRoute
   '/api/admin/servers/$id/installation/script/$grantId': typeof ApiAdminServersIdInstallationScriptGrantIdRoute
 }
 export interface FileRoutesById {
@@ -662,14 +762,11 @@ export interface FileRoutesById {
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
   '/(static)/': typeof staticIndexRoute
-  '/(admin)/admin/audit': typeof adminAdminAuditRouteRouteWithChildren
-  '/(admin)/admin/mcp': typeof adminAdminMcpRouteRouteWithChildren
-  '/(admin)/admin/plans': typeof adminAdminPlansRouteRouteWithChildren
-  '/(admin)/admin/proxies': typeof adminAdminProxiesRouteRouteWithChildren
-  '/(admin)/admin/redeem': typeof adminAdminRedeemRouteRouteWithChildren
-  '/(admin)/admin/subscriptions': typeof adminAdminSubscriptionsRouteRouteWithChildren
-  '/(admin)/admin/traffic': typeof adminAdminTrafficRouteRouteWithChildren
-  '/(admin)/admin/users': typeof adminAdminUsersRouteRouteWithChildren
+  '/(admin)/admin/access': typeof adminAdminAccessRouteRouteWithChildren
+  '/(admin)/admin/networking': typeof adminAdminNetworkingRouteRouteWithChildren
+  '/(admin)/admin/operations': typeof adminAdminOperationsRouteRouteWithChildren
+  '/(admin)/admin/servers': typeof adminAdminServersRouteRouteWithChildren
+  '/(admin)/admin/$': typeof adminAdminSplatRoute
   '/(auth)/auth/forgot': typeof authAuthForgotRoute
   '/(auth)/auth/login': typeof authAuthLoginRoute
   '/(auth)/auth/mcp-consent': typeof authAuthMcpConsentRoute
@@ -684,50 +781,63 @@ export interface FileRoutesById {
   '/(admin)/admin/': typeof adminAdminIndexRoute
   '/(user)/dashboard/': typeof userDashboardIndexRoute
   '/(user)/welcome/': typeof userWelcomeIndexRoute
-  '/(admin)/admin/proxies/certificates': typeof adminAdminProxiesCertificatesRouteRouteWithChildren
-  '/(admin)/admin/proxies/groups': typeof adminAdminProxiesGroupsRouteRouteWithChildren
-  '/(admin)/admin/proxies/nodes': typeof adminAdminProxiesNodesRouteRouteWithChildren
-  '/(admin)/admin/proxies/servers': typeof adminAdminProxiesServersRouteRouteWithChildren
-  '/(admin)/admin/plans/$planId': typeof adminAdminPlansPlanIdRoute
-  '/(admin)/admin/plans/new': typeof adminAdminPlansNewRoute
-  '/(admin)/admin/redeem/$batchId': typeof adminAdminRedeemBatchIdRoute
-  '/(admin)/admin/users/$userId': typeof adminAdminUsersUserIdRoute
+  '/(admin)/admin/access/groups': typeof adminAdminAccessGroupsRouteRouteWithChildren
+  '/(admin)/admin/access/plans': typeof adminAdminAccessPlansRouteRouteWithChildren
+  '/(admin)/admin/access/redeem': typeof adminAdminAccessRedeemRouteRouteWithChildren
+  '/(admin)/admin/access/subscriptions': typeof adminAdminAccessSubscriptionsRouteRouteWithChildren
+  '/(admin)/admin/access/users': typeof adminAdminAccessUsersRouteRouteWithChildren
+  '/(admin)/admin/networking/certificates': typeof adminAdminNetworkingCertificatesRouteRouteWithChildren
+  '/(admin)/admin/operations/audit': typeof adminAdminOperationsAuditRouteRouteWithChildren
+  '/(admin)/admin/operations/mcp': typeof adminAdminOperationsMcpRouteRouteWithChildren
+  '/(admin)/admin/operations/traffic': typeof adminAdminOperationsTrafficRouteRouteWithChildren
+  '/(admin)/admin/servers/$serverId': typeof adminAdminServersServerIdRouteRouteWithChildren
+  '/(admin)/admin/networking/links': typeof adminAdminNetworkingLinksRoute
+  '/(admin)/admin/networking/routing': typeof adminAdminNetworkingRoutingRoute
+  '/(admin)/admin/networking/rule-sets': typeof adminAdminNetworkingRuleSetsRoute
+  '/(admin)/admin/networking/topology': typeof adminAdminNetworkingTopologyRoute
+  '/(admin)/admin/servers/new': typeof adminAdminServersNewRoute
   '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
   '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
   '/api/agent/enrollment/redeem': typeof ApiAgentEnrollmentRedeemRoute
-  '/(admin)/admin/announcements/': typeof adminAdminAnnouncementsIndexRoute
-  '/(admin)/admin/audit/': typeof adminAdminAuditIndexRoute
-  '/(admin)/admin/mcp/': typeof adminAdminMcpIndexRoute
-  '/(admin)/admin/plans/': typeof adminAdminPlansIndexRoute
-  '/(admin)/admin/redeem/': typeof adminAdminRedeemIndexRoute
-  '/(admin)/admin/settings/': typeof adminAdminSettingsIndexRoute
-  '/(admin)/admin/subscriptions/': typeof adminAdminSubscriptionsIndexRoute
-  '/(admin)/admin/traffic/': typeof adminAdminTrafficIndexRoute
-  '/(admin)/admin/users/': typeof adminAdminUsersIndexRoute
+  '/(admin)/admin/access/': typeof adminAdminAccessIndexRoute
+  '/(admin)/admin/networking/': typeof adminAdminNetworkingIndexRoute
+  '/(admin)/admin/operations/': typeof adminAdminOperationsIndexRoute
+  '/(admin)/admin/servers/': typeof adminAdminServersIndexRoute
   '/(user)/dashboard/subscriptions/': typeof userDashboardSubscriptionsIndexRoute
-  '/(admin)/admin/proxies/servers/$serverId': typeof adminAdminProxiesServersServerIdRouteRouteWithChildren
-  '/(admin)/admin/proxies/groups/$groupId': typeof adminAdminProxiesGroupsGroupIdRoute
-  '/(admin)/admin/proxies/groups/new': typeof adminAdminProxiesGroupsNewRoute
-  '/(admin)/admin/proxies/nodes/$nodeId': typeof adminAdminProxiesNodesNodeIdRoute
-  '/(admin)/admin/proxies/nodes/new': typeof adminAdminProxiesNodesNewRoute
-  '/(admin)/admin/proxies/servers/new': typeof adminAdminProxiesServersNewRoute
+  '/(admin)/admin/access/groups/$groupId': typeof adminAdminAccessGroupsGroupIdRoute
+  '/(admin)/admin/access/groups/new': typeof adminAdminAccessGroupsNewRoute
+  '/(admin)/admin/access/plans/$planId': typeof adminAdminAccessPlansPlanIdRoute
+  '/(admin)/admin/access/plans/new': typeof adminAdminAccessPlansNewRoute
+  '/(admin)/admin/access/redeem/$batchId': typeof adminAdminAccessRedeemBatchIdRoute
+  '/(admin)/admin/access/users/$userId': typeof adminAdminAccessUsersUserIdRoute
+  '/(admin)/admin/servers/$serverId/connection': typeof adminAdminServersServerIdConnectionRoute
+  '/(admin)/admin/servers/$serverId/logs': typeof adminAdminServersServerIdLogsRoute
+  '/(admin)/admin/servers/$serverId/outbounds': typeof adminAdminServersServerIdOutboundsRoute
+  '/(admin)/admin/servers/$serverId/overview': typeof adminAdminServersServerIdOverviewRoute
+  '/(admin)/admin/servers/$serverId/settings': typeof adminAdminServersServerIdSettingsRoute
+  '/(admin)/admin/servers/$serverId/terminal': typeof adminAdminServersServerIdTerminalRoute
   '/api/admin/servers/$id/stream': typeof ApiAdminServersIdStreamRoute
-  '/(admin)/admin/proxies/certificates/': typeof adminAdminProxiesCertificatesIndexRoute
-  '/(admin)/admin/proxies/groups/': typeof adminAdminProxiesGroupsIndexRoute
-  '/(admin)/admin/proxies/nodes/': typeof adminAdminProxiesNodesIndexRoute
-  '/(admin)/admin/proxies/rules/': typeof adminAdminProxiesRulesIndexRoute
-  '/(admin)/admin/proxies/servers/': typeof adminAdminProxiesServersIndexRoute
-  '/(admin)/admin/proxies/servers/$serverId/connection': typeof adminAdminProxiesServersServerIdConnectionRoute
-  '/(admin)/admin/proxies/servers/$serverId/logs': typeof adminAdminProxiesServersServerIdLogsRoute
-  '/(admin)/admin/proxies/servers/$serverId/nodes': typeof adminAdminProxiesServersServerIdNodesRoute
-  '/(admin)/admin/proxies/servers/$serverId/settings': typeof adminAdminProxiesServersServerIdSettingsRoute
-  '/(admin)/admin/proxies/servers/$serverId/terminal': typeof adminAdminProxiesServersServerIdTerminalRoute
+  '/(admin)/admin/access/client-rules/': typeof adminAdminAccessClientRulesIndexRoute
+  '/(admin)/admin/access/groups/': typeof adminAdminAccessGroupsIndexRoute
+  '/(admin)/admin/access/plans/': typeof adminAdminAccessPlansIndexRoute
+  '/(admin)/admin/access/redeem/': typeof adminAdminAccessRedeemIndexRoute
+  '/(admin)/admin/access/subscriptions/': typeof adminAdminAccessSubscriptionsIndexRoute
+  '/(admin)/admin/access/users/': typeof adminAdminAccessUsersIndexRoute
+  '/(admin)/admin/networking/certificates/': typeof adminAdminNetworkingCertificatesIndexRoute
+  '/(admin)/admin/operations/announcements/': typeof adminAdminOperationsAnnouncementsIndexRoute
+  '/(admin)/admin/operations/audit/': typeof adminAdminOperationsAuditIndexRoute
+  '/(admin)/admin/operations/mcp/': typeof adminAdminOperationsMcpIndexRoute
+  '/(admin)/admin/operations/settings/': typeof adminAdminOperationsSettingsIndexRoute
+  '/(admin)/admin/operations/traffic/': typeof adminAdminOperationsTrafficIndexRoute
+  '/(admin)/admin/servers/$serverId/': typeof adminAdminServersServerIdIndexRoute
+  '/(admin)/admin/servers/$serverId/inbounds/$nodeId': typeof adminAdminServersServerIdInboundsNodeIdRoute
+  '/(admin)/admin/servers/$serverId/inbounds/new': typeof adminAdminServersServerIdInboundsNewRoute
   '/api/admin/certificates/$certificateId/export/$part': typeof ApiAdminCertificatesCertificateIdExportPartRoute
   '/api/admin/servers/$id/logs/ws': typeof ApiAdminServersIdLogsWsRoute
   '/api/admin/servers/$id/metrics/ws': typeof ApiAdminServersIdMetricsWsRoute
   '/api/admin/servers/$id/pty/status': typeof ApiAdminServersIdPtyStatusRoute
   '/api/admin/servers/$id/pty/ws': typeof ApiAdminServersIdPtyWsRoute
-  '/(admin)/admin/proxies/servers/$serverId/': typeof adminAdminProxiesServersServerIdIndexRoute
+  '/(admin)/admin/servers/$serverId/inbounds/': typeof adminAdminServersServerIdInboundsIndexRoute
   '/api/admin/servers/$id/installation/script/$grantId': typeof ApiAdminServersIdInstallationScriptGrantIdRoute
 }
 export interface FileRouteTypes {
@@ -741,14 +851,11 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/api/health'
     | '/api/mcp'
-    | '/admin/audit'
-    | '/admin/mcp'
-    | '/admin/plans'
-    | '/admin/proxies'
-    | '/admin/redeem'
-    | '/admin/subscriptions'
-    | '/admin/traffic'
-    | '/admin/users'
+    | '/admin/access'
+    | '/admin/networking'
+    | '/admin/operations'
+    | '/admin/servers'
+    | '/admin/$'
     | '/auth/forgot'
     | '/auth/login'
     | '/auth/mcp-consent'
@@ -763,50 +870,63 @@ export interface FileRouteTypes {
     | '/admin/'
     | '/dashboard/'
     | '/welcome/'
-    | '/admin/proxies/certificates'
-    | '/admin/proxies/groups'
-    | '/admin/proxies/nodes'
-    | '/admin/proxies/servers'
-    | '/admin/plans/$planId'
-    | '/admin/plans/new'
-    | '/admin/redeem/$batchId'
-    | '/admin/users/$userId'
+    | '/admin/access/groups'
+    | '/admin/access/plans'
+    | '/admin/access/redeem'
+    | '/admin/access/subscriptions'
+    | '/admin/access/users'
+    | '/admin/networking/certificates'
+    | '/admin/operations/audit'
+    | '/admin/operations/mcp'
+    | '/admin/operations/traffic'
+    | '/admin/servers/$serverId'
+    | '/admin/networking/links'
+    | '/admin/networking/routing'
+    | '/admin/networking/rule-sets'
+    | '/admin/networking/topology'
+    | '/admin/servers/new'
     | '/.well-known/oauth-authorization-server/api/auth'
     | '/.well-known/oauth-protected-resource/api/mcp'
     | '/api/agent/enrollment/redeem'
-    | '/admin/announcements/'
-    | '/admin/audit/'
-    | '/admin/mcp/'
-    | '/admin/plans/'
-    | '/admin/redeem/'
-    | '/admin/settings/'
-    | '/admin/subscriptions/'
-    | '/admin/traffic/'
-    | '/admin/users/'
+    | '/admin/access/'
+    | '/admin/networking/'
+    | '/admin/operations/'
+    | '/admin/servers/'
     | '/dashboard/subscriptions/'
-    | '/admin/proxies/servers/$serverId'
-    | '/admin/proxies/groups/$groupId'
-    | '/admin/proxies/groups/new'
-    | '/admin/proxies/nodes/$nodeId'
-    | '/admin/proxies/nodes/new'
-    | '/admin/proxies/servers/new'
+    | '/admin/access/groups/$groupId'
+    | '/admin/access/groups/new'
+    | '/admin/access/plans/$planId'
+    | '/admin/access/plans/new'
+    | '/admin/access/redeem/$batchId'
+    | '/admin/access/users/$userId'
+    | '/admin/servers/$serverId/connection'
+    | '/admin/servers/$serverId/logs'
+    | '/admin/servers/$serverId/outbounds'
+    | '/admin/servers/$serverId/overview'
+    | '/admin/servers/$serverId/settings'
+    | '/admin/servers/$serverId/terminal'
     | '/api/admin/servers/$id/stream'
-    | '/admin/proxies/certificates/'
-    | '/admin/proxies/groups/'
-    | '/admin/proxies/nodes/'
-    | '/admin/proxies/rules/'
-    | '/admin/proxies/servers/'
-    | '/admin/proxies/servers/$serverId/connection'
-    | '/admin/proxies/servers/$serverId/logs'
-    | '/admin/proxies/servers/$serverId/nodes'
-    | '/admin/proxies/servers/$serverId/settings'
-    | '/admin/proxies/servers/$serverId/terminal'
+    | '/admin/access/client-rules/'
+    | '/admin/access/groups/'
+    | '/admin/access/plans/'
+    | '/admin/access/redeem/'
+    | '/admin/access/subscriptions/'
+    | '/admin/access/users/'
+    | '/admin/networking/certificates/'
+    | '/admin/operations/announcements/'
+    | '/admin/operations/audit/'
+    | '/admin/operations/mcp/'
+    | '/admin/operations/settings/'
+    | '/admin/operations/traffic/'
+    | '/admin/servers/$serverId/'
+    | '/admin/servers/$serverId/inbounds/$nodeId'
+    | '/admin/servers/$serverId/inbounds/new'
     | '/api/admin/certificates/$certificateId/export/$part'
     | '/api/admin/servers/$id/logs/ws'
     | '/api/admin/servers/$id/metrics/ws'
     | '/api/admin/servers/$id/pty/status'
     | '/api/admin/servers/$id/pty/ws'
-    | '/admin/proxies/servers/$serverId/'
+    | '/admin/servers/$serverId/inbounds/'
     | '/api/admin/servers/$id/installation/script/$grantId'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -816,7 +936,7 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/api/health'
     | '/api/mcp'
-    | '/admin/proxies'
+    | '/admin/$'
     | '/auth/forgot'
     | '/auth/login'
     | '/auth/mcp-consent'
@@ -831,45 +951,53 @@ export interface FileRouteTypes {
     | '/admin'
     | '/dashboard'
     | '/welcome'
-    | '/admin/plans/$planId'
-    | '/admin/plans/new'
-    | '/admin/redeem/$batchId'
-    | '/admin/users/$userId'
+    | '/admin/networking/links'
+    | '/admin/networking/routing'
+    | '/admin/networking/rule-sets'
+    | '/admin/networking/topology'
+    | '/admin/servers/new'
     | '/.well-known/oauth-authorization-server/api/auth'
     | '/.well-known/oauth-protected-resource/api/mcp'
     | '/api/agent/enrollment/redeem'
-    | '/admin/announcements'
-    | '/admin/audit'
-    | '/admin/mcp'
-    | '/admin/plans'
-    | '/admin/redeem'
-    | '/admin/settings'
-    | '/admin/subscriptions'
-    | '/admin/traffic'
-    | '/admin/users'
+    | '/admin/access'
+    | '/admin/networking'
+    | '/admin/operations'
+    | '/admin/servers'
     | '/dashboard/subscriptions'
-    | '/admin/proxies/groups/$groupId'
-    | '/admin/proxies/groups/new'
-    | '/admin/proxies/nodes/$nodeId'
-    | '/admin/proxies/nodes/new'
-    | '/admin/proxies/servers/new'
+    | '/admin/access/groups/$groupId'
+    | '/admin/access/groups/new'
+    | '/admin/access/plans/$planId'
+    | '/admin/access/plans/new'
+    | '/admin/access/redeem/$batchId'
+    | '/admin/access/users/$userId'
+    | '/admin/servers/$serverId/connection'
+    | '/admin/servers/$serverId/logs'
+    | '/admin/servers/$serverId/outbounds'
+    | '/admin/servers/$serverId/overview'
+    | '/admin/servers/$serverId/settings'
+    | '/admin/servers/$serverId/terminal'
     | '/api/admin/servers/$id/stream'
-    | '/admin/proxies/certificates'
-    | '/admin/proxies/groups'
-    | '/admin/proxies/nodes'
-    | '/admin/proxies/rules'
-    | '/admin/proxies/servers'
-    | '/admin/proxies/servers/$serverId/connection'
-    | '/admin/proxies/servers/$serverId/logs'
-    | '/admin/proxies/servers/$serverId/nodes'
-    | '/admin/proxies/servers/$serverId/settings'
-    | '/admin/proxies/servers/$serverId/terminal'
+    | '/admin/access/client-rules'
+    | '/admin/access/groups'
+    | '/admin/access/plans'
+    | '/admin/access/redeem'
+    | '/admin/access/subscriptions'
+    | '/admin/access/users'
+    | '/admin/networking/certificates'
+    | '/admin/operations/announcements'
+    | '/admin/operations/audit'
+    | '/admin/operations/mcp'
+    | '/admin/operations/settings'
+    | '/admin/operations/traffic'
+    | '/admin/servers/$serverId'
+    | '/admin/servers/$serverId/inbounds/$nodeId'
+    | '/admin/servers/$serverId/inbounds/new'
     | '/api/admin/certificates/$certificateId/export/$part'
     | '/api/admin/servers/$id/logs/ws'
     | '/api/admin/servers/$id/metrics/ws'
     | '/api/admin/servers/$id/pty/status'
     | '/api/admin/servers/$id/pty/ws'
-    | '/admin/proxies/servers/$serverId'
+    | '/admin/servers/$serverId/inbounds'
     | '/api/admin/servers/$id/installation/script/$grantId'
   id:
     | '__root__'
@@ -884,14 +1012,11 @@ export interface FileRouteTypes {
     | '/api/health'
     | '/api/mcp'
     | '/(static)/'
-    | '/(admin)/admin/audit'
-    | '/(admin)/admin/mcp'
-    | '/(admin)/admin/plans'
-    | '/(admin)/admin/proxies'
-    | '/(admin)/admin/redeem'
-    | '/(admin)/admin/subscriptions'
-    | '/(admin)/admin/traffic'
-    | '/(admin)/admin/users'
+    | '/(admin)/admin/access'
+    | '/(admin)/admin/networking'
+    | '/(admin)/admin/operations'
+    | '/(admin)/admin/servers'
+    | '/(admin)/admin/$'
     | '/(auth)/auth/forgot'
     | '/(auth)/auth/login'
     | '/(auth)/auth/mcp-consent'
@@ -906,50 +1031,63 @@ export interface FileRouteTypes {
     | '/(admin)/admin/'
     | '/(user)/dashboard/'
     | '/(user)/welcome/'
-    | '/(admin)/admin/proxies/certificates'
-    | '/(admin)/admin/proxies/groups'
-    | '/(admin)/admin/proxies/nodes'
-    | '/(admin)/admin/proxies/servers'
-    | '/(admin)/admin/plans/$planId'
-    | '/(admin)/admin/plans/new'
-    | '/(admin)/admin/redeem/$batchId'
-    | '/(admin)/admin/users/$userId'
+    | '/(admin)/admin/access/groups'
+    | '/(admin)/admin/access/plans'
+    | '/(admin)/admin/access/redeem'
+    | '/(admin)/admin/access/subscriptions'
+    | '/(admin)/admin/access/users'
+    | '/(admin)/admin/networking/certificates'
+    | '/(admin)/admin/operations/audit'
+    | '/(admin)/admin/operations/mcp'
+    | '/(admin)/admin/operations/traffic'
+    | '/(admin)/admin/servers/$serverId'
+    | '/(admin)/admin/networking/links'
+    | '/(admin)/admin/networking/routing'
+    | '/(admin)/admin/networking/rule-sets'
+    | '/(admin)/admin/networking/topology'
+    | '/(admin)/admin/servers/new'
     | '/.well-known/oauth-authorization-server/api/auth'
     | '/.well-known/oauth-protected-resource/api/mcp'
     | '/api/agent/enrollment/redeem'
-    | '/(admin)/admin/announcements/'
-    | '/(admin)/admin/audit/'
-    | '/(admin)/admin/mcp/'
-    | '/(admin)/admin/plans/'
-    | '/(admin)/admin/redeem/'
-    | '/(admin)/admin/settings/'
-    | '/(admin)/admin/subscriptions/'
-    | '/(admin)/admin/traffic/'
-    | '/(admin)/admin/users/'
+    | '/(admin)/admin/access/'
+    | '/(admin)/admin/networking/'
+    | '/(admin)/admin/operations/'
+    | '/(admin)/admin/servers/'
     | '/(user)/dashboard/subscriptions/'
-    | '/(admin)/admin/proxies/servers/$serverId'
-    | '/(admin)/admin/proxies/groups/$groupId'
-    | '/(admin)/admin/proxies/groups/new'
-    | '/(admin)/admin/proxies/nodes/$nodeId'
-    | '/(admin)/admin/proxies/nodes/new'
-    | '/(admin)/admin/proxies/servers/new'
+    | '/(admin)/admin/access/groups/$groupId'
+    | '/(admin)/admin/access/groups/new'
+    | '/(admin)/admin/access/plans/$planId'
+    | '/(admin)/admin/access/plans/new'
+    | '/(admin)/admin/access/redeem/$batchId'
+    | '/(admin)/admin/access/users/$userId'
+    | '/(admin)/admin/servers/$serverId/connection'
+    | '/(admin)/admin/servers/$serverId/logs'
+    | '/(admin)/admin/servers/$serverId/outbounds'
+    | '/(admin)/admin/servers/$serverId/overview'
+    | '/(admin)/admin/servers/$serverId/settings'
+    | '/(admin)/admin/servers/$serverId/terminal'
     | '/api/admin/servers/$id/stream'
-    | '/(admin)/admin/proxies/certificates/'
-    | '/(admin)/admin/proxies/groups/'
-    | '/(admin)/admin/proxies/nodes/'
-    | '/(admin)/admin/proxies/rules/'
-    | '/(admin)/admin/proxies/servers/'
-    | '/(admin)/admin/proxies/servers/$serverId/connection'
-    | '/(admin)/admin/proxies/servers/$serverId/logs'
-    | '/(admin)/admin/proxies/servers/$serverId/nodes'
-    | '/(admin)/admin/proxies/servers/$serverId/settings'
-    | '/(admin)/admin/proxies/servers/$serverId/terminal'
+    | '/(admin)/admin/access/client-rules/'
+    | '/(admin)/admin/access/groups/'
+    | '/(admin)/admin/access/plans/'
+    | '/(admin)/admin/access/redeem/'
+    | '/(admin)/admin/access/subscriptions/'
+    | '/(admin)/admin/access/users/'
+    | '/(admin)/admin/networking/certificates/'
+    | '/(admin)/admin/operations/announcements/'
+    | '/(admin)/admin/operations/audit/'
+    | '/(admin)/admin/operations/mcp/'
+    | '/(admin)/admin/operations/settings/'
+    | '/(admin)/admin/operations/traffic/'
+    | '/(admin)/admin/servers/$serverId/'
+    | '/(admin)/admin/servers/$serverId/inbounds/$nodeId'
+    | '/(admin)/admin/servers/$serverId/inbounds/new'
     | '/api/admin/certificates/$certificateId/export/$part'
     | '/api/admin/servers/$id/logs/ws'
     | '/api/admin/servers/$id/metrics/ws'
     | '/api/admin/servers/$id/pty/status'
     | '/api/admin/servers/$id/pty/ws'
-    | '/(admin)/admin/proxies/servers/$serverId/'
+    | '/(admin)/admin/servers/$serverId/inbounds/'
     | '/api/admin/servers/$id/installation/script/$grantId'
   fileRoutesById: FileRoutesById
 }
@@ -1065,60 +1203,39 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof adminAdminIndexRouteImport
       parentRoute: typeof adminAdminRouteRoute
     }
-    '/(admin)/admin/audit': {
-      id: '/(admin)/admin/audit'
-      path: '/audit'
-      fullPath: '/admin/audit'
-      preLoaderRoute: typeof adminAdminAuditRouteRouteImport
+    '/(admin)/admin/$': {
+      id: '/(admin)/admin/$'
+      path: '/$'
+      fullPath: '/admin/$'
+      preLoaderRoute: typeof adminAdminSplatRouteImport
       parentRoute: typeof adminAdminRouteRoute
     }
-    '/(admin)/admin/mcp': {
-      id: '/(admin)/admin/mcp'
-      path: '/mcp'
-      fullPath: '/admin/mcp'
-      preLoaderRoute: typeof adminAdminMcpRouteRouteImport
+    '/(admin)/admin/access': {
+      id: '/(admin)/admin/access'
+      path: '/access'
+      fullPath: '/admin/access'
+      preLoaderRoute: typeof adminAdminAccessRouteRouteImport
       parentRoute: typeof adminAdminRouteRoute
     }
-    '/(admin)/admin/plans': {
-      id: '/(admin)/admin/plans'
-      path: '/plans'
-      fullPath: '/admin/plans'
-      preLoaderRoute: typeof adminAdminPlansRouteRouteImport
+    '/(admin)/admin/networking': {
+      id: '/(admin)/admin/networking'
+      path: '/networking'
+      fullPath: '/admin/networking'
+      preLoaderRoute: typeof adminAdminNetworkingRouteRouteImport
       parentRoute: typeof adminAdminRouteRoute
     }
-    '/(admin)/admin/proxies': {
-      id: '/(admin)/admin/proxies'
-      path: '/proxies'
-      fullPath: '/admin/proxies'
-      preLoaderRoute: typeof adminAdminProxiesRouteRouteImport
+    '/(admin)/admin/operations': {
+      id: '/(admin)/admin/operations'
+      path: '/operations'
+      fullPath: '/admin/operations'
+      preLoaderRoute: typeof adminAdminOperationsRouteRouteImport
       parentRoute: typeof adminAdminRouteRoute
     }
-    '/(admin)/admin/redeem': {
-      id: '/(admin)/admin/redeem'
-      path: '/redeem'
-      fullPath: '/admin/redeem'
-      preLoaderRoute: typeof adminAdminRedeemRouteRouteImport
-      parentRoute: typeof adminAdminRouteRoute
-    }
-    '/(admin)/admin/subscriptions': {
-      id: '/(admin)/admin/subscriptions'
-      path: '/subscriptions'
-      fullPath: '/admin/subscriptions'
-      preLoaderRoute: typeof adminAdminSubscriptionsRouteRouteImport
-      parentRoute: typeof adminAdminRouteRoute
-    }
-    '/(admin)/admin/traffic': {
-      id: '/(admin)/admin/traffic'
-      path: '/traffic'
-      fullPath: '/admin/traffic'
-      preLoaderRoute: typeof adminAdminTrafficRouteRouteImport
-      parentRoute: typeof adminAdminRouteRoute
-    }
-    '/(admin)/admin/users': {
-      id: '/(admin)/admin/users'
-      path: '/users'
-      fullPath: '/admin/users'
-      preLoaderRoute: typeof adminAdminUsersRouteRouteImport
+    '/(admin)/admin/servers': {
+      id: '/(admin)/admin/servers'
+      path: '/servers'
+      fullPath: '/admin/servers'
+      preLoaderRoute: typeof adminAdminServersRouteRouteImport
       parentRoute: typeof adminAdminRouteRoute
     }
     '/(auth)/auth/forgot': {
@@ -1212,124 +1329,138 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiSubTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/(admin)/admin/announcements/': {
-      id: '/(admin)/admin/announcements/'
-      path: '/announcements'
-      fullPath: '/admin/announcements/'
-      preLoaderRoute: typeof adminAdminAnnouncementsIndexRouteImport
-      parentRoute: typeof adminAdminRouteRoute
-    }
-    '/(admin)/admin/audit/': {
-      id: '/(admin)/admin/audit/'
+    '/(admin)/admin/access/': {
+      id: '/(admin)/admin/access/'
       path: '/'
-      fullPath: '/admin/audit/'
-      preLoaderRoute: typeof adminAdminAuditIndexRouteImport
-      parentRoute: typeof adminAdminAuditRouteRoute
+      fullPath: '/admin/access/'
+      preLoaderRoute: typeof adminAdminAccessIndexRouteImport
+      parentRoute: typeof adminAdminAccessRouteRoute
     }
-    '/(admin)/admin/mcp/': {
-      id: '/(admin)/admin/mcp/'
-      path: '/'
-      fullPath: '/admin/mcp/'
-      preLoaderRoute: typeof adminAdminMcpIndexRouteImport
-      parentRoute: typeof adminAdminMcpRouteRoute
-    }
-    '/(admin)/admin/plans/': {
-      id: '/(admin)/admin/plans/'
-      path: '/'
-      fullPath: '/admin/plans/'
-      preLoaderRoute: typeof adminAdminPlansIndexRouteImport
-      parentRoute: typeof adminAdminPlansRouteRoute
-    }
-    '/(admin)/admin/plans/$planId': {
-      id: '/(admin)/admin/plans/$planId'
-      path: '/$planId'
-      fullPath: '/admin/plans/$planId'
-      preLoaderRoute: typeof adminAdminPlansPlanIdRouteImport
-      parentRoute: typeof adminAdminPlansRouteRoute
-    }
-    '/(admin)/admin/plans/new': {
-      id: '/(admin)/admin/plans/new'
-      path: '/new'
-      fullPath: '/admin/plans/new'
-      preLoaderRoute: typeof adminAdminPlansNewRouteImport
-      parentRoute: typeof adminAdminPlansRouteRoute
-    }
-    '/(admin)/admin/proxies/certificates': {
-      id: '/(admin)/admin/proxies/certificates'
-      path: '/certificates'
-      fullPath: '/admin/proxies/certificates'
-      preLoaderRoute: typeof adminAdminProxiesCertificatesRouteRouteImport
-      parentRoute: typeof adminAdminProxiesRouteRoute
-    }
-    '/(admin)/admin/proxies/groups': {
-      id: '/(admin)/admin/proxies/groups'
+    '/(admin)/admin/access/groups': {
+      id: '/(admin)/admin/access/groups'
       path: '/groups'
-      fullPath: '/admin/proxies/groups'
-      preLoaderRoute: typeof adminAdminProxiesGroupsRouteRouteImport
-      parentRoute: typeof adminAdminProxiesRouteRoute
+      fullPath: '/admin/access/groups'
+      preLoaderRoute: typeof adminAdminAccessGroupsRouteRouteImport
+      parentRoute: typeof adminAdminAccessRouteRoute
     }
-    '/(admin)/admin/proxies/nodes': {
-      id: '/(admin)/admin/proxies/nodes'
-      path: '/nodes'
-      fullPath: '/admin/proxies/nodes'
-      preLoaderRoute: typeof adminAdminProxiesNodesRouteRouteImport
-      parentRoute: typeof adminAdminProxiesRouteRoute
+    '/(admin)/admin/access/plans': {
+      id: '/(admin)/admin/access/plans'
+      path: '/plans'
+      fullPath: '/admin/access/plans'
+      preLoaderRoute: typeof adminAdminAccessPlansRouteRouteImport
+      parentRoute: typeof adminAdminAccessRouteRoute
     }
-    '/(admin)/admin/proxies/servers': {
-      id: '/(admin)/admin/proxies/servers'
-      path: '/servers'
-      fullPath: '/admin/proxies/servers'
-      preLoaderRoute: typeof adminAdminProxiesServersRouteRouteImport
-      parentRoute: typeof adminAdminProxiesRouteRoute
+    '/(admin)/admin/access/redeem': {
+      id: '/(admin)/admin/access/redeem'
+      path: '/redeem'
+      fullPath: '/admin/access/redeem'
+      preLoaderRoute: typeof adminAdminAccessRedeemRouteRouteImport
+      parentRoute: typeof adminAdminAccessRouteRoute
     }
-    '/(admin)/admin/redeem/': {
-      id: '/(admin)/admin/redeem/'
+    '/(admin)/admin/access/subscriptions': {
+      id: '/(admin)/admin/access/subscriptions'
+      path: '/subscriptions'
+      fullPath: '/admin/access/subscriptions'
+      preLoaderRoute: typeof adminAdminAccessSubscriptionsRouteRouteImport
+      parentRoute: typeof adminAdminAccessRouteRoute
+    }
+    '/(admin)/admin/access/users': {
+      id: '/(admin)/admin/access/users'
+      path: '/users'
+      fullPath: '/admin/access/users'
+      preLoaderRoute: typeof adminAdminAccessUsersRouteRouteImport
+      parentRoute: typeof adminAdminAccessRouteRoute
+    }
+    '/(admin)/admin/networking/': {
+      id: '/(admin)/admin/networking/'
       path: '/'
-      fullPath: '/admin/redeem/'
-      preLoaderRoute: typeof adminAdminRedeemIndexRouteImport
-      parentRoute: typeof adminAdminRedeemRouteRoute
+      fullPath: '/admin/networking/'
+      preLoaderRoute: typeof adminAdminNetworkingIndexRouteImport
+      parentRoute: typeof adminAdminNetworkingRouteRoute
     }
-    '/(admin)/admin/redeem/$batchId': {
-      id: '/(admin)/admin/redeem/$batchId'
-      path: '/$batchId'
-      fullPath: '/admin/redeem/$batchId'
-      preLoaderRoute: typeof adminAdminRedeemBatchIdRouteImport
-      parentRoute: typeof adminAdminRedeemRouteRoute
+    '/(admin)/admin/networking/certificates': {
+      id: '/(admin)/admin/networking/certificates'
+      path: '/certificates'
+      fullPath: '/admin/networking/certificates'
+      preLoaderRoute: typeof adminAdminNetworkingCertificatesRouteRouteImport
+      parentRoute: typeof adminAdminNetworkingRouteRoute
     }
-    '/(admin)/admin/settings/': {
-      id: '/(admin)/admin/settings/'
-      path: '/settings'
-      fullPath: '/admin/settings/'
-      preLoaderRoute: typeof adminAdminSettingsIndexRouteImport
-      parentRoute: typeof adminAdminRouteRoute
+    '/(admin)/admin/networking/links': {
+      id: '/(admin)/admin/networking/links'
+      path: '/links'
+      fullPath: '/admin/networking/links'
+      preLoaderRoute: typeof adminAdminNetworkingLinksRouteImport
+      parentRoute: typeof adminAdminNetworkingRouteRoute
     }
-    '/(admin)/admin/subscriptions/': {
-      id: '/(admin)/admin/subscriptions/'
+    '/(admin)/admin/networking/routing': {
+      id: '/(admin)/admin/networking/routing'
+      path: '/routing'
+      fullPath: '/admin/networking/routing'
+      preLoaderRoute: typeof adminAdminNetworkingRoutingRouteImport
+      parentRoute: typeof adminAdminNetworkingRouteRoute
+    }
+    '/(admin)/admin/networking/rule-sets': {
+      id: '/(admin)/admin/networking/rule-sets'
+      path: '/rule-sets'
+      fullPath: '/admin/networking/rule-sets'
+      preLoaderRoute: typeof adminAdminNetworkingRuleSetsRouteImport
+      parentRoute: typeof adminAdminNetworkingRouteRoute
+    }
+    '/(admin)/admin/networking/topology': {
+      id: '/(admin)/admin/networking/topology'
+      path: '/topology'
+      fullPath: '/admin/networking/topology'
+      preLoaderRoute: typeof adminAdminNetworkingTopologyRouteImport
+      parentRoute: typeof adminAdminNetworkingRouteRoute
+    }
+    '/(admin)/admin/operations/': {
+      id: '/(admin)/admin/operations/'
       path: '/'
-      fullPath: '/admin/subscriptions/'
-      preLoaderRoute: typeof adminAdminSubscriptionsIndexRouteImport
-      parentRoute: typeof adminAdminSubscriptionsRouteRoute
+      fullPath: '/admin/operations/'
+      preLoaderRoute: typeof adminAdminOperationsIndexRouteImport
+      parentRoute: typeof adminAdminOperationsRouteRoute
     }
-    '/(admin)/admin/traffic/': {
-      id: '/(admin)/admin/traffic/'
+    '/(admin)/admin/operations/audit': {
+      id: '/(admin)/admin/operations/audit'
+      path: '/audit'
+      fullPath: '/admin/operations/audit'
+      preLoaderRoute: typeof adminAdminOperationsAuditRouteRouteImport
+      parentRoute: typeof adminAdminOperationsRouteRoute
+    }
+    '/(admin)/admin/operations/mcp': {
+      id: '/(admin)/admin/operations/mcp'
+      path: '/mcp'
+      fullPath: '/admin/operations/mcp'
+      preLoaderRoute: typeof adminAdminOperationsMcpRouteRouteImport
+      parentRoute: typeof adminAdminOperationsRouteRoute
+    }
+    '/(admin)/admin/operations/traffic': {
+      id: '/(admin)/admin/operations/traffic'
+      path: '/traffic'
+      fullPath: '/admin/operations/traffic'
+      preLoaderRoute: typeof adminAdminOperationsTrafficRouteRouteImport
+      parentRoute: typeof adminAdminOperationsRouteRoute
+    }
+    '/(admin)/admin/servers/': {
+      id: '/(admin)/admin/servers/'
       path: '/'
-      fullPath: '/admin/traffic/'
-      preLoaderRoute: typeof adminAdminTrafficIndexRouteImport
-      parentRoute: typeof adminAdminTrafficRouteRoute
+      fullPath: '/admin/servers/'
+      preLoaderRoute: typeof adminAdminServersIndexRouteImport
+      parentRoute: typeof adminAdminServersRouteRoute
     }
-    '/(admin)/admin/users/': {
-      id: '/(admin)/admin/users/'
-      path: '/'
-      fullPath: '/admin/users/'
-      preLoaderRoute: typeof adminAdminUsersIndexRouteImport
-      parentRoute: typeof adminAdminUsersRouteRoute
+    '/(admin)/admin/servers/$serverId': {
+      id: '/(admin)/admin/servers/$serverId'
+      path: '/$serverId'
+      fullPath: '/admin/servers/$serverId'
+      preLoaderRoute: typeof adminAdminServersServerIdRouteRouteImport
+      parentRoute: typeof adminAdminServersRouteRoute
     }
-    '/(admin)/admin/users/$userId': {
-      id: '/(admin)/admin/users/$userId'
-      path: '/$userId'
-      fullPath: '/admin/users/$userId'
-      preLoaderRoute: typeof adminAdminUsersUserIdRouteImport
-      parentRoute: typeof adminAdminUsersRouteRoute
+    '/(admin)/admin/servers/new': {
+      id: '/(admin)/admin/servers/new'
+      path: '/new'
+      fullPath: '/admin/servers/new'
+      preLoaderRoute: typeof adminAdminServersNewRouteImport
+      parentRoute: typeof adminAdminServersRouteRoute
     }
     '/(user)/dashboard/subscriptions/': {
       id: '/(user)/dashboard/subscriptions/'
@@ -1359,82 +1490,180 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAgentEnrollmentRedeemRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/(admin)/admin/proxies/certificates/': {
-      id: '/(admin)/admin/proxies/certificates/'
-      path: '/'
-      fullPath: '/admin/proxies/certificates/'
-      preLoaderRoute: typeof adminAdminProxiesCertificatesIndexRouteImport
-      parentRoute: typeof adminAdminProxiesCertificatesRouteRoute
+    '/(admin)/admin/access/client-rules/': {
+      id: '/(admin)/admin/access/client-rules/'
+      path: '/client-rules'
+      fullPath: '/admin/access/client-rules/'
+      preLoaderRoute: typeof adminAdminAccessClientRulesIndexRouteImport
+      parentRoute: typeof adminAdminAccessRouteRoute
     }
-    '/(admin)/admin/proxies/groups/': {
-      id: '/(admin)/admin/proxies/groups/'
+    '/(admin)/admin/access/groups/': {
+      id: '/(admin)/admin/access/groups/'
       path: '/'
-      fullPath: '/admin/proxies/groups/'
-      preLoaderRoute: typeof adminAdminProxiesGroupsIndexRouteImport
-      parentRoute: typeof adminAdminProxiesGroupsRouteRoute
+      fullPath: '/admin/access/groups/'
+      preLoaderRoute: typeof adminAdminAccessGroupsIndexRouteImport
+      parentRoute: typeof adminAdminAccessGroupsRouteRoute
     }
-    '/(admin)/admin/proxies/groups/$groupId': {
-      id: '/(admin)/admin/proxies/groups/$groupId'
+    '/(admin)/admin/access/groups/$groupId': {
+      id: '/(admin)/admin/access/groups/$groupId'
       path: '/$groupId'
-      fullPath: '/admin/proxies/groups/$groupId'
-      preLoaderRoute: typeof adminAdminProxiesGroupsGroupIdRouteImport
-      parentRoute: typeof adminAdminProxiesGroupsRouteRoute
+      fullPath: '/admin/access/groups/$groupId'
+      preLoaderRoute: typeof adminAdminAccessGroupsGroupIdRouteImport
+      parentRoute: typeof adminAdminAccessGroupsRouteRoute
     }
-    '/(admin)/admin/proxies/groups/new': {
-      id: '/(admin)/admin/proxies/groups/new'
+    '/(admin)/admin/access/groups/new': {
+      id: '/(admin)/admin/access/groups/new'
       path: '/new'
-      fullPath: '/admin/proxies/groups/new'
-      preLoaderRoute: typeof adminAdminProxiesGroupsNewRouteImport
-      parentRoute: typeof adminAdminProxiesGroupsRouteRoute
+      fullPath: '/admin/access/groups/new'
+      preLoaderRoute: typeof adminAdminAccessGroupsNewRouteImport
+      parentRoute: typeof adminAdminAccessGroupsRouteRoute
     }
-    '/(admin)/admin/proxies/nodes/': {
-      id: '/(admin)/admin/proxies/nodes/'
+    '/(admin)/admin/access/plans/': {
+      id: '/(admin)/admin/access/plans/'
       path: '/'
-      fullPath: '/admin/proxies/nodes/'
-      preLoaderRoute: typeof adminAdminProxiesNodesIndexRouteImport
-      parentRoute: typeof adminAdminProxiesNodesRouteRoute
+      fullPath: '/admin/access/plans/'
+      preLoaderRoute: typeof adminAdminAccessPlansIndexRouteImport
+      parentRoute: typeof adminAdminAccessPlansRouteRoute
     }
-    '/(admin)/admin/proxies/nodes/$nodeId': {
-      id: '/(admin)/admin/proxies/nodes/$nodeId'
-      path: '/$nodeId'
-      fullPath: '/admin/proxies/nodes/$nodeId'
-      preLoaderRoute: typeof adminAdminProxiesNodesNodeIdRouteImport
-      parentRoute: typeof adminAdminProxiesNodesRouteRoute
+    '/(admin)/admin/access/plans/$planId': {
+      id: '/(admin)/admin/access/plans/$planId'
+      path: '/$planId'
+      fullPath: '/admin/access/plans/$planId'
+      preLoaderRoute: typeof adminAdminAccessPlansPlanIdRouteImport
+      parentRoute: typeof adminAdminAccessPlansRouteRoute
     }
-    '/(admin)/admin/proxies/nodes/new': {
-      id: '/(admin)/admin/proxies/nodes/new'
+    '/(admin)/admin/access/plans/new': {
+      id: '/(admin)/admin/access/plans/new'
       path: '/new'
-      fullPath: '/admin/proxies/nodes/new'
-      preLoaderRoute: typeof adminAdminProxiesNodesNewRouteImport
-      parentRoute: typeof adminAdminProxiesNodesRouteRoute
+      fullPath: '/admin/access/plans/new'
+      preLoaderRoute: typeof adminAdminAccessPlansNewRouteImport
+      parentRoute: typeof adminAdminAccessPlansRouteRoute
     }
-    '/(admin)/admin/proxies/rules/': {
-      id: '/(admin)/admin/proxies/rules/'
-      path: '/rules'
-      fullPath: '/admin/proxies/rules/'
-      preLoaderRoute: typeof adminAdminProxiesRulesIndexRouteImport
-      parentRoute: typeof adminAdminProxiesRouteRoute
-    }
-    '/(admin)/admin/proxies/servers/': {
-      id: '/(admin)/admin/proxies/servers/'
+    '/(admin)/admin/access/redeem/': {
+      id: '/(admin)/admin/access/redeem/'
       path: '/'
-      fullPath: '/admin/proxies/servers/'
-      preLoaderRoute: typeof adminAdminProxiesServersIndexRouteImport
-      parentRoute: typeof adminAdminProxiesServersRouteRoute
+      fullPath: '/admin/access/redeem/'
+      preLoaderRoute: typeof adminAdminAccessRedeemIndexRouteImport
+      parentRoute: typeof adminAdminAccessRedeemRouteRoute
     }
-    '/(admin)/admin/proxies/servers/$serverId': {
-      id: '/(admin)/admin/proxies/servers/$serverId'
-      path: '/$serverId'
-      fullPath: '/admin/proxies/servers/$serverId'
-      preLoaderRoute: typeof adminAdminProxiesServersServerIdRouteRouteImport
-      parentRoute: typeof adminAdminProxiesServersRouteRoute
+    '/(admin)/admin/access/redeem/$batchId': {
+      id: '/(admin)/admin/access/redeem/$batchId'
+      path: '/$batchId'
+      fullPath: '/admin/access/redeem/$batchId'
+      preLoaderRoute: typeof adminAdminAccessRedeemBatchIdRouteImport
+      parentRoute: typeof adminAdminAccessRedeemRouteRoute
     }
-    '/(admin)/admin/proxies/servers/new': {
-      id: '/(admin)/admin/proxies/servers/new'
-      path: '/new'
-      fullPath: '/admin/proxies/servers/new'
-      preLoaderRoute: typeof adminAdminProxiesServersNewRouteImport
-      parentRoute: typeof adminAdminProxiesServersRouteRoute
+    '/(admin)/admin/access/subscriptions/': {
+      id: '/(admin)/admin/access/subscriptions/'
+      path: '/'
+      fullPath: '/admin/access/subscriptions/'
+      preLoaderRoute: typeof adminAdminAccessSubscriptionsIndexRouteImport
+      parentRoute: typeof adminAdminAccessSubscriptionsRouteRoute
+    }
+    '/(admin)/admin/access/users/': {
+      id: '/(admin)/admin/access/users/'
+      path: '/'
+      fullPath: '/admin/access/users/'
+      preLoaderRoute: typeof adminAdminAccessUsersIndexRouteImport
+      parentRoute: typeof adminAdminAccessUsersRouteRoute
+    }
+    '/(admin)/admin/access/users/$userId': {
+      id: '/(admin)/admin/access/users/$userId'
+      path: '/$userId'
+      fullPath: '/admin/access/users/$userId'
+      preLoaderRoute: typeof adminAdminAccessUsersUserIdRouteImport
+      parentRoute: typeof adminAdminAccessUsersRouteRoute
+    }
+    '/(admin)/admin/networking/certificates/': {
+      id: '/(admin)/admin/networking/certificates/'
+      path: '/'
+      fullPath: '/admin/networking/certificates/'
+      preLoaderRoute: typeof adminAdminNetworkingCertificatesIndexRouteImport
+      parentRoute: typeof adminAdminNetworkingCertificatesRouteRoute
+    }
+    '/(admin)/admin/operations/announcements/': {
+      id: '/(admin)/admin/operations/announcements/'
+      path: '/announcements'
+      fullPath: '/admin/operations/announcements/'
+      preLoaderRoute: typeof adminAdminOperationsAnnouncementsIndexRouteImport
+      parentRoute: typeof adminAdminOperationsRouteRoute
+    }
+    '/(admin)/admin/operations/audit/': {
+      id: '/(admin)/admin/operations/audit/'
+      path: '/'
+      fullPath: '/admin/operations/audit/'
+      preLoaderRoute: typeof adminAdminOperationsAuditIndexRouteImport
+      parentRoute: typeof adminAdminOperationsAuditRouteRoute
+    }
+    '/(admin)/admin/operations/mcp/': {
+      id: '/(admin)/admin/operations/mcp/'
+      path: '/'
+      fullPath: '/admin/operations/mcp/'
+      preLoaderRoute: typeof adminAdminOperationsMcpIndexRouteImport
+      parentRoute: typeof adminAdminOperationsMcpRouteRoute
+    }
+    '/(admin)/admin/operations/settings/': {
+      id: '/(admin)/admin/operations/settings/'
+      path: '/settings'
+      fullPath: '/admin/operations/settings/'
+      preLoaderRoute: typeof adminAdminOperationsSettingsIndexRouteImport
+      parentRoute: typeof adminAdminOperationsRouteRoute
+    }
+    '/(admin)/admin/operations/traffic/': {
+      id: '/(admin)/admin/operations/traffic/'
+      path: '/'
+      fullPath: '/admin/operations/traffic/'
+      preLoaderRoute: typeof adminAdminOperationsTrafficIndexRouteImport
+      parentRoute: typeof adminAdminOperationsTrafficRouteRoute
+    }
+    '/(admin)/admin/servers/$serverId/': {
+      id: '/(admin)/admin/servers/$serverId/'
+      path: '/'
+      fullPath: '/admin/servers/$serverId/'
+      preLoaderRoute: typeof adminAdminServersServerIdIndexRouteImport
+      parentRoute: typeof adminAdminServersServerIdRouteRoute
+    }
+    '/(admin)/admin/servers/$serverId/connection': {
+      id: '/(admin)/admin/servers/$serverId/connection'
+      path: '/connection'
+      fullPath: '/admin/servers/$serverId/connection'
+      preLoaderRoute: typeof adminAdminServersServerIdConnectionRouteImport
+      parentRoute: typeof adminAdminServersServerIdRouteRoute
+    }
+    '/(admin)/admin/servers/$serverId/logs': {
+      id: '/(admin)/admin/servers/$serverId/logs'
+      path: '/logs'
+      fullPath: '/admin/servers/$serverId/logs'
+      preLoaderRoute: typeof adminAdminServersServerIdLogsRouteImport
+      parentRoute: typeof adminAdminServersServerIdRouteRoute
+    }
+    '/(admin)/admin/servers/$serverId/outbounds': {
+      id: '/(admin)/admin/servers/$serverId/outbounds'
+      path: '/outbounds'
+      fullPath: '/admin/servers/$serverId/outbounds'
+      preLoaderRoute: typeof adminAdminServersServerIdOutboundsRouteImport
+      parentRoute: typeof adminAdminServersServerIdRouteRoute
+    }
+    '/(admin)/admin/servers/$serverId/overview': {
+      id: '/(admin)/admin/servers/$serverId/overview'
+      path: '/overview'
+      fullPath: '/admin/servers/$serverId/overview'
+      preLoaderRoute: typeof adminAdminServersServerIdOverviewRouteImport
+      parentRoute: typeof adminAdminServersServerIdRouteRoute
+    }
+    '/(admin)/admin/servers/$serverId/settings': {
+      id: '/(admin)/admin/servers/$serverId/settings'
+      path: '/settings'
+      fullPath: '/admin/servers/$serverId/settings'
+      preLoaderRoute: typeof adminAdminServersServerIdSettingsRouteImport
+      parentRoute: typeof adminAdminServersServerIdRouteRoute
+    }
+    '/(admin)/admin/servers/$serverId/terminal': {
+      id: '/(admin)/admin/servers/$serverId/terminal'
+      path: '/terminal'
+      fullPath: '/admin/servers/$serverId/terminal'
+      preLoaderRoute: typeof adminAdminServersServerIdTerminalRouteImport
+      parentRoute: typeof adminAdminServersServerIdRouteRoute
     }
     '/api/admin/servers/$id/stream': {
       id: '/api/admin/servers/$id/stream'
@@ -1443,47 +1672,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminServersIdStreamRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/(admin)/admin/proxies/servers/$serverId/': {
-      id: '/(admin)/admin/proxies/servers/$serverId/'
-      path: '/'
-      fullPath: '/admin/proxies/servers/$serverId/'
-      preLoaderRoute: typeof adminAdminProxiesServersServerIdIndexRouteImport
-      parentRoute: typeof adminAdminProxiesServersServerIdRouteRoute
+    '/(admin)/admin/servers/$serverId/inbounds/': {
+      id: '/(admin)/admin/servers/$serverId/inbounds/'
+      path: '/inbounds'
+      fullPath: '/admin/servers/$serverId/inbounds/'
+      preLoaderRoute: typeof adminAdminServersServerIdInboundsIndexRouteImport
+      parentRoute: typeof adminAdminServersServerIdRouteRoute
     }
-    '/(admin)/admin/proxies/servers/$serverId/connection': {
-      id: '/(admin)/admin/proxies/servers/$serverId/connection'
-      path: '/connection'
-      fullPath: '/admin/proxies/servers/$serverId/connection'
-      preLoaderRoute: typeof adminAdminProxiesServersServerIdConnectionRouteImport
-      parentRoute: typeof adminAdminProxiesServersServerIdRouteRoute
+    '/(admin)/admin/servers/$serverId/inbounds/$nodeId': {
+      id: '/(admin)/admin/servers/$serverId/inbounds/$nodeId'
+      path: '/inbounds/$nodeId'
+      fullPath: '/admin/servers/$serverId/inbounds/$nodeId'
+      preLoaderRoute: typeof adminAdminServersServerIdInboundsNodeIdRouteImport
+      parentRoute: typeof adminAdminServersServerIdRouteRoute
     }
-    '/(admin)/admin/proxies/servers/$serverId/logs': {
-      id: '/(admin)/admin/proxies/servers/$serverId/logs'
-      path: '/logs'
-      fullPath: '/admin/proxies/servers/$serverId/logs'
-      preLoaderRoute: typeof adminAdminProxiesServersServerIdLogsRouteImport
-      parentRoute: typeof adminAdminProxiesServersServerIdRouteRoute
-    }
-    '/(admin)/admin/proxies/servers/$serverId/nodes': {
-      id: '/(admin)/admin/proxies/servers/$serverId/nodes'
-      path: '/nodes'
-      fullPath: '/admin/proxies/servers/$serverId/nodes'
-      preLoaderRoute: typeof adminAdminProxiesServersServerIdNodesRouteImport
-      parentRoute: typeof adminAdminProxiesServersServerIdRouteRoute
-    }
-    '/(admin)/admin/proxies/servers/$serverId/settings': {
-      id: '/(admin)/admin/proxies/servers/$serverId/settings'
-      path: '/settings'
-      fullPath: '/admin/proxies/servers/$serverId/settings'
-      preLoaderRoute: typeof adminAdminProxiesServersServerIdSettingsRouteImport
-      parentRoute: typeof adminAdminProxiesServersServerIdRouteRoute
-    }
-    '/(admin)/admin/proxies/servers/$serverId/terminal': {
-      id: '/(admin)/admin/proxies/servers/$serverId/terminal'
-      path: '/terminal'
-      fullPath: '/admin/proxies/servers/$serverId/terminal'
-      preLoaderRoute: typeof adminAdminProxiesServersServerIdTerminalRouteImport
-      parentRoute: typeof adminAdminProxiesServersServerIdRouteRoute
+    '/(admin)/admin/servers/$serverId/inbounds/new': {
+      id: '/(admin)/admin/servers/$serverId/inbounds/new'
+      path: '/inbounds/new'
+      fullPath: '/admin/servers/$serverId/inbounds/new'
+      preLoaderRoute: typeof adminAdminServersServerIdInboundsNewRouteImport
+      parentRoute: typeof adminAdminServersServerIdRouteRoute
     }
     '/api/admin/certificates/$certificateId/export/$part': {
       id: '/api/admin/certificates/$certificateId/export/$part'
@@ -1530,252 +1738,304 @@ declare module '@tanstack/react-router' {
   }
 }
 
-interface adminAdminAuditRouteRouteChildren {
-  adminAdminAuditIndexRoute: typeof adminAdminAuditIndexRoute
+interface adminAdminAccessGroupsRouteRouteChildren {
+  adminAdminAccessGroupsGroupIdRoute: typeof adminAdminAccessGroupsGroupIdRoute
+  adminAdminAccessGroupsNewRoute: typeof adminAdminAccessGroupsNewRoute
+  adminAdminAccessGroupsIndexRoute: typeof adminAdminAccessGroupsIndexRoute
 }
 
-const adminAdminAuditRouteRouteChildren: adminAdminAuditRouteRouteChildren = {
-  adminAdminAuditIndexRoute: adminAdminAuditIndexRoute,
-}
-
-const adminAdminAuditRouteRouteWithChildren =
-  adminAdminAuditRouteRoute._addFileChildren(adminAdminAuditRouteRouteChildren)
-
-interface adminAdminMcpRouteRouteChildren {
-  adminAdminMcpIndexRoute: typeof adminAdminMcpIndexRoute
-}
-
-const adminAdminMcpRouteRouteChildren: adminAdminMcpRouteRouteChildren = {
-  adminAdminMcpIndexRoute: adminAdminMcpIndexRoute,
-}
-
-const adminAdminMcpRouteRouteWithChildren =
-  adminAdminMcpRouteRoute._addFileChildren(adminAdminMcpRouteRouteChildren)
-
-interface adminAdminPlansRouteRouteChildren {
-  adminAdminPlansPlanIdRoute: typeof adminAdminPlansPlanIdRoute
-  adminAdminPlansNewRoute: typeof adminAdminPlansNewRoute
-  adminAdminPlansIndexRoute: typeof adminAdminPlansIndexRoute
-}
-
-const adminAdminPlansRouteRouteChildren: adminAdminPlansRouteRouteChildren = {
-  adminAdminPlansPlanIdRoute: adminAdminPlansPlanIdRoute,
-  adminAdminPlansNewRoute: adminAdminPlansNewRoute,
-  adminAdminPlansIndexRoute: adminAdminPlansIndexRoute,
-}
-
-const adminAdminPlansRouteRouteWithChildren =
-  adminAdminPlansRouteRoute._addFileChildren(adminAdminPlansRouteRouteChildren)
-
-interface adminAdminProxiesCertificatesRouteRouteChildren {
-  adminAdminProxiesCertificatesIndexRoute: typeof adminAdminProxiesCertificatesIndexRoute
-}
-
-const adminAdminProxiesCertificatesRouteRouteChildren: adminAdminProxiesCertificatesRouteRouteChildren =
+const adminAdminAccessGroupsRouteRouteChildren: adminAdminAccessGroupsRouteRouteChildren =
   {
-    adminAdminProxiesCertificatesIndexRoute:
-      adminAdminProxiesCertificatesIndexRoute,
+    adminAdminAccessGroupsGroupIdRoute: adminAdminAccessGroupsGroupIdRoute,
+    adminAdminAccessGroupsNewRoute: adminAdminAccessGroupsNewRoute,
+    adminAdminAccessGroupsIndexRoute: adminAdminAccessGroupsIndexRoute,
   }
 
-const adminAdminProxiesCertificatesRouteRouteWithChildren =
-  adminAdminProxiesCertificatesRouteRoute._addFileChildren(
-    adminAdminProxiesCertificatesRouteRouteChildren,
+const adminAdminAccessGroupsRouteRouteWithChildren =
+  adminAdminAccessGroupsRouteRoute._addFileChildren(
+    adminAdminAccessGroupsRouteRouteChildren,
   )
 
-interface adminAdminProxiesGroupsRouteRouteChildren {
-  adminAdminProxiesGroupsGroupIdRoute: typeof adminAdminProxiesGroupsGroupIdRoute
-  adminAdminProxiesGroupsNewRoute: typeof adminAdminProxiesGroupsNewRoute
-  adminAdminProxiesGroupsIndexRoute: typeof adminAdminProxiesGroupsIndexRoute
+interface adminAdminAccessPlansRouteRouteChildren {
+  adminAdminAccessPlansPlanIdRoute: typeof adminAdminAccessPlansPlanIdRoute
+  adminAdminAccessPlansNewRoute: typeof adminAdminAccessPlansNewRoute
+  adminAdminAccessPlansIndexRoute: typeof adminAdminAccessPlansIndexRoute
 }
 
-const adminAdminProxiesGroupsRouteRouteChildren: adminAdminProxiesGroupsRouteRouteChildren =
+const adminAdminAccessPlansRouteRouteChildren: adminAdminAccessPlansRouteRouteChildren =
   {
-    adminAdminProxiesGroupsGroupIdRoute: adminAdminProxiesGroupsGroupIdRoute,
-    adminAdminProxiesGroupsNewRoute: adminAdminProxiesGroupsNewRoute,
-    adminAdminProxiesGroupsIndexRoute: adminAdminProxiesGroupsIndexRoute,
+    adminAdminAccessPlansPlanIdRoute: adminAdminAccessPlansPlanIdRoute,
+    adminAdminAccessPlansNewRoute: adminAdminAccessPlansNewRoute,
+    adminAdminAccessPlansIndexRoute: adminAdminAccessPlansIndexRoute,
   }
 
-const adminAdminProxiesGroupsRouteRouteWithChildren =
-  adminAdminProxiesGroupsRouteRoute._addFileChildren(
-    adminAdminProxiesGroupsRouteRouteChildren,
+const adminAdminAccessPlansRouteRouteWithChildren =
+  adminAdminAccessPlansRouteRoute._addFileChildren(
+    adminAdminAccessPlansRouteRouteChildren,
   )
 
-interface adminAdminProxiesNodesRouteRouteChildren {
-  adminAdminProxiesNodesNodeIdRoute: typeof adminAdminProxiesNodesNodeIdRoute
-  adminAdminProxiesNodesNewRoute: typeof adminAdminProxiesNodesNewRoute
-  adminAdminProxiesNodesIndexRoute: typeof adminAdminProxiesNodesIndexRoute
+interface adminAdminAccessRedeemRouteRouteChildren {
+  adminAdminAccessRedeemBatchIdRoute: typeof adminAdminAccessRedeemBatchIdRoute
+  adminAdminAccessRedeemIndexRoute: typeof adminAdminAccessRedeemIndexRoute
 }
 
-const adminAdminProxiesNodesRouteRouteChildren: adminAdminProxiesNodesRouteRouteChildren =
+const adminAdminAccessRedeemRouteRouteChildren: adminAdminAccessRedeemRouteRouteChildren =
   {
-    adminAdminProxiesNodesNodeIdRoute: adminAdminProxiesNodesNodeIdRoute,
-    adminAdminProxiesNodesNewRoute: adminAdminProxiesNodesNewRoute,
-    adminAdminProxiesNodesIndexRoute: adminAdminProxiesNodesIndexRoute,
+    adminAdminAccessRedeemBatchIdRoute: adminAdminAccessRedeemBatchIdRoute,
+    adminAdminAccessRedeemIndexRoute: adminAdminAccessRedeemIndexRoute,
   }
 
-const adminAdminProxiesNodesRouteRouteWithChildren =
-  adminAdminProxiesNodesRouteRoute._addFileChildren(
-    adminAdminProxiesNodesRouteRouteChildren,
+const adminAdminAccessRedeemRouteRouteWithChildren =
+  adminAdminAccessRedeemRouteRoute._addFileChildren(
+    adminAdminAccessRedeemRouteRouteChildren,
   )
 
-interface adminAdminProxiesServersServerIdRouteRouteChildren {
-  adminAdminProxiesServersServerIdConnectionRoute: typeof adminAdminProxiesServersServerIdConnectionRoute
-  adminAdminProxiesServersServerIdLogsRoute: typeof adminAdminProxiesServersServerIdLogsRoute
-  adminAdminProxiesServersServerIdNodesRoute: typeof adminAdminProxiesServersServerIdNodesRoute
-  adminAdminProxiesServersServerIdSettingsRoute: typeof adminAdminProxiesServersServerIdSettingsRoute
-  adminAdminProxiesServersServerIdTerminalRoute: typeof adminAdminProxiesServersServerIdTerminalRoute
-  adminAdminProxiesServersServerIdIndexRoute: typeof adminAdminProxiesServersServerIdIndexRoute
+interface adminAdminAccessSubscriptionsRouteRouteChildren {
+  adminAdminAccessSubscriptionsIndexRoute: typeof adminAdminAccessSubscriptionsIndexRoute
 }
 
-const adminAdminProxiesServersServerIdRouteRouteChildren: adminAdminProxiesServersServerIdRouteRouteChildren =
+const adminAdminAccessSubscriptionsRouteRouteChildren: adminAdminAccessSubscriptionsRouteRouteChildren =
   {
-    adminAdminProxiesServersServerIdConnectionRoute:
-      adminAdminProxiesServersServerIdConnectionRoute,
-    adminAdminProxiesServersServerIdLogsRoute:
-      adminAdminProxiesServersServerIdLogsRoute,
-    adminAdminProxiesServersServerIdNodesRoute:
-      adminAdminProxiesServersServerIdNodesRoute,
-    adminAdminProxiesServersServerIdSettingsRoute:
-      adminAdminProxiesServersServerIdSettingsRoute,
-    adminAdminProxiesServersServerIdTerminalRoute:
-      adminAdminProxiesServersServerIdTerminalRoute,
-    adminAdminProxiesServersServerIdIndexRoute:
-      adminAdminProxiesServersServerIdIndexRoute,
+    adminAdminAccessSubscriptionsIndexRoute:
+      adminAdminAccessSubscriptionsIndexRoute,
   }
 
-const adminAdminProxiesServersServerIdRouteRouteWithChildren =
-  adminAdminProxiesServersServerIdRouteRoute._addFileChildren(
-    adminAdminProxiesServersServerIdRouteRouteChildren,
+const adminAdminAccessSubscriptionsRouteRouteWithChildren =
+  adminAdminAccessSubscriptionsRouteRoute._addFileChildren(
+    adminAdminAccessSubscriptionsRouteRouteChildren,
   )
 
-interface adminAdminProxiesServersRouteRouteChildren {
-  adminAdminProxiesServersServerIdRouteRoute: typeof adminAdminProxiesServersServerIdRouteRouteWithChildren
-  adminAdminProxiesServersNewRoute: typeof adminAdminProxiesServersNewRoute
-  adminAdminProxiesServersIndexRoute: typeof adminAdminProxiesServersIndexRoute
+interface adminAdminAccessUsersRouteRouteChildren {
+  adminAdminAccessUsersUserIdRoute: typeof adminAdminAccessUsersUserIdRoute
+  adminAdminAccessUsersIndexRoute: typeof adminAdminAccessUsersIndexRoute
 }
 
-const adminAdminProxiesServersRouteRouteChildren: adminAdminProxiesServersRouteRouteChildren =
+const adminAdminAccessUsersRouteRouteChildren: adminAdminAccessUsersRouteRouteChildren =
   {
-    adminAdminProxiesServersServerIdRouteRoute:
-      adminAdminProxiesServersServerIdRouteRouteWithChildren,
-    adminAdminProxiesServersNewRoute: adminAdminProxiesServersNewRoute,
-    adminAdminProxiesServersIndexRoute: adminAdminProxiesServersIndexRoute,
+    adminAdminAccessUsersUserIdRoute: adminAdminAccessUsersUserIdRoute,
+    adminAdminAccessUsersIndexRoute: adminAdminAccessUsersIndexRoute,
   }
 
-const adminAdminProxiesServersRouteRouteWithChildren =
-  adminAdminProxiesServersRouteRoute._addFileChildren(
-    adminAdminProxiesServersRouteRouteChildren,
+const adminAdminAccessUsersRouteRouteWithChildren =
+  adminAdminAccessUsersRouteRoute._addFileChildren(
+    adminAdminAccessUsersRouteRouteChildren,
   )
 
-interface adminAdminProxiesRouteRouteChildren {
-  adminAdminProxiesCertificatesRouteRoute: typeof adminAdminProxiesCertificatesRouteRouteWithChildren
-  adminAdminProxiesGroupsRouteRoute: typeof adminAdminProxiesGroupsRouteRouteWithChildren
-  adminAdminProxiesNodesRouteRoute: typeof adminAdminProxiesNodesRouteRouteWithChildren
-  adminAdminProxiesServersRouteRoute: typeof adminAdminProxiesServersRouteRouteWithChildren
-  adminAdminProxiesRulesIndexRoute: typeof adminAdminProxiesRulesIndexRoute
+interface adminAdminAccessRouteRouteChildren {
+  adminAdminAccessGroupsRouteRoute: typeof adminAdminAccessGroupsRouteRouteWithChildren
+  adminAdminAccessPlansRouteRoute: typeof adminAdminAccessPlansRouteRouteWithChildren
+  adminAdminAccessRedeemRouteRoute: typeof adminAdminAccessRedeemRouteRouteWithChildren
+  adminAdminAccessSubscriptionsRouteRoute: typeof adminAdminAccessSubscriptionsRouteRouteWithChildren
+  adminAdminAccessUsersRouteRoute: typeof adminAdminAccessUsersRouteRouteWithChildren
+  adminAdminAccessIndexRoute: typeof adminAdminAccessIndexRoute
+  adminAdminAccessClientRulesIndexRoute: typeof adminAdminAccessClientRulesIndexRoute
 }
 
-const adminAdminProxiesRouteRouteChildren: adminAdminProxiesRouteRouteChildren =
+const adminAdminAccessRouteRouteChildren: adminAdminAccessRouteRouteChildren = {
+  adminAdminAccessGroupsRouteRoute:
+    adminAdminAccessGroupsRouteRouteWithChildren,
+  adminAdminAccessPlansRouteRoute: adminAdminAccessPlansRouteRouteWithChildren,
+  adminAdminAccessRedeemRouteRoute:
+    adminAdminAccessRedeemRouteRouteWithChildren,
+  adminAdminAccessSubscriptionsRouteRoute:
+    adminAdminAccessSubscriptionsRouteRouteWithChildren,
+  adminAdminAccessUsersRouteRoute: adminAdminAccessUsersRouteRouteWithChildren,
+  adminAdminAccessIndexRoute: adminAdminAccessIndexRoute,
+  adminAdminAccessClientRulesIndexRoute: adminAdminAccessClientRulesIndexRoute,
+}
+
+const adminAdminAccessRouteRouteWithChildren =
+  adminAdminAccessRouteRoute._addFileChildren(
+    adminAdminAccessRouteRouteChildren,
+  )
+
+interface adminAdminNetworkingCertificatesRouteRouteChildren {
+  adminAdminNetworkingCertificatesIndexRoute: typeof adminAdminNetworkingCertificatesIndexRoute
+}
+
+const adminAdminNetworkingCertificatesRouteRouteChildren: adminAdminNetworkingCertificatesRouteRouteChildren =
   {
-    adminAdminProxiesCertificatesRouteRoute:
-      adminAdminProxiesCertificatesRouteRouteWithChildren,
-    adminAdminProxiesGroupsRouteRoute:
-      adminAdminProxiesGroupsRouteRouteWithChildren,
-    adminAdminProxiesNodesRouteRoute:
-      adminAdminProxiesNodesRouteRouteWithChildren,
-    adminAdminProxiesServersRouteRoute:
-      adminAdminProxiesServersRouteRouteWithChildren,
-    adminAdminProxiesRulesIndexRoute: adminAdminProxiesRulesIndexRoute,
+    adminAdminNetworkingCertificatesIndexRoute:
+      adminAdminNetworkingCertificatesIndexRoute,
   }
 
-const adminAdminProxiesRouteRouteWithChildren =
-  adminAdminProxiesRouteRoute._addFileChildren(
-    adminAdminProxiesRouteRouteChildren,
+const adminAdminNetworkingCertificatesRouteRouteWithChildren =
+  adminAdminNetworkingCertificatesRouteRoute._addFileChildren(
+    adminAdminNetworkingCertificatesRouteRouteChildren,
   )
 
-interface adminAdminRedeemRouteRouteChildren {
-  adminAdminRedeemBatchIdRoute: typeof adminAdminRedeemBatchIdRoute
-  adminAdminRedeemIndexRoute: typeof adminAdminRedeemIndexRoute
+interface adminAdminNetworkingRouteRouteChildren {
+  adminAdminNetworkingCertificatesRouteRoute: typeof adminAdminNetworkingCertificatesRouteRouteWithChildren
+  adminAdminNetworkingLinksRoute: typeof adminAdminNetworkingLinksRoute
+  adminAdminNetworkingRoutingRoute: typeof adminAdminNetworkingRoutingRoute
+  adminAdminNetworkingRuleSetsRoute: typeof adminAdminNetworkingRuleSetsRoute
+  adminAdminNetworkingTopologyRoute: typeof adminAdminNetworkingTopologyRoute
+  adminAdminNetworkingIndexRoute: typeof adminAdminNetworkingIndexRoute
 }
 
-const adminAdminRedeemRouteRouteChildren: adminAdminRedeemRouteRouteChildren = {
-  adminAdminRedeemBatchIdRoute: adminAdminRedeemBatchIdRoute,
-  adminAdminRedeemIndexRoute: adminAdminRedeemIndexRoute,
-}
-
-const adminAdminRedeemRouteRouteWithChildren =
-  adminAdminRedeemRouteRoute._addFileChildren(
-    adminAdminRedeemRouteRouteChildren,
-  )
-
-interface adminAdminSubscriptionsRouteRouteChildren {
-  adminAdminSubscriptionsIndexRoute: typeof adminAdminSubscriptionsIndexRoute
-}
-
-const adminAdminSubscriptionsRouteRouteChildren: adminAdminSubscriptionsRouteRouteChildren =
+const adminAdminNetworkingRouteRouteChildren: adminAdminNetworkingRouteRouteChildren =
   {
-    adminAdminSubscriptionsIndexRoute: adminAdminSubscriptionsIndexRoute,
+    adminAdminNetworkingCertificatesRouteRoute:
+      adminAdminNetworkingCertificatesRouteRouteWithChildren,
+    adminAdminNetworkingLinksRoute: adminAdminNetworkingLinksRoute,
+    adminAdminNetworkingRoutingRoute: adminAdminNetworkingRoutingRoute,
+    adminAdminNetworkingRuleSetsRoute: adminAdminNetworkingRuleSetsRoute,
+    adminAdminNetworkingTopologyRoute: adminAdminNetworkingTopologyRoute,
+    adminAdminNetworkingIndexRoute: adminAdminNetworkingIndexRoute,
   }
 
-const adminAdminSubscriptionsRouteRouteWithChildren =
-  adminAdminSubscriptionsRouteRoute._addFileChildren(
-    adminAdminSubscriptionsRouteRouteChildren,
+const adminAdminNetworkingRouteRouteWithChildren =
+  adminAdminNetworkingRouteRoute._addFileChildren(
+    adminAdminNetworkingRouteRouteChildren,
   )
 
-interface adminAdminTrafficRouteRouteChildren {
-  adminAdminTrafficIndexRoute: typeof adminAdminTrafficIndexRoute
+interface adminAdminOperationsAuditRouteRouteChildren {
+  adminAdminOperationsAuditIndexRoute: typeof adminAdminOperationsAuditIndexRoute
 }
 
-const adminAdminTrafficRouteRouteChildren: adminAdminTrafficRouteRouteChildren =
+const adminAdminOperationsAuditRouteRouteChildren: adminAdminOperationsAuditRouteRouteChildren =
   {
-    adminAdminTrafficIndexRoute: adminAdminTrafficIndexRoute,
+    adminAdminOperationsAuditIndexRoute: adminAdminOperationsAuditIndexRoute,
   }
 
-const adminAdminTrafficRouteRouteWithChildren =
-  adminAdminTrafficRouteRoute._addFileChildren(
-    adminAdminTrafficRouteRouteChildren,
+const adminAdminOperationsAuditRouteRouteWithChildren =
+  adminAdminOperationsAuditRouteRoute._addFileChildren(
+    adminAdminOperationsAuditRouteRouteChildren,
   )
 
-interface adminAdminUsersRouteRouteChildren {
-  adminAdminUsersUserIdRoute: typeof adminAdminUsersUserIdRoute
-  adminAdminUsersIndexRoute: typeof adminAdminUsersIndexRoute
+interface adminAdminOperationsMcpRouteRouteChildren {
+  adminAdminOperationsMcpIndexRoute: typeof adminAdminOperationsMcpIndexRoute
 }
 
-const adminAdminUsersRouteRouteChildren: adminAdminUsersRouteRouteChildren = {
-  adminAdminUsersUserIdRoute: adminAdminUsersUserIdRoute,
-  adminAdminUsersIndexRoute: adminAdminUsersIndexRoute,
+const adminAdminOperationsMcpRouteRouteChildren: adminAdminOperationsMcpRouteRouteChildren =
+  {
+    adminAdminOperationsMcpIndexRoute: adminAdminOperationsMcpIndexRoute,
+  }
+
+const adminAdminOperationsMcpRouteRouteWithChildren =
+  adminAdminOperationsMcpRouteRoute._addFileChildren(
+    adminAdminOperationsMcpRouteRouteChildren,
+  )
+
+interface adminAdminOperationsTrafficRouteRouteChildren {
+  adminAdminOperationsTrafficIndexRoute: typeof adminAdminOperationsTrafficIndexRoute
 }
 
-const adminAdminUsersRouteRouteWithChildren =
-  adminAdminUsersRouteRoute._addFileChildren(adminAdminUsersRouteRouteChildren)
+const adminAdminOperationsTrafficRouteRouteChildren: adminAdminOperationsTrafficRouteRouteChildren =
+  {
+    adminAdminOperationsTrafficIndexRoute:
+      adminAdminOperationsTrafficIndexRoute,
+  }
+
+const adminAdminOperationsTrafficRouteRouteWithChildren =
+  adminAdminOperationsTrafficRouteRoute._addFileChildren(
+    adminAdminOperationsTrafficRouteRouteChildren,
+  )
+
+interface adminAdminOperationsRouteRouteChildren {
+  adminAdminOperationsAuditRouteRoute: typeof adminAdminOperationsAuditRouteRouteWithChildren
+  adminAdminOperationsMcpRouteRoute: typeof adminAdminOperationsMcpRouteRouteWithChildren
+  adminAdminOperationsTrafficRouteRoute: typeof adminAdminOperationsTrafficRouteRouteWithChildren
+  adminAdminOperationsIndexRoute: typeof adminAdminOperationsIndexRoute
+  adminAdminOperationsAnnouncementsIndexRoute: typeof adminAdminOperationsAnnouncementsIndexRoute
+  adminAdminOperationsSettingsIndexRoute: typeof adminAdminOperationsSettingsIndexRoute
+}
+
+const adminAdminOperationsRouteRouteChildren: adminAdminOperationsRouteRouteChildren =
+  {
+    adminAdminOperationsAuditRouteRoute:
+      adminAdminOperationsAuditRouteRouteWithChildren,
+    adminAdminOperationsMcpRouteRoute:
+      adminAdminOperationsMcpRouteRouteWithChildren,
+    adminAdminOperationsTrafficRouteRoute:
+      adminAdminOperationsTrafficRouteRouteWithChildren,
+    adminAdminOperationsIndexRoute: adminAdminOperationsIndexRoute,
+    adminAdminOperationsAnnouncementsIndexRoute:
+      adminAdminOperationsAnnouncementsIndexRoute,
+    adminAdminOperationsSettingsIndexRoute:
+      adminAdminOperationsSettingsIndexRoute,
+  }
+
+const adminAdminOperationsRouteRouteWithChildren =
+  adminAdminOperationsRouteRoute._addFileChildren(
+    adminAdminOperationsRouteRouteChildren,
+  )
+
+interface adminAdminServersServerIdRouteRouteChildren {
+  adminAdminServersServerIdConnectionRoute: typeof adminAdminServersServerIdConnectionRoute
+  adminAdminServersServerIdLogsRoute: typeof adminAdminServersServerIdLogsRoute
+  adminAdminServersServerIdOutboundsRoute: typeof adminAdminServersServerIdOutboundsRoute
+  adminAdminServersServerIdOverviewRoute: typeof adminAdminServersServerIdOverviewRoute
+  adminAdminServersServerIdSettingsRoute: typeof adminAdminServersServerIdSettingsRoute
+  adminAdminServersServerIdTerminalRoute: typeof adminAdminServersServerIdTerminalRoute
+  adminAdminServersServerIdIndexRoute: typeof adminAdminServersServerIdIndexRoute
+  adminAdminServersServerIdInboundsNodeIdRoute: typeof adminAdminServersServerIdInboundsNodeIdRoute
+  adminAdminServersServerIdInboundsNewRoute: typeof adminAdminServersServerIdInboundsNewRoute
+  adminAdminServersServerIdInboundsIndexRoute: typeof adminAdminServersServerIdInboundsIndexRoute
+}
+
+const adminAdminServersServerIdRouteRouteChildren: adminAdminServersServerIdRouteRouteChildren =
+  {
+    adminAdminServersServerIdConnectionRoute:
+      adminAdminServersServerIdConnectionRoute,
+    adminAdminServersServerIdLogsRoute: adminAdminServersServerIdLogsRoute,
+    adminAdminServersServerIdOutboundsRoute:
+      adminAdminServersServerIdOutboundsRoute,
+    adminAdminServersServerIdOverviewRoute:
+      adminAdminServersServerIdOverviewRoute,
+    adminAdminServersServerIdSettingsRoute:
+      adminAdminServersServerIdSettingsRoute,
+    adminAdminServersServerIdTerminalRoute:
+      adminAdminServersServerIdTerminalRoute,
+    adminAdminServersServerIdIndexRoute: adminAdminServersServerIdIndexRoute,
+    adminAdminServersServerIdInboundsNodeIdRoute:
+      adminAdminServersServerIdInboundsNodeIdRoute,
+    adminAdminServersServerIdInboundsNewRoute:
+      adminAdminServersServerIdInboundsNewRoute,
+    adminAdminServersServerIdInboundsIndexRoute:
+      adminAdminServersServerIdInboundsIndexRoute,
+  }
+
+const adminAdminServersServerIdRouteRouteWithChildren =
+  adminAdminServersServerIdRouteRoute._addFileChildren(
+    adminAdminServersServerIdRouteRouteChildren,
+  )
+
+interface adminAdminServersRouteRouteChildren {
+  adminAdminServersServerIdRouteRoute: typeof adminAdminServersServerIdRouteRouteWithChildren
+  adminAdminServersNewRoute: typeof adminAdminServersNewRoute
+  adminAdminServersIndexRoute: typeof adminAdminServersIndexRoute
+}
+
+const adminAdminServersRouteRouteChildren: adminAdminServersRouteRouteChildren =
+  {
+    adminAdminServersServerIdRouteRoute:
+      adminAdminServersServerIdRouteRouteWithChildren,
+    adminAdminServersNewRoute: adminAdminServersNewRoute,
+    adminAdminServersIndexRoute: adminAdminServersIndexRoute,
+  }
+
+const adminAdminServersRouteRouteWithChildren =
+  adminAdminServersRouteRoute._addFileChildren(
+    adminAdminServersRouteRouteChildren,
+  )
 
 interface adminAdminRouteRouteChildren {
-  adminAdminAuditRouteRoute: typeof adminAdminAuditRouteRouteWithChildren
-  adminAdminMcpRouteRoute: typeof adminAdminMcpRouteRouteWithChildren
-  adminAdminPlansRouteRoute: typeof adminAdminPlansRouteRouteWithChildren
-  adminAdminProxiesRouteRoute: typeof adminAdminProxiesRouteRouteWithChildren
-  adminAdminRedeemRouteRoute: typeof adminAdminRedeemRouteRouteWithChildren
-  adminAdminSubscriptionsRouteRoute: typeof adminAdminSubscriptionsRouteRouteWithChildren
-  adminAdminTrafficRouteRoute: typeof adminAdminTrafficRouteRouteWithChildren
-  adminAdminUsersRouteRoute: typeof adminAdminUsersRouteRouteWithChildren
+  adminAdminAccessRouteRoute: typeof adminAdminAccessRouteRouteWithChildren
+  adminAdminNetworkingRouteRoute: typeof adminAdminNetworkingRouteRouteWithChildren
+  adminAdminOperationsRouteRoute: typeof adminAdminOperationsRouteRouteWithChildren
+  adminAdminServersRouteRoute: typeof adminAdminServersRouteRouteWithChildren
+  adminAdminSplatRoute: typeof adminAdminSplatRoute
   adminAdminIndexRoute: typeof adminAdminIndexRoute
-  adminAdminAnnouncementsIndexRoute: typeof adminAdminAnnouncementsIndexRoute
-  adminAdminSettingsIndexRoute: typeof adminAdminSettingsIndexRoute
 }
 
 const adminAdminRouteRouteChildren: adminAdminRouteRouteChildren = {
-  adminAdminAuditRouteRoute: adminAdminAuditRouteRouteWithChildren,
-  adminAdminMcpRouteRoute: adminAdminMcpRouteRouteWithChildren,
-  adminAdminPlansRouteRoute: adminAdminPlansRouteRouteWithChildren,
-  adminAdminProxiesRouteRoute: adminAdminProxiesRouteRouteWithChildren,
-  adminAdminRedeemRouteRoute: adminAdminRedeemRouteRouteWithChildren,
-  adminAdminSubscriptionsRouteRoute:
-    adminAdminSubscriptionsRouteRouteWithChildren,
-  adminAdminTrafficRouteRoute: adminAdminTrafficRouteRouteWithChildren,
-  adminAdminUsersRouteRoute: adminAdminUsersRouteRouteWithChildren,
+  adminAdminAccessRouteRoute: adminAdminAccessRouteRouteWithChildren,
+  adminAdminNetworkingRouteRoute: adminAdminNetworkingRouteRouteWithChildren,
+  adminAdminOperationsRouteRoute: adminAdminOperationsRouteRouteWithChildren,
+  adminAdminServersRouteRoute: adminAdminServersRouteRouteWithChildren,
+  adminAdminSplatRoute: adminAdminSplatRoute,
   adminAdminIndexRoute: adminAdminIndexRoute,
-  adminAdminAnnouncementsIndexRoute: adminAdminAnnouncementsIndexRoute,
-  adminAdminSettingsIndexRoute: adminAdminSettingsIndexRoute,
 }
 
 const adminAdminRouteRouteWithChildren = adminAdminRouteRoute._addFileChildren(
