@@ -18,6 +18,7 @@ import {
   type AgentWsV2TelemetrySnapshotPayload,
 } from "@blossom/contracts/agent-ws-v2";
 import type { LogPolicyNotifyPayload } from "@blossom/contracts/log-policy";
+import type { ManagedLinkProbeRequest } from "@blossom/contracts/managed-link-probe";
 import Redis from "ioredis";
 
 import type { Server } from "@/db/proxy-schema";
@@ -49,6 +50,7 @@ import {
 } from "./agent-ws-v2-pty";
 import {
   encodeAgentWsV2ConfigNotify,
+  encodeAgentWsV2LinkProbeRequest,
   encodeAgentWsV2LogPolicyNotify,
   openAgentWsV2Session,
   type AgentWsV2Session,
@@ -66,6 +68,14 @@ import type {
   AgentLogRelayHandler,
 } from "./logs-relay-types";
 import { NitroAdminLogRelay } from "./logs-relay.nitro";
+import {
+  applyManagedConfigAck,
+  applyManagedHello,
+  applyManagedProbeResult,
+  applyManagedStatus,
+  dispatchManagedRolloutFollowUps,
+  type ManagedRolloutFollowUp,
+} from "./managed-rollout-runtime";
 import {
   REALTIME_BACKPLANE_CHANNEL,
   type AgentPtyTarget,
@@ -449,6 +459,26 @@ export class NitroRealtimeHub implements RealtimeHub {
             onWelcome: () => {
               connection.welcomed = true;
               this.resubscribeLiveMetrics(serverId, started.sessionId);
+            },
+            onManagedHello: async (report) => {
+              await this.dispatchManagedRollout(
+                await applyManagedHello(report),
+              );
+            },
+            onManagedStatus: async (report) => {
+              await this.dispatchManagedRollout(
+                await applyManagedStatus(report),
+              );
+            },
+            onManagedConfigAck: async (report) => {
+              await this.dispatchManagedRollout(
+                await applyManagedConfigAck(report),
+              );
+            },
+            onManagedProbeResult: async (report) => {
+              await this.dispatchManagedRollout(
+                await applyManagedProbeResult(report),
+              );
             },
           });
           connection.sessionId = started.sessionId;
@@ -1760,6 +1790,55 @@ export class NitroRealtimeHub implements RealtimeHub {
     payload: LogPolicyNotifyPayload,
   ): Promise<void> {
     this.publishV2(serverId, encodeAgentWsV2LogPolicyNotify(payload));
+  }
+
+  /**
+   * Addresses a probe to the exact agent session that was issued the request.
+   * A newer or non-welcomed local socket is never considered, and the Redis
+   * path carries the session id so the owning instance applies the same check.
+   */
+  async sendLinkProbe(
+    serverId: string,
+    sessionId: string,
+    request: ManagedLinkProbeRequest,
+  ): Promise<boolean> {
+    const frame = encodeAgentWsV2LinkProbeRequest(request);
+    const connection = this.findV2ConnectionBySession(serverId, sessionId);
+    if (connection) {
+      if (!connection.welcomed) return false;
+      try {
+        connection.peer.send(frame);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    const backplane = this.backplane;
+    if (!backplane) return false;
+    try {
+      await this.startBackplane();
+      await backplane.publish({
+        origin: this.id,
+        serverId,
+        frame,
+        protocol: "v2",
+        agentSessionId: sessionId,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async dispatchManagedRollout(
+    followUps: ManagedRolloutFollowUp[],
+  ): Promise<void> {
+    await dispatchManagedRolloutFollowUps(followUps, {
+      notifyConfigChanged: (serverId, payload) =>
+        this.notifyConfigChanged(serverId, payload),
+      sendLinkProbe: (serverId, sessionId, request) =>
+        this.sendLinkProbe(serverId, sessionId, request),
+    });
   }
 }
 

@@ -1,4 +1,5 @@
 import type { ManagedRuleSetFormat } from "@blossom/contracts/agent-config-v3";
+import type { ManagedLinkProbeOutcome } from "@blossom/contracts/managed-link-probe";
 import type {
   ListenerClaimOwnerKind,
   ManagedOutboundKind,
@@ -353,14 +354,32 @@ export const managedRolloutStage = pgTable(
     // Verified managed-state fingerprint, including required presences and
     // removals, that an applied report must match.
     managedFingerprint: text("managed_fingerprint").notNull(),
-    // `server.desired_revision_seq` at pointer advance; reports below it
-    // cannot prove this stage.
+    // `server.desired_revision_seq` issued for this attempt; reports below it
+    // cannot prove this stage. Written only when the pointer advances.
     minRevisionSeq: integer("min_revision_seq"),
+    // Full identifier issued for the attempt. Kept apart from `min_revision_seq`
+    // so recovery can record its own identifier without erasing the candidate.
+    issuedRevisionSeq: integer("issued_revision_seq"),
+    // Link whose probe must succeed after this stage is proven and before the
+    // next stage may advance. Null for stages without a peer-path gate.
+    probeLinkId: text("probe_link_id").references(() => peerLink.id, {
+      onDelete: "set null",
+    }),
     subscriberIntent: jsonb("subscriber_intent").$type<JsonValue>(),
     subscriberPrevious: jsonb("subscriber_previous").$type<JsonValue>(),
+    // Start when issued; a timeout surfaces as stalled and never confirms.
     deadlineAt: timestamp("deadline_at"),
     issuedAt: timestamp("issued_at"),
     confirmedAt: timestamp("confirmed_at"),
+    // Recovery evidence written by a compensation. `recovery_config_version_id`
+    // is the existing `previous_config_version_id`; these columns name the
+    // identifier and proof window for the restored version.
+    recoveryMinRevisionSeq: integer("recovery_min_revision_seq"),
+    recoveryManagedFingerprint: text("recovery_managed_fingerprint"),
+    recoveryIssuedRevisionSeq: integer("recovery_issued_revision_seq"),
+    recoveryIssuedAt: timestamp("recovery_issued_at"),
+    recoveryDeadlineAt: timestamp("recovery_deadline_at"),
+    recoveryProvenAt: timestamp("recovery_proven_at"),
     failureCode: text("failure_code"),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -371,6 +390,94 @@ export const managedRolloutStage = pgTable(
     primaryKey({ columns: [table.rolloutId, table.ordinal] }),
     index("managed_rollout_stage_server_idx").on(table.serverId, table.state),
     check("managed_rollout_stage_ordinal", sql`${table.ordinal} >= 1`),
+  ],
+);
+
+/**
+ * One bounded link probe issued for a confirmed sender stage. Results are
+ * recorded idempotently by `probe_id`, only from the source server's
+ * authenticated session and before `expires_at`. The request/result payloads
+ * live in `@blossom/contracts/managed-link-probe`; this table persists the
+ * identifiers, endpoint generations and outcome so a reconnect or restart can
+ * correlate a late result without replaying the request.
+ */
+export const managedLinkProbe = pgTable(
+  "managed_link_probe",
+  {
+    id: text("id").primaryKey(),
+    rolloutId: text("rollout_id").notNull(),
+    stageOrdinal: integer("stage_ordinal").notNull(),
+    linkId: text("link_id")
+      .notNull()
+      .references(() => peerLink.id, { onDelete: "cascade" }),
+    credentialGeneration: integer("credential_generation").notNull(),
+    sourceServerId: text("source_server_id")
+      .notNull()
+      .references(() => server.id, { onDelete: "cascade" }),
+    destinationServerId: text("destination_server_id")
+      .notNull()
+      .references(() => server.id, { onDelete: "cascade" }),
+    sourceMinRevisionSeq: integer("source_min_revision_seq").notNull(),
+    sourceManagedFingerprint: text("source_managed_fingerprint").notNull(),
+    destinationMinRevisionSeq: integer(
+      "destination_min_revision_seq",
+    ).notNull(),
+    destinationManagedFingerprint: text(
+      "destination_managed_fingerprint",
+    ).notNull(),
+    issuedAt: timestamp("issued_at").notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+    outcome: text("outcome").$type<ManagedLinkProbeOutcome>(),
+    latencyMs: integer("latency_ms"),
+    appliedDesiredRevisionSeq: integer("applied_desired_revision_seq"),
+    appliedManagedFingerprint: text("applied_managed_fingerprint"),
+    completedAt: timestamp("completed_at"),
+    recordedAt: timestamp("recorded_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      name: "managed_link_probe_stage_fk",
+      columns: [table.rolloutId, table.stageOrdinal],
+      foreignColumns: [
+        managedRolloutStage.rolloutId,
+        managedRolloutStage.ordinal,
+      ],
+    }).onDelete("cascade"),
+    index("managed_link_probe_stage_idx").on(
+      table.rolloutId,
+      table.stageOrdinal,
+      table.issuedAt,
+    ),
+    index("managed_link_probe_source_idx").on(
+      table.sourceServerId,
+      table.issuedAt,
+    ),
+    check("managed_link_probe_stage_ordinal", sql`${table.stageOrdinal} >= 1`),
+    check(
+      "managed_link_probe_credential_generation",
+      sql`${table.credentialGeneration} >= 1`,
+    ),
+    check(
+      "managed_link_probe_revision_seqs",
+      sql`${table.sourceMinRevisionSeq} >= 0 AND ${table.destinationMinRevisionSeq} >= 0`,
+    ),
+    check(
+      "managed_link_probe_expiry",
+      sql`${table.expiresAt} > ${table.issuedAt}`,
+    ),
+    check(
+      "managed_link_probe_outcome",
+      sql`${table.outcome} IS NULL OR ${table.outcome} IN ('succeeded', 'timeout', 'connect_failed', 'tls_failed', 'auth_rejected', 'responder_mismatch', 'generation_mismatch', 'expired', 'isolation_unavailable', 'unsupported')`,
+    ),
+    check(
+      "managed_link_probe_latency",
+      sql`${table.latencyMs} IS NULL OR ${table.latencyMs} BETWEEN 0 AND 60000`,
+    ),
   ],
 );
 
@@ -432,4 +539,5 @@ export type ManagedConfigVersion = typeof managedConfigVersion.$inferSelect;
 export type ManagedRuleSetAsset = typeof managedRuleSetAsset.$inferSelect;
 export type ManagedRollout = typeof managedRollout.$inferSelect;
 export type ManagedRolloutStage = typeof managedRolloutStage.$inferSelect;
+export type ManagedLinkProbe = typeof managedLinkProbe.$inferSelect;
 export type ManagedServerState = typeof managedServerState.$inferSelect;

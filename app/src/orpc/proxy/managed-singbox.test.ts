@@ -22,6 +22,7 @@ import {
 
 const FP_A = "a".repeat(64);
 const FP_B = "b".repeat(64);
+const FP_C = "c".repeat(64);
 const SRS_BYTES = Buffer.from([0x53, 0x52, 0x53, 0x01]);
 
 function ruleSetArtifact() {
@@ -77,7 +78,7 @@ function stageIntent(): ManagedStageIntent {
         certificateFingerprintSha256: FP_A,
         admissions: [
           {
-            linkId: "link-a-to-b",
+            linkId: "link-b-to-a",
             sourceServerId: "srv-b",
             credentialGeneration: 1,
           },
@@ -252,6 +253,10 @@ function credentials(): Map<string, string> {
       managedPeerCredentialKey("link-a-to-b", 1),
       "550e8400-e29b-41d4-a716-446655440000",
     ],
+    [
+      managedPeerCredentialKey("link-b-to-a", 1),
+      "550e8400-e29b-41d4-a716-446655440001",
+    ],
   ]);
 }
 
@@ -278,7 +283,7 @@ describe("managed snapshot compiler", () => {
       "peer-in-pin1",
     ]);
     expect(inbounds[1]?.users?.[0]?.name).toBe(
-      encodePeerLinkIdentity("link-a-to-b", 1),
+      encodePeerLinkIdentity("link-b-to-a", 1),
     );
 
     const outbounds = result.config.outbounds as unknown as {
@@ -355,6 +360,25 @@ describe("managed snapshot compiler", () => {
     expect(result.extension.peerTrustArtifacts[0]).not.toHaveProperty(
       "privateKeyPem",
     );
+    expect(result.probeBindings).toEqual([
+      {
+        linkId: "link-a-to-b",
+        credentialGeneration: 1,
+        sourceServerId: "srv-1",
+        destinationServerId: "srv-b",
+        sourceOutboundTag: "peer-out-pout1",
+        destinationInboundTag: null,
+      },
+      {
+        linkId: "link-b-to-a",
+        credentialGeneration: 1,
+        sourceServerId: "srv-b",
+        destinationServerId: "srv-1",
+        sourceOutboundTag: null,
+        destinationInboundTag: "peer-in-pin1",
+      },
+    ]);
+    expect(result.extension.probeBindings).toEqual(result.probeBindings);
     expect(result.peerCertificateArtifacts).toEqual([
       expect.objectContaining({
         certificateId: "cert-peer-a",
@@ -362,6 +386,127 @@ describe("managed snapshot compiler", () => {
         privateKeyPem: "PEER-A-KEY",
       }),
     ]);
+  });
+
+  it("maps every source link to its own outbound and keeps remote tags local-only", () => {
+    const intent = stageIntent();
+    const secondOutbound = {
+      ...intent.outbounds[1]!,
+      outboundId: "pout2",
+      runtimeTag: "peer-out-pout2",
+      linkId: "link-a-to-c",
+      destinationServerId: "srv-c",
+      destinationInboundId: "pin-c1",
+      serverAddress: "203.0.113.30",
+      tlsServerName: "peer-c.internal.example.com",
+      trustedCertificates: [
+        {
+          certificateId: "cert-peer-c",
+          generation: 7,
+          fingerprintSha256: FP_C,
+        },
+      ],
+    };
+    intent.outbounds.push(secondOutbound);
+    const baseMaterial = tlsMaterial(intent);
+    const secondTrust = secondOutbound.trustedCertificates[0]!;
+    const secondBinding = {
+      bindingId: formatManagedPeerTlsBindingId({
+        direction: "outbound",
+        ownerKind: "peer_outbound",
+        ownerId: secondOutbound.outboundId,
+        certificateId: secondTrust.certificateId,
+        generation: secondTrust.generation,
+      }),
+      runtimeTag: secondOutbound.runtimeTag,
+      direction: "outbound" as const,
+      ownerKind: "peer_outbound" as const,
+      ownerId: secondOutbound.outboundId,
+      certificateId: secondTrust.certificateId,
+      generation: secondTrust.generation,
+      fingerprintSha256: secondTrust.fingerprintSha256,
+      serverName: secondOutbound.tlsServerName!,
+      usage: "peer_ca_trust" as const,
+    };
+    const material: ManagedPeerTlsMaterial = {
+      inbound: baseMaterial.inbound,
+      outboundTrust: [
+        ...baseMaterial.outboundTrust,
+        {
+          binding: secondBinding,
+          artifact: {
+            certificateId: secondTrust.certificateId,
+            generation: secondTrust.generation,
+            domains: ["peer-c.internal.example.com"],
+            fingerprintSha256: secondTrust.fingerprintSha256,
+            notBefore: "2026-01-01T00:00:00.000Z",
+            notAfter: "2027-01-01T00:00:00.000Z",
+            certificatePem: "PEER-C-PUBLIC-CERT",
+          },
+        },
+      ],
+    };
+    const peerCredentials = credentials();
+    peerCredentials.set(
+      managedPeerCredentialKey("link-a-to-c", 1),
+      "550e8400-e29b-41d4-a716-446655440002",
+    );
+    const result = compileManagedServerConfig({
+      intent,
+      subscriberConfig: subscriberConfig(),
+      ruleSetArtifacts: [ruleSetArtifact()],
+      tlsMaterial: material,
+      peerCredentials,
+    });
+
+    expect(
+      result.probeBindings
+        .filter((binding) => binding.sourceOutboundTag !== null)
+        .map((binding) => [
+          binding.linkId,
+          binding.sourceOutboundTag,
+          binding.destinationInboundTag,
+        ]),
+    ).toEqual([
+      ["link-a-to-b", "peer-out-pout1", null],
+      ["link-a-to-c", "peer-out-pout2", null],
+    ]);
+    expect(
+      result.probeBindings.every(
+        (binding) =>
+          binding.destinationInboundTag !== "pin-c1" &&
+          binding.destinationInboundTag !== "peer-in-pin-b1",
+      ),
+    ).toBe(true);
+
+    const reversed = {
+      ...intent,
+      peerInbounds: [...intent.peerInbounds].reverse(),
+      outbounds: [...intent.outbounds].reverse(),
+    };
+    const replay = compileManagedServerConfig({
+      intent: reversed,
+      subscriberConfig: subscriberConfig(),
+      ruleSetArtifacts: [ruleSetArtifact()],
+      tlsMaterial: material,
+      peerCredentials,
+    });
+    expect(replay.probeBindings).toEqual(result.probeBindings);
+    expect(replay.managedFingerprint).toBe(result.managedFingerprint);
+  });
+
+  it("rejects a duplicate link identity instead of guessing a probe target", () => {
+    const intent = stageIntent();
+    intent.peerInbounds[0]!.admissions[0]!.linkId = "link-a-to-b";
+    expect(() =>
+      compileManagedServerConfig({
+        intent,
+        subscriberConfig: subscriberConfig(),
+        ruleSetArtifacts: [ruleSetArtifact()],
+        tlsMaterial: tlsMaterial(intent),
+        peerCredentials: credentials(),
+      }),
+    ).toThrow(/duplicate probe binding/);
   });
 
   it("keeps a hostname peer endpoint on direct DNS rather than the link", () => {

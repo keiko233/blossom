@@ -18,6 +18,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use crate::log_policy::{Level as PolicyLevel, Source as PolicySource};
+use crate::probe::{LinkProbeRequest, LinkProbeResult};
 use crate::ws::codec::{
     AcmeDnsAckPayload, AcmeIssuePayload, CertificateDeployment, UpdateStatusPayload,
     UpdateTriggerPayload,
@@ -70,6 +71,7 @@ const AGENT_TYPES: &[&str] = &[
     "logs.error",
     "telemetry.sample",
     "telemetry.snapshot",
+    "link_probe.result",
 ];
 const CONTROL_TYPES: &[&str] = &[
     "welcome",
@@ -98,6 +100,7 @@ const CONTROL_TYPES: &[&str] = &[
     "logs.search",
     "logs.search.cancel",
     "logs.context",
+    "link_probe.request",
 ];
 
 /// The side that produced a frame. The receiver is the other side.
@@ -190,6 +193,8 @@ pub enum Message {
     LogsContext(LogsContext),
     TelemetrySample(TelemetrySample),
     TelemetrySnapshot(TelemetrySnapshot),
+    LinkProbeRequest(LinkProbeRequest),
+    LinkProbeResult(LinkProbeResult),
     Welcome(Welcome),
     StatusAck(StatusAck),
     ConfigNotify(ConfigNotify),
@@ -329,6 +334,12 @@ pub fn decode(text: &str, sender: Sender, max_frame_bytes: usize) -> Result<Deco
         "telemetry.snapshot" => Message::TelemetrySnapshot(
             checked(payload, TelemetrySnapshot::check).ok_or_else(invalid)?,
         ),
+        "link_probe.request" => Message::LinkProbeRequest(
+            checked(payload, LinkProbeRequest::check).ok_or_else(invalid)?,
+        ),
+        "link_probe.result" => {
+            Message::LinkProbeResult(checked(payload, LinkProbeResult::check).ok_or_else(invalid)?)
+        }
         "welcome" => Message::Welcome(checked(payload, Welcome::check).ok_or_else(invalid)?),
         "agent.status.ack" => {
             Message::StatusAck(checked(payload, StatusAck::check).ok_or_else(invalid)?)
@@ -1958,6 +1969,8 @@ mod tests {
         include_str!("../../../../packages/contracts/fixtures/agent-ws-v2.frames.json");
     const LOG_FIXTURES: &str =
         include_str!("../../../../packages/contracts/fixtures/agent-ws-v2-logs.frames.json");
+    const LINK_PROBE_FIXTURES: &str =
+        include_str!("../../../../packages/contracts/fixtures/agent-ws-v2-link-probe.frames.json");
 
     fn sender_of(name: &str) -> Sender {
         match name {
@@ -1998,6 +2011,69 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn managed_link_probe_frames_decode_in_their_contract_direction() {
+        let document: Value = serde_json::from_str(LINK_PROBE_FIXTURES).unwrap();
+        let request = document["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["frame"]["type"] == "link_probe.request")
+            .expect("request fixture exists")["frame"]
+            .clone();
+        let expected_result = document["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["frame"]["type"] == "link_probe.result")
+            .expect("result fixture exists")["frame"]
+            .clone();
+        let text = serde_json::to_string(&request).unwrap();
+        let decoded = decode(&text, Sender::ControlPlane, MAX_FRAME_BYTES).unwrap();
+        assert!(matches!(decoded.message, Message::LinkProbeRequest(_)));
+        assert_eq!(
+            decode(&text, Sender::Agent, MAX_FRAME_BYTES).unwrap_err(),
+            DecodeError::InvalidDirection("link_probe.request".to_string())
+        );
+
+        let decoded_result = decode(
+            &serde_json::to_string(&expected_result).unwrap(),
+            Sender::Agent,
+            MAX_FRAME_BYTES,
+        )
+        .unwrap();
+        let result = decoded_result.message;
+        assert!(matches!(result, Message::LinkProbeResult(_)));
+        let text = match &result {
+            Message::LinkProbeResult(payload) => {
+                encode("link_probe.result", payload, None).unwrap()
+            }
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            decode(&text, Sender::Agent, MAX_FRAME_BYTES)
+                .unwrap()
+                .message,
+            result
+        );
+        assert_eq!(
+            decode(&text, Sender::ControlPlane, MAX_FRAME_BYTES).unwrap_err(),
+            DecodeError::InvalidDirection("link_probe.result".to_string())
+        );
+
+        let mut unknown = request;
+        unknown["payload"]["hidden"] = serde_json::json!("ignored");
+        assert_eq!(
+            decode(
+                &serde_json::to_string(&unknown).unwrap(),
+                Sender::ControlPlane,
+                MAX_FRAME_BYTES
+            )
+            .unwrap_err(),
+            DecodeError::InvalidPayload("link_probe.request".to_string())
+        );
     }
 
     #[test]

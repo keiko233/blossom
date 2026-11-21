@@ -33,6 +33,7 @@ import { Route as userDashboardIndexRouteImport } from './routes/(user)/dashboar
 import { Route as userWelcomeIndexRouteImport } from './routes/(user)/welcome/index'
 import { Route as ApiAgentWsRouteImport } from './routes/api/agent/ws'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiMaintenanceManagedRolloutsRouteImport } from './routes/api/maintenance/managed-rollouts'
 import { Route as ApiMaintenanceMigrateRouteImport } from './routes/api/maintenance/migrate'
 import { Route as ApiMaintenanceServerMetricsRouteImport } from './routes/api/maintenance/server-metrics'
 import { Route as ApiRpcSplatRouteImport } from './routes/api/rpc/$'
@@ -227,6 +228,12 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiMaintenanceManagedRolloutsRoute =
+  ApiMaintenanceManagedRolloutsRouteImport.update({
+    id: '/api/maintenance/managed-rollouts',
+    path: '/api/maintenance/managed-rollouts',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiMaintenanceMigrateRoute = ApiMaintenanceMigrateRouteImport.update({
   id: '/api/maintenance/migrate',
   path: '/api/maintenance/migrate',
@@ -612,6 +619,7 @@ export interface FileRoutesByFullPath {
   '/auth/signup': typeof authAuthSignupRoute
   '/api/agent/ws': typeof ApiAgentWsRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/maintenance/managed-rollouts': typeof ApiMaintenanceManagedRolloutsRoute
   '/api/maintenance/migrate': typeof ApiMaintenanceMigrateRoute
   '/api/maintenance/server-metrics': typeof ApiMaintenanceServerMetricsRoute
   '/api/rpc/$': typeof ApiRpcSplatRoute
@@ -693,6 +701,7 @@ export interface FileRoutesByTo {
   '/auth/signup': typeof authAuthSignupRoute
   '/api/agent/ws': typeof ApiAgentWsRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/maintenance/managed-rollouts': typeof ApiMaintenanceManagedRolloutsRoute
   '/api/maintenance/migrate': typeof ApiMaintenanceMigrateRoute
   '/api/maintenance/server-metrics': typeof ApiMaintenanceServerMetricsRoute
   '/api/rpc/$': typeof ApiRpcSplatRoute
@@ -774,6 +783,7 @@ export interface FileRoutesById {
   '/(auth)/auth/signup': typeof authAuthSignupRoute
   '/api/agent/ws': typeof ApiAgentWsRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/maintenance/managed-rollouts': typeof ApiMaintenanceManagedRolloutsRoute
   '/api/maintenance/migrate': typeof ApiMaintenanceMigrateRoute
   '/api/maintenance/server-metrics': typeof ApiMaintenanceServerMetricsRoute
   '/api/rpc/$': typeof ApiRpcSplatRoute
@@ -863,6 +873,7 @@ export interface FileRouteTypes {
     | '/auth/signup'
     | '/api/agent/ws'
     | '/api/auth/$'
+    | '/api/maintenance/managed-rollouts'
     | '/api/maintenance/migrate'
     | '/api/maintenance/server-metrics'
     | '/api/rpc/$'
@@ -944,6 +955,7 @@ export interface FileRouteTypes {
     | '/auth/signup'
     | '/api/agent/ws'
     | '/api/auth/$'
+    | '/api/maintenance/managed-rollouts'
     | '/api/maintenance/migrate'
     | '/api/maintenance/server-metrics'
     | '/api/rpc/$'
@@ -1024,6 +1036,7 @@ export interface FileRouteTypes {
     | '/(auth)/auth/signup'
     | '/api/agent/ws'
     | '/api/auth/$'
+    | '/api/maintenance/managed-rollouts'
     | '/api/maintenance/migrate'
     | '/api/maintenance/server-metrics'
     | '/api/rpc/$'
@@ -1103,6 +1116,7 @@ export interface RootRouteChildren {
   staticIndexRoute: typeof staticIndexRoute
   ApiAgentWsRoute: typeof ApiAgentWsRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiMaintenanceManagedRolloutsRoute: typeof ApiMaintenanceManagedRolloutsRoute
   ApiMaintenanceMigrateRoute: typeof ApiMaintenanceMigrateRoute
   ApiMaintenanceServerMetricsRoute: typeof ApiMaintenanceServerMetricsRoute
   ApiRpcSplatRoute: typeof ApiRpcSplatRoute
@@ -1299,6 +1313,13 @@ declare module '@tanstack/react-router' {
       path: '/api/auth/$'
       fullPath: '/api/auth/$'
       preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/maintenance/managed-rollouts': {
+      id: '/api/maintenance/managed-rollouts'
+      path: '/api/maintenance/managed-rollouts'
+      fullPath: '/api/maintenance/managed-rollouts'
+      preLoaderRoute: typeof ApiMaintenanceManagedRolloutsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/maintenance/migrate': {
@@ -2145,6 +2166,7 @@ const rootRouteChildren: RootRouteChildren = {
   staticIndexRoute: staticIndexRoute,
   ApiAgentWsRoute: ApiAgentWsRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiMaintenanceManagedRolloutsRoute: ApiMaintenanceManagedRolloutsRoute,
   ApiMaintenanceMigrateRoute: ApiMaintenanceMigrateRoute,
   ApiMaintenanceServerMetricsRoute: ApiMaintenanceServerMetricsRoute,
   ApiRpcSplatRoute: ApiRpcSplatRoute,

@@ -31,6 +31,7 @@ use serde_json::{Map, Value};
 use sha2::{Digest as _, Sha256};
 
 use crate::certificate::{FULLCHAIN_FILE, GENERATION_DIR_PREFIX, PRIVATE_KEY_FILE};
+use crate::probe::{ManagedProbeBinding, validate_manifest};
 
 /// V2 capability advertised once managed networking apply is enabled.
 pub const MANAGED_NETWORKING_CAPABILITY: &str = "managed-networking-v1";
@@ -363,6 +364,10 @@ pub struct ManagedSnapshotExtension {
     pub peer_trust_artifacts: Vec<ManagedPeerTrustArtifact>,
     pub rule_set_bindings: Vec<ManagedRuleSetBinding>,
     pub rule_set_artifacts: Vec<ManagedRuleSetArtifact>,
+    /// Explicit link-to-runtime-tag mapping consumed only by the local probe
+    /// runtime. Control-plane endpoints and credentials are never present.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub probe_bindings: Vec<ManagedProbeBinding>,
 }
 
 impl ManagedSnapshotExtension {
@@ -374,6 +379,8 @@ impl ManagedSnapshotExtension {
         {
             return Err(ManagedContractError::InvalidExtensionHeader);
         }
+        validate_manifest(&self.probe_bindings)
+            .map_err(|error| ManagedContractError::InvalidProbeBinding(error.to_string()))?;
 
         let mut seen_binding_ids = HashSet::new();
         let mut seen_inbound_tags = HashSet::new();
@@ -584,6 +591,7 @@ pub enum ManagedContractError {
     InvalidRuleSetFormat {
         rule_set_id: String,
     },
+    InvalidProbeBinding(String),
     Materialize(String),
     StageFailed {
         path: String,
@@ -637,6 +645,9 @@ impl std::fmt::Display for ManagedContractError {
             ),
             Self::InvalidRuleSetFormat { rule_set_id } => {
                 write!(formatter, "rule-set {rule_set_id} is not binary SRS data")
+            }
+            Self::InvalidProbeBinding(message) => {
+                write!(formatter, "invalid probe binding: {message}")
             }
             Self::Materialize(message) => {
                 write!(
@@ -1128,6 +1139,17 @@ mod tests {
                         assert_eq!(managed.peer_trust_artifacts.len(), 1);
                         assert_eq!(managed.rule_set_bindings.len(), 1);
                         assert_eq!(managed.rule_set_artifacts.len(), 1);
+                        assert_eq!(managed.probe_bindings.len(), 2);
+                        assert_eq!(managed.probe_bindings[0].link_id, "link-a-to-b");
+                        assert_eq!(
+                            managed.probe_bindings[0].source_outbound_tag.as_deref(),
+                            Some("peer-out-pout1")
+                        );
+                        assert_eq!(managed.probe_bindings[1].link_id, "link-c-to-a");
+                        assert_eq!(
+                            managed.probe_bindings[1].destination_inbound_tag.as_deref(),
+                            Some("peer-in-pin1")
+                        );
                         let raw_srs = managed.rule_set_artifacts[0].decode_and_verify().unwrap();
                         assert_eq!(raw_srs.len(), 34);
                         assert_eq!(&raw_srs[..3], b"SRS");
@@ -1140,6 +1162,7 @@ mod tests {
                         assert_eq!(generated_managed.peer_trust_artifacts.len(), 1);
                         assert_eq!(generated_managed.rule_set_bindings.len(), 1);
                         assert_eq!(generated_managed.rule_set_artifacts.len(), 1);
+                        assert_eq!(generated_managed.probe_bindings.len(), 2);
                         assert_eq!(
                             generated_managed.config_version_id.to_string(),
                             managed.config_version_id

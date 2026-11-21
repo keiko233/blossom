@@ -25,6 +25,7 @@ import {
   type AgentWsV2Peer,
   type AgentWsV2PtyFrame,
   type AgentWsV2Store,
+  type OpenAgentWsV2SessionOptions,
 } from "./agent-ws-v2-session";
 
 const SERVER_ID = "srv-1";
@@ -1303,5 +1304,180 @@ describe("agent WebSocket v2 operations parity", () => {
       kind: "error",
       payload: { code: "invalid_direction", type: "update.trigger" },
     });
+  });
+});
+
+describe("managed rollout v2 ingress", () => {
+  const PROBE_CAPABILITY = "managed-link-probe-v1";
+  const FP = `sha256:${"a".repeat(64)}`;
+  const CAPABLE_HELLO: AgentWsV2HelloPayload = {
+    ...CURRENT_HELLO,
+    capabilities: ["config-v3", "managed-networking-v1", PROBE_CAPABILITY],
+    applied: { desiredRevisionSeq: 8, desiredRevision: NEXT_REVISION },
+  };
+  const PROBE_RESULT = {
+    probeId: "probe-1",
+    rolloutId: "rollout-1",
+    stageOrdinal: 2,
+    linkId: "link-1",
+    outcome: "succeeded" as const,
+    applied: { desiredRevisionSeq: 8, managedFingerprint: FP },
+    latencyMs: 12,
+    completedAt: "2026-11-20T00:00:05.000Z",
+  };
+
+  function managed(
+    store: AgentWsV2Store,
+    peer: AgentWsV2Peer,
+    options: Partial<
+      Pick<
+        OpenAgentWsV2SessionOptions,
+        | "onManagedHello"
+        | "onManagedStatus"
+        | "onManagedConfigAck"
+        | "onManagedProbeResult"
+      >
+    > = {},
+  ) {
+    return openAgentWsV2Session({
+      serverId: SERVER_ID,
+      sessionId: SESSION_ID,
+      credential: { kind: "static", tokenHash: "hash-1" },
+      peer,
+      store,
+      ...options,
+    });
+  }
+
+  it("reports hello, status, applied and failed acks to the managed adapter", async () => {
+    const store = makeStore({
+      recordConfigAck: vi.fn(async (_serverId, _sessionId, ack) =>
+        ack.outcome === "failed" ? ("failed" as const) : ("applied" as const),
+      ),
+    });
+    const peer = makePeer();
+    const hello = vi.fn();
+    const status = vi.fn();
+    const ack = vi.fn();
+    const session = managed(store, peer, {
+      onManagedHello: hello,
+      onManagedStatus: status,
+      onManagedConfigAck: ack,
+    });
+
+    await session.handleText(agentFrame("hello", CAPABLE_HELLO));
+    expect(hello).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serverId: SERVER_ID,
+        sessionId: SESSION_ID,
+        applied: CAPABLE_HELLO.applied,
+        capabilities: CAPABLE_HELLO.capabilities,
+      }),
+    );
+
+    await session.handleText(
+      agentFrame("agent.status", {
+        reason: "interval",
+        certificateDeployments: [],
+      }),
+    );
+    expect(status).toHaveBeenCalledWith({
+      serverId: SERVER_ID,
+      sessionId: SESSION_ID,
+    });
+
+    const appliedAck: AgentWsV2ConfigAckPayload = {
+      desired: { desiredRevisionSeq: 8, desiredRevision: NEXT_REVISION },
+      outcome: "applied",
+    };
+    await session.handleText(agentFrame("config.ack", appliedAck));
+    expect(ack).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ack: appliedAck, outcome: "applied" }),
+    );
+
+    const failedAck: AgentWsV2ConfigAckPayload = {
+      desired: {
+        desiredRevisionSeq: 9,
+        desiredRevision: `9:sha256:${"d".repeat(64)}`,
+      },
+      outcome: "failed",
+      stage: "apply",
+      error: "candidate rejected",
+    };
+    await session.handleText(agentFrame("config.ack", failedAck));
+    expect(ack).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ack: failedAck, outcome: "failed" }),
+    );
+  });
+
+  it("does not report a stale or replaced acknowledgement", async () => {
+    const peer = makePeer();
+    const ack = vi.fn();
+    const staleStore = makeStore({
+      recordConfigAck: vi.fn(async () => "stale" as const),
+    });
+    const stale = managed(staleStore, peer, { onManagedConfigAck: ack });
+    await stale.handleText(agentFrame("hello", CURRENT_HELLO));
+    await stale.handleText(
+      agentFrame("config.ack", {
+        desired: { desiredRevisionSeq: 7, desiredRevision: REVISION },
+        outcome: "applied",
+      }),
+    );
+    expect(ack).not.toHaveBeenCalled();
+
+    const replacedPeer = makePeer();
+    const replacedStore = makeStore({
+      recordConfigAck: vi.fn(async () => "replaced" as const),
+    });
+    const replaced = managed(replacedStore, replacedPeer, {
+      onManagedConfigAck: ack,
+    });
+    await replaced.handleText(agentFrame("hello", CURRENT_HELLO));
+    await replaced.handleText(
+      agentFrame("config.ack", {
+        desired: { desiredRevisionSeq: 8, desiredRevision: NEXT_REVISION },
+        outcome: "applied",
+      }),
+    );
+    expect(ack).not.toHaveBeenCalled();
+  });
+
+  it("accepts a probe result only from a session that advertised the capability", async () => {
+    const capablePeer = makePeer();
+    const onProbe = vi.fn();
+    const probeSession = openAgentWsV2Session({
+      serverId: SERVER_ID,
+      sessionId: SESSION_ID,
+      credential: { kind: "static", tokenHash: "hash-1" },
+      peer: capablePeer,
+      store: makeStore(),
+      onManagedProbeResult: onProbe,
+    });
+    await probeSession.handleText(agentFrame("hello", CAPABLE_HELLO));
+    await probeSession.handleText(
+      agentFrame("link_probe.result", PROBE_RESULT),
+    );
+    expect(onProbe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serverId: SERVER_ID,
+        sessionId: SESSION_ID,
+        result: PROBE_RESULT,
+      }),
+    );
+
+    const incapablePeer = makePeer();
+    const incapableProbe = vi.fn();
+    const incapable = openAgentWsV2Session({
+      serverId: SERVER_ID,
+      sessionId: SESSION_ID,
+      credential: { kind: "static", tokenHash: "hash-1" },
+      peer: incapablePeer,
+      store: makeStore(),
+      onManagedProbeResult: incapableProbe,
+    });
+    await incapable.handleText(agentFrame("hello", CURRENT_HELLO));
+    await incapable.handleText(agentFrame("link_probe.result", PROBE_RESULT));
+    expect(incapableProbe).not.toHaveBeenCalled();
   });
 });

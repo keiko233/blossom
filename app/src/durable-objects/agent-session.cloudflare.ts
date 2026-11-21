@@ -25,7 +25,11 @@ import {
   type AgentWsStore,
 } from "@/lib/agent-ws-session";
 import { createAgentWsStore, createAgentWsV2Store } from "@/lib/agent-ws-store";
-import { openAgentWsV2Session } from "@/lib/agent-ws-v2-session";
+import {
+  encodeAgentWsV2ConfigNotify,
+  encodeAgentWsV2LinkProbeRequest,
+  openAgentWsV2Session,
+} from "@/lib/agent-ws-v2-session";
 import {
   LIVE_METRIC_INTERVAL_MS,
   liveSampleFromV1,
@@ -33,6 +37,14 @@ import {
   type LiveMetricSample,
 } from "@/lib/live-metrics";
 import { revalidateLogRelay } from "@/lib/logs-authority";
+import {
+  applyManagedConfigAck,
+  applyManagedHello,
+  applyManagedProbeResult,
+  applyManagedStatus,
+  dispatchManagedRolloutFollowUps,
+  type ManagedRolloutFollowUp,
+} from "@/lib/managed-rollout-runtime";
 import {
   AGENT_WS_INTERNAL_CONNECTED_AT,
   AGENT_WS_INTERNAL_CREDENTIAL_KIND,
@@ -381,6 +393,7 @@ export class AgentSessionDO extends DurableObject {
     const body = (await request.json()) as {
       frame?: unknown;
       protocol?: unknown;
+      agentSessionId?: unknown;
     };
     if (typeof body.frame !== "string") {
       return new Response("Bad Request", { status: 400 });
@@ -388,6 +401,8 @@ export class AgentSessionDO extends DurableObject {
     // A v1 frame goes only to v1 sockets, and a v2 push only to welcomed v2
     // sockets. Neither is ever sent across the other protocol.
     const target = body.protocol === "v2" ? "v2" : "v1";
+    const agentSessionId =
+      typeof body.agentSessionId === "string" ? body.agentSessionId : null;
     for (const ws of this.ctx.getWebSockets()) {
       if (readPtyAttachment(ws)) {
         continue;
@@ -402,6 +417,9 @@ export class AgentSessionDO extends DurableObject {
       ) {
         continue;
       }
+      if (agentSessionId && attachment.sessionId !== agentSessionId) {
+        continue;
+      }
       try {
         ws.send(body.frame);
       } catch {
@@ -409,6 +427,95 @@ export class AgentSessionDO extends DurableObject {
       }
     }
     return new Response(null, { status: 204 });
+  }
+
+  /** Best-effort post-commit push from this object's own agent socket. */
+  private sendV2Frame(frame: string, agentSessionId?: string): boolean {
+    let delivered = false;
+    for (const ws of this.ctx.getWebSockets()) {
+      if (readPtyAttachment(ws)) continue;
+      const attachment = readAttachment(ws);
+      if (
+        attachment?.protocol !== "v2" ||
+        !attachment.welcomed ||
+        attachment.superseded ||
+        (agentSessionId && attachment.sessionId !== agentSessionId)
+      ) {
+        continue;
+      }
+      try {
+        ws.send(frame);
+        delivered = true;
+      } catch {
+        // A stale socket is cleaned up through webSocketClose.
+      }
+    }
+    return delivered;
+  }
+
+  private ownServerId(): string | null {
+    const named = (this.ctx as unknown as { id?: { name?: unknown } }).id?.name;
+    if (typeof named === "string" && named.length > 0) return named;
+    for (const ws of this.ctx.getWebSockets()) {
+      const attachment = readAttachment(ws);
+      if (attachment?.serverId) return attachment.serverId;
+    }
+    return null;
+  }
+
+  /**
+   * Delivers a managed rollout follow-up after its database commit. The target
+   * may be another server's Durable Object, so the frame goes through the same
+   * internal notify path the Worker uses; this object never relies on being the
+   * only instance holding a socket.
+   */
+  private async deliverManagedFrame(
+    serverId: string,
+    frame: string,
+    agentSessionId?: string,
+  ): Promise<boolean> {
+    if (this.ownServerId() === serverId) {
+      return this.sendV2Frame(frame, agentSessionId);
+    }
+    if (!env.AGENT_SESSION_DO) {
+      return false;
+    }
+    const binding = env.AGENT_SESSION_DO;
+    const response = await binding.get(binding.idFromName(serverId)).fetch(
+      new Request("https://agent-session.internal/internal/notify", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          frame,
+          protocol: "v2",
+          ...(agentSessionId ? { agentSessionId } : {}),
+        }),
+      }),
+    );
+    return response.ok;
+  }
+
+  private async dispatchManagedRollout(
+    followUps: ManagedRolloutFollowUp[],
+  ): Promise<void> {
+    await dispatchManagedRolloutFollowUps(followUps, {
+      notifyConfigChanged: async (serverId, payload) => {
+        const frame = encodeAgentWsV2ConfigNotify({
+          desired: {
+            desiredRevisionSeq: payload.desiredRevisionSeq,
+            desiredRevision: payload.desiredRevision,
+          },
+          ...(payload.reason ? { reason: payload.reason } : {}),
+        });
+        await this.deliverManagedFrame(serverId, frame);
+      },
+      sendLinkProbe: (serverId, sessionId, request) =>
+        this.deliverManagedFrame(
+          serverId,
+          encodeAgentWsV2LinkProbeRequest(request),
+          sessionId,
+        ),
+    });
   }
 
   private async connect(request: Request): Promise<Response> {
@@ -1214,6 +1321,35 @@ export class AgentSessionDO extends DurableObject {
         },
         onSnapshot: (snapshot) =>
           this.resolveMetricsSnapshot(snapshot.requestId, snapshot),
+        onWelcome: () => {
+          // The attachment is the only cross-message session state in a
+          // hibernating object. Flip `welcomed` before managed follow-ups run,
+          // so a probe or notification issued by this hello is not dropped.
+          ws.serializeAttachment({
+            ...attachment,
+            welcomed: true,
+          } satisfies V2AgentSessionAttachment);
+        },
+        onManagedHello: async (report) => {
+          await this.dispatchManagedRollout(
+            await applyManagedHello(report, { database }),
+          );
+        },
+        onManagedStatus: async (report) => {
+          await this.dispatchManagedRollout(
+            await applyManagedStatus(report, { database }),
+          );
+        },
+        onManagedConfigAck: async (report) => {
+          await this.dispatchManagedRollout(
+            await applyManagedConfigAck(report, { database }),
+          );
+        },
+        onManagedProbeResult: async (report) => {
+          await this.dispatchManagedRollout(
+            await applyManagedProbeResult(report, { database }),
+          );
+        },
       });
       await session.handleText(raw);
       if (

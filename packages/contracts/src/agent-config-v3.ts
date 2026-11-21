@@ -42,6 +42,7 @@ export const MANAGED_SNAPSHOT_LIMITS = {
   maxRuleSetAggregateRawBytes: 2 * 1024 * 1024,
   maxActivationPreviewBytes: 6 * 1024 * 1024,
   maxWireSnapshotBytes: 8 * 1024 * 1024,
+  maxProbeBindings: 2_000,
 } as const;
 
 function isLowercaseSha256Hex(value: string): boolean {
@@ -318,7 +319,210 @@ export type ManagedRuleSetArtifact = z.infer<
   typeof managedRuleSetArtifactSchema
 >;
 
-// --- Versioned single-unit managed extension on V3 output -------------------
+// --- Managed probe bindings ------------------------------------------------
+
+const MANAGED_PROBE_ID_MAX_CHARS = 128;
+const MANAGED_PROBE_SOURCE_TAG_PREFIX = "peer-out-";
+const MANAGED_PROBE_DESTINATION_TAG_PREFIX = "peer-in-";
+
+function isBoundedProbeId(value: string): boolean {
+  return (
+    value.length > 0 &&
+    [...value].length <= MANAGED_PROBE_ID_MAX_CHARS &&
+    [...value].every((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code > 0x1f && code !== 0x7f;
+    })
+  );
+}
+
+const managedProbeIdSchema = z
+  .string()
+  .min(1)
+  .max(MANAGED_PROBE_ID_MAX_CHARS)
+  .refine(isBoundedProbeId, {
+    message: "probe binding identifiers must not contain control characters",
+  });
+
+/**
+ * One link-to-local-runtime-tag mapping in the v3 `managed.probeBindings`
+ * manifest. A server owns a `sourceOutboundTag` for the link it sends and a
+ * `destinationInboundTag` for the link it receives; the side that does not own
+ * a tag omits it. At least one local tag is required, so a binding always names
+ * something the compiled config can prove. Endpoint addresses, paths and
+ * credentials never appear here.
+ */
+export const managedProbeBindingSchema = z
+  .object({
+    linkId: managedProbeIdSchema,
+    credentialGeneration: z.number().int().min(1),
+    sourceServerId: managedProbeIdSchema,
+    destinationServerId: managedProbeIdSchema,
+    sourceOutboundTag: z.string().min(1).max(128).nullable().default(null),
+    destinationInboundTag: z.string().min(1).max(128).nullable().default(null),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.sourceServerId === value.destinationServerId) {
+      context.addIssue({
+        code: "custom",
+        message: "a probe binding cannot target its own server",
+        path: ["destinationServerId"],
+      });
+    }
+    if (
+      value.sourceOutboundTag === null &&
+      value.destinationInboundTag === null
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "a probe binding requires at least one local runtime tag",
+        path: ["sourceOutboundTag"],
+      });
+    }
+    if (
+      (value.sourceOutboundTag !== null &&
+        !isBoundedProbeId(value.sourceOutboundTag)) ||
+      (value.sourceOutboundTag !== null &&
+        !value.sourceOutboundTag.startsWith(MANAGED_PROBE_SOURCE_TAG_PREFIX))
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: `sourceOutboundTag must be ${MANAGED_PROBE_SOURCE_TAG_PREFIX}<id>`,
+        path: ["sourceOutboundTag"],
+      });
+    }
+    if (
+      value.destinationInboundTag !== null &&
+      (!isBoundedProbeId(value.destinationInboundTag) ||
+        !value.destinationInboundTag.startsWith(
+          MANAGED_PROBE_DESTINATION_TAG_PREFIX,
+        ))
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: `destinationInboundTag must be ${MANAGED_PROBE_DESTINATION_TAG_PREFIX}<id>`,
+        path: ["destinationInboundTag"],
+      });
+    }
+  });
+
+export type ManagedProbeBinding = z.infer<typeof managedProbeBindingSchema>;
+
+export class ManagedProbeBindingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ManagedProbeBindingError";
+  }
+}
+
+function compareProbeBindings(
+  a: ManagedProbeBinding,
+  b: ManagedProbeBinding,
+): number {
+  return (
+    a.linkId.localeCompare(b.linkId) ||
+    a.credentialGeneration - b.credentialGeneration ||
+    (a.sourceOutboundTag ?? "").localeCompare(b.sourceOutboundTag ?? "") ||
+    (a.destinationInboundTag ?? "").localeCompare(b.destinationInboundTag ?? "")
+  );
+}
+
+/**
+ * Validates a complete binding set, rejecting duplicate link generations and
+ * ambiguous local mappings. A destination listener may serve several links,
+ * so only source outbounds must be unique; a local source outbound belongs to
+ * exactly one link and credential generation.
+ */
+export function validateManagedProbeBindings(
+  bindings: readonly ManagedProbeBinding[],
+): ManagedProbeBinding[] {
+  if (bindings.length > MANAGED_SNAPSHOT_LIMITS.maxProbeBindings) {
+    throw new ManagedProbeBindingError(
+      `probe binding count ${bindings.length} exceeds ${MANAGED_SNAPSHOT_LIMITS.maxProbeBindings}`,
+    );
+  }
+  const seenLinks = new Set<string>();
+  const seenSourceTags = new Set<string>();
+  const normalized: ManagedProbeBinding[] = [];
+  for (const binding of bindings) {
+    const parsed = managedProbeBindingSchema.safeParse(binding);
+    if (!parsed.success) {
+      throw new ManagedProbeBindingError(
+        parsed.error.issues
+          .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+          .join("; "),
+      );
+    }
+    const value = parsed.data;
+    const key = `${value.linkId}\0${value.credentialGeneration}`;
+    if (seenLinks.has(key)) {
+      throw new ManagedProbeBindingError(
+        `duplicate probe binding for link ${value.linkId} generation ${value.credentialGeneration}`,
+      );
+    }
+    seenLinks.add(key);
+    if (value.sourceOutboundTag !== null) {
+      if (seenSourceTags.has(value.sourceOutboundTag)) {
+        throw new ManagedProbeBindingError(
+          `ambiguous probe source outbound ${value.sourceOutboundTag}`,
+        );
+      }
+      seenSourceTags.add(value.sourceOutboundTag);
+    }
+    normalized.push(value);
+  }
+  return normalized.sort(compareProbeBindings);
+}
+
+/**
+ * Derives the only valid per-server manifest from the frozen stage intent: a
+ * local peer-link outbound maps its link/generation to the source tag, and a
+ * local peer admission maps the same identity to the destination tag. The
+ * remote tag is never inferred, so a sender or receiver learns only its own
+ * local runtime tag. This is the single source of the binding shape used by
+ * the compiler, the fingerprint, and the v3 revision metadata.
+ */
+export function deriveManagedProbeBindings(
+  intent: ManagedStageIntent,
+): ManagedProbeBinding[] {
+  const bindings: ManagedProbeBinding[] = [];
+  for (const outbound of intent.outbounds) {
+    if (outbound.kind !== "peer_link") {
+      continue;
+    }
+    if (
+      outbound.linkId === null ||
+      outbound.destinationServerId === null ||
+      outbound.credentialGeneration === null
+    ) {
+      throw new ManagedProbeBindingError(
+        `peer outbound ${outbound.outboundId} is missing its link identity`,
+      );
+    }
+    bindings.push({
+      linkId: outbound.linkId,
+      credentialGeneration: outbound.credentialGeneration,
+      sourceServerId: intent.serverId,
+      destinationServerId: outbound.destinationServerId,
+      sourceOutboundTag: outbound.runtimeTag,
+      destinationInboundTag: null,
+    });
+  }
+  for (const peer of intent.peerInbounds) {
+    for (const admission of peer.admissions) {
+      bindings.push({
+        linkId: admission.linkId,
+        credentialGeneration: admission.credentialGeneration,
+        sourceServerId: admission.sourceServerId,
+        destinationServerId: intent.serverId,
+        sourceOutboundTag: null,
+        destinationInboundTag: peer.runtimeTag,
+      });
+    }
+  }
+  return validateManagedProbeBindings(bindings);
+}
 
 export const managedSnapshotExtensionSchema = z
   .object({
@@ -330,8 +534,27 @@ export const managedSnapshotExtensionSchema = z
     peerTrustArtifacts: z.array(managedPeerTrustArtifactSchema).max(1_000),
     ruleSetBindings: z.array(managedRuleSetBindingSchema).max(256),
     ruleSetArtifacts: z.array(managedRuleSetArtifactSchema).max(256),
+    /** Local link-to-tag mapping for managed link probes. */
+    probeBindings: z
+      .array(managedProbeBindingSchema)
+      .max(MANAGED_SNAPSHOT_LIMITS.maxProbeBindings)
+      .default([]),
   })
   .superRefine((value, context) => {
+    let bindings: ManagedProbeBinding[];
+    try {
+      bindings = validateManagedProbeBindings(value.probeBindings);
+    } catch (error) {
+      context.addIssue({
+        code: "custom",
+        message:
+          error instanceof Error ? error.message : "invalid probe bindings",
+        path: ["probeBindings"],
+      });
+      return;
+    }
+    value.probeBindings = bindings;
+
     const seenBindingIds = new Set<string>();
     const seenInboundTags = new Set<string>();
     for (const binding of value.tlsBindings) {

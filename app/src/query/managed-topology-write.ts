@@ -4,6 +4,7 @@ import {
   MANAGED_TOPOLOGY_ID,
   type ManagedRolloutState,
 } from "@blossom/domain/managed-networking";
+import { MANAGED_STAGE_DEADLINE_POLICY } from "@blossom/domain/managed-rollout";
 import { and, asc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
@@ -73,7 +74,9 @@ export type NodeWriteValues = Partial<
  *    It composes the rollout ordinal CAS, node and membership writes (through
  *    the group-membership statements, never a second node-delete path), the
  *    stage pointer, `server.desired_revision_seq` bumps, the publish-gate
- *    record and the replaced rows in `subscriber_previous` atomically.
+ *    record and the replaced rows in `subscriber_previous` atomically. It
+ *    *issues* the attempt (`issued`) and starts its deadline; only an
+ *    authenticated matching applied report may confirm it in Task 08.
  *    Compensation uses the same path and preserves newer entitlement changes.
  *  - Legacy structural node writers (UI `nodes.ts`, MCP `mcp-tools.ts`) return
  *    a `LegacyStructuralWriteRejection` instead of writing a node that a
@@ -125,6 +128,16 @@ function jsonParam(value: unknown): SQL {
 
 function numeric(value: unknown): number {
   return typeof value === "number" ? value : Number(value);
+}
+
+function timestampValue(value: unknown): Date | null {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) return value;
+  const text = String(value);
+  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(text)) {
+    return new Date(`${text.replace(" ", "T")}Z`);
+  }
+  return new Date(text);
 }
 
 function stableServerIds(serverIds: readonly string[]): string[] {
@@ -429,6 +442,9 @@ export interface ManagedRolloutAdmissionStage {
   configVersionId: string;
   previousConfigVersionId?: string | null;
   managedFingerprint: string;
+  /** Link probe gate after this stage is proven, for sender stages. */
+  probeLinkId?: string | null;
+  /** Ignored at admission; the deadline starts when the stage is issued. */
   deadlineAt?: Date | string | null;
   subscriberIntent?: JsonValue | null;
 }
@@ -564,10 +580,8 @@ export async function admitManagedRollout(
     config_version_id: stage.configVersionId,
     previous_config_version_id: stage.previousConfigVersionId ?? null,
     managed_fingerprint: stage.managedFingerprint,
-    deadline_at:
-      stage.deadlineAt instanceof Date
-        ? stage.deadlineAt.toISOString()
-        : (stage.deadlineAt ?? null),
+    deadline_at: null,
+    probe_link_id: stage.probeLinkId ?? null,
     subscriber_intent: stage.subscriberIntent ?? null,
   }));
   const stageRowset =
@@ -581,6 +595,7 @@ export async function admitManagedRollout(
             ${sql.identifier(managedRolloutStage.previousConfigVersionId.name)},
             ${sql.identifier(managedRolloutStage.managedFingerprint.name)},
             ${sql.identifier(managedRolloutStage.deadlineAt.name)},
+            ${sql.identifier(managedRolloutStage.probeLinkId.name)},
             ${sql.identifier(managedRolloutStage.subscriberIntent.name)}
           )
           SELECT created.id,
@@ -590,6 +605,7 @@ export async function admitManagedRollout(
                  stages.previous_config_version_id,
                  stages.managed_fingerprint,
                  stages.deadline_at::timestamp,
+                 stages.probe_link_id,
                  stages.subscriber_intent
           FROM created
           CROSS JOIN jsonb_to_recordset(${jsonParam(stages)}::jsonb) AS stages(
@@ -599,6 +615,7 @@ export async function admitManagedRollout(
             previous_config_version_id text,
             managed_fingerprint text,
             deadline_at text,
+            probe_link_id text,
             subscriber_intent jsonb
           )
           ORDER BY stages.ordinal
@@ -1362,6 +1379,13 @@ export interface ManagedStageCompensationInput {
   rolloutId: string;
   ordinal: number;
   failureCode: string;
+  /**
+   * Verified fingerprint of the restored version. Omit to let the writer
+   * resolve it from the rollout or the server's last applied pointer.
+   */
+  previousManagedFingerprint?: string | null;
+  /** Authenticated agent session for a report-driven compensation. */
+  sessionId?: string;
   /** Optional CAS token; when omitted the writer reads the current generation. */
   expectedTopologyGeneration?: number | null;
 }
@@ -1372,11 +1396,23 @@ export type ManagedStageCommitResult =
       ordinal: number;
       serverId: string;
       configVersionId: string | null;
-      /** `server.desired_revision_seq` after the bump; the stage minimum. */
+      /** `server.desired_revision_seq` issued for this attempt. */
       revisionSeq: number;
+      /** Persisted full identifier for the issued attempt. */
+      issuedRevisionSeq: number;
+      issuedAt: Date | null;
+      /** When an issued stage reads as stalled; a timeout never confirms. */
+      deadlineAt: Date | null;
       /** Publish-gate record for a staged subscriber change, if any. */
       changeId: string | null;
       topologyGeneration: number | null;
+      /** True when the statement found the attempt already issued. */
+      alreadyIssued?: boolean;
+      /** Recovery target summary on compensation. */
+      recoveryMinRevisionSeq?: number | null;
+      recoveryManagedFingerprint?: string | null;
+      recoveryDeadlineAt?: Date | null;
+      alreadyCompensated?: boolean;
     }
   | { ok: false; reason: "activation_disabled" }
   | { ok: false; reason: "rollout_not_found" }
@@ -1399,10 +1435,12 @@ export type ManagedStageCommitResult =
   | ListenerClaimConflict;
 
 /**
- * Atomic stage writer. Both methods run the whole mutation as one
- * data-modifying statement on node-postgres and neon-http; the statement's
- * CTEs re-check the rollout ordinal, the server claim, the topology generation
- * and the exact previous rows before any pointer or sequence moves.
+ * Atomic stage writer. `commitStage` advances the pointer and records the
+ * issued identifier but never confirms; `compensateStage` records the recovery
+ * target. Both methods run the whole mutation as one data-modifying statement
+ * on node-postgres and neon-http; the statement's CTEs re-check the rollout
+ * ordinal, the server claim, the topology generation and the exact previous
+ * rows before any pointer or sequence moves.
  */
 export interface ManagedStageWriter {
   commitStage(
@@ -1751,7 +1789,7 @@ function stageUpdateBuiltStatement(input: {
     SELECT 1 FROM ${managedRolloutStage}
     WHERE ${managedRolloutStage.rolloutId} = ${stage.rolloutId}::text
       AND ${managedRolloutStage.ordinal} = ${targetOrdinal}::integer
-      AND ${managedRolloutStage.state} IN ('pending', 'issued')
+      AND ${managedRolloutStage.state} = 'pending'
   )`);
   ctes.push(sql`claim_guard AS (
     SELECT 1 FROM ${managedRolloutClaim}
@@ -1823,12 +1861,17 @@ function stageUpdateBuiltStatement(input: {
   )`);
   ctes.push(sql`stage_updated AS (
     UPDATE ${managedRolloutStage}
-    SET ${sql.identifier(managedRolloutStage.state.name)} = 'confirmed',
+    SET ${sql.identifier(managedRolloutStage.state.name)} = 'issued',
+        ${sql.identifier(managedRolloutStage.issuedRevisionSeq.name)} = (
+          SELECT seq FROM server_bumped WHERE id = ${stage.serverId}::text
+        ),
         ${sql.identifier(managedRolloutStage.minRevisionSeq.name)} = (
           SELECT seq FROM server_bumped WHERE id = ${stage.serverId}::text
         ),
+        ${sql.identifier(managedRolloutStage.issuedAt.name)} = now(),
+        ${sql.identifier(managedRolloutStage.deadlineAt.name)} = now() + make_interval(secs => ${MANAGED_STAGE_DEADLINE_POLICY.stageProofSeconds}),
+        ${sql.identifier(managedRolloutStage.confirmedAt.name)} = NULL,
         ${sql.identifier(managedRolloutStage.subscriberPrevious.name)} = ${stagePreviousJson(parsed)},
-        ${sql.identifier(managedRolloutStage.confirmedAt.name)} = now(),
         ${sql.identifier(managedRolloutStage.updatedAt.name)} = now()
     WHERE ${managedRolloutStage.rolloutId} = ${stage.rolloutId}::text
       AND ${managedRolloutStage.ordinal} = ${targetOrdinal}::integer
@@ -1876,6 +1919,9 @@ function stageUpdateBuiltStatement(input: {
            stage_updated.server_id AS server_id,
            stage_updated.config_version_id AS config_version_id,
            bumped.seq AS revision_seq,
+           stage_updated.issued_revision_seq AS issued_revision_seq,
+           stage_updated.issued_at AS issued_at,
+           stage_updated.deadline_at AS deadline_at,
            ${gate.changeIdSelect} AS change_id,
            ${
              input.expectedTopologyGeneration !== null
@@ -1929,6 +1975,25 @@ async function diagnoseCommitFailure(
       reason: "stage_not_found",
       rolloutId: input.rolloutId,
       ordinal: targetOrdinal,
+    };
+  }
+  if (
+    rollout.currentOrdinal === targetOrdinal &&
+    (stage.state === "issued" || stage.state === "confirmed") &&
+    stage.issuedRevisionSeq !== null
+  ) {
+    return {
+      ok: true,
+      ordinal: stage.ordinal,
+      serverId: stage.serverId,
+      configVersionId: stage.configVersionId,
+      revisionSeq: stage.issuedRevisionSeq,
+      issuedRevisionSeq: stage.issuedRevisionSeq,
+      issuedAt: stage.issuedAt,
+      deadlineAt: stage.deadlineAt,
+      changeId: null,
+      topologyGeneration: null,
+      alreadyIssued: true,
     };
   }
   if (input.expectedTopologyGeneration !== null) {
@@ -2027,6 +2092,9 @@ export async function commitManagedStage(
             ? null
             : String(rows[0].config_version_id),
         revisionSeq: numeric(rows[0].revision_seq),
+        issuedRevisionSeq: numeric(rows[0].issued_revision_seq),
+        issuedAt: timestampValue(rows[0].issued_at),
+        deadlineAt: timestampValue(rows[0].deadline_at),
         changeId: rows[0].change_id === null ? null : String(rows[0].change_id),
         topologyGeneration:
           rows[0].topology_generation === null
@@ -2082,6 +2150,32 @@ async function buildCompensationStatement(
             )
             .limit(1)
         )[0] ?? null);
+  let targetManagedFingerprint =
+    input.previousManagedFingerprint !== undefined
+      ? input.previousManagedFingerprint
+      : (previousStage?.fingerprint ?? null);
+  if (
+    input.previousManagedFingerprint === undefined &&
+    stage.previousConfigVersionId !== null &&
+    previousStage === null
+  ) {
+    const [state] = await database
+      .select({
+        appliedConfigVersionId: managedServerState.appliedConfigVersionId,
+        appliedManagedFingerprint: managedServerState.appliedManagedFingerprint,
+        desiredConfigVersionId: managedServerState.desiredConfigVersionId,
+        desiredManagedFingerprint: managedServerState.desiredManagedFingerprint,
+      })
+      .from(managedServerState)
+      .where(eq(managedServerState.serverId, stage.serverId));
+    if (state?.appliedConfigVersionId === stage.previousConfigVersionId) {
+      targetManagedFingerprint = state.appliedManagedFingerprint;
+    } else if (
+      state?.desiredConfigVersionId === stage.previousConfigVersionId
+    ) {
+      targetManagedFingerprint = state.desiredManagedFingerprint;
+    }
+  }
 
   let current: Node | null = null;
   let snapshot: NodeCascadeSnapshot | null = null;
@@ -2179,11 +2273,21 @@ async function buildCompensationStatement(
     WHERE ${managedRollout.id} = ${stage.rolloutId}::text
       AND ${managedRollout.state} IN ${ACTIVE_ROLLOUT_STATES}
   )`);
+  if (input.sessionId) {
+    ctes.push(sql`report_session_guard AS (
+      SELECT 1 FROM ${server}
+      WHERE ${server.id} = ${stage.serverId}::text
+        AND ${server.wsSessionId} = ${input.sessionId}::text
+    )`);
+  }
   const preconditions: SQL[] = [
     sql`EXISTS (SELECT 1 FROM stage_guard)`,
     sql`EXISTS (SELECT 1 FROM claim_guard)`,
     sql`EXISTS (SELECT 1 FROM rollout_guard)`,
   ];
+  if (input.sessionId) {
+    preconditions.push(sql`EXISTS (SELECT 1 FROM report_session_guard)`);
+  }
   if (snapshot && previous?.intent.kind === "create_node") {
     const guards = snapshot.plans.map((plan) => ({
       group_id: plan.groupId,
@@ -2201,7 +2305,7 @@ async function buildCompensationStatement(
   ctes.push(sql`preconditions AS (
     SELECT 1 WHERE ${sql.join(preconditions, sql` AND `)}
   )`);
-  if (previous && expectedGeneration !== null) {
+  if (expectedGeneration !== null) {
     ctes.push(
       topologyGenerationCasCte(
         expectedGeneration,
@@ -2213,20 +2317,8 @@ async function buildCompensationStatement(
     SELECT 1 FROM preconditions
     ${expectedGeneration !== null ? sql`WHERE EXISTS (SELECT 1 FROM topology_cas)` : sql``}
   )`);
-  ctes.push(sql`failed_stage AS (
-    UPDATE ${managedRolloutStage}
-    SET ${sql.identifier(managedRolloutStage.state.name)} = 'failed',
-        ${sql.identifier(managedRolloutStage.failureCode.name)} = ${input.failureCode}::text,
-        ${sql.identifier(managedRolloutStage.updatedAt.name)} = now()
-    WHERE ${managedRolloutStage.rolloutId} = ${stage.rolloutId}::text
-      AND ${managedRolloutStage.ordinal} = ${stage.ordinal}::integer
-      AND ${managedRolloutStage.state} IN ('pending', 'issued', 'confirmed')
-      AND EXISTS (SELECT 1 FROM compensation_gate)
-    RETURNING ${managedRolloutStage}.*
-  )`);
   ctes.push(sql`run_gate AS (
-    SELECT 1 FROM failed_stage
-    WHERE EXISTS (SELECT 1 FROM compensation_gate)
+    SELECT 1 FROM compensation_gate
   )`);
 
   let nodeGateName: string | null = null;
@@ -2376,6 +2468,25 @@ async function buildCompensationStatement(
       AND EXISTS (SELECT 1 FROM mutation_gate)
     RETURNING ${server.id} AS id, ${server.desiredRevisionSeq} AS seq
   )`);
+  ctes.push(sql`stage_recovered AS (
+    UPDATE ${managedRolloutStage}
+    SET ${sql.identifier(managedRolloutStage.state.name)} = 'failed',
+        ${sql.identifier(managedRolloutStage.failureCode.name)} = ${input.failureCode}::text,
+        ${sql.identifier(managedRolloutStage.recoveryMinRevisionSeq.name)} = bumped.seq,
+        ${sql.identifier(managedRolloutStage.recoveryManagedFingerprint.name)} = ${targetManagedFingerprint}::text,
+        ${sql.identifier(managedRolloutStage.recoveryIssuedRevisionSeq.name)} = bumped.seq,
+        ${sql.identifier(managedRolloutStage.recoveryIssuedAt.name)} = now(),
+        ${sql.identifier(managedRolloutStage.recoveryDeadlineAt.name)} = now() + make_interval(secs => ${MANAGED_STAGE_DEADLINE_POLICY.stageProofSeconds}),
+        ${sql.identifier(managedRolloutStage.recoveryProvenAt.name)} = NULL,
+        ${sql.identifier(managedRolloutStage.updatedAt.name)} = now()
+    FROM ${sql.identifier(serverBumpedName)} bumped
+    WHERE ${managedRolloutStage.rolloutId} = ${stage.rolloutId}::text
+      AND ${managedRolloutStage.ordinal} = ${stage.ordinal}::integer
+      AND ${managedRolloutStage.state} IN ('pending', 'issued', 'confirmed')
+      AND bumped.id = ${stage.serverId}::text
+      AND EXISTS (SELECT 1 FROM mutation_gate)
+    RETURNING ${managedRolloutStage}.*
+  )`);
   ctes.push(sql`rollout_recovering AS (
     UPDATE ${managedRollout}
     SET ${sql.identifier(managedRollout.state.name)} = 'recovering',
@@ -2386,7 +2497,7 @@ async function buildCompensationStatement(
         ${sql.identifier(managedRollout.failureMessage.name)} = ${`recovery:${stage.previousConfigVersionId ?? "legacy"}`}::text,
         ${sql.identifier(managedRollout.updatedAt.name)} = now()
     WHERE ${managedRollout.id} = ${stage.rolloutId}::text
-      AND EXISTS (SELECT 1 FROM mutation_gate)
+      AND EXISTS (SELECT 1 FROM stage_recovered)
     RETURNING ${managedRollout}.*
   )`);
   ctes.push(sql`pointer AS (
@@ -2408,7 +2519,7 @@ async function buildCompensationStatement(
            now()
     FROM ${sql.identifier(serverBumpedName)} bumped
     WHERE bumped.id = ${stage.serverId}::text
-      AND EXISTS (SELECT 1 FROM mutation_gate)
+      AND EXISTS (SELECT 1 FROM stage_recovered)
     ON CONFLICT (${sql.identifier(managedServerState.serverId.name)}) DO UPDATE SET
       ${sql.identifier(managedServerState.desiredConfigVersionId.name)} = ${stage.previousConfigVersionId}::text,
       ${sql.identifier(managedServerState.desiredRolloutId.name)} = ${stage.previousConfigVersionId === null ? null : stage.rolloutId}::text,
@@ -2421,7 +2532,7 @@ async function buildCompensationStatement(
       ${sql.identifier(managedServerState.updatedAt.name)} = now()
     RETURNING 1
   )`);
-  const gateCtes = stageGateCtes(gate, serverBumpedName, "mutation_gate");
+  const gateCtes = stageGateCtes(gate, serverBumpedName, "stage_recovered");
   ctes.push(...gateCtes.ctes);
 
   return {
@@ -2429,15 +2540,19 @@ async function buildCompensationStatement(
       WITH ${sql.join(ctes, sql`, `)}
       SELECT ${stage.ordinal}::integer AS ordinal,
              ${stage.serverId}::text AS server_id,
-             ${stage.previousConfigVersionId}::text AS config_version_id,
+             stage_recovered.previous_config_version_id AS config_version_id,
              bumped.seq AS revision_seq,
+             stage_recovered.recovery_min_revision_seq AS recovery_min_revision_seq,
+             stage_recovered.recovery_managed_fingerprint AS recovery_managed_fingerprint,
+             stage_recovered.recovery_deadline_at AS recovery_deadline_at,
              ${gateCtes.changeIdSelect} AS change_id,
              ${
                expectedGeneration !== null
                  ? sql`(SELECT generation FROM topology_cas)`
                  : sql`NULL::integer`
              } AS topology_generation
-      FROM rollout_recovering
+      FROM stage_recovered
+      JOIN rollout_recovering ON true
       JOIN ${sql.identifier(serverBumpedName)} bumped
         ON bumped.id = ${stage.serverId}::text
     `,
@@ -2524,16 +2639,28 @@ export async function compensateManagedStage(
             ? null
             : String(rows[0].config_version_id),
         revisionSeq: numeric(rows[0].revision_seq),
+        issuedRevisionSeq: numeric(rows[0].revision_seq),
+        issuedAt: null,
+        deadlineAt: null,
         changeId: rows[0].change_id === null ? null : String(rows[0].change_id),
         topologyGeneration:
           rows[0].topology_generation === null
             ? null
             : numeric(rows[0].topology_generation),
+        recoveryMinRevisionSeq:
+          rows[0].recovery_min_revision_seq === null
+            ? null
+            : numeric(rows[0].recovery_min_revision_seq),
+        recoveryManagedFingerprint:
+          rows[0].recovery_managed_fingerprint === null
+            ? null
+            : String(rows[0].recovery_managed_fingerprint),
+        recoveryDeadlineAt: timestampValue(rows[0].recovery_deadline_at),
       };
     }
 
     const [currentStage] = await database
-      .select({ state: managedRolloutStage.state })
+      .select()
       .from(managedRolloutStage)
       .where(
         and(
@@ -2541,6 +2668,27 @@ export async function compensateManagedStage(
           eq(managedRolloutStage.ordinal, input.ordinal),
         ),
       );
+    if (
+      currentStage?.state === "failed" &&
+      currentStage.recoveryIssuedRevisionSeq !== null
+    ) {
+      return {
+        ok: true,
+        ordinal: currentStage.ordinal,
+        serverId: currentStage.serverId,
+        configVersionId: currentStage.previousConfigVersionId,
+        revisionSeq: currentStage.recoveryIssuedRevisionSeq,
+        issuedRevisionSeq: currentStage.recoveryIssuedRevisionSeq,
+        issuedAt: currentStage.recoveryIssuedAt,
+        deadlineAt: currentStage.recoveryDeadlineAt,
+        changeId: null,
+        topologyGeneration: null,
+        recoveryMinRevisionSeq: currentStage.recoveryMinRevisionSeq,
+        recoveryManagedFingerprint: currentStage.recoveryManagedFingerprint,
+        recoveryDeadlineAt: currentStage.recoveryDeadlineAt,
+        alreadyCompensated: true,
+      };
+    }
     if (
       currentStage &&
       !["pending", "issued", "confirmed"].includes(currentStage.state)

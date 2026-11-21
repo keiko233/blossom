@@ -1,0 +1,977 @@
+{
+  "type": "diff",
+  "version": "9",
+  "dialect": "postgres",
+  "id": "a7e9ba0b-9a41-4948-bf56-e74a3e8ac4e7",
+  "prevIds": ["fcec05a4-a9e9-49a4-b7df-cd875efabc4b"],
+  "footprints": [
+    {
+      "statementType": "create_table",
+      "statementTarget": ["table", "public", "managed_link_probe"],
+      "writes": [
+        "s|tbl|public.managed_link_probe",
+        "n|tbl|public.managed_link_probe",
+        "e|tbl|public.managed_link_probe",
+        "n|rel|public.managed_link_probe",
+        "n|type|public.managed_link_probe",
+        "n|rel|public.managed_link_probe_pkey"
+      ],
+      "reads": ["n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "managed_rollout_stage",
+        "issued_revision_seq"
+      ],
+      "writes": [
+        "s|col|public.managed_rollout_stage.issued_revision_seq",
+        "n|col|public.managed_rollout_stage.issued_revision_seq",
+        "e|col|public.managed_rollout_stage.issued_revision_seq"
+      ],
+      "reads": ["n|tbl|public.managed_rollout_stage", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "managed_rollout_stage",
+        "probe_link_id"
+      ],
+      "writes": [
+        "s|col|public.managed_rollout_stage.probe_link_id",
+        "n|col|public.managed_rollout_stage.probe_link_id",
+        "e|col|public.managed_rollout_stage.probe_link_id"
+      ],
+      "reads": ["n|tbl|public.managed_rollout_stage", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "managed_rollout_stage",
+        "recovery_min_revision_seq"
+      ],
+      "writes": [
+        "s|col|public.managed_rollout_stage.recovery_min_revision_seq",
+        "n|col|public.managed_rollout_stage.recovery_min_revision_seq",
+        "e|col|public.managed_rollout_stage.recovery_min_revision_seq"
+      ],
+      "reads": ["n|tbl|public.managed_rollout_stage", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "managed_rollout_stage",
+        "recovery_managed_fingerprint"
+      ],
+      "writes": [
+        "s|col|public.managed_rollout_stage.recovery_managed_fingerprint",
+        "n|col|public.managed_rollout_stage.recovery_managed_fingerprint",
+        "e|col|public.managed_rollout_stage.recovery_managed_fingerprint"
+      ],
+      "reads": ["n|tbl|public.managed_rollout_stage", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "managed_rollout_stage",
+        "recovery_issued_revision_seq"
+      ],
+      "writes": [
+        "s|col|public.managed_rollout_stage.recovery_issued_revision_seq",
+        "n|col|public.managed_rollout_stage.recovery_issued_revision_seq",
+        "e|col|public.managed_rollout_stage.recovery_issued_revision_seq"
+      ],
+      "reads": ["n|tbl|public.managed_rollout_stage", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "managed_rollout_stage",
+        "recovery_issued_at"
+      ],
+      "writes": [
+        "s|col|public.managed_rollout_stage.recovery_issued_at",
+        "n|col|public.managed_rollout_stage.recovery_issued_at",
+        "e|col|public.managed_rollout_stage.recovery_issued_at"
+      ],
+      "reads": ["n|tbl|public.managed_rollout_stage", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "managed_rollout_stage",
+        "recovery_deadline_at"
+      ],
+      "writes": [
+        "s|col|public.managed_rollout_stage.recovery_deadline_at",
+        "n|col|public.managed_rollout_stage.recovery_deadline_at",
+        "e|col|public.managed_rollout_stage.recovery_deadline_at"
+      ],
+      "reads": ["n|tbl|public.managed_rollout_stage", "n|sch|public"]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "managed_rollout_stage",
+        "recovery_proven_at"
+      ],
+      "writes": [
+        "s|col|public.managed_rollout_stage.recovery_proven_at",
+        "n|col|public.managed_rollout_stage.recovery_proven_at",
+        "e|col|public.managed_rollout_stage.recovery_proven_at"
+      ],
+      "reads": ["n|tbl|public.managed_rollout_stage", "n|sch|public"]
+    },
+    {
+      "statementType": "create_index",
+      "statementTarget": [
+        "index",
+        "public",
+        "managed_link_probe",
+        "managed_link_probe_stage_idx"
+      ],
+      "writes": [
+        "s|idx|public.managed_link_probe_stage_idx",
+        "n|idx|public.managed_link_probe_stage_idx",
+        "e|idx|public.managed_link_probe_stage_idx",
+        "n|rel|public.managed_link_probe_stage_idx"
+      ],
+      "reads": [
+        "n|tbl|public.managed_link_probe",
+        "n|sch|public",
+        "n|col|public.managed_link_probe.rollout_id",
+        "n|col|public.managed_link_probe.stage_ordinal",
+        "n|col|public.managed_link_probe.issued_at"
+      ]
+    },
+    {
+      "statementType": "create_index",
+      "statementTarget": [
+        "index",
+        "public",
+        "managed_link_probe",
+        "managed_link_probe_source_idx"
+      ],
+      "writes": [
+        "s|idx|public.managed_link_probe_source_idx",
+        "n|idx|public.managed_link_probe_source_idx",
+        "e|idx|public.managed_link_probe_source_idx",
+        "n|rel|public.managed_link_probe_source_idx"
+      ],
+      "reads": [
+        "n|tbl|public.managed_link_probe",
+        "n|sch|public",
+        "n|col|public.managed_link_probe.source_server_id",
+        "n|col|public.managed_link_probe.issued_at"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "managed_link_probe"],
+      "writes": [
+        "s|fk|public.managed_link_probe.managed_link_probe_link_id_peer_link_id_fkey",
+        "n|fk|public.managed_link_probe.managed_link_probe_link_id_peer_link_id_fkey",
+        "e|fk|public.managed_link_probe.managed_link_probe_link_id_peer_link_id_fkey",
+        "n|con|public.managed_link_probe.managed_link_probe_link_id_peer_link_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.managed_link_probe",
+        "n|sch|public",
+        "n|tbl|public.peer_link",
+        "n|sch|public",
+        "n|col|public.managed_link_probe.link_id",
+        "n|col|public.peer_link.id",
+        "e|uniqueness|public.peer_link.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "managed_link_probe"],
+      "writes": [
+        "s|fk|public.managed_link_probe.managed_link_probe_source_server_id_server_id_fkey",
+        "n|fk|public.managed_link_probe.managed_link_probe_source_server_id_server_id_fkey",
+        "e|fk|public.managed_link_probe.managed_link_probe_source_server_id_server_id_fkey",
+        "n|con|public.managed_link_probe.managed_link_probe_source_server_id_server_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.managed_link_probe",
+        "n|sch|public",
+        "n|tbl|public.server",
+        "n|sch|public",
+        "n|col|public.managed_link_probe.source_server_id",
+        "n|col|public.server.id",
+        "e|uniqueness|public.server.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "managed_link_probe"],
+      "writes": [
+        "s|fk|public.managed_link_probe.managed_link_probe_destination_server_id_server_id_fkey",
+        "n|fk|public.managed_link_probe.managed_link_probe_destination_server_id_server_id_fkey",
+        "e|fk|public.managed_link_probe.managed_link_probe_destination_server_id_server_id_fkey",
+        "n|con|public.managed_link_probe.managed_link_probe_destination_server_id_server_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.managed_link_probe",
+        "n|sch|public",
+        "n|tbl|public.server",
+        "n|sch|public",
+        "n|col|public.managed_link_probe.destination_server_id",
+        "n|col|public.server.id",
+        "e|uniqueness|public.server.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "managed_link_probe"],
+      "writes": [
+        "s|fk|public.managed_link_probe.managed_link_probe_stage_fk",
+        "n|fk|public.managed_link_probe.managed_link_probe_stage_fk",
+        "e|fk|public.managed_link_probe.managed_link_probe_stage_fk",
+        "n|con|public.managed_link_probe.managed_link_probe_stage_fk"
+      ],
+      "reads": [
+        "n|tbl|public.managed_link_probe",
+        "n|sch|public",
+        "n|tbl|public.managed_rollout_stage",
+        "n|sch|public",
+        "n|col|public.managed_link_probe.rollout_id",
+        "n|col|public.managed_link_probe.stage_ordinal",
+        "n|col|public.managed_rollout_stage.rollout_id",
+        "n|col|public.managed_rollout_stage.ordinal",
+        "e|uniqueness|public.managed_rollout_stage.ordinal.rollout_id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": ["table", "public", "managed_rollout_stage"],
+      "writes": [
+        "s|fk|public.managed_rollout_stage.managed_rollout_stage_probe_link_id_peer_link_id_fkey",
+        "n|fk|public.managed_rollout_stage.managed_rollout_stage_probe_link_id_peer_link_id_fkey",
+        "e|fk|public.managed_rollout_stage.managed_rollout_stage_probe_link_id_peer_link_id_fkey",
+        "n|con|public.managed_rollout_stage.managed_rollout_stage_probe_link_id_peer_link_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.managed_rollout_stage",
+        "n|sch|public",
+        "n|tbl|public.peer_link",
+        "n|sch|public",
+        "n|col|public.managed_rollout_stage.probe_link_id",
+        "n|col|public.peer_link.id",
+        "e|uniqueness|public.peer_link.id"
+      ]
+    }
+  ],
+  "deltas": [
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "name": "managed_link_probe",
+        "isRlsEnabled": false,
+        "entityType": "tables"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "rollout_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "stage_ordinal",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "link_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "credential_generation",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "source_server_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "destination_server_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "source_min_revision_seq",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "source_managed_fingerprint",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "destination_min_revision_seq",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "destination_managed_fingerprint",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "issued_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "expires_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "outcome",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "latency_ms",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "applied_desired_revision_seq",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "applied_managed_fingerprint",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "completed_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "recorded_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "created_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "updated_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "issued_revision_seq",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "probe_link_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "recovery_min_revision_seq",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "recovery_managed_fingerprint",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "recovery_issued_revision_seq",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "recovery_issued_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "recovery_deadline_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "recovery_proven_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "managed_link_probe_stage_idx",
+        "nameExplicit": true,
+        "columns": [
+          {
+            "value": "rollout_id",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          },
+          {
+            "value": "stage_ordinal",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          },
+          {
+            "value": "issued_at",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          }
+        ],
+        "isUnique": false,
+        "where": null,
+        "with": "",
+        "method": "btree",
+        "concurrently": false,
+        "entityType": "indexes"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "managed_link_probe_source_idx",
+        "nameExplicit": true,
+        "columns": [
+          {
+            "value": "source_server_id",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          },
+          {
+            "value": "issued_at",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          }
+        ],
+        "isUnique": false,
+        "where": null,
+        "with": "",
+        "method": "btree",
+        "concurrently": false,
+        "entityType": "indexes"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "managed_link_probe_link_id_peer_link_id_fkey",
+        "nameExplicit": false,
+        "columns": ["link_id"],
+        "schemaTo": "public",
+        "tableTo": "peer_link",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "CASCADE",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "managed_link_probe_source_server_id_server_id_fkey",
+        "nameExplicit": false,
+        "columns": ["source_server_id"],
+        "schemaTo": "public",
+        "tableTo": "server",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "CASCADE",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "managed_link_probe_destination_server_id_server_id_fkey",
+        "nameExplicit": false,
+        "columns": ["destination_server_id"],
+        "schemaTo": "public",
+        "tableTo": "server",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "CASCADE",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "managed_link_probe_stage_fk",
+        "nameExplicit": true,
+        "columns": ["rollout_id", "stage_ordinal"],
+        "schemaTo": "public",
+        "tableTo": "managed_rollout_stage",
+        "columnsTo": ["rollout_id", "ordinal"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "CASCADE",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_rollout_stage",
+        "name": "managed_rollout_stage_probe_link_id_peer_link_id_fkey",
+        "nameExplicit": false,
+        "columns": ["probe_link_id"],
+        "schemaTo": "public",
+        "tableTo": "peer_link",
+        "columnsTo": ["id"],
+        "onUpdate": "NO ACTION",
+        "onDelete": "SET NULL",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "managed_link_probe_pkey",
+        "columns": ["id"],
+        "nameExplicit": false,
+        "entityType": "pks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "managed_link_probe_stage_ordinal",
+        "value": "\"stage_ordinal\" >= 1",
+        "entityType": "checks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "managed_link_probe_credential_generation",
+        "value": "\"credential_generation\" >= 1",
+        "entityType": "checks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "managed_link_probe_revision_seqs",
+        "value": "\"source_min_revision_seq\" >= 0 AND \"destination_min_revision_seq\" >= 0",
+        "entityType": "checks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "managed_link_probe_expiry",
+        "value": "\"expires_at\" > \"issued_at\"",
+        "entityType": "checks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "managed_link_probe_outcome",
+        "value": "\"outcome\" IS NULL OR \"outcome\" IN ('succeeded', 'timeout', 'connect_failed', 'tls_failed', 'auth_rejected', 'responder_mismatch', 'generation_mismatch', 'expired', 'isolation_unavailable', 'unsupported')",
+        "entityType": "checks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "managed_link_probe",
+        "name": "managed_link_probe_latency",
+        "value": "\"latency_ms\" IS NULL OR \"latency_ms\" BETWEEN 0 AND 60000",
+        "entityType": "checks"
+      }
+    }
+  ]
+}

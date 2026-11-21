@@ -16,6 +16,7 @@ use super::{
     SessionTiming, TrafficOutcome, TrafficPorts, TrafficRequest, Wire, channels, run,
 };
 use crate::logs::{LogStore, RingLimits};
+use crate::probe::{LinkProbeOutcome, LinkProbeResult, ManagedApplied};
 use crate::ws::codec::{AgentWsFrame, UpdateStatePayload, UpdateStatusPayload, frame_type};
 use crate::ws::ports::{WsCommand, WsError};
 use crate::ws::v2::codec::{
@@ -384,6 +385,139 @@ async fn log_requests_are_answered_over_the_session() {
 async fn expect_silence(harness: &mut Harness) {
     let result = tokio::time::timeout(Duration::from_millis(200), harness.sent.recv()).await;
     assert!(result.is_err(), "unexpected frame: {result:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_link_probe_request_is_forwarded_and_its_bounded_result_is_sent() {
+    let mut harness = start(Some(D7));
+    expect_type(&mut harness, "hello").await;
+    harness.peer.send(Ok(welcome(D7, 30, None))).unwrap();
+
+    let request = json!({
+        "probeId": "probe-1",
+        "rolloutId": "rollout-1",
+        "stageOrdinal": 2,
+        "linkId": "link-1",
+        "credentialGeneration": 1,
+        "source": {
+            "serverId": "server-1",
+            "managedFingerprint": format!("sha256:{}", "a".repeat(64)),
+            "minRevisionSeq": 7
+        },
+        "destination": {
+            "serverId": "server-2",
+            "managedFingerprint": format!("sha256:{}", "b".repeat(64)),
+            "minRevisionSeq": 5
+        },
+        "issuedAt": "2026-11-20T00:00:00.000Z",
+        "expiresAt": "2026-11-20T00:01:00.000Z"
+    });
+    harness
+        .peer
+        .send(Ok(peer_frame("link_probe.request", request)))
+        .unwrap();
+    let job = harness
+        .core
+        .probe_jobs
+        .recv()
+        .await
+        .expect("the probe reached the core");
+    assert_eq!(job.server_id, "server-1");
+    assert_eq!(job.request.probe_id, "probe-1");
+    assert_eq!(job.request.link_id, "link-1");
+    assert!(!job.cancel.is_cancelled());
+
+    // A repeated request while the first is in flight must not start a second
+    // execution.
+    harness
+        .peer
+        .send(Ok(peer_frame(
+            "link_probe.request",
+            json!({
+                "probeId": "probe-1",
+                "rolloutId": "rollout-1",
+                "stageOrdinal": 2,
+                "linkId": "link-1",
+                "credentialGeneration": 1,
+                "source": {
+                    "serverId": "server-1",
+                    "managedFingerprint": format!("sha256:{}", "a".repeat(64)),
+                    "minRevisionSeq": 7
+                },
+                "destination": {
+                    "serverId": "server-2",
+                    "managedFingerprint": format!("sha256:{}", "b".repeat(64)),
+                    "minRevisionSeq": 5
+                },
+                "issuedAt": "2026-11-20T00:00:00.000Z",
+                "expiresAt": "2026-11-20T00:01:00.000Z"
+            }),
+        )))
+        .unwrap();
+    assert!(harness.core.probe_jobs.try_recv().is_err());
+
+    job.reply
+        .send(LinkProbeResult {
+            probe_id: "probe-1".to_string(),
+            rollout_id: "rollout-1".to_string(),
+            stage_ordinal: 2,
+            link_id: "link-1".to_string(),
+            outcome: LinkProbeOutcome::Succeeded,
+            applied: ManagedApplied {
+                desired_revision_seq: 7,
+                managed_fingerprint: Some(format!("sha256:{}", "a".repeat(64))),
+            },
+            latency_ms: Some(12),
+            completed_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+    let frame = expect_type(&mut harness, "link_probe.result").await;
+    assert_eq!(frame["probeId"], "probe-1");
+    assert_eq!(frame["outcome"], "succeeded");
+    assert_eq!(frame["applied"]["desiredRevisionSeq"], 7);
+
+    harness.cancel.cancel();
+    let _ = harness.task.await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_session_end_cancels_any_probe_still_running_for_it() {
+    let mut harness = start(Some(D7));
+    expect_type(&mut harness, "hello").await;
+    harness.peer.send(Ok(welcome(D7, 30, None))).unwrap();
+    harness
+        .peer
+        .send(Ok(peer_frame(
+            "link_probe.request",
+            json!({
+                "probeId": "probe-cancel",
+                "rolloutId": "rollout-1",
+                "stageOrdinal": 2,
+                "linkId": "link-1",
+                "credentialGeneration": 1,
+                "source": {
+                    "serverId": "server-1",
+                    "managedFingerprint": format!("sha256:{}", "a".repeat(64)),
+                    "minRevisionSeq": 7
+                },
+                "destination": {
+                    "serverId": "server-2",
+                    "managedFingerprint": format!("sha256:{}", "b".repeat(64)),
+                    "minRevisionSeq": 5
+                },
+                "issuedAt": "2026-11-20T00:00:00.000Z",
+                "expiresAt": "2026-11-20T00:01:00.000Z"
+            }),
+        )))
+        .unwrap();
+    let job = harness.core.probe_jobs.recv().await.expect("a probe job");
+    harness.cancel.cancel();
+    let _ = harness.task.await;
+    assert!(
+        job.cancel.is_cancelled(),
+        "the job token is scoped to the connection"
+    );
 }
 
 #[tokio::test(start_paused = true)]

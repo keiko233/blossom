@@ -15,6 +15,7 @@ const TARGET_LABELS: Record<string, () => string> = {
   redeem_code: () => m.admin_audit_target_redeem_code(),
   audit_log: () => m.admin_audit_target_audit_log(),
   setting: () => m.admin_audit_target_setting(),
+  managed_rollout: () => m.admin_audit_target_managed_rollout(),
 };
 
 /** Display name of a stored target type; unknown types are shown as stored. */
