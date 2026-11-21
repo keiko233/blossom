@@ -275,6 +275,10 @@ export function SchemaField({
             <Field>
               <FieldLabel>{label}</FieldLabel>
               <Select
+                items={items.map((opt) => ({
+                  label: opt === "" ? "(none)" : opt,
+                  value: opt,
+                }))}
                 value={current}
                 onValueChange={(v) => field.handleChange(v)}
               >
@@ -556,6 +560,7 @@ function DiscriminatedGroup({
               <Field>
                 <FieldLabel>{humanizeKey(du.key)}</FieldLabel>
                 <Select
+                  items={values.map((v) => ({ label: v, value: v }))}
                   value={current}
                   onValueChange={(v) => field.handleChange(v)}
                 >

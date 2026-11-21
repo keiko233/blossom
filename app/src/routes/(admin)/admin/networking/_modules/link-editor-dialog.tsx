@@ -316,6 +316,7 @@ export function LinkEditorDialog({
                       {m.admin_networking_links_field_protocol()}
                     </FieldLabel>
                     <Select
+                      items={{ vless: "VLESS", trojan: "Trojan" }}
                       value={protocol}
                       onValueChange={(value) =>
                         setProtocol(value as "trojan" | "vless")

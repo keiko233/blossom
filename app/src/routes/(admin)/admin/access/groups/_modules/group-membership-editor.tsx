@@ -322,6 +322,17 @@ export function GroupMembershipEditor({
                 />
                 <div className="grid grid-cols-2 gap-2">
                   <Select
+                    items={[
+                      {
+                        label:
+                          m.admin_proxies_groups_members_filter_all_protocols(),
+                        value: ALL_FILTER,
+                      },
+                      ...protocolOptions.map((value) => ({
+                        label: value,
+                        value,
+                      })),
+                    ]}
                     value={protocol ?? ALL_FILTER}
                     onValueChange={(next) =>
                       setProtocol(
@@ -347,6 +358,15 @@ export function GroupMembershipEditor({
                     </SelectPopup>
                   </Select>
                   <Select
+                    items={{
+                      [ALL_FILTER]:
+                        m.admin_proxies_groups_members_filter_all_readiness(),
+                      ready: m.admin_proxies_groups_members_readiness_ready(),
+                      pending:
+                        m.admin_proxies_groups_members_readiness_pending(),
+                      withheld:
+                        m.admin_proxies_groups_members_readiness_withheld(),
+                    }}
                     value={readiness ?? ALL_FILTER}
                     onValueChange={(next) =>
                       setReadiness(
