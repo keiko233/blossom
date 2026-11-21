@@ -27,5 +27,8 @@ mod store;
 mod systemd;
 
 pub(crate) use helper::{ServiceControlArgs, run as run_control};
+pub(crate) use journal::{Generation, RuntimeInstance};
 pub(crate) use native::NativeRuntime;
 pub(crate) use ports::ActiveState;
+#[cfg(test)]
+pub(crate) use ports::{InvocationId, ServiceIdentity};

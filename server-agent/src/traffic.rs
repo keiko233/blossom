@@ -48,7 +48,7 @@ const STREAM_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 /// Reconnect backoff for the connection stream.
 const STREAM_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(30);
 
-const MAX_ENTRIES_PER_REPORT: usize = 10_000;
+pub(crate) const MAX_ENTRIES_PER_REPORT: usize = 10_000;
 /// Upper bound on entries held in sealed batches (disk and memory). Beyond it,
 /// new deltas stay in the in-memory accumulator, which is bounded by the number
 /// of distinct subscriptions, until the queue drains.
@@ -59,7 +59,7 @@ const MAX_PENDING_ENTRIES: usize = 200_000;
 const MAX_PENDING_AGE_DAYS: i64 = 7;
 const MAX_SENDS_PER_CYCLE: usize = 20;
 const MAX_REJECTED_KEPT: usize = 16;
-const BATCH_FORMAT_VERSION: u32 = 1;
+pub(crate) const BATCH_FORMAT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy)]
 struct Limits {
@@ -195,7 +195,7 @@ fn to_body(batch: &Batch) -> Result<ReportAgentTrafficBody, String> {
 /// random bits. Random bits come from the std hasher's per-instance OS-seeded
 /// keys; uniqueness only has to hold per server, across restarts, for the
 /// control plane's retention window. Matches `[A-Za-z0-9._-]{8,128}`.
-fn new_report_id(now: DateTime<Utc>) -> String {
+pub(crate) fn new_report_id(now: DateTime<Utc>) -> String {
     let random = || {
         let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
         hasher.write_i64(now.timestamp_nanos_opt().unwrap_or_default());
@@ -406,7 +406,7 @@ impl PendingQueue {
     }
 }
 
-fn read_batch(path: &Path) -> Result<Batch, String> {
+pub(crate) fn read_batch(path: &Path) -> Result<Batch, String> {
     let bytes = fs::read(path).map_err(|e| e.to_string())?;
     let batch: Batch = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
@@ -419,7 +419,7 @@ fn read_batch(path: &Path) -> Result<Batch, String> {
     Ok(batch)
 }
 
-fn create_private_dir(dir: &Path) -> io::Result<()> {
+pub(crate) fn create_private_dir(dir: &Path) -> io::Result<()> {
     fs::create_dir_all(dir)?;
     #[cfg(unix)]
     {
@@ -430,7 +430,7 @@ fn create_private_dir(dir: &Path) -> io::Result<()> {
 }
 
 /// Durable write: temp file, fsync, rename, fsync of the directory.
-fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
     let tmp = dir.join(format!("{name}.tmp"));
     let target = dir.join(name);
     let result = (|| {
@@ -722,7 +722,10 @@ impl TrafficReporter {
     }
 }
 
-fn drain_entries(pending: &mut HashMap<String, (u64, u64)>, max: usize) -> Vec<BatchEntry> {
+pub(crate) fn drain_entries(
+    pending: &mut HashMap<String, (u64, u64)>,
+    max: usize,
+) -> Vec<BatchEntry> {
     let mut out = Vec::with_capacity(max.min(pending.len()));
     let keys: Vec<String> = pending.keys().cloned().collect();
 

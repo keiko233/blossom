@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use anyhow::{Result, bail};
 use chrono::Utc;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
@@ -33,6 +33,9 @@ use crate::acme::solver_dns01::DnsAck;
 use crate::config::{AgentPolicy, ConfigError, ConfigManager};
 use crate::log_policy::{LogPolicy, PolicyAction, PolicyRequest, SOURCES, Source as PolicySource};
 use crate::logs::{LogStore, SecretScope};
+use crate::metering::{
+    MeteringConfig, MeteringState, MeteringWorker, NativeMetering, TonicEventSource,
+};
 use crate::oauth::OAuthTokenProvider;
 use crate::process::{ProcessState, SingBoxManager, resolve_binary, singbox_version};
 use crate::service::{ActiveState, NativeRuntime};
@@ -50,13 +53,13 @@ use crate::ws::v2::codec::{
 use crate::ws::v2::link::{self, LinkOptions};
 use crate::ws::v2::session::{
     self, ApplyJob, ApplyOutcome, ApplyResult, Command, CoreStatus, HelloIdentity, LogPolicyJob,
-    SnapshotRefusal,
+    SnapshotRefusal, TrafficPorts,
 };
 use crate::ws::v2::telemetry;
-use crate::ws::v2::traffic::run_reporter;
+use crate::ws::v2::traffic::{SessionSink, run_reporter};
 use crate::{
-    AGENT_BUILD_ID, AGENT_VERSION, AgentStatus, Args, AuthMode, ReportedError, ServiceStartup,
-    apply_fetched, apply_update_trigger, certificate_deployment, handle_pty_event,
+    AGENT_BUILD_ID, AGENT_VERSION, AgentStatus, Args, AuthMode, NativeApply, ReportedError,
+    ServiceStartup, apply_fetched, apply_update_trigger, certificate_deployment, handle_pty_event,
     handle_pty_frame, new_acme_manager, new_pty_manager, new_update_manager, reconcile_updates,
     record_config_error, shutdown_signal, start_last_known_good, update_status_payload_from,
 };
@@ -169,8 +172,20 @@ pub async fn run(
         });
     }
 
-    let endpoint = config.api_endpoint().clone();
-    let reporter = TrafficReporter::new(endpoint.addr, endpoint.secret, state_dir.join("traffic"))?;
+    // Processkit and Docker keep the existing reporter and must fail startup
+    // before any connection task is spawned. Native mode uses the metering
+    // worker below instead and never constructs this reporter.
+    let legacy_reporter = match native.as_ref() {
+        Some(_) => None,
+        None => {
+            let endpoint = config.api_endpoint().clone();
+            Some(TrafficReporter::new(
+                endpoint.addr,
+                endpoint.secret,
+                state_dir.join("traffic"),
+            )?)
+        }
+    };
 
     let initial = snapshot(
         &config,
@@ -227,12 +242,85 @@ pub async fn run(
         )
         .await;
     });
-    let traffic_task = tokio::spawn(run_reporter(
-        reporter,
-        traffic_ports,
-        Duration::from_secs(args.v2_traffic_interval_seconds),
-        cancel.clone(),
-    ));
+    // In native mode the agent may not carry a local sing-box binary at all;
+    // the helper's committed release is the version whose stats service will
+    // actually be consumed.
+    let metering_version = match native.as_ref() {
+        Some(native) => match native.committed_binary().await {
+            Ok(Some(path)) => singbox_version(&path)
+                .await
+                .or_else(|| sing_box_version.clone()),
+            Ok(None) => sing_box_version.clone(),
+            Err(error) => {
+                warn!("cannot read the committed native binary version for metering: {error}");
+                sing_box_version.clone()
+            }
+        },
+        None => sing_box_version.clone(),
+    };
+    let stats_supported = metering_version
+        .as_deref()
+        .is_some_and(supports_singbox_version);
+    let mut metering = None;
+    let traffic_task = if let Some(native_runtime) = native.as_ref() {
+        match MeteringState::open(MeteringConfig::new(&state_dir), Utc::now()) {
+            Ok(state) => {
+                let (observations, receiver) = mpsc::channel(8);
+                let worker = MeteringWorker::new(state, Arc::new(TonicEventSource));
+                let TrafficPorts { requests, online } = traffic_ports;
+                let sink = SessionSink::new(requests, online.clone());
+                let task = tokio::spawn(worker.run(
+                    receiver,
+                    sink,
+                    Duration::from_secs(args.v2_traffic_interval_seconds),
+                    cancel.clone(),
+                ));
+                let mut bridge = NativeMetering::new(observations, stats_supported);
+                match native_runtime.committed_generation().await {
+                    Ok(Some(generation)) => match config.active_inbound_classification() {
+                        Ok(Some(classification)) => bridge.register(
+                            generation,
+                            classification,
+                            crate::metering::StatsEndpoint::new(
+                                config.api_endpoint().addr.clone(),
+                                config.api_endpoint().secret.clone(),
+                            ),
+                        ),
+                        Ok(None) => warn!(
+                            "native runtime is committed but no active config exists for metering adoption"
+                        ),
+                        Err(error) => warn!(
+                            "cannot classify the committed active config; metering stays unavailable: {error}"
+                        ),
+                    },
+                    Ok(None) => warn!(
+                        "native runtime has no committed generation; metering adoption is deferred"
+                    ),
+                    Err(error) => warn!(
+                        "cannot read the committed native generation; metering adoption is deferred: {error}"
+                    ),
+                }
+                bridge.observe(native_runtime).await;
+                metering = Some(bridge);
+                Some(task)
+            }
+            Err(error) => {
+                error!(
+                    "restart-safe metering is unavailable; native accounting is not started: {error}"
+                );
+                None
+            }
+        }
+    } else {
+        let reporter = legacy_reporter
+            .expect("a legacy reporter is created exactly when native mode is disabled");
+        Some(tokio::spawn(run_reporter(
+            reporter,
+            traffic_ports,
+            Duration::from_secs(args.v2_traffic_interval_seconds),
+            cancel.clone(),
+        )))
+    };
 
     let probation = Duration::from_millis(args.v2_probation_ms);
     let policy = AgentPolicy {
@@ -261,6 +349,10 @@ pub async fn run(
                 let Some(job) = job else {
                     break;
                 };
+                let native_apply = native.as_ref().map(|runtime| NativeApply {
+                    runtime,
+                    metering: metering.as_mut(),
+                });
                 let result = apply_job(
                     job,
                     &mut config,
@@ -268,7 +360,7 @@ pub async fn run(
                     &bin,
                     &mut status,
                     probation,
-                    native.as_ref(),
+                    native_apply,
                 )
                 .await;
                 if core.results.send(result).await.is_err() {
@@ -276,7 +368,14 @@ pub async fn run(
                 }
             }
             Some(()) = core.disabled.recv() => {
-                apply_administrative_disable(&mut config, &mut manager, &bin, native.as_ref()).await;
+                apply_administrative_disable(
+                    &mut config,
+                    &mut manager,
+                    &bin,
+                    native.as_ref(),
+                    metering.as_mut(),
+                )
+                .await;
             }
             job = core.log_jobs.recv() => {
                 let Some(job) = job else {
@@ -420,7 +519,11 @@ pub async fn run(
             }
             _ = runtime_tick.tick() => {
                 if let Some(native) = native.as_ref() {
-                    native.refresh_observation().await;
+                    if let Some(metering) = metering.as_mut() {
+                        metering.observe(native).await;
+                    } else {
+                        native.refresh_observation().await;
+                    }
                 }
             }
         }
@@ -446,7 +549,9 @@ pub async fn run(
 
     cancel.cancel();
     let _ = link_task.await;
-    let _ = traffic_task.await;
+    if let Some(traffic_task) = traffic_task {
+        let _ = traffic_task.await;
+    }
     for exit in pty_manager.close_all(crate::pty::PtyExitReason::AgentDisconnected) {
         crate::send_pty_exit(core.outbound.as_ref(), exit);
     }
@@ -468,12 +573,16 @@ async fn apply_administrative_disable(
     manager: &mut Option<SingBoxManager>,
     bin: &Path,
     native: Option<&NativeRuntime>,
+    mut metering: Option<&mut NativeMetering>,
 ) {
     if config.administratively_disabled() {
         if let Some(native) = native
             && let Err(error) = native.disable().await
         {
             error!("failed to repeat native disable intent: {error}");
+        }
+        if let (Some(native), Some(metering)) = (native, metering.as_deref_mut()) {
+            metering.observe(native).await;
         }
         return;
     }
@@ -491,6 +600,9 @@ async fn apply_administrative_disable(
         if let Err(error) = native.disable().await {
             error!("failed to record native disable intent: {error}");
             return;
+        }
+        if let Some(metering) = metering {
+            metering.observe(native).await;
         }
         info!(
             revision = %candidate.revision,
@@ -615,7 +727,7 @@ async fn apply_job(
     bin: &Path,
     status: &mut AgentStatus,
     probation: Duration,
-    native: Option<&NativeRuntime>,
+    native: Option<NativeApply<'_>>,
 ) -> ApplyResult {
     let ApplyJob {
         request_id,

@@ -40,6 +40,7 @@ use crate::log_policy::{
     Level as LogLevelPolicy, LogOverlay, LogPolicy, Source as LogSourcePolicy,
 };
 use crate::logs::{LogStore, SecretRegistryFull, SecretScope};
+use crate::metering::InboundClassification;
 
 /// The agent always injects its own `api` service for traffic stats. The
 /// secret is per agent run (OS CSPRNG), the port is any free loopback port;
@@ -378,6 +379,26 @@ impl ConfigManager {
 
     pub fn api_endpoint(&self) -> &ApiEndpoint {
         &self.api_endpoint
+    }
+
+    /// Inbound classification of the committed active config. It is fixed by
+    /// the generation on disk, never by the live connection stream.
+    pub(crate) fn active_inbound_classification(&self) -> Result<Option<InboundClassification>> {
+        if !self.active_path.exists() {
+            return Ok(None);
+        }
+        let config = read_config_map(&self.active_path)?;
+        InboundClassification::from_committed_config(&config)
+            .map(Some)
+            .map_err(|error| anyhow::anyhow!(error))
+    }
+
+    /// Inbound classification of the staged candidate, used when its
+    /// generation is registered before a native trial.
+    pub(crate) fn candidate_inbound_classification(&self) -> Result<InboundClassification> {
+        let config = read_config_map(&self.candidate_path)?;
+        InboundClassification::from_committed_config(&config)
+            .map_err(|error| anyhow::anyhow!(error))
     }
 
     /// Registers the credentials of the running and staged configs plus any

@@ -14,6 +14,7 @@ mod client;
 mod config;
 mod log_policy;
 mod logs;
+mod metering;
 mod oauth;
 mod process;
 mod pty;
@@ -53,6 +54,7 @@ use crate::log_policy::{
     PolicyStatus, Source as PolicySource,
 };
 use crate::logs::{CaptureLayer, LogStore, SecretScope};
+use crate::metering::{NativeMetering, StatsEndpoint};
 use crate::process::{ProcessState, SingBoxManager, check_config, resolve_binary, singbox_version};
 use crate::service::NativeRuntime;
 use crate::traffic::TrafficReporter;
@@ -1164,6 +1166,7 @@ async fn apply_native_fetched(
     fetched: FetchStatus,
     probation: Duration,
     native: &NativeRuntime,
+    mut metering: Option<&mut NativeMetering>,
 ) -> Result<AgentPolicy> {
     let (policy, candidate) = match fetched {
         FetchStatus::Unchanged(policy) => {
@@ -1222,6 +1225,56 @@ async fn apply_native_fetched(
         return Ok(policy);
     }
 
+    let classification = match config.candidate_inbound_classification() {
+        Ok(classification) => classification,
+        Err(error) => {
+            let message = format!("cannot classify the candidate's committed inbounds: {error}");
+            status.config_state = "rejected";
+            config.mark_candidate_error(&candidate, "metering", &message);
+            status.error = Some(ReportedError {
+                phase: "preflight",
+                code: "METERING_CLASSIFICATION_UNAVAILABLE",
+                message,
+                node_id: None,
+                occurred_at: Utc::now(),
+            });
+            return Ok(policy);
+        }
+    };
+    // A zero-user config tears down listeners and has nothing to bill, so a
+    // broken metering worker must not strand it. Any billable inbound still
+    // requires the worker and a complete classification.
+    if !classification.is_empty() {
+        let Some(metering) = metering.as_deref_mut() else {
+            status.config_state = "apply_failed";
+            config.mark_candidate_error(
+                &candidate,
+                "metering",
+                "the restart-safe metering worker is unavailable",
+            );
+            status.error = Some(ReportedError {
+                phase: "apply",
+                code: "METERING_UNAVAILABLE",
+                message: "native activation requires the restart-safe metering worker".to_string(),
+                node_id: None,
+                occurred_at: Utc::now(),
+            });
+            return Ok(policy);
+        };
+        if let Err(error) = metering.require_ready(&classification) {
+            status.config_state = "rejected";
+            config.mark_candidate_error(&candidate, "metering", &error.to_string());
+            status.error = Some(ReportedError {
+                phase: "preflight",
+                code: "METERING_UNAVAILABLE",
+                message: error.to_string(),
+                node_id: None,
+                occurred_at: Utc::now(),
+            });
+            return Ok(policy);
+        }
+    }
+
     if let Err(error) = native.enable().await {
         status.config_state = "apply_failed";
         config.mark_candidate_error(&candidate, "native_enable", &error.to_string());
@@ -1250,8 +1303,21 @@ async fn apply_native_fetched(
             return Ok(policy);
         }
     };
+    if let Some(metering) = metering.as_deref_mut() {
+        metering.register(
+            record.generation,
+            classification,
+            StatsEndpoint::new(
+                config.api_endpoint().addr.clone(),
+                config.api_endpoint().secret.clone(),
+            ),
+        );
+    }
     if let Err(error) = native.begin_trial(record.clone(), probation).await {
         let _ = native.rollback().await;
+        if let Some(metering) = metering.as_deref_mut() {
+            metering.observe(native).await;
+        }
         status.config_state = "apply_failed";
         config.mark_candidate_error(&candidate, "native_trial", &error.to_string());
         status.error = Some(ReportedError {
@@ -1263,6 +1329,9 @@ async fn apply_native_fetched(
         });
         return Ok(policy);
     }
+    if let Some(metering) = metering.as_deref_mut() {
+        metering.observe(native).await;
+    }
 
     tokio::time::sleep(probation).await;
     match native.commit_and_confirm(record.generation).await {
@@ -1272,10 +1341,16 @@ async fn apply_native_fetched(
             config.set_runtime_confirmed(true);
             status.config_state = "applied";
             status.error = None;
+            if let Some(metering) = metering.as_deref_mut() {
+                metering.observe(native).await;
+            }
             info!(revision = %candidate.revision, "sing-box config {} applied natively", candidate.revision);
         }
         Err(error) => {
             let _ = native.rollback().await;
+            if let Some(metering) = metering {
+                metering.observe(native).await;
+            }
             config.mark_candidate_error(
                 &candidate,
                 "health",
@@ -1294,6 +1369,14 @@ async fn apply_native_fetched(
     Ok(policy)
 }
 
+/// The tasks that only the opt-in native backend performs: the runtime
+/// adapter and its one metering bridge. Keeping them together keeps the
+/// ordinary apply signature from growing another backend-specific argument.
+pub(crate) struct NativeApply<'a> {
+    pub(crate) runtime: &'a NativeRuntime,
+    pub(crate) metering: Option<&'a mut NativeMetering>,
+}
+
 /// Applies a compiled desired state with every safety invariant: candidate
 /// preflight, promotion, process replacement, probation, then commit or
 /// rollback. The HTTP poll path and the WebSocket v2 snapshot path both use it.
@@ -1304,10 +1387,11 @@ async fn apply_fetched(
     status: &mut AgentStatus,
     fetched: FetchStatus,
     probation: Duration,
-    native: Option<&NativeRuntime>,
+    native: Option<NativeApply<'_>>,
 ) -> Result<AgentPolicy> {
-    if let Some(native) = native {
-        return apply_native_fetched(config, bin, status, fetched, probation, native).await;
+    if let Some(NativeApply { runtime, metering }) = native {
+        return apply_native_fetched(config, bin, status, fetched, probation, runtime, metering)
+            .await;
     }
     let (policy, candidate) = match fetched {
         FetchStatus::Unchanged(policy) => {

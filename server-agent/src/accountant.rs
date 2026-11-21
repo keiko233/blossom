@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::stats::{ConnectionEvent, ConnectionEvents};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,6 +68,24 @@ pub struct ConnectionAccountant {
 /// Larger than sing-box's own closed-connection history (1000) so a replayed
 /// id is always still remembered.
 const FINALISED_LIMIT: usize = 4096;
+
+/// Durable form of the accountant, committed in the runtime checkpoint.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountantState {
+    pub tracked: Vec<TrackedConnection>,
+    /// Oldest first.
+    pub finalised: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackedConnection {
+    pub id: String,
+    pub user: String,
+    pub uplink: u64,
+    pub downlink: u64,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Accounted {
@@ -199,6 +219,76 @@ impl ConnectionAccountant {
         out
     }
 
+    /// Rebuilds an accountant from a committed checkpoint. Duplicate and
+    /// excess finalised ids are dropped, keeping the newest.
+    pub fn from_state(state: AccountantState) -> Self {
+        let mut accountant = Self::new();
+        for connection in state.tracked {
+            accountant.tracked.insert(
+                connection.id,
+                Accounted {
+                    user: connection.user,
+                    uplink: connection.uplink,
+                    downlink: connection.downlink,
+                },
+            );
+        }
+        for id in &state.finalised {
+            accountant.mark_finalised(id);
+        }
+        accountant
+    }
+
+    /// The accounted totals and finalised ids, in a deterministic order, for
+    /// a checkpoint committed together with the deltas they produced.
+    pub fn state(&self) -> AccountantState {
+        let mut tracked: Vec<TrackedConnection> = self
+            .tracked
+            .iter()
+            .map(|(id, accounted)| TrackedConnection {
+                id: id.clone(),
+                user: accounted.user.clone(),
+                uplink: accounted.uplink,
+                downlink: accounted.downlink,
+            })
+            .collect();
+        tracked.sort_by(|a, b| a.id.cmp(&b.id));
+        AccountantState {
+            tracked,
+            finalised: self.finalised.iter().cloned().collect(),
+        }
+    }
+
+    /// Adopts a snapshot without paying for it: live totals become accounted
+    /// and replayed closed ids become finalised. Used when the runtime may
+    /// have served before and no trustworthy checkpoint says what was paid,
+    /// so anything before this snapshot is an unobservable window rather than
+    /// a historical recharge. Ids absent from the snapshot are dropped.
+    pub fn baseline(&mut self, snapshot: &ConnectionEvents) {
+        self.tracked.clear();
+        for event in &snapshot.events {
+            let Some((user, (uplink, downlink))) = Self::snapshot_totals(event) else {
+                continue;
+            };
+            let closed = event
+                .connection
+                .as_ref()
+                .is_some_and(|connection| connection.closed_at != 0);
+            if closed {
+                self.mark_finalised(&event.id);
+                continue;
+            }
+            self.tracked.insert(
+                event.id.clone(),
+                Accounted {
+                    user,
+                    uplink,
+                    downlink,
+                },
+            );
+        }
+    }
+
     fn mark_finalised(&mut self, id: &str) {
         if !self.finalised_set.insert(id.to_owned()) {
             return;
@@ -242,6 +332,7 @@ mod tests {
 
     fn connection(user: &str, uplink_total: i64, downlink_total: i64) -> Connection {
         Connection {
+            inbound: "node-test".to_string(),
             user: user.to_string(),
             closed_at: 0,
             uplink_total,
@@ -469,6 +560,61 @@ mod tests {
         assert_eq!(accountant.apply(&replay()).get("user-a"), Some(&(30, 20)));
         assert!(accountant.apply(&replay()).is_empty());
         assert!(accountant.is_empty());
+    }
+
+    #[test]
+    fn restored_state_reconciles_like_the_original() {
+        let mut original = ConnectionAccountant::new();
+        original.apply(&snapshot(vec![new_event_with_totals("c1", "user-a", 0, 0)]));
+        original.apply(&updates(vec![update_event("c1", "user-a", 40, 10)]));
+        original.apply(&snapshot(vec![
+            new_event_with_totals("c1", "user-a", 40, 10),
+            closed_snapshot_event("c0", "user-b", 7, 7),
+        ]));
+
+        let state = original.state();
+        let mut restored = ConnectionAccountant::from_state(state.clone());
+        assert_eq!(restored.state(), state);
+
+        let next = || {
+            snapshot(vec![
+                new_event_with_totals("c1", "user-a", 55, 10),
+                closed_snapshot_event("c0", "user-b", 7, 7),
+            ])
+        };
+        assert_eq!(original.apply(&next()), restored.apply(&next()));
+    }
+
+    #[test]
+    fn restored_finalised_ids_are_bounded_and_deduplicated() {
+        let mut finalised: Vec<String> = (0..super::FINALISED_LIMIT + 10)
+            .map(|index| format!("c{index}"))
+            .collect();
+        finalised.push("c20".to_owned());
+        let restored = ConnectionAccountant::from_state(super::AccountantState {
+            tracked: Vec::new(),
+            finalised,
+        });
+        let state = restored.state();
+        assert_eq!(state.finalised.len(), super::FINALISED_LIMIT);
+        assert_eq!(state.finalised.first().map(String::as_str), Some("c10"));
+    }
+
+    #[test]
+    fn baseline_pays_nothing_and_later_deltas_are_billed() {
+        let mut accountant = ConnectionAccountant::new();
+        accountant.baseline(&snapshot(vec![
+            new_event_with_totals("live", "user-a", 500, 50),
+            closed_snapshot_event("gone", "user-b", 9, 9),
+        ]));
+
+        // The same snapshot replayed after a stream reconnect pays nothing.
+        let replay = accountant.apply(&snapshot(vec![
+            new_event_with_totals("live", "user-a", 520, 50),
+            closed_snapshot_event("gone", "user-b", 9, 9),
+        ]));
+        assert_eq!(replay.get("user-a"), Some(&(20, 0)));
+        assert_eq!(replay.get("user-b"), None);
     }
 
     #[test]
