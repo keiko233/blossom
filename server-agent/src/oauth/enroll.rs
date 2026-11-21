@@ -9,6 +9,7 @@ use serde_json::Value;
 use super::credentials::{
     Credentials, endpoint, parse_base_url, read_protected_file, write_atomic_protected,
 };
+use super::host::{HostInfo, InstallMode};
 use super::http::{MAX_RESPONSE_BYTES, client, read_bounded};
 
 /// Maximum size of the one-line grant file: the contract caps the redeemed
@@ -31,6 +32,12 @@ pub(crate) struct EnrollArgs {
     /// Destination credential file. It is written atomically with mode 0600.
     #[arg(long, value_name = "FILE")]
     pub(crate) credentials_file: PathBuf,
+
+    /// How this agent is installed (`docker` or `host`). Reported to the
+    /// control plane with the enrollment; `/.dockerenv` selects `docker`
+    /// when the flag and `AGENT_INSTALL_MODE` are unset.
+    #[arg(long, env = "AGENT_INSTALL_MODE", value_enum)]
+    pub(crate) install_mode: Option<InstallMode>,
 }
 
 /// Redeems one enrollment grant exactly once and writes the response verbatim.
@@ -43,8 +50,12 @@ pub(crate) async fn run_enroll(args: &EnrollArgs) -> anyhow::Result<()> {
     let grant = read_grant(&args.grant_file)?;
     let redeem_url = endpoint(&base, "agent/enrollment/redeem")?;
 
-    let payload = serde_json::to_vec(&serde_json::json!({ "enrollmentGrant": grant }))
-        .context("cannot encode the enrollment request")?;
+    let host_info = HostInfo::detect(args.install_mode);
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "enrollmentGrant": grant,
+        "hostInfo": host_info,
+    }))
+    .context("cannot encode the enrollment request")?;
     let response = client()?
         .post(redeem_url)
         .header(CONTENT_TYPE, "application/json")

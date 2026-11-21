@@ -21,6 +21,11 @@ download_dir="$data_dir/downloads"
 agent_bin=${AGENT_BIN_PATH:-$bin_dir/server-agent}
 sing_box_bin=${AGENT_SING_BOX_PATH:-$bin_dir/sing-box}
 seed_dir=${AGENT_SEED_DIR:-}
+# OAuth onboarding: the credential file is written once by `server-agent
+# enroll` from a one-time grant, then reused for every restart.
+agent_url=${AGENT_URL:-}
+credentials_file=${AGENT_CREDENTIALS_FILE:-$data_dir/credentials.json}
+grant_file=${AGENT_GRANT_FILE:-$data_dir/enroll.grant}
 
 export AGENT_DATA_DIR="$data_dir"
 export AGENT_STATE_DIR="$state_dir"
@@ -41,6 +46,17 @@ github_ipv6=${AGENT_GITHUB_IPV6:-prefer}
 
 log() {
   printf '[entrypoint] %s\n' "$*" >&2
+}
+
+# Removes a one-time secret without leaving it recoverable by a later reader.
+secure_remove() {
+  file=$1
+  [ -e "$file" ] || return 0
+  if command -v shred >/dev/null 2>&1; then
+    shred -u "$file" 2>/dev/null && return 0
+  fi
+  : >"$file" 2>/dev/null || true
+  rm -f "$file"
 }
 
 fail() {
@@ -237,6 +253,78 @@ fi
 
 [ -x "$agent_bin" ] || fail "agent binary missing: $agent_bin"
 [ -x "$sing_box_bin" ] || fail "sing-box binary missing: $sing_box_bin"
+
+# A credential flag on the command line wins over the environment, so an
+# operator-supplied invocation keeps working unchanged.
+credential_from_args=0
+for arg in "$@"; do
+  case "$arg" in
+    --token|--token=*|--credentials-file|--credentials-file=*)
+      credential_from_args=1
+      ;;
+  esac
+done
+
+# Redeem a pending enrollment grant before starting: an explicit
+# AGENT_ENROLLMENT_GRANT (written to a protected temporary file), otherwise a
+# grant file from the installer. A redeemable grant is one-shot, so the local
+# copy is destroyed after the attempt. An existing credentials file is never
+# re-enrolled.
+if [ "$credential_from_args" = 0 ]; then
+  grant_path=
+  grant_source=
+  if [ ! -s "$credentials_file" ] && [ -f "$grant_file" ]; then
+    grant_path=$grant_file
+    grant_source=file
+  fi
+  if [ ! -s "$credentials_file" ] && [ -n "${AGENT_ENROLLMENT_GRANT:-}" ]; then
+    grant_path="$state_dir/enroll.grant.$$"
+    grant_source=env
+    (umask 077 && printf '%s\n' "$AGENT_ENROLLMENT_GRANT" >"$grant_path")
+  fi
+  if [ -n "$grant_path" ]; then
+    [ -n "$agent_url" ] || fail "AGENT_URL is required to redeem an enrollment grant"
+    log "redeeming enrollment grant via $agent_url"
+    if ! "$agent_bin" enroll \
+      --url "$agent_url" \
+      --grant-file "$grant_path" \
+      --credentials-file "$credentials_file"; then
+      [ "$grant_source" = env ] && secure_remove "$grant_path"
+      fail "enrollment failed; fix the grant or AGENT_URL and retry"
+    fi
+    secure_remove "$grant_path"
+    log "enrollment complete: $credentials_file"
+  fi
+fi
+
+# OAuth credentials replace the static token; a leftover AGENT_TOKEN must not
+# be sent alongside them. Existing static-token deployments are unchanged.
+if [ "$credential_from_args" = 0 ]; then
+  if [ -s "$credentials_file" ]; then
+    export AGENT_CREDENTIALS_FILE="$credentials_file"
+    unset AGENT_TOKEN
+  elif [ -z "${AGENT_TOKEN:-}" ]; then
+    fail "no agent credentials: provide AGENT_TOKEN, AGENT_ENROLLMENT_GRANT, or $credentials_file"
+  fi
+fi
+
+# Prefer explicit flags understood by both protocols; the matching AGENT_*
+# environment variables remain set for the agent's own parsing. User-supplied
+# duplicates are left alone.
+if [ -n "$agent_url" ]; then
+  seen_url=0
+  for arg in "$@"; do
+    [ "$arg" = "--url" ] && seen_url=1 && break
+  done
+  [ "$seen_url" = 1 ] || set -- --url "$agent_url" "$@"
+fi
+if [ "$credential_from_args" = 0 ] && [ -s "$credentials_file" ]; then
+  seen_credentials=0
+  for arg in "$@"; do
+    [ "$arg" = "--credentials-file" ] && seen_credentials=1 && break
+  done
+  [ "$seen_credentials" = 1 ] || set -- --credentials-file "$credentials_file" "$@"
+fi
 
 child_pid=
 shutdown() {

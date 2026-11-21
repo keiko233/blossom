@@ -7,9 +7,12 @@
 //! the configured Better Auth endpoint, and refreshes them before expiry.
 //! Client secrets and issued tokens are registered for log redaction before
 //! they are used; neither is ever printed.
+//! Enrollment also attaches bounded, untrusted host facts so the control
+//! plane can name the server and record how the agent is installed.
 
 mod credentials;
 mod enroll;
+mod host;
 mod http;
 mod provider;
 
