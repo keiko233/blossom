@@ -1,6 +1,56 @@
 # Changelog
 
 All notable changes to Blossom.
+## v1.5.0 - 2026-11-21
+
+### Added
+
+- Add workspace shell and canonical routes (#197)
+
+- Persist membership order and sort exports (#198)
+
+- Add subscriber ingress and ordered group editing (#199)
+
+- Add opt-in native systemd supervision (#200)
+
+- Persist traffic metering across restarts (#201)
+
+- Persist managed topology and rollout stages (#202)
+
+- Compile and apply managed agent snapshots (#203)
+
+- Orchestrate rollouts and authenticate link probes (#204)
+
+- Build the managed networking workspace (#205)
+
+- Enable managed rollouts by default (#206)
+
+
+### Fixed
+
+- Update rust crate base64 to 0.23 (#183)
+
+- Retry db:migrate on transient connection errors (#193)
+
+
+### Maintenance
+
+- Update dependency @iconify/json to v2.2.559 (#181)
+
+- Build after publishing the draft release (#186)
+
+- Update dependency @tanstack/react-devtools to v0.10.15 (#187)
+
+- Update postgres docker tag to v19 (#192)
+
+- Update tanstack-router monorepo (#191)
+
+- Update rust crate clap to v4.6.9 (#189)
+
+- Update better-auth monorepo to v1.7.27 (#195)
+
+- Update dependency tailwind-merge to v3.7.1 (#188)
+
 ## v1.4.0 - 2026-11-19
 
 ### Added
