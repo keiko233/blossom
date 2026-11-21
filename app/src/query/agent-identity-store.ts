@@ -73,6 +73,8 @@ export interface CreateEnrollmentGrantInput {
   release: string | null;
   createdById: string | null;
   now: Date;
+  /** Clear the legacy static backup token when this grant's identity promotes. */
+  disableBackupOnPromote?: boolean;
 }
 
 /**
@@ -166,6 +168,7 @@ export async function createEnrollmentGrant(
       tokenHash: generated.tokenHash,
       capabilities: input.capabilities,
       release: input.release,
+      disableBackupOnPromote: input.disableBackupOnPromote ?? false,
       expiresAt: new Date(
         input.now.getTime() + ENROLLMENT_GRANT_TTL_MINUTES * 60_000,
       ),

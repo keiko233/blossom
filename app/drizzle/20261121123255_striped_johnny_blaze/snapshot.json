@@ -1,0 +1,42 @@
+{
+  "type": "diff",
+  "version": "9",
+  "dialect": "postgres",
+  "id": "41596555-5270-4507-a5bf-3cbe73fdc144",
+  "prevIds": ["e9b04e33-86bb-4f1c-99d8-f94415683bd0"],
+  "footprints": [
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "agent_enrollment_grant",
+        "disable_backup_on_promote"
+      ],
+      "writes": [
+        "s|col|public.agent_enrollment_grant.disable_backup_on_promote",
+        "n|col|public.agent_enrollment_grant.disable_backup_on_promote",
+        "e|col|public.agent_enrollment_grant.disable_backup_on_promote"
+      ],
+      "reads": ["n|tbl|public.agent_enrollment_grant", "n|sch|public"]
+    }
+  ],
+  "deltas": [
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "agent_enrollment_grant",
+        "name": "disable_backup_on_promote",
+        "type": "boolean",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "false",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    }
+  ]
+}

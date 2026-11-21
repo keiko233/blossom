@@ -111,6 +111,29 @@ export const createEnrollmentGrantInputSchema = z
     }
   });
 
+/**
+ * Admin input for the Connection-tab bootstrap grant. The generated one-line
+ * command installs or upgrades an existing server; replacing an identity
+ * needs an explicit confirmation.
+ */
+export const createBootstrapGrantInputSchema = z
+  .object({
+    serverId: z.string().min(1).max(64),
+    mode: z.enum(["enroll", "replace"]),
+    confirmReplace: z.literal(true).optional(),
+    release: z.string().trim().max(64).optional(),
+    migrateFromStaticToken: z.boolean().optional(),
+  })
+  .superRefine((input, ctx) => {
+    if (input.mode === "replace" && input.confirmReplace !== true) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["confirmReplace"],
+        message: "Replacing the active identity requires confirmReplace",
+      });
+    }
+  });
+
 /** Admin input for an unbound onboarding grant. Only first enrollment. */
 export const createOnboardingGrantInputSchema = z.object({
   release: z.string().trim().min(1).max(64).default("latest"),

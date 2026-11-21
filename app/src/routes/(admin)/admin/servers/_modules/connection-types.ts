@@ -22,10 +22,15 @@ export interface ConnectionGrantRow {
   createdAt: Date | string;
 }
 
-export interface ConnectionReleaseOption {
-  version: string;
-  tag: string;
-  singBoxVersion: string;
-  capabilities: string[];
-  compatible: boolean;
+export interface ConnectionReleaseVersionOption {
+  /** `latest` or a bare version such as `1.5.0`. */
+  value: string;
+  tag: string | null;
+  prerelease: boolean;
+}
+
+export interface ConnectionBootstrapCommand {
+  expiresAt: Date | string;
+  dockerCommand: string;
+  hostCommand: string;
 }

@@ -1,0 +1,1 @@
+ALTER TABLE "agent_enrollment_grant" ADD COLUMN "disable_backup_on_promote" boolean DEFAULT false NOT NULL;
