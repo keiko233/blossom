@@ -165,7 +165,7 @@ export function ServerConnectionGrants({
                       variant="outline"
                       render={
                         <a
-                          href={`/api/admin/servers/${encodeURIComponent(grant.serverId)}/installation/script/${encodeURIComponent(grant.id)}`}
+                          href={`/api/admin/servers/${encodeURIComponent(grant.serverId ?? "")}/installation/script/${encodeURIComponent(grant.id)}`}
                           download="blossom-agent-install.sh"
                         />
                       }

@@ -42,14 +42,19 @@ const listSql = (values: readonly string[]) =>
  * redemption attempt, identified by `attemptId`) → `redeemed` in the same
  * statement that creates the identity. A failed claim goes back to `issued`
  * only when nothing was created. Grants die with their server.
+ *
+ * `server_id` is null for an onboarding grant generated before a server row
+ * exists. Redemption creates that server in the same statement and links both
+ * the grant and the new identity to it; a later `replace` grant always names
+ * its existing server.
  */
 export const agentEnrollmentGrant = pgTable(
   "agent_enrollment_grant",
   {
     id: text("id").primaryKey(),
-    serverId: text("server_id")
-      .notNull()
-      .references(() => server.id, { onDelete: "cascade" }),
+    serverId: text("server_id").references(() => server.id, {
+      onDelete: "cascade",
+    }),
     mode: text("mode").$type<AgentEnrollmentMode>().notNull(),
     tokenHash: text("token_hash").notNull().unique(),
     capabilities: jsonb("capabilities").$type<string[]>().default([]).notNull(),

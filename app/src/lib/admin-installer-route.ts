@@ -65,7 +65,8 @@ const defaultDependencies: Omit<
         ),
       )
       .limit(1);
-    return row ?? null;
+    // The query filters on this server id, so the row is always bound.
+    return row ? { ...row, serverId } : null;
   },
   now: () => new Date(),
 };

@@ -28,6 +28,7 @@ import {
 
 import {
   createEnrollmentGrant,
+  createOnboardingGrant,
   listAgentIdentities,
   listEnrollmentGrants,
   redeemEnrollmentGrant,
@@ -201,6 +202,53 @@ describe.skipIf(!PG_URL)(
           [grant.id],
         );
         expect(grantRow.rows[0]).toMatchObject({ status: "redeemed" });
+      });
+
+      it("creates a server for an unbound onboarding grant", async () => {
+        const { grant, secret } = await createOnboardingGrant(db, {
+          capabilities: ["ws"],
+          release: "latest",
+          createdById: OPERATOR,
+          now: now(),
+        });
+        expect(grant.serverId).toBeNull();
+
+        const result = await redeemEnrollmentGrant(db, {
+          secret,
+          resources: RESOURCES,
+          now: now(),
+          hostInfo: {
+            hostname: "edge-1.example.test",
+            ips: ["203.0.113.9"],
+            os: "linux",
+            arch: "x86_64",
+            agentVersion: "1.5.0",
+            installMode: "docker",
+          },
+          clientIp: "198.51.100.7",
+        });
+        expect(result).toMatchObject({ ok: true, generation: 1 });
+        if (!result.ok) throw new Error("unreachable");
+
+        const created = await pool.query(
+          `SELECT name, address, enabled FROM server WHERE id = $1`,
+          [result.serverId],
+        );
+        expect(created.rows[0]).toEqual({
+          name: "edge-1.example.test",
+          address: "203.0.113.9",
+          enabled: true,
+        });
+        const linked = await pool.query(
+          `SELECT
+             (SELECT server_id FROM agent_enrollment_grant WHERE id = $1) AS grant_server,
+             (SELECT server_id FROM agent_identity WHERE id = $2) AS identity_server`,
+          [grant.id, result.identityId],
+        );
+        expect(linked.rows[0]).toEqual({
+          grant_server: result.serverId,
+          identity_server: result.serverId,
+        });
       });
 
       it("never stores the plaintext grant or client secret", async () => {

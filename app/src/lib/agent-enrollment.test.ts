@@ -25,6 +25,31 @@ describe("enrollment grant secrets", () => {
       redeemEnrollmentBodySchema.safeParse({ enrollmentGrant: secret }).success,
     ).toBe(true);
     expect(
+      redeemEnrollmentBodySchema.safeParse({
+        enrollmentGrant: secret,
+        hostInfo: {
+          hostname: "edge-1.example.test",
+          ips: ["203.0.113.9"],
+          os: "linux",
+          arch: "x86_64",
+          agentVersion: "1.5.0",
+          installMode: "docker",
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      redeemEnrollmentBodySchema.safeParse({
+        enrollmentGrant: secret,
+        hostInfo: { installMode: "podman" },
+      }).success,
+    ).toBe(false);
+    expect(
+      redeemEnrollmentBodySchema.safeParse({
+        enrollmentGrant: secret,
+        hostInfo: { privateKey: "not-a-field" },
+      }).success,
+    ).toBe(false);
+    expect(
       redeemEnrollmentBodySchema.safeParse({ enrollmentGrant: "egr_short" })
         .success,
     ).toBe(false);

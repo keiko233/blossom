@@ -1,0 +1,34 @@
+{
+  "type": "diff",
+  "version": "9",
+  "dialect": "postgres",
+  "id": "e9b04e33-86bb-4f1c-99d8-f94415683bd0",
+  "prevIds": ["a7e9ba0b-9a41-4948-bf56-e74a3e8ac4e7"],
+  "footprints": [
+    {
+      "statementType": "alter_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "agent_enrollment_grant",
+        "server_id"
+      ],
+      "writes": ["s|colprop|public.agent_enrollment_grant.server_id.notNull"],
+      "reads": [
+        "n|tbl|public.agent_enrollment_grant",
+        "n|sch|public",
+        "n|col|public.agent_enrollment_grant.server_id"
+      ],
+      "sqlHash": "8edeb945ba48ad1b"
+    }
+  ],
+  "deltas": [
+    {
+      "op": "alter",
+      "key": "columns\u0000[\"public\",\"agent_enrollment_grant\",\"server_id\"]",
+      "set": {
+        "notNull": false
+      }
+    }
+  ]
+}

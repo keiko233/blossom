@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
+import { isIP } from "node:net";
 
 import type { Database } from "@/db";
 import {
@@ -74,6 +75,54 @@ export interface CreateEnrollmentGrantInput {
   now: Date;
 }
 
+/**
+ * Host facts an agent may report while redeeming. Used only to name and address
+ * a server that the grant does not own yet; optional and untrusted.
+ */
+export interface EnrollmentHostInfo {
+  hostname?: string;
+  ips?: string[];
+  os?: string;
+  arch?: string;
+  agentVersion?: string;
+  installMode?: "docker" | "host";
+}
+
+export interface CreateOnboardingGrantInput {
+  capabilities: string[];
+  release: string | null;
+  createdById: string | null;
+  now: Date;
+}
+
+/**
+ * Issues an unbound grant for the "add a server" flow. No server row exists
+ * yet; redemption creates one. Only an initial `enroll` grant can be unbound,
+ * because `replace` needs an existing active identity to replace.
+ */
+export async function createOnboardingGrant(
+  db: Database,
+  input: CreateOnboardingGrantInput,
+): Promise<{ grant: EnrollmentGrantView; secret: string }> {
+  const generated = generateEnrollmentGrant();
+  const [row] = await db
+    .insert(agentEnrollmentGrant)
+    .values({
+      id: randomUUID(),
+      serverId: null,
+      mode: "enroll",
+      tokenHash: generated.tokenHash,
+      capabilities: input.capabilities,
+      release: input.release,
+      expiresAt: new Date(
+        input.now.getTime() + ENROLLMENT_GRANT_TTL_MINUTES * 60_000,
+      ),
+      createdById: input.createdById,
+    })
+    .returning();
+  return { grant: toGrantView(row!), secret: generated.secret };
+}
+
 export async function createEnrollmentGrant(
   db: Database,
   input: CreateEnrollmentGrantInput,
@@ -132,6 +181,8 @@ export async function redeemEnrollmentGrant(
     secret: string;
     resources: OAuthResourceIdentifiers;
     now: Date;
+    hostInfo?: EnrollmentHostInfo;
+    clientIp?: string | null;
   },
 ): Promise<EnrollmentRedeemResult> {
   const tokenHash = hashEnrollmentGrantSecret(input.secret);
@@ -147,9 +198,13 @@ export async function redeemEnrollmentGrant(
         eq(agentEnrollmentGrant.tokenHash, tokenHash),
         eq(agentEnrollmentGrant.status, "issued"),
         gt(agentEnrollmentGrant.expiresAt, now),
-        sql`EXISTS (SELECT 1 FROM ${server} WHERE ${server.id} = ${agentEnrollmentGrant.serverId} AND ${server.enabled})`,
-        // enroll: no active identity may exist. replace: one must.
-        sql`(${agentEnrollmentGrant.mode} = 'enroll') = NOT EXISTS (SELECT 1 FROM ${agentIdentity} WHERE ${agentIdentity.serverId} = ${agentEnrollmentGrant.serverId} AND ${agentIdentity.status} = 'active')`,
+        // An unbound onboarding grant has no server yet and is therefore not
+        // subject to the enabled/server-identity checks; redemption creates
+        // the server below.
+        sql`(${agentEnrollmentGrant.serverId} IS NULL OR EXISTS (SELECT 1 FROM ${server} WHERE ${server.id} = ${agentEnrollmentGrant.serverId} AND ${server.enabled}))`,
+        // enroll: no active identity may exist. replace: one must. Unbound
+        // grants are always first enrollments.
+        sql`(${agentEnrollmentGrant.serverId} IS NULL OR (${agentEnrollmentGrant.mode} = 'enroll') = NOT EXISTS (SELECT 1 FROM ${agentIdentity} WHERE ${agentIdentity.serverId} = ${agentEnrollmentGrant.serverId} AND ${agentIdentity.status} = 'active'))`,
       ),
     )
     .returning({
@@ -169,10 +224,35 @@ export async function redeemEnrollmentGrant(
   const machine = generateMachineCredential();
   const identityId = randomUUID();
   const nowIso = now.toISOString();
+  const newServerId = grant.serverId === null ? randomUUID() : null;
+  const newServerName =
+    newServerId === null
+      ? null
+      : onboardingServerName(input.hostInfo?.hostname, newServerId);
+  const newServerAddress =
+    newServerId === null ? null : onboardingAddress(input);
   try {
     await db.execute(
       sql`
-      WITH client AS (
+      WITH new_server AS (
+        INSERT INTO server (id, name, address, enabled, created_at, updated_at)
+        SELECT
+          ${newServerId}::text,
+          ${newServerName}::text,
+          ${newServerAddress}::text,
+          true,
+          ${nowIso}::timestamp,
+          ${nowIso}::timestamp
+        WHERE ${grant.serverId}::text IS NULL
+        RETURNING id
+      ),
+      target AS (
+        SELECT ${grant.serverId}::text AS id
+        WHERE ${grant.serverId}::text IS NOT NULL
+        UNION ALL
+        SELECT id FROM new_server
+      ),
+      client AS (
         INSERT INTO oauth_client (
           id, client_id, client_secret, name, redirect_uris, grant_types,
           client_credentials_scopes, token_endpoint_auth_method, public,
@@ -199,8 +279,8 @@ export async function redeemEnrollmentGrant(
         )
         SELECT
           ${identityId}::text,
-          ${grant.serverId}::text,
-          (SELECT COALESCE(MAX(i.generation), 0) + 1 FROM agent_identity i WHERE i.server_id = ${grant.serverId}::text),
+          target.id,
+          (SELECT COALESCE(MAX(i.generation), 0) + 1 FROM agent_identity i WHERE i.server_id = target.id),
           link.client_id,
           'pending',
           ${grant.id}::text,
@@ -208,11 +288,15 @@ export async function redeemEnrollmentGrant(
           ${grant.createdById}::text,
           ${nowIso}::timestamp,
           ${nowIso}::timestamp
-        FROM link
-        RETURNING id
+        FROM link, target
+        RETURNING id, server_id
       )
       UPDATE agent_enrollment_grant
-      SET status = 'redeemed', redeemed_at = ${nowIso}::timestamp, updated_at = ${nowIso}::timestamp
+      SET
+        status = 'redeemed',
+        redeemed_at = ${nowIso}::timestamp,
+        updated_at = ${nowIso}::timestamp,
+        server_id = COALESCE(agent_enrollment_grant.server_id, (SELECT server_id FROM identity))
       WHERE id = ${grant.id}::text AND attempt_id = ${attemptId}::text AND status = 'redeeming'
     `,
       "objects",
@@ -244,7 +328,10 @@ export async function redeemEnrollmentGrant(
   }
 
   const [created] = await db
-    .select({ generation: agentIdentity.generation })
+    .select({
+      generation: agentIdentity.generation,
+      serverId: agentIdentity.serverId,
+    })
     .from(agentIdentity)
     .where(eq(agentIdentity.id, identityId))
     .limit(1);
@@ -252,12 +339,37 @@ export async function redeemEnrollmentGrant(
   return {
     ok: true,
     grantId: grant.id,
-    serverId: grant.serverId,
+    serverId: created?.serverId ?? grant.serverId!,
     identityId,
     generation: created?.generation ?? 0,
     clientId: machine.clientId,
     clientSecret: machine.clientSecret,
   };
+}
+
+const HOSTNAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,251}[A-Za-z0-9])?$/;
+
+/** A safe server name from the host-reported hostname, else `server-<id>`. */
+function onboardingServerName(
+  hostname: string | undefined,
+  serverId: string,
+): string {
+  const candidate = hostname?.trim() ?? "";
+  return HOSTNAME_PATTERN.test(candidate)
+    ? candidate
+    : `server-${serverId.slice(0, 8)}`;
+}
+
+/** The first valid reported IP, then the request IP, then loopback. */
+function onboardingAddress(input: {
+  hostInfo?: EnrollmentHostInfo;
+  clientIp?: string | null;
+}): string {
+  for (const candidate of [...(input.hostInfo?.ips ?? []), input.clientIp]) {
+    const value = candidate?.trim();
+    if (value && isIP(value) !== 0) return value;
+  }
+  return "127.0.0.1";
 }
 
 async function diagnoseUnclaimedGrant(
@@ -277,6 +389,9 @@ async function diagnoseUnclaimedGrant(
   if (!row || row.status === "revoked") return "invalid_grant";
   if (row.status !== "issued") return "grant_unavailable";
   if (row.expiresAt <= now) return "invalid_grant";
+  // An unbound grant has not created a server yet, so there is no disabled
+  // server to report.
+  if (row.serverId === null) return "grant_unavailable";
   const [srv] = await db
     .select({ enabled: server.enabled })
     .from(server)
@@ -379,7 +494,8 @@ export async function revokeEnrollmentGrant(
   db: Database,
   input: { grantId: string; now: Date },
 ): Promise<
-  { found: false } | { found: true; serverId: string; grantStatus: string }
+  | { found: false }
+  | { found: true; serverId: string | null; grantStatus: string }
 > {
   const [grant] = await db
     .select({
@@ -444,7 +560,7 @@ async function ensureAgentResourceRow(db: Database, identifier: string) {
 
 export interface EnrollmentGrantView {
   id: string;
-  serverId: string;
+  serverId: string | null;
   mode: AgentEnrollmentMode;
   capabilities: string[];
   release: string | null;

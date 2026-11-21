@@ -78,6 +78,7 @@ export const ADMIN_AUDIT_ACTIONS = [
   "server.pty_open",
   "server.pty_close",
   "server.enrollment_grant_create",
+  "server.onboarding_grant_create",
   "server.enrollment_grant_revoke",
   "server.agent_identity_revoke",
   "server.logs_open",
