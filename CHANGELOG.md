@@ -1,6 +1,28 @@
 # Changelog
 
 All notable changes to Blossom.
+## v1.6.0 - 2026-11-21
+
+### Added
+
+- Upgrade PostgreSQL version to 19 across configurations and documentation
+
+- Add role switching functionality to user profile menu and update sidebar components
+
+- Add one-line server onboarding and auto-creation (#212)
+
+
+### Changed
+
+- Modularize main, shrink binary, send hostInfo (#211)
+
+
+### Fixed
+
+- Pass items to Select for value labels (#210)
+
+- Update import path for env-schema to include file extension
+
 ## v1.5.0 - 2026-11-21
 
 ### Added
