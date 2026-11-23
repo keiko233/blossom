@@ -7,6 +7,27 @@ import { getServerEnv } from "@/lib/env";
 import { createMcpOAuthHandler } from "@/lib/mcp-auth";
 import { createMCPClient } from "@/orpc/mcp";
 import { getActorFromExtra, sanitizeError } from "@/orpc/mcp/auth-context";
+import {
+  banUserInput,
+  cancelSubscriptionInput,
+  createNodeInput,
+  deleteNodeInput,
+  deleteServerInput,
+  serverIdInput,
+  setUserRoleInput,
+  unbanUserInput,
+  updateNodeInput,
+  updateServerInput,
+  updateSubscriptionInput,
+} from "@/orpc/mcp/context";
+
+let cachedHandler: ((req: Request) => Promise<Response>) | undefined;
+
+/** Built once per process: the tool registry and OAuth config are static. */
+function getHandler(): (req: Request) => Promise<Response> {
+  cachedHandler ??= buildHandler();
+  return cachedHandler;
+}
 
 function buildHandler(): (req: Request) => Promise<Response> {
   const env = getServerEnv();
@@ -316,133 +337,76 @@ function buildHandler(): (req: Request) => Promise<Response> {
           name: "banUser",
           title: "Ban user",
           description: "Ban a user. Revokes all their sessions.",
-          schema: z.object({
-            userId: z.string().min(1),
-            reason: z.string().max(512).optional(),
-            expiresInDays: z.number().int().min(1).optional(),
-            confirm: z.literal(true),
-          }),
+          schema: banUserInput,
         },
         {
           name: "unbanUser",
           title: "Unban user",
           description: "Unban a user.",
-          schema: z.object({ id: z.string().min(1), confirm: z.literal(true) }),
+          schema: unbanUserInput,
         },
         {
           name: "setUserRole",
           title: "Set user role",
           description: "Change a user's role to admin or user.",
-          schema: z.object({
-            userId: z.string().min(1),
-            role: z.enum(["admin", "user"]),
-            confirm: z.literal(true),
-          }),
+          schema: setUserRoleInput,
         },
         {
           name: "createNode",
           title: "Create node",
           description:
             "Create a new proxy node with sing-box validated settings.",
-          schema: z.object({
-            name: z.string().min(1).max(128),
-            serverId: z.string().min(1),
-            listenPort: z.number().int().min(1).max(65535),
-            protocol: z.string().min(1),
-            settings: z.record(z.string(), z.unknown()),
-            remark: z.string().max(512).optional(),
-            tags: z.array(z.string()).optional(),
-            enabled: z.boolean().optional(),
-            address: z.string().nullable().optional(),
-            confirm: z.literal(true),
-          }),
+          schema: createNodeInput,
         },
         {
           name: "updateNode",
           title: "Update node",
           description: "Update an existing proxy node.",
-          schema: z.object({
-            id: z.string().min(1),
-            name: z.string().min(1).max(128).optional(),
-            serverId: z.string().min(1).optional(),
-            listenPort: z.number().int().min(1).max(65535).optional(),
-            protocol: z.string().min(1).optional(),
-            settings: z.record(z.string(), z.unknown()).optional(),
-            remark: z.string().max(512).optional(),
-            tags: z.array(z.string()).optional(),
-            enabled: z.boolean().optional(),
-            address: z.string().nullable().optional(),
-            confirm: z.literal(true),
-          }),
+          schema: updateNodeInput,
         },
         {
           name: "deleteNode",
           title: "Delete node",
           description: "Delete a proxy node.",
-          schema: z.object({ id: z.string().min(1), confirm: z.literal(true) }),
+          schema: deleteNodeInput,
         },
         {
           name: "updateServer",
           title: "Update server",
           description: "Update a proxy server configuration.",
-          schema: z.object({
-            id: z.string().min(1),
-            name: z.string().min(1).max(128).optional(),
-            remark: z.string().max(512).optional(),
-            enabled: z.boolean().optional(),
-            address: z.string().min(1).optional(),
-            configPollIntervalSeconds: z
-              .number()
-              .int()
-              .min(5)
-              .max(86400)
-              .optional(),
-            heartbeatIntervalSeconds: z
-              .number()
-              .int()
-              .min(5)
-              .max(300)
-              .optional(),
-            confirm: z.literal(true),
-          }),
+          schema: updateServerInput,
         },
         {
           name: "enableServer",
           title: "Enable server",
           description: "Enable a proxy server.",
-          schema: z.object({ id: z.string().min(1), confirm: z.literal(true) }),
+          schema: serverIdInput,
         },
         {
           name: "disableServer",
           title: "Disable server",
           description: "Disable a proxy server.",
-          schema: z.object({ id: z.string().min(1), confirm: z.literal(true) }),
+          schema: serverIdInput,
         },
         {
           name: "deleteServer",
           title: "Delete server",
           description:
             "Delete a proxy server. Fails if the server still has nodes.",
-          schema: z.object({ id: z.string().min(1), confirm: z.literal(true) }),
+          schema: deleteServerInput,
         },
         {
           name: "updateSubscription",
           title: "Update subscription",
           description:
             "Update a subscription's status, expiry, or traffic usage.",
-          schema: z.object({
-            id: z.string().min(1),
-            status: z.enum(["active", "expired", "cancelled"]).optional(),
-            expiresAt: z.string().optional(),
-            trafficUsedBytes: z.number().int().min(0).optional(),
-            confirm: z.literal(true),
-          }),
+          schema: updateSubscriptionInput,
         },
         {
           name: "cancelSubscription",
           title: "Cancel subscription",
           description: "Cancel a subscription.",
-          schema: z.object({ id: z.string().min(1), confirm: z.literal(true) }),
+          schema: cancelSubscriptionInput,
         },
       ];
 
@@ -493,9 +457,9 @@ function buildHandler(): (req: Request) => Promise<Response> {
 export const Route = createFileRoute("/api/mcp")({
   server: {
     handlers: {
-      GET: async ({ request }) => buildHandler()(request),
-      POST: async ({ request }) => buildHandler()(request),
-      DELETE: async ({ request }) => buildHandler()(request),
+      GET: async ({ request }) => getHandler()(request),
+      POST: async ({ request }) => getHandler()(request),
+      DELETE: async ({ request }) => getHandler()(request),
       OPTIONS: async () => {
         return new Response(null, {
           headers: {

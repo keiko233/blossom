@@ -81,7 +81,7 @@ const USER_FACING_POST_FNS: Readonly<Record<string, string>> = {
     "An owner rotating their own proxy credentials; owner comes from the session and the row is scoped to it.",
 };
 
-describe("every admin POST server function is audited", () => {
+describe("every admin POST server function is audited and admin-gated", () => {
   const queryDir = fileURLToPath(new URL("../query/", import.meta.url));
   const seen: string[] = [];
   const exemptSeen = new Set<string>();
@@ -111,11 +111,20 @@ describe("every admin POST server function is audited", () => {
         });
         continue;
       }
+      // The handler runs up to the next top-level export.
+      const handler = source
+        .slice(match.index + match[0].length)
+        .split(/\nexport /)[0]!;
       it(`${file}: ${name}`, () => {
         const audit = /adminAudit\(\s*"([a-z_.]+)"/.exec(chain!);
         expect(audit, `${name} lacks adminAudit()`).not.toBeNull();
         expect(ADMIN_AUDIT_ACTIONS).toContain(audit![1]);
         seen.push(audit![1]!);
+      });
+      it(`${file}: ${name} is admin-gated`, () => {
+        expect(handler, `${name} must call ensureAdmin()`).toContain(
+          "ensureAdmin(",
+        );
       });
     }
   }
@@ -142,6 +151,62 @@ describe("every admin POST server function is audited", () => {
     for (const action of ROUTE_AUDIT_ACTIONS) {
       expect(source, action).toContain(`"${action}"`);
     }
+  });
+});
+
+/**
+ * GET server functions that are deliberately reachable without an admin
+ * session. Keyed `<file in src/query>:<export name>`; the value is the reason.
+ *
+ * Every other GET server function must call `ensureAdmin(` or `ensureSession(`.
+ * An entry is checked, not trusted: the function must exist and must not
+ * call either guard (a guarded function does not belong in this list).
+ */
+const PUBLIC_GET_FNS: Readonly<Record<string, string>> = {
+  "settings.ts:getPublicSettings":
+    "Public site settings (name, branding, signup flags) read by unauthenticated pages.",
+};
+
+describe("every GET server function is authenticated or explicitly public", () => {
+  const queryDir = fileURLToPath(new URL("../query/", import.meta.url));
+  const publicSeen = new Set<string>();
+  const GET_FN_RE =
+    /export const (\w+) = createServerFn\(\{[^}]*"GET"[^}]*\}\)([\s\S]*?)\.handler\(/g;
+
+  for (const file of readdirSync(queryDir).filter((f) => f.endsWith(".ts"))) {
+    const source = readFileSync(`${queryDir}${file}`, "utf8");
+    for (const match of source.matchAll(GET_FN_RE)) {
+      const [, name, chain] = match;
+      const key = `${file}:${name}`;
+      // The handler runs up to the next top-level export.
+      const handler = source
+        .slice(match.index + match[0].length)
+        .split(/\nexport /)[0]!;
+      const guarded =
+        handler.includes("ensureAdmin(") ||
+        handler.includes("ensureSession(") ||
+        chain!.includes("ensureAdmin(") ||
+        chain!.includes("ensureSession(");
+      if (key in PUBLIC_GET_FNS) {
+        publicSeen.add(key);
+        it(`${key} is exempt as a public function`, () => {
+          expect(guarded, "a guarded function must not be allowlisted").toBe(
+            false,
+          );
+        });
+        continue;
+      }
+      it(`${key} requires an admin or user session`, () => {
+        expect(
+          guarded,
+          `${name} must call ensureAdmin() or ensureSession(), or be listed in PUBLIC_GET_FNS`,
+        ).toBe(true);
+      });
+    }
+  }
+
+  it("only exempts functions that exist", () => {
+    expect([...publicSeen].sort()).toEqual(Object.keys(PUBLIC_GET_FNS).sort());
   });
 });
 
