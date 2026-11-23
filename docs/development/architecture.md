@@ -37,8 +37,6 @@ Established. Know which surface you are on, because they authenticate differentl
 | Subscription output      | `app/src/routes/api/sub/$token.ts`                                                | the subscription token in the URL                              | Renders a Clash config from the nodes the subscription may use, gated by the publish gate below. Writes an access log.                                                           |
 | Misc                     | `api/health.ts`, `api/admin/certificates/…/export/$part.ts`, `.well-known` routes | health: none; others per route                                 | `/api/health` is the container health check.                                                                                                                                     |
 
-An isomorphic oRPC client and TanStack Query utilities exist in `app/src/orpc/client.ts`; the pages inspected call server functions directly instead.
-
 ### Agent WebSocket transport
 
 Established. The frozen v1 envelope and payload schemas live in
