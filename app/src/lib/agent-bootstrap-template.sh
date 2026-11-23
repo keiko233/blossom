@@ -64,11 +64,46 @@ case "$ENROLLMENT_GRANT" in
 esac
 [ "${#ENROLLMENT_GRANT}" -eq 47 ] || fail "the install link does not contain a valid enrollment grant"
 
+curl_with_proto() {
+  url=$1
+  shift
+  case "$url" in
+    https://*)
+      curl --fail --show-error --silent --location \
+        --proto '=https' --proto-redir '=https' --tlsv1.2 \
+        "$@" "$url"
+      ;;
+    http://localhost:*|http://127.0.0.1:*|http://\[::1\]:*)
+      curl --fail --show-error --silent --location \
+        --proto '=http,https' --proto-redir '=http,https' \
+        "$@" "$url"
+      ;;
+    *)
+      fail "refusing non-HTTPS URL: $url"
+      ;;
+  esac
+}
+
 download() {
-  curl --fail --show-error --silent --location \
-    --proto '=https' --proto-redir '=https' --tlsv1.2 \
+  curl_with_proto "$1" \
     --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 300 \
-    --output "$2" "$1"
+    --output "$2"
+}
+
+download_proxy() {
+  printf 'header = "Authorization: Bearer %s"\n' "$ENROLLMENT_GRANT" |
+    curl_with_proto "$1" --config - \
+      --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 300 \
+      --output "$2"
+}
+
+download_github() {
+  github_path=$1
+  dest=$2
+  if ! download "https://github.com/$github_path" "$dest"; then
+    log "direct GitHub download failed; retrying via control-plane proxy"
+    download_proxy "$ORIGIN/api/agent/github/$github_path" "$dest"
+  fi
 }
 
 detect_arch() {
@@ -79,11 +114,11 @@ detect_arch() {
   esac
 }
 
-agent_download_url() {
+agent_github_path() {
   if [ "$AGENT_VERSION" = latest ]; then
-    printf 'https://github.com/%s/releases/latest/download/server-agent-linux-%s\n' "$AGENT_REPO" "$1"
+    printf '%s/releases/latest/download/server-agent-linux-%s\n' "$AGENT_REPO" "$1"
   else
-    printf 'https://github.com/%s/releases/download/v%s/server-agent-linux-%s\n' "$AGENT_REPO" "${AGENT_VERSION#v}" "$1"
+    printf '%s/releases/download/v%s/server-agent-linux-%s\n' "$AGENT_REPO" "${AGENT_VERSION#v}" "$1"
   fi
 }
 
@@ -91,10 +126,16 @@ agent_download_url() {
 # api.github.com, avoiding the 60 req/hr unauthenticated API rate limit.
 resolve_sing_box_version() {
   if [ "${SING_BOX_VERSION:-latest}" = latest ]; then
-    effective=$(curl --fail --show-error --silent --location \
-      --proto '=https' --proto-redir '=https' --tlsv1.2 \
+    github_path="$SING_BOX_REPO/releases/latest"
+    if ! effective=$(curl_with_proto "https://github.com/$github_path" \
       --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 60 \
-      -o /dev/null -w '%{url_effective}' "https://github.com/$SING_BOX_REPO/releases/latest")
+      -o /dev/null -w '%{url_effective}'); then
+      log "direct GitHub release lookup failed; retrying via control-plane proxy"
+      effective=$(printf 'header = "Authorization: Bearer %s"\n' "$ENROLLMENT_GRANT" |
+        curl_with_proto "$ORIGIN/api/agent/github/$github_path" --config - \
+          --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 60 \
+          -o /dev/null -w '%{url_effective}')
+    fi
     ver=${effective##*/}
     ver=${ver#v}
     [ -n "$ver" ] && [ "$ver" != latest ] || fail "cannot resolve the latest sing-box release"
@@ -120,7 +161,7 @@ install_docker() {
   umask 077
 
   log "downloading server-agent $AGENT_VERSION for $architecture"
-  download "$(agent_download_url "$architecture")" "$staging/server-agent"
+  download_github "$(agent_github_path "$architecture")" "$staging/server-agent"
 
   log "preparing the $IMAGE runtime in the $volume volume"
   docker run --rm -i -v "$volume:/data" --entrypoint sh "$IMAGE" -c \
@@ -132,8 +173,8 @@ install_docker() {
     '[ -x /data/bin/sing-box ]' >/dev/null 2>&1; then
     sing_box_version=$(resolve_sing_box_version)
     log "downloading sing-box $sing_box_version for $architecture"
-    sing_box_url="https://github.com/$SING_BOX_REPO/releases/download/v$sing_box_version/sing-box-${sing_box_version}-linux-${architecture}-musl.tar.gz"
-    download "$sing_box_url" "$staging/sing-box.tar.gz"
+    sing_box_path="$SING_BOX_REPO/releases/download/v$sing_box_version/sing-box-${sing_box_version}-linux-${architecture}-musl.tar.gz"
+    download_github "$sing_box_path" "$staging/sing-box.tar.gz"
     tar -tzf "$staging/sing-box.tar.gz" >"$staging/sing-box-members"
     if grep -Eq '(^/|(^|/)\.\.(/|$))' "$staging/sing-box-members"; then
       fail "the sing-box archive contains an unsafe path"
@@ -207,20 +248,20 @@ install_host() {
   UNIT_FILE=/etc/systemd/system/blossom-agent.service
   SERVICE_USER=blossom-agent
 
-  agent_url=$(agent_download_url "$architecture")
+  agent_path=$(agent_github_path "$architecture")
   sing_box_version=$(resolve_sing_box_version)
-  sing_box_url="https://github.com/$SING_BOX_REPO/releases/download/v$sing_box_version/sing-box-${sing_box_version}-linux-${architecture}-musl.tar.gz"
+  sing_box_path="$SING_BOX_REPO/releases/download/v$sing_box_version/sing-box-${sing_box_version}-linux-${architecture}-musl.tar.gz"
 
   staging=$(mktemp -d)
   trap 'rm -rf "$staging"' EXIT HUP INT TERM
   umask 077
 
   log "downloading server-agent $AGENT_VERSION for $architecture"
-  download "$agent_url" "$staging/server-agent"
+  download_github "$agent_path" "$staging/server-agent"
   chmod 0755 "$staging/server-agent"
 
   log "downloading sing-box $sing_box_version for $architecture"
-  download "$sing_box_url" "$staging/sing-box.tar.gz"
+  download_github "$sing_box_path" "$staging/sing-box.tar.gz"
   tar -tzf "$staging/sing-box.tar.gz" >"$staging/sing-box-members"
   if grep -Eq '(^/|(^|/)\.\.(/|$))' "$staging/sing-box-members"; then
     fail "the sing-box archive contains an unsafe path"
