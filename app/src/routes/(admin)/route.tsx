@@ -11,8 +11,12 @@ import { AdminSidebar } from "./_modules/admin-sidebar";
 import { TokenRevealDialog } from "./admin/servers/_modules/token-reveal-dialog";
 
 export const Route = createFileRoute("/(admin)")({
-  beforeLoad: async () => {
-    const session = await getSession();
+  beforeLoad: async ({ context }) => {
+    const session = await context.queryClient.ensureQueryData({
+      queryKey: ["auth", "session"],
+      queryFn: () => getSession(),
+      staleTime: 30_000,
+    });
 
     if (!session) {
       throw redirect({
