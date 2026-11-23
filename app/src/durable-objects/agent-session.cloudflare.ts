@@ -1,4 +1,6 @@
+import { MANAGED_NETWORKING_V2_CAPABILITY } from "@blossom/contracts/agent-config-v3";
 import {
+  agentWsTelemetrySnapshotPayloadSchema,
   agentWsWelcomePayloadSchema,
   type AgentWsWelcomePayload,
 } from "@blossom/contracts/agent-ws";
@@ -7,6 +9,7 @@ import {
   createAgentWsV2Frame,
   encodeAgentWsV2Frame,
 } from "@blossom/contracts/agent-ws-v2";
+import { MANAGED_LINK_PROBE_CAPABILITY } from "@blossom/contracts/managed-link-probe";
 import { DurableObject, env } from "cloudflare:workers";
 import { drizzle } from "drizzle-orm/node-postgres";
 
@@ -29,6 +32,7 @@ import {
   encodeAgentWsV2ConfigNotify,
   encodeAgentWsV2LinkProbeRequest,
   openAgentWsV2Session,
+  type AgentWsV2Session,
 } from "@/lib/agent-ws-v2-session";
 import {
   LIVE_METRIC_INTERVAL_MS,
@@ -73,8 +77,10 @@ import {
   handleLogsBrowserClose,
   handleLogsBrowserMessage,
   handleLogsConnect,
+  nextLogAlarm,
   readLogSocketAttachment,
   revalidateLogSockets,
+  type LogsDoContext,
   type LogsRelayDependencies,
 } from "./logs-session.cloudflare";
 import {
@@ -85,8 +91,10 @@ import {
   handlePtyConnect,
   handleAgentV2PtyFrame,
   isPtySessionAuthorized,
+  nextPtyAlarm,
   readPtyAttachment,
   revalidatePtySockets,
+  type PtyDoContext,
   type PtySocketAttachment,
   type RecordPtyClose,
 } from "./pty-session.cloudflare";
@@ -119,6 +127,12 @@ interface V2AgentSessionAttachment extends AgentSessionAttachmentBase {
   identityGeneration?: number;
   /** Machine-token expiry in epoch seconds. Never the token itself. */
   expiresAt: number | null;
+  /** Capabilities from `hello`; later frames of this socket depend on them. */
+  capabilities?: string[];
+  /** Last `config.get` generation, so a newer compile supersedes an older one. */
+  snapshotGeneration?: number;
+  /** Epoch milliseconds of the last successful lease check. */
+  lastRevalidatedAt?: number;
 }
 
 type AgentSessionAttachment =
@@ -136,6 +150,24 @@ interface MetricsAdminAttachment {
 }
 
 const AUTHORITY_CHECK_INTERVAL_MS = 30_000;
+/** The shortest alarm delay: a due deadline still goes through the scheduler. */
+const MIN_ALARM_DELAY_MS = 1;
+const V2_LEASE_CHECK_INTERVAL_MS = 30_000;
+
+/**
+ * A socket attachment holds at most 2 KiB, while a `hello` may list far more
+ * capabilities. Only the ones a later frame depends on are kept.
+ */
+const PERSISTED_V2_CAPABILITIES: ReadonlySet<string> = new Set([
+  MANAGED_NETWORKING_V2_CAPABILITY,
+  MANAGED_LINK_PROBE_CAPABILITY,
+]);
+
+function persistedCapabilities(capabilities: readonly string[]): string[] {
+  return capabilities.filter((capability) =>
+    PERSISTED_V2_CAPABILITIES.has(capability),
+  );
+}
 
 function isWebSocketUpgrade(request: Request): boolean {
   return request.headers.get("upgrade")?.toLowerCase() === "websocket";
@@ -179,6 +211,16 @@ function readAttachment(ws: WebSocket): AgentSessionAttachment | null {
         : {}),
       expiresAt:
         typeof candidate.expiresAt === "number" ? candidate.expiresAt : null,
+      ...(Array.isArray(candidate.capabilities) &&
+      candidate.capabilities.every((entry) => typeof entry === "string")
+        ? { capabilities: candidate.capabilities }
+        : {}),
+      ...(typeof candidate.snapshotGeneration === "number"
+        ? { snapshotGeneration: candidate.snapshotGeneration }
+        : {}),
+      ...(typeof candidate.lastRevalidatedAt === "number"
+        ? { lastRevalidatedAt: candidate.lastRevalidatedAt }
+        : {}),
     };
   }
   if (typeof candidate.sessionId !== "string") {
@@ -303,9 +345,17 @@ export class AgentSessionDO extends DurableObject {
     (snapshot: unknown) => void
   >();
 
-  private async withDatabase<T>(
-    run: (database: Database) => Promise<T>,
-  ): Promise<T> {
+  /**
+   * Pooled by this object for its lifetime: idle clients close on their own
+   * after the pool's idle timeout, so a quiet object still hibernates.
+   */
+  private pooledDatabase: Database | undefined;
+
+  /** The pool is shared by every frame this object handles. */
+  private database(): Database {
+    if (this.pooledDatabase) {
+      return this.pooledDatabase;
+    }
     const connectionString =
       env.HYPERDRIVE_FRESH?.connectionString ??
       env.HYPERDRIVE?.connectionString ??
@@ -313,18 +363,22 @@ export class AgentSessionDO extends DurableObject {
     if (!connectionString) {
       throw new Error("No database binding is available to AgentSessionDO");
     }
-    const database = drizzle(connectionString) as Database & {
-      $client: { end(): Promise<void> };
-    };
-    try {
-      return await run(database);
-    } finally {
-      await database.$client.end().catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        console.warn(`agent durable object database close failed: ${message}`);
-      });
-    }
+    this.pooledDatabase = drizzle(connectionString);
+    return this.pooledDatabase;
   }
+
+  private async withDatabase<T>(
+    run: (database: Database) => Promise<T>,
+  ): Promise<T> {
+    return run(this.database());
+  }
+
+  /** What the PTY and log relay modules need from this object. */
+  private readonly relayContext: PtyDoContext & LogsDoContext = {
+    getWebSockets: (tag) => this.ctx.getWebSockets(tag),
+    acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
+    reconcileAlarm: () => this.reconcileAlarm(),
+  };
 
   private logDependencies(database: Database): LogsRelayDependencies {
     return {
@@ -345,13 +399,13 @@ export class AgentSessionDO extends DurableObject {
   async fetch(request: Request): Promise<Response> {
     const pathname = new URL(request.url).pathname;
     if (pathname === "/internal/logs/connect") {
-      return handleLogsConnect(this.ctx, request, {
+      return handleLogsConnect(this.relayContext, request, {
         now: () => Date.now(),
         newId: () => crypto.randomUUID(),
       });
     }
     if (pathname === "/internal/pty/connect") {
-      return handlePtyConnect(this.ctx, request, this.recordPtyClose);
+      return handlePtyConnect(this.relayContext, request, this.recordPtyClose);
     }
     if (pathname === "/internal/admin-metrics/connect") {
       return this.connectMetricsAdmin(request);
@@ -360,6 +414,10 @@ export class AgentSessionDO extends DurableObject {
       const params = new URL(request.url).searchParams;
       const kind = params.get("kind");
       const connectedAt = params.get("connectedAt");
+      const sessionId = params.get("sessionId");
+      if (connectedAt && sessionId && kind === "snapshot") {
+        return this.inspectV2Telemetry(connectedAt, sessionId);
+      }
       const ws =
         connectedAt &&
         this.ctx.getWebSockets().find((candidate) => {
@@ -386,6 +444,18 @@ export class AgentSessionDO extends DurableObject {
       return this.connect(request);
     }
     return new Response("Not Found", { status: 404 });
+  }
+
+  /** On-demand v2 inspection for the Worker's stateless snapshot route. */
+  private async inspectV2Telemetry(
+    connectedAt: string,
+    sessionId: string,
+  ): Promise<Response> {
+    const snapshot = await this.inspectMetrics({ connectedAt, sessionId });
+    const parsed = agentWsTelemetrySnapshotPayloadSchema.safeParse(snapshot);
+    return parsed.success
+      ? Response.json({ kind: "snapshot", data: parsed.data })
+      : new Response(null, { status: 204 });
   }
 
   private async notify(request: Request): Promise<Response> {
@@ -614,7 +684,7 @@ export class AgentSessionDO extends DurableObject {
     if (this.ctx.getWebSockets(`logs:${serverId}`).length > 0) {
       await this.withDatabase((database) =>
         closeLogSocketsForAgent(
-          this.ctx,
+          this.relayContext,
           serverId,
           sessionId,
           "session_replaced",
@@ -640,7 +710,7 @@ export class AgentSessionDO extends DurableObject {
         ? { identityGeneration, expiresAt }
         : { expiresAt: null }),
     } satisfies V2AgentSessionAttachment);
-    this.scheduleV2Alarm();
+    await this.reconcileAlarm();
 
     return new Response(null, {
       status: 101,
@@ -668,45 +738,72 @@ export class AgentSessionDO extends DurableObject {
     return { kind: "static", tokenHash: "" };
   }
 
+  /** Earliest lease check any open v2 socket needs, or null without one. */
+  private nextV2Alarm(now: number): number | null {
+    let next: number | null = null;
+    for (const ws of this.ctx.getWebSockets()) {
+      const attachment = readAttachment(ws);
+      if (attachment?.protocol !== "v2") {
+        continue;
+      }
+      // A token expiry is a hard deadline; otherwise a periodic lease check.
+      const candidate = Math.max(
+        now + 1_000,
+        Math.min(
+          now + V2_LEASE_CHECK_INTERVAL_MS,
+          attachment.expiresAt === null
+            ? Number.POSITIVE_INFINITY
+            : attachment.expiresAt * 1000,
+        ),
+      );
+      if (next === null || candidate < next) {
+        next = candidate;
+      }
+    }
+    return next;
+  }
+
   /**
-   * Wakes the object at least every 30 seconds (or at the earliest token
-   * expiry) so revocation, replacement and expiry close idle sockets without
-   * waiting for the next frame.
+   * The object has one storage alarm slot shared by v2 lease checks, PTY
+   * authority re-checks and log relay deadlines. This is the only place that
+   * writes it: it arms the earliest deadline any subsystem needs and removes
+   * the alarm only when none does. An alarm that is already earlier is kept,
+   * since the alarm body re-checks every subsystem and re-arms, so frames can
+   * never push a pending deadline back.
    */
-  private scheduleV2Alarm(): void {
+  private async reconcileAlarm(): Promise<void> {
     const storage = this.ctx.storage;
     if (!storage?.setAlarm) {
       return;
     }
     const now = Date.now();
-    const deadlines = this.ctx
-      .getWebSockets()
-      .map(readAttachment)
-      .filter(
-        (attachment): attachment is V2AgentSessionAttachment =>
-          attachment?.protocol === "v2",
-      )
-      .map((attachment) =>
-        attachment.expiresAt === null
-          ? now + 30_000
-          : attachment.expiresAt * 1000,
-      );
+    const deadlines = [
+      this.nextV2Alarm(now),
+      nextPtyAlarm(this.relayContext, now),
+      nextLogAlarm(this.relayContext),
+    ].filter((deadline): deadline is number => deadline !== null);
     if (deadlines.length === 0) {
-      void storage.deleteAlarm().catch(() => undefined);
+      await storage.deleteAlarm().catch(() => undefined);
       return;
     }
-    const next = Math.max(now + 1_000, Math.min(now + 30_000, ...deadlines));
-    void storage.setAlarm(next).catch(() => undefined);
+    const next = Math.max(Math.min(...deadlines), now + MIN_ALARM_DELAY_MS);
+    const current = await storage.getAlarm();
+    if (current === null || next < current) {
+      await storage.setAlarm(next);
+    }
   }
 
   async alarm(): Promise<void> {
-    await revalidatePtySockets(this.ctx, this.recordPtyClose, (attachment) =>
-      this.withDatabase((database) =>
-        isPtySessionAuthorized(database, attachment),
-      ),
+    await revalidatePtySockets(
+      this.relayContext,
+      this.recordPtyClose,
+      (attachment) =>
+        this.withDatabase((database) =>
+          isPtySessionAuthorized(database, attachment),
+        ),
     );
     await this.withDatabase((database) =>
-      revalidateLogSockets(this.ctx, this.logDependencies(database)),
+      revalidateLogSockets(this.relayContext, this.logDependencies(database)),
     );
     const now = Date.now();
     for (const ws of this.ctx.getWebSockets()) {
@@ -753,7 +850,7 @@ export class AgentSessionDO extends DurableObject {
         );
       }
     }
-    this.scheduleV2Alarm();
+    await this.reconcileAlarm();
   }
 
   private connectMetricsAdmin(request: Request): Response {
@@ -859,8 +956,39 @@ export class AgentSessionDO extends DurableObject {
       clearInterval(this.metricsTimer);
       this.metricsTimer = undefined;
     }
+    this.unsubscribeLiveMetrics();
     this.metricsSubscriptionId = undefined;
     this.lastMetricsAuthorityCheck = 0;
+  }
+
+  /**
+   * Ends the agent's live `telemetry.subscribe`. Without it the agent keeps
+   * sending samples after the last viewer leaves and the object never
+   * hibernates.
+   */
+  private unsubscribeLiveMetrics(): void {
+    const subscriptionId = this.metricsSubscriptionId;
+    if (!subscriptionId) return;
+    for (const ws of this.ctx.getWebSockets()) {
+      const attachment = readAttachment(ws);
+      if (
+        attachment?.protocol !== "v2" ||
+        !attachment.welcomed ||
+        attachment.superseded ||
+        `live-${attachment.sessionId}` !== subscriptionId
+      ) {
+        continue;
+      }
+      try {
+        ws.send(
+          encodeAgentWsV2Frame(
+            createAgentWsV2Frame("telemetry.unsubscribe", { subscriptionId }),
+          ),
+        );
+      } catch {
+        // A stale socket is cleaned up through webSocketClose.
+      }
+    }
   }
 
   private sendMetricsEvent(message: AdminMetricsServerMessage): void {
@@ -1040,7 +1168,7 @@ export class AgentSessionDO extends DurableObject {
     if (logs) {
       await this.withDatabase((database) =>
         handleLogsBrowserMessage(
-          this.ctx,
+          this.relayContext,
           ws,
           logs,
           raw,
@@ -1052,7 +1180,7 @@ export class AgentSessionDO extends DurableObject {
     const pty = readPtyAttachment(ws);
     if (pty) {
       await handlePtyBrowserMessage(
-        this.ctx,
+        this.relayContext,
         ws,
         pty,
         raw,
@@ -1076,7 +1204,7 @@ export class AgentSessionDO extends DurableObject {
     }
     if (
       await handleAgentPtyFrame(
-        this.ctx,
+        this.relayContext,
         attachment.serverId,
         attachment.connectedAt,
         raw,
@@ -1107,7 +1235,7 @@ export class AgentSessionDO extends DurableObject {
     if (logs) {
       await this.withDatabase((database) =>
         handleLogsBrowserClose(
-          this.ctx,
+          this.relayContext,
           ws,
           logs,
           this.logDependencies(database),
@@ -1117,7 +1245,12 @@ export class AgentSessionDO extends DurableObject {
     }
     const pty = readPtyAttachment(ws);
     if (pty) {
-      await handlePtyBrowserClose(this.ctx, ws, pty, this.recordPtyClose);
+      await handlePtyBrowserClose(
+        this.relayContext,
+        ws,
+        pty,
+        this.recordPtyClose,
+      );
       return;
     }
     const metrics = readMetricsAttachment(ws);
@@ -1140,7 +1273,7 @@ export class AgentSessionDO extends DurableObject {
       this.closeMetricsViewers("unavailable");
     }
     await closePtySocketsForAgent(
-      this.ctx,
+      this.relayContext,
       attachment.serverId,
       attachment.protocol === "v2"
         ? {
@@ -1158,7 +1291,7 @@ export class AgentSessionDO extends DurableObject {
     if (attachment.protocol === "v2") {
       await this.withDatabase(async (database) => {
         await closeLogSocketsForAgent(
-          this.ctx,
+          this.relayContext,
           attachment.serverId,
           attachment.sessionId,
           "agent_disconnected",
@@ -1170,7 +1303,7 @@ export class AgentSessionDO extends DurableObject {
           database,
         );
       });
-      this.scheduleV2Alarm();
+      await this.reconcileAlarm();
       return;
     }
     await this.withDatabase(async (database) => {
@@ -1224,7 +1357,7 @@ export class AgentSessionDO extends DurableObject {
   }
 
   private async inspectMetrics(
-    attachment: MetricsAdminAttachment,
+    attachment: Pick<MetricsAdminAttachment, "connectedAt" | "sessionId">,
   ): Promise<unknown> {
     const agent = this.findAgentSocket(
       attachment.connectedAt,
@@ -1300,9 +1433,18 @@ export class AgentSessionDO extends DurableObject {
         peer: ws,
         store: createAgentWsV2Store(database),
         welcomed: attachment.welcomed,
+        ...(attachment.capabilities
+          ? { capabilities: attachment.capabilities }
+          : {}),
+        ...(attachment.snapshotGeneration === undefined
+          ? {}
+          : { snapshotGeneration: attachment.snapshotGeneration }),
+        ...(attachment.lastRevalidatedAt === undefined
+          ? {}
+          : { lastRevalidatedAt: attachment.lastRevalidatedAt }),
         onPtyFrame: (frame) =>
           handleAgentV2PtyFrame(
-            this.ctx,
+            this.relayContext,
             attachment.serverId,
             attachment.sessionId,
             frame,
@@ -1310,7 +1452,7 @@ export class AgentSessionDO extends DurableObject {
           ),
         onLogFrame: (text) =>
           handleAgentLogFrame(
-            this.ctx,
+            this.relayContext,
             attachment.serverId,
             attachment.sessionId,
             text,
@@ -1354,18 +1496,44 @@ export class AgentSessionDO extends DurableObject {
         },
       });
       await session.handleText(raw);
-      if (
-        session.welcomed !== attachment.welcomed ||
-        session.pending !== attachment.pending
-      ) {
-        ws.serializeAttachment({
-          ...attachment,
-          welcomed: session.welcomed,
-          pending: session.pending,
-        } satisfies V2AgentSessionAttachment);
-      }
-      this.scheduleV2Alarm();
+      this.persistV2State(ws, attachment, session);
     });
+    await this.reconcileAlarm();
+  }
+
+  /**
+   * Writes back what this frame changed. The attachment is re-read first: a
+   * frame that awaited the database may have overlapped another one, and a
+   * stale copy must not undo its `welcomed` or `superseded` flags.
+   */
+  private persistV2State(
+    ws: WebSocket,
+    loaded: V2AgentSessionAttachment,
+    session: AgentWsV2Session,
+  ): void {
+    const current = readAttachment(ws);
+    const base = current?.protocol === "v2" ? current : loaded;
+    const capabilities = persistedCapabilities(session.capabilities);
+    const lastRevalidatedAt = session.lastRevalidatedAt ?? undefined;
+    const next: V2AgentSessionAttachment = {
+      ...base,
+      welcomed: base.welcomed || session.welcomed,
+      pending: session.pending,
+      ...(capabilities.length > 0 || base.capabilities ? { capabilities } : {}),
+      ...(session.snapshotGeneration > 0 || base.snapshotGeneration
+        ? {
+            snapshotGeneration: Math.max(
+              session.snapshotGeneration,
+              base.snapshotGeneration ?? 0,
+            ),
+          }
+        : {}),
+      ...(lastRevalidatedAt === undefined ? {} : { lastRevalidatedAt }),
+    };
+    if (JSON.stringify(next) === JSON.stringify(base)) {
+      return;
+    }
+    ws.serializeAttachment(next);
   }
 
   async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
@@ -1373,7 +1541,7 @@ export class AgentSessionDO extends DurableObject {
     if (logs) {
       await this.withDatabase((database) =>
         handleLogsBrowserClose(
-          this.ctx,
+          this.relayContext,
           ws,
           logs,
           this.logDependencies(database),
@@ -1384,7 +1552,7 @@ export class AgentSessionDO extends DurableObject {
     const pty = readPtyAttachment(ws);
     if (pty) {
       await handlePtyBrowserClose(
-        this.ctx,
+        this.relayContext,
         ws,
         pty,
         this.recordPtyClose,
@@ -1395,7 +1563,7 @@ export class AgentSessionDO extends DurableObject {
     const attachment = readAttachment(ws);
     if (attachment) {
       await closePtySocketsForAgent(
-        this.ctx,
+        this.relayContext,
         attachment.serverId,
         attachment.protocol === "v2"
           ? {

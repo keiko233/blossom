@@ -17,13 +17,13 @@ import {
   handlePtyBrowserMessage,
   handlePtyConnect,
   isPtySessionAuthorized,
+  nextPtyAlarm,
   PTY_REVALIDATE_INTERVAL_MS,
   PTY_REVALIDATE_TIMEOUT_MS,
   type PtyAuthorizationCheck,
   type PtyDoContext,
   type PtySocketAttachment,
   revalidatePtySockets,
-  schedulePtyRevalidation,
 } from "./pty-session.cloudflare";
 
 const NOW = new Date("2026-11-19T01:00:00.000Z");
@@ -88,9 +88,13 @@ function fakeCtx(sockets: FakeSocket[] = []): FakeCtx {
       (ws as unknown as FakeSocket).tags = tags;
       ctx.sockets.push(ws as unknown as FakeSocket);
     },
-    storage: {
-      getAlarm: async () => ctx.alarm,
-      setAlarm: (time: number) => ctx.setAlarm(time),
+    // The Durable Object's coordinator also weighs other subsystems; only the
+    // shell re-check exists in these tests.
+    async reconcileAlarm() {
+      const next = nextPtyAlarm(ctx, Date.now());
+      if (next !== null && (ctx.alarm === null || next < ctx.alarm)) {
+        await ctx.setAlarm(next);
+      }
     },
   };
   return ctx;
@@ -165,13 +169,27 @@ describe("PTY storage alarm", () => {
     vi.useRealTimers();
   });
 
-  it("arms one alarm for the first shell and keeps it for later shells", async () => {
-    const ctx = fakeCtx();
-    await schedulePtyRevalidation(ctx);
+  it("wants an alarm one interval out only while a shell is open", () => {
+    const now = NOW.getTime();
+    expect(nextPtyAlarm(fakeCtx([agentSocket()]), now)).toBeNull();
+    expect(nextPtyAlarm(fakeCtx([agentSocket(), shellSocket()]), now)).toBe(
+      now + PTY_REVALIDATE_INTERVAL_MS,
+    );
+    expect(
+      nextPtyAlarm(
+        fakeCtx([shellSocket({ ...shellAttachment(), closeAudited: true })]),
+        now,
+      ),
+    ).toBeNull();
+  });
+
+  it("keeps an earlier alarm when a later shell opens", async () => {
+    const ctx = fakeCtx([shellSocket()]);
+    await ctx.reconcileAlarm();
     expect(ctx.alarm).toBe(NOW.getTime() + PTY_REVALIDATE_INTERVAL_MS);
 
     vi.setSystemTime(new Date(NOW.getTime() + 10_000));
-    await schedulePtyRevalidation(ctx);
+    await ctx.reconcileAlarm();
     expect(ctx.setAlarm).toHaveBeenCalledTimes(1);
     expect(ctx.alarm).toBe(NOW.getTime() + PTY_REVALIDATE_INTERVAL_MS);
   });
@@ -527,19 +545,17 @@ describe("PTY connect", () => {
     expect(closed.closeAudited).toBe(true);
   });
 
-  it("closes the browser when the agent disappears while the alarm is armed", async () => {
+  it("ends the shell when its re-check alarm cannot be armed", async () => {
     const agent = agentSocket();
     const ctx = fakeCtx([agent]);
-    ctx.setAlarm.mockImplementationOnce(async (time: number) => {
-      ctx.alarm = time;
-      ctx.sockets.splice(ctx.sockets.indexOf(agent), 1);
-    });
+    ctx.reconcileAlarm = async () => {
+      throw new Error("storage unavailable");
+    };
     const recordClose = recorder();
 
     const response = await handlePtyConnect(ctx, connectRequest(), recordClose);
 
     expect(response.status).toBe(101);
-    expect(agent.sent).toEqual([]);
     expect(recordClose).toHaveBeenCalledTimes(1);
     const [, reason] = recordClose.mock.calls[0] as unknown as [
       PtySocketAttachment,
