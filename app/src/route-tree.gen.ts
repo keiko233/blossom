@@ -62,6 +62,7 @@ import { Route as userDashboardSubscriptionsIndexRouteImport } from './routes/(u
 import { Route as DotwellKnownOauthAuthorizationServerApiAuthRouteImport } from './routes/[.]well-known.oauth-authorization-server.api.auth'
 import { Route as DotwellKnownOauthProtectedResourceApiMcpRouteImport } from './routes/[.]well-known.oauth-protected-resource.api.mcp'
 import { Route as ApiAgentEnrollmentRedeemRouteImport } from './routes/api/agent/enrollment/redeem'
+import { Route as ApiAgentGithubSplatRouteImport } from './routes/api/agent/github/$'
 import { Route as ApiAgentInstallTokenRouteImport } from './routes/api/agent/install/$token'
 import { Route as adminAdminAccessClientRulesIndexRouteImport } from './routes/(admin)/admin/access/client-rules/index'
 import { Route as adminAdminAccessGroupsIndexRouteImport } from './routes/(admin)/admin/access/groups/index'
@@ -398,6 +399,11 @@ const ApiAgentEnrollmentRedeemRoute =
     path: '/api/agent/enrollment/redeem',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiAgentGithubSplatRoute = ApiAgentGithubSplatRouteImport.update({
+  id: '/api/agent/github/$',
+  path: '/api/agent/github/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAgentInstallTokenRoute = ApiAgentInstallTokenRouteImport.update({
   id: '/api/agent/install/$token',
   path: '/api/agent/install/$token',
@@ -659,6 +665,7 @@ export interface FileRoutesByFullPath {
   '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
   '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
   '/api/agent/enrollment/redeem': typeof ApiAgentEnrollmentRedeemRoute
+  '/api/agent/github/$': typeof ApiAgentGithubSplatRoute
   '/api/agent/install/$token': typeof ApiAgentInstallTokenRoute
   '/admin/access/': typeof adminAdminAccessIndexRoute
   '/admin/networking/': typeof adminAdminNetworkingIndexRoute
@@ -733,6 +740,7 @@ export interface FileRoutesByTo {
   '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
   '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
   '/api/agent/enrollment/redeem': typeof ApiAgentEnrollmentRedeemRoute
+  '/api/agent/github/$': typeof ApiAgentGithubSplatRoute
   '/api/agent/install/$token': typeof ApiAgentInstallTokenRoute
   '/admin/access': typeof adminAdminAccessIndexRoute
   '/admin/networking': typeof adminAdminNetworkingIndexRoute
@@ -827,6 +835,7 @@ export interface FileRoutesById {
   '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
   '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
   '/api/agent/enrollment/redeem': typeof ApiAgentEnrollmentRedeemRoute
+  '/api/agent/github/$': typeof ApiAgentGithubSplatRoute
   '/api/agent/install/$token': typeof ApiAgentInstallTokenRoute
   '/(admin)/admin/access/': typeof adminAdminAccessIndexRoute
   '/(admin)/admin/networking/': typeof adminAdminNetworkingIndexRoute
@@ -919,6 +928,7 @@ export interface FileRouteTypes {
     | '/.well-known/oauth-authorization-server/api/auth'
     | '/.well-known/oauth-protected-resource/api/mcp'
     | '/api/agent/enrollment/redeem'
+    | '/api/agent/github/$'
     | '/api/agent/install/$token'
     | '/admin/access/'
     | '/admin/networking/'
@@ -993,6 +1003,7 @@ export interface FileRouteTypes {
     | '/.well-known/oauth-authorization-server/api/auth'
     | '/.well-known/oauth-protected-resource/api/mcp'
     | '/api/agent/enrollment/redeem'
+    | '/api/agent/github/$'
     | '/api/agent/install/$token'
     | '/admin/access'
     | '/admin/networking'
@@ -1086,6 +1097,7 @@ export interface FileRouteTypes {
     | '/.well-known/oauth-authorization-server/api/auth'
     | '/.well-known/oauth-protected-resource/api/mcp'
     | '/api/agent/enrollment/redeem'
+    | '/api/agent/github/$'
     | '/api/agent/install/$token'
     | '/(admin)/admin/access/'
     | '/(admin)/admin/networking/'
@@ -1148,6 +1160,7 @@ export interface RootRouteChildren {
   ApiRpcSplatRoute: typeof ApiRpcSplatRoute
   ApiSubTokenRoute: typeof ApiSubTokenRoute
   ApiAgentEnrollmentRedeemRoute: typeof ApiAgentEnrollmentRedeemRoute
+  ApiAgentGithubSplatRoute: typeof ApiAgentGithubSplatRoute
   ApiAgentInstallTokenRoute: typeof ApiAgentInstallTokenRoute
   ApiAdminServersIdStreamRoute: typeof ApiAdminServersIdStreamRoute
   ApiAdminCertificatesCertificateIdExportPartRoute: typeof ApiAdminCertificatesCertificateIdExportPartRoute
@@ -1543,6 +1556,13 @@ declare module '@tanstack/react-router' {
       path: '/api/agent/enrollment/redeem'
       fullPath: '/api/agent/enrollment/redeem'
       preLoaderRoute: typeof ApiAgentEnrollmentRedeemRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/agent/github/$': {
+      id: '/api/agent/github/$'
+      path: '/api/agent/github/$'
+      fullPath: '/api/agent/github/$'
+      preLoaderRoute: typeof ApiAgentGithubSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/agent/install/$token': {
@@ -2214,6 +2234,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiRpcSplatRoute: ApiRpcSplatRoute,
   ApiSubTokenRoute: ApiSubTokenRoute,
   ApiAgentEnrollmentRedeemRoute: ApiAgentEnrollmentRedeemRoute,
+  ApiAgentGithubSplatRoute: ApiAgentGithubSplatRoute,
   ApiAgentInstallTokenRoute: ApiAgentInstallTokenRoute,
   ApiAdminServersIdStreamRoute: ApiAdminServersIdStreamRoute,
   ApiAdminCertificatesCertificateIdExportPartRoute:

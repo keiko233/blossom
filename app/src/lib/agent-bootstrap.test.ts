@@ -68,6 +68,7 @@ describe("renderAgentBootstrapScript", () => {
     expect(script).toContain(grant);
     expect(script).toContain("--host");
     expect(script).toContain("ghcr.io/keiko233/blossom/server-agent:1.4.2");
+    expect(script).toContain("/api/agent/github/");
     expect(template).toContain("@@ENROLLMENT_GRANT@@");
   });
 
