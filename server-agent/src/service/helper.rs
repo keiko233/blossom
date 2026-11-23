@@ -292,6 +292,7 @@ impl ControlHandler for Helper {
     }
 
     async fn promote(&self, service: ServiceIdentity, request: PromoteRequest) -> ControlResponse {
+        let _guard = self.operation.lock().await;
         if self.lifecycle(service).is_none() {
             return unknown_service();
         }

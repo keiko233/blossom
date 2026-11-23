@@ -354,8 +354,10 @@ native_agent_config_source=$staging/native-agent-config.json
 printf '{"component":"agent"}\n' >"$native_agent_config_source"
 chmod 0600 "$native_agent_config_source"
 native_sing_box_config_source=$staging/native-sing-box-config.json
-if [ -f "$STATE_DIR/config.json" ]; then
-  cp "$STATE_DIR/config.json" "$native_sing_box_config_source"
+if [ -f "$STATE_DIR/active.json" ]; then
+  cp "$STATE_DIR/active.json" "$native_sing_box_config_source"
+elif [ -f "$STATE_DIR/last-known-good.json" ]; then
+  cp "$STATE_DIR/last-known-good.json" "$native_sing_box_config_source"
 else
   cat >"$native_sing_box_config_source" <<'EOF_NATIVE_CONFIG'
 {"log":{"level":"info"},"outbounds":[{"type":"direct","tag":"direct"}]}
@@ -633,7 +635,7 @@ if [ "$NATIVE_SERVICE" = 1 ]; then
   printf '%s\n' "$NATIVE_RELEASE_PUBLIC_KEY" >"$NATIVE_KEY.new"
   chmod 0644 "$NATIVE_KEY.new"
   mv -f "$NATIVE_KEY.new" "$NATIVE_KEY"
-  install -d -m 0750 "$NATIVE_LIB" "$NATIVE_LIB/journal" "$NATIVE_RELEASES"
+  install -d -g "$NATIVE_RUNTIME_GROUP" -m 0750 "$NATIVE_LIB" "$NATIVE_LIB/journal" "$NATIVE_RELEASES"
   chmod 0700 "$NATIVE_LIB/journal"
   "$NATIVE_HELPER" bootstrap --service agent \
     --binary-source "$staging/server-agent" \

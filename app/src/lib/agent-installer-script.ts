@@ -76,7 +76,11 @@ export function renderAgentInstallerScript(
       input.enrollmentGrant === undefined
         ? "enrollment_grant="
         : `enrollment_grant=${shellQuote(input.enrollmentGrant)}`,
-    PTY_FLAG: input.capabilities.includes("pty-v1") ? " --pty-enabled" : "",
+    PTY_FLAG: input.capabilities.some(
+      (capability) => capability === "pty-v2" || capability === "pty-v1",
+    )
+      ? " --pty-enabled"
+      : "",
   };
 
   let script = template;

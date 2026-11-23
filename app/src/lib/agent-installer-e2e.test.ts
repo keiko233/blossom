@@ -84,6 +84,21 @@ if [ "$1" = "--version" ]; then
   exit 0
 fi
 if [ "$1" = "bootstrap" ]; then
+  shift
+  service=
+  config_source=
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --service) service=$2; shift 2 ;;
+      --binary-source) shift 2 ;;
+      --config-source) config_source=$2; shift 2 ;;
+      --journal-dir|--release-dir|--runtime-gid) shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  [ -n "$config_source" ] || exit 69
+  [ -n "$service" ] || exit 69
+  cp "$config_source" "$FAKE_STATE/bootstrap-$service.json"
   exit 0
 fi
 if [ "$1" = "enroll" ]; then
@@ -316,6 +331,10 @@ function sandboxScript(
     )
     .replaceAll("SERVICE_USER=blossom-agent", `SERVICE_USER=${user}`)
     .replaceAll("SERVICE_GROUP=blossom-agent", `SERVICE_GROUP=${group}`)
+    .replaceAll(
+      "NATIVE_RUNTIME_GROUP=blossom-runtime",
+      `NATIVE_RUNTIME_GROUP=${group}`,
+    )
     .replaceAll("userdel blossom-agent", `userdel ${user}`);
 }
 
@@ -559,6 +578,25 @@ describe("native installer sandbox", () => {
         "utf8",
       ),
     ).toBe(readFileSync(sandbox.agentArchive, "utf8"));
+  });
+
+  it("bootstraps the native runtime from the existing active config", () => {
+    const sandbox = createSandbox();
+    const script = sandboxScript(sandbox, { inline: true });
+    const stateDir = join(sandbox.root, "var/lib/blossom-agent");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(stateDir, "active.json"),
+      '{"log":{"level":"debug"},"outbounds":[]}\n',
+    );
+
+    const result = runInstaller(sandbox, script, { native: true });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(
+      readFileSync(join(sandbox.state, "bootstrap-sing-box.json"), "utf8"),
+    ).toContain('"level":"debug"');
+    expect(existsSync(join(stateDir, "config.json"))).toBe(false);
   });
 
   it("refuses to silently switch an existing native host back to processkit", () => {

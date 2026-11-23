@@ -111,6 +111,10 @@ const RUNTIME_SAMPLE: Duration = Duration::from_secs(5);
 const MAX_CONCURRENT_PROBES: usize = 2;
 /// Longest status error message sent upstream; the contract caps it.
 const MAX_STATUS_MESSAGE_CHARS: usize = 4096;
+/// Reported for a sing-box log-level overlay in native mode, where the agent
+/// does not own the runtime process.
+const NATIVE_LOG_POLICY_UNSUPPORTED: &str =
+    "sing-box log-level policy is not supported by the native runtime adapter";
 
 /// Runs the v2 agent until shutdown or until a self-update asks for a restart.
 pub async fn run(
@@ -470,20 +474,19 @@ pub async fn run(
                 let Some(job) = job else {
                     break;
                 };
-                if native.is_some() {
-                    warn!("log-level policy is not served by the native runtime adapter yet");
-                } else {
-                    apply_log_policy_job(
-                        &log_policy,
-                        &mut config,
-                        &mut manager,
-                        &bin,
+                apply_log_policy_job(
+                    &log_policy,
+                    LogPolicyTarget {
+                        config: &mut config,
+                        manager: &mut manager,
+                        bin: &bin,
                         probation,
-                        job,
-                        &mut log_policy_errors,
-                    )
-                    .await;
-                }
+                        native: native.is_some(),
+                    },
+                    job,
+                    &mut log_policy_errors,
+                )
+                .await;
             }
             changed = core.policy.changed() => {
                 if changed.is_err() {
@@ -597,14 +600,20 @@ pub async fn run(
                 }
             }
             _ = log_policy_tick.tick() => {
-                crate::log_policy_maintenance(
-                    &log_policy,
-                    &mut config,
-                    &mut manager,
-                    &bin,
-                    probation,
-                )
-                .await;
+                // The native adapter never supervises sing-box as a child. The
+                // maintenance tick is the only path that could start a rogue
+                // `processkit` process inside blossom-agent.service, so it is
+                // disabled while the helper owns the runtime unit.
+                if native.is_none() {
+                    crate::log_policy_maintenance(
+                        &log_policy,
+                        &mut config,
+                        &mut manager,
+                        &bin,
+                        probation,
+                    )
+                    .await;
+                }
             }
             _ = runtime_tick.tick() => {
                 if let Some(native) = native.as_ref() {
@@ -716,18 +725,35 @@ async fn apply_administrative_disable(
     }
 }
 
+/// The local state one log-policy job may change. Bundled so the core loop
+/// passes one value instead of a growing argument list.
+struct LogPolicyTarget<'a> {
+    config: &'a mut ConfigManager,
+    manager: &'a mut Option<SingBoxManager>,
+    bin: &'a Path,
+    probation: Duration,
+    native: bool,
+}
+
 /// Applies the desired levels from one control-plane snapshot through the
 /// existing local policy API. The core loop owns this work, so it is serialized
-/// with configuration reconciliation and sing-box probation.
+/// with configuration reconciliation and sing-box probation. The native
+/// adapter applies agent tracing filter changes only: it does not own the
+/// sing-box process, so a `sing-box` overlay is reported as unsupported rather
+/// than silently dropped.
 async fn apply_log_policy_job(
     policy: &LogPolicy,
-    config: &mut ConfigManager,
-    manager: &mut Option<SingBoxManager>,
-    bin: &Path,
-    probation: Duration,
+    target: LogPolicyTarget<'_>,
     job: LogPolicyJob,
     errors: &mut BTreeMap<PolicySource, String>,
 ) {
+    let LogPolicyTarget {
+        config,
+        manager,
+        bin,
+        probation,
+        native,
+    } = target;
     for desired in job.sources {
         let source: PolicySource = desired.source.into();
         let mut request = PolicyRequest::new(source, desired.revision, desired.level.into());
@@ -737,11 +763,21 @@ async fn apply_log_policy_job(
             Ok(decision) => {
                 errors.remove(&source);
                 let Some(action) = decision.action else {
+                    if native && source == PolicySource::SingBox {
+                        errors.insert(source, NATIVE_LOG_POLICY_UNSUPPORTED.to_string());
+                    }
                     continue;
                 };
                 match action {
                     PolicyAction::Agent(level) => {
                         policy.apply_agent(level, Utc::now());
+                    }
+                    PolicyAction::SingBox(_) if native => {
+                        // The native helper owns sing-box, so the local
+                        // overlay/reload path must never run here. Surface it
+                        // as an explicit unsupported error instead of
+                        // reporting `error: None`.
+                        errors.insert(source, NATIVE_LOG_POLICY_UNSUPPORTED.to_string());
                     }
                     PolicyAction::SingBox(overlay) => {
                         if !config.has_active_config() {
