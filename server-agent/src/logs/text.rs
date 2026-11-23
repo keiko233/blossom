@@ -12,16 +12,17 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{self, Write as _};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::model::MAX_TEXT_BYTES;
 
 pub(crate) const REDACTED: &str = "[REDACTED]";
 const REDACTED_KEY: &str = "[REDACTED PRIVATE KEY]";
 /// Bound on secret forms held at once, current and retired together. A
-/// credential contributes a handful of forms, so this covers hundreds of node
-/// credentials. A registration that would exceed it changes nothing.
-pub(crate) const MAX_SECRET_FORMS: usize = 4096;
+/// subscription contributes a handful of forms, and each apply registers every
+/// credential in the active config plus the candidate, so this covers thousands
+/// of subscriptions without the matcher outgrowing the retained log buffer. A
+/// registration that would exceed it changes nothing.
+pub(crate) const MAX_SECRET_FORMS: usize = 65_536;
 
 /// Owner of one set of registered secrets. A scope is always replaced as a
 /// whole, never appended to.
@@ -67,19 +68,27 @@ struct Registry {
     /// a process that is still shutting down remains masked until the bound
     /// pushes them out.
     retired: VecDeque<Vec<String>>,
-    /// Every form in `current` and `retired`, longest first, so an overlapping
-    /// longer secret is matched whole.
-    all: Vec<String>,
+    /// Total forms in `current` and `retired`, maintained incrementally so the
+    /// bound check does not rescan every retired set on each rotation.
+    total_forms: usize,
+    /// `current`/`retired` changed since the automaton was built. Building is
+    /// deferred to the next redaction, so a burst of registrations before any
+    /// log line is captured (the common config-apply path) builds one automaton
+    /// instead of one per set.
+    dirty: bool,
+    /// One automaton over every form in `current` and `retired`.
+    automaton: Option<SecretMatcher>,
+    /// The scope whose registration did not fit [`MAX_SECRET_FORMS`]. Capture
+    /// fails closed until that scope is successfully replaced with a smaller
+    /// set, because until then the oversized set may still be running.
+    overflowed_scope: Option<SecretScope>,
 }
 
 impl Registry {
-    fn total(&self) -> usize {
-        let current: usize = self.current.values().map(Vec::len).sum();
-        let retired: usize = self.retired.iter().map(Vec::len).sum();
-        current + retired
-    }
-
-    fn rebuild(&mut self) {
+    fn refresh(&mut self) {
+        if !self.dirty {
+            return;
+        }
         let mut all: Vec<String> = self
             .current
             .values()
@@ -87,9 +96,12 @@ impl Registry {
             .flatten()
             .cloned()
             .collect();
-        all.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+        all.sort_unstable();
         all.dedup();
-        self.all = all;
+        // The matcher is built lazily so a config apply that registers several
+        // scopes builds one automaton on next capture, not one per set.
+        self.automaton = Some(SecretMatcher::new(&all));
+        self.dirty = false;
     }
 }
 
@@ -98,12 +110,6 @@ impl Registry {
 #[derive(Default)]
 pub(crate) struct SecretRedactor {
     registry: Mutex<Registry>,
-    /// Set once a registration could not fit [`MAX_SECRET_FORMS`]. Everything
-    /// captured afterwards is replaced whole, so a config with more
-    /// credentials than the bound still keeps the proxy running without
-    /// exposing an unregistered value. Sticky for the process lifetime: the
-    /// oversized set may still be the one the supervised process is running.
-    overflowed: AtomicBool,
 }
 
 impl SecretRedactor {
@@ -111,7 +117,7 @@ impl SecretRedactor {
     /// retired rather than forgotten. When the new set would push the registry
     /// past [`MAX_SECRET_FORMS`], retired sets are dropped oldest first; if the
     /// current sets alone do not fit, nothing changes, the call fails, and
-    /// capture switches to fail-closed redaction.
+    /// capture fails closed until that scope is replaced with a smaller set.
     pub(crate) fn replace<I>(
         &self,
         scope: SecretScope,
@@ -128,8 +134,13 @@ impl SecretRedactor {
         forms.sort();
         forms.dedup();
 
+        let new_len = forms.len();
         let mut registry = self.registry.lock().map_err(|_| SecretRegistryFull)?;
+        let old_len = registry.current.get(&scope).map_or(0, Vec::len);
         if registry.current.get(&scope) == Some(&forms) {
+            if registry.overflowed_scope == Some(scope) {
+                registry.overflowed_scope = None;
+            }
             return Ok(());
         }
         let others: usize = registry
@@ -138,43 +149,64 @@ impl SecretRedactor {
             .filter(|(owner, _)| **owner != scope)
             .map(|(_, set)| set.len())
             .sum();
-        if others + forms.len() > MAX_SECRET_FORMS {
-            self.overflowed.store(true, Ordering::Release);
+        if others + new_len > MAX_SECRET_FORMS {
+            registry.overflowed_scope = Some(scope);
             return Err(SecretRegistryFull);
         }
+        registry.total_forms = registry.total_forms - old_len + new_len;
         if let Some(retired) = registry
             .current
             .insert(scope, forms)
             .filter(|set| !set.is_empty())
         {
+            registry.total_forms += retired.len();
             registry.retired.push_back(retired);
         }
-        while registry.total() > MAX_SECRET_FORMS && registry.retired.pop_front().is_some() {}
-        registry.rebuild();
+        while registry.total_forms > MAX_SECRET_FORMS {
+            let Some(pruned) = registry.retired.pop_front() else {
+                break;
+            };
+            registry.total_forms -= pruned.len();
+        }
+        registry.dirty = true;
+        if registry.overflowed_scope == Some(scope) {
+            registry.overflowed_scope = None;
+        }
         Ok(())
     }
 
-    /// Replaces known secrets and `Bearer` tokens. If the registry cannot be
-    /// read, or an earlier registration overflowed, everything is redacted
-    /// rather than risking a leak.
+    /// Replaces known secrets and `Bearer` tokens. While a scope's registration
+    /// is still over the bound, or the registry cannot be read, everything is
+    /// redacted rather than risking a leak.
     pub(crate) fn redact<'a>(&self, text: &'a str) -> Cow<'a, str> {
-        if self.overflowed.load(Ordering::Acquire) {
-            return Cow::Borrowed(REDACTED);
-        }
-        let Ok(registry) = self.registry.lock() else {
+        let Ok(mut registry) = self.registry.lock() else {
             return Cow::Borrowed(REDACTED);
         };
-        redact_bearer(replace_spans(text, &registry.all))
+        if registry.overflowed_scope.is_some() {
+            return Cow::Borrowed(REDACTED);
+        }
+        registry.refresh();
+        match registry.automaton.as_ref() {
+            Some(matcher) => redact_bearer(replace_spans(text, matcher)),
+            // A registry with no registered forms has no matcher yet; nothing
+            // but bearer tokens can leak. Any other state fails closed.
+            None if registry.total_forms == 0 => redact_bearer(Cow::Borrowed(text)),
+            None => Cow::Borrowed(REDACTED),
+        }
     }
 
     #[cfg(test)]
     fn form_count(&self) -> usize {
-        self.registry.lock().map_or(0, |registry| registry.total())
+        self.registry
+            .lock()
+            .map_or(0, |registry| registry.total_forms)
     }
 
     #[cfg(test)]
     fn overflowed(&self) -> bool {
-        self.overflowed.load(Ordering::Acquire)
+        self.registry
+            .lock()
+            .is_ok_and(|registry| registry.overflowed_scope.is_some())
     }
 }
 
@@ -342,17 +374,153 @@ fn percent_encode(input: &str, upper: bool) -> String {
     out
 }
 
-/// Masks every occurrence of every form in one pass over the original text.
-/// Replacements are never rescanned, and overlapping matches collapse into one
-/// mask.
-fn replace_spans<'a>(text: &'a str, forms: &[String]) -> Cow<'a, str> {
-    let mut spans: Vec<(usize, usize)> = forms
-        .iter()
-        .flat_map(|form| {
-            text.match_indices(form.as_str())
-                .map(|(start, found)| (start, start + found.len()))
-        })
-        .collect();
+/// Sentinel for "no terminal form" in the matcher's output links.
+const NO_MATCH: u32 = u32::MAX;
+
+/// Byte-level Aho-Corasick automaton over the registered secret forms.
+///
+/// It is implemented here instead of pulled in as a crate so the agent keeps
+/// an empty dependency surface and `cargo test --locked` stays fully offline.
+/// Edges are stored once, sorted by byte within each node, and looked up with
+/// a binary search; that keeps one automaton over tens of thousands of forms
+/// small enough to sit beside the retained log ring. Matches are collected
+/// with the overlap-preserving scan, which is what the previous per-form
+/// `match_indices` loop did.
+#[derive(Debug)]
+struct SecretMatcher {
+    /// `(byte, child node)` sorted by byte within each node's range.
+    edges: Vec<(u8, u32)>,
+    /// Start index of each node's edge range in `edges`; `node_count + 1` entries.
+    starts: Vec<u32>,
+    /// Failure link: the longest proper suffix state.
+    fail: Vec<u32>,
+    /// Nearest terminal node on the failure chain, including the node itself.
+    output: Vec<u32>,
+    /// Form length per terminal node; zero for nodes that only prefix a form.
+    pattern_len: Vec<u32>,
+}
+
+impl SecretMatcher {
+    fn new(patterns: &[String]) -> Self {
+        // Binary-searchable children during construction; flattened afterwards.
+        let mut nodes: Vec<Vec<(u8, u32)>> = vec![Vec::new()];
+        let mut pattern_len: Vec<u32> = vec![0];
+        for pattern in patterns {
+            if pattern.is_empty() {
+                continue;
+            }
+            let mut node = 0u32;
+            for &byte in pattern.as_bytes() {
+                let found =
+                    nodes[node as usize].binary_search_by_key(&byte, |&(candidate, _)| candidate);
+                match found {
+                    Ok(index) => node = nodes[node as usize][index].1,
+                    Err(index) => {
+                        let child = nodes.len() as u32;
+                        nodes[node as usize].insert(index, (byte, child));
+                        nodes.push(Vec::new());
+                        pattern_len.push(0);
+                        node = child;
+                    }
+                }
+            }
+            pattern_len[node as usize] = pattern.len() as u32;
+        }
+
+        let node_count = nodes.len();
+        let mut fail = vec![0u32; node_count];
+        let mut output = vec![NO_MATCH; node_count];
+        let mut queue: Vec<u32> = Vec::with_capacity(node_count);
+        for &(_, child) in &nodes[0] {
+            queue.push(child);
+            if pattern_len[child as usize] > 0 {
+                output[child as usize] = child;
+            }
+        }
+
+        let mut head = 0;
+        while head < queue.len() {
+            let node = queue[head] as usize;
+            head += 1;
+            for &(byte, child) in &nodes[node] {
+                let mut fallback = fail[node];
+                while fallback != 0
+                    && nodes[fallback as usize]
+                        .binary_search_by_key(&byte, |&(candidate, _)| candidate)
+                        .is_err()
+                {
+                    fallback = fail[fallback as usize];
+                }
+                let target = nodes[fallback as usize]
+                    .binary_search_by_key(&byte, |&(candidate, _)| candidate)
+                    .ok()
+                    .map_or(0, |index| nodes[fallback as usize][index].1);
+                fail[child as usize] = target;
+                output[child as usize] = if pattern_len[child as usize] > 0 {
+                    child
+                } else {
+                    output[target as usize]
+                };
+                queue.push(child);
+            }
+        }
+
+        let mut starts = Vec::with_capacity(node_count + 1);
+        let mut edges = Vec::new();
+        for children in nodes {
+            starts.push(edges.len() as u32);
+            edges.extend(children);
+        }
+        starts.push(edges.len() as u32);
+        Self {
+            edges,
+            starts,
+            fail,
+            output,
+            pattern_len,
+        }
+    }
+
+    fn child(&self, node: u32, byte: u8) -> Option<u32> {
+        let start = self.starts[node as usize] as usize;
+        let end = self.starts[node as usize + 1] as usize;
+        self.edges[start..end]
+            .binary_search_by_key(&byte, |&(candidate, _)| candidate)
+            .ok()
+            .map(|index| self.edges[start + index].1)
+    }
+
+    /// Every match ``(start, end)`` in `text`, including overlapping ones.
+    fn spans(&self, text: &str) -> Vec<(usize, usize)> {
+        let mut spans = Vec::new();
+        let mut node = 0u32;
+        for (index, &byte) in text.as_bytes().iter().enumerate() {
+            loop {
+                if let Some(next) = self.child(node, byte) {
+                    node = next;
+                    break;
+                }
+                if node == 0 {
+                    break;
+                }
+                node = self.fail[node as usize];
+            }
+            let mut matched = self.output[node as usize];
+            while matched != NO_MATCH {
+                let len = self.pattern_len[matched as usize] as usize;
+                spans.push((index + 1 - len, index + 1));
+                matched = self.output[self.fail[matched as usize] as usize];
+            }
+        }
+        spans
+    }
+}
+
+/// Masks every occurrence of every registered form with one automaton pass over
+/// the original text. Replacements are never rescanned, and overlapping matches
+/// collapse into one mask.
+fn replace_spans<'a>(text: &'a str, matcher: &SecretMatcher) -> Cow<'a, str> {
+    let mut spans = matcher.spans(text);
     if spans.is_empty() {
         return Cow::Borrowed(text);
     }
@@ -701,10 +869,10 @@ mod tests {
                 .unwrap();
             assert!(redactor.form_count() <= MAX_SECRET_FORMS);
         }
-        // The bound is a lifetime bound, not just a count: the oldest form is
-        // pushed out once enough rotations have retired it.
+        // Both ends of the rotation history fit under the raised bound, so they
+        // stay masked until enough rotations retire them.
         let (text, _) = sanitize("rotating-credential-000000-value", &redactor);
-        assert_eq!(text, "rotating-credential-000000-value");
+        assert_eq!(text, REDACTED);
         let (text, _) = sanitize("rotating-credential-005999-value", &redactor);
         assert_eq!(text, REDACTED);
         // Re-registering an unchanged set adds nothing.
@@ -716,6 +884,29 @@ mod tests {
             )
             .unwrap();
         assert_eq!(redactor.form_count(), before);
+    }
+
+    #[test]
+    fn retired_forms_are_dropped_oldest_first_once_the_bound_is_reached() {
+        let redactor = SecretRedactor::default();
+        let many: Vec<String> = (0..MAX_SECRET_FORMS)
+            .map(|n| format!("retired-credential-{n:05}"))
+            .collect();
+        redactor
+            .replace(SecretScope::NodeCredentials, &many)
+            .unwrap();
+        assert_eq!(redactor.form_count(), MAX_SECRET_FORMS);
+
+        redactor
+            .replace(SecretScope::NodeCredentials, ["final-credential"])
+            .unwrap();
+        assert!(redactor.form_count() <= MAX_SECRET_FORMS);
+        // The retired generation no longer fits beside the new set, so the
+        // oldest forms are pushed out (here: the whole retired generation).
+        let (text, _) = sanitize("retired-credential-00000", &redactor);
+        assert_eq!(text, "retired-credential-00000");
+        let (text, _) = sanitize("final-credential", &redactor);
+        assert_eq!(text, REDACTED);
     }
 
     #[test]

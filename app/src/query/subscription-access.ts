@@ -307,35 +307,7 @@ export async function getNodeActiveSubscriptions(
   nodeId: string,
   database: Database = db,
 ): Promise<Subscription[]> {
-  const now = new Date();
-  const rows = await database
-    .select({ subscription })
-    .from(nodeGroup)
-    .innerJoin(planGroup, eq(planGroup.groupId, nodeGroup.groupId))
-    .innerJoin(subscription, eq(subscription.planId, planGroup.planId))
-    .innerJoin(user, eq(user.id, subscription.userId))
-    .where(
-      and(
-        eq(nodeGroup.nodeId, nodeId),
-        eq(subscription.status, "active"),
-        gt(subscription.expiresAt, now),
-        or(
-          isNull(user.banned),
-          eq(user.banned, false),
-          // Expired temp ban not yet cleared by better-auth. NULL banExpires
-          // (permanent ban) yields SQL NULL here, i.e. stays excluded.
-          lt(user.banExpires, now),
-        ),
-        or(
-          eq(subscription.trafficQuotaBytes, 0),
-          lt(subscription.trafficUsedBytes, subscription.trafficQuotaBytes),
-        ),
-      ),
-    )
-    // Deterministic user ordering: the compiled sing-box `users` array feeds
-    // the V3 desired revision, so identical entitlement snapshots must produce
-    // byte-identical output regardless of query plan.
-    .orderBy(asc(subscription.id));
+  const rows = await activeSubscriptionRows([nodeId], database);
 
   // Overlapping groups across plans produce duplicate rows; dedupe by id.
   const byId = new Map<string, Subscription>();
@@ -343,4 +315,84 @@ export async function getNodeActiveSubscriptions(
     byId.set(row.subscription.id, row.subscription);
   }
   return [...byId.values()];
+}
+
+/**
+ * Batch form of {@link getNodeActiveSubscriptions}: the subscriptions entitled
+ * to use each of `nodeIds` right now, resolved with ONE query instead of one
+ * per node. Config compilation uses this so a server with many nodes does not
+ * pay an N+1 round trip per compile.
+ *
+ * Nodes with no active subscriptions are absent from the map; callers treat a
+ * missing entry as an empty list. Each list keeps the same deterministic
+ * `asc(subscription.id)` ordering as the single-node query, and duplicate rows
+ * from overlapping groups are collapsed per node.
+ */
+export async function getServerActiveSubscriptionsByNode(
+  nodeIds: readonly string[],
+  database: Database = db,
+): Promise<Map<string, Subscription[]>> {
+  const rows = await activeSubscriptionRows(nodeIds, database);
+
+  const byNode = new Map<string, Map<string, Subscription>>();
+  for (const row of rows) {
+    let nodeSubscriptions = byNode.get(row.nodeId);
+    if (!nodeSubscriptions) {
+      nodeSubscriptions = new Map();
+      byNode.set(row.nodeId, nodeSubscriptions);
+    }
+    nodeSubscriptions.set(row.subscription.id, row.subscription);
+  }
+
+  const result = new Map<string, Subscription[]>();
+  for (const [nodeId, nodeSubscriptions] of byNode) {
+    result.set(nodeId, [...nodeSubscriptions.values()]);
+  }
+  return result;
+}
+
+/**
+ * One query for the active subscriptions of every node in `nodeIds`, ordered
+ * by node and then subscription id. Entitlement, active-window, ban and quota
+ * filters are shared with the single-node query, so both callers compile
+ * identical user arrays.
+ */
+async function activeSubscriptionRows(
+  nodeIds: readonly string[],
+  database: Database,
+): Promise<{ nodeId: string; subscription: Subscription }[]> {
+  if (nodeIds.length === 0) {
+    return [];
+  }
+  const now = new Date();
+  return (
+    database
+      .select({ nodeId: nodeGroup.nodeId, subscription })
+      .from(nodeGroup)
+      .innerJoin(planGroup, eq(planGroup.groupId, nodeGroup.groupId))
+      .innerJoin(subscription, eq(subscription.planId, planGroup.planId))
+      .innerJoin(user, eq(user.id, subscription.userId))
+      .where(
+        and(
+          inArray(nodeGroup.nodeId, [...nodeIds]),
+          eq(subscription.status, "active"),
+          gt(subscription.expiresAt, now),
+          or(
+            isNull(user.banned),
+            eq(user.banned, false),
+            // Expired temp ban not yet cleared by better-auth. NULL banExpires
+            // (permanent ban) yields SQL NULL here, i.e. stays excluded.
+            lt(user.banExpires, now),
+          ),
+          or(
+            eq(subscription.trafficQuotaBytes, 0),
+            lt(subscription.trafficUsedBytes, subscription.trafficQuotaBytes),
+          ),
+        ),
+      )
+      // Deterministic user ordering: the compiled sing-box `users` array feeds
+      // the V3 desired revision, so identical entitlement snapshots must produce
+      // byte-identical output regardless of query plan.
+      .orderBy(asc(nodeGroup.nodeId), asc(subscription.id))
+  );
 }
