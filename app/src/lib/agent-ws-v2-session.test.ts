@@ -14,7 +14,7 @@ import {
 } from "@blossom/contracts/agent-ws-v2";
 import type { LogPolicyAckPayload } from "@blossom/contracts/log-policy";
 import { createHash } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Server } from "@/db/proxy-schema";
 import { ManagedCompileError } from "@/orpc/proxy/managed-singbox";
@@ -22,6 +22,7 @@ import { ManagedCompileError } from "@/orpc/proxy/managed-singbox";
 import {
   encodeAgentWsV2ConfigNotify,
   openAgentWsV2Session,
+  STREAMING_REVALIDATE_INTERVAL_MS,
   type AgentWsV2Peer,
   type AgentWsV2PtyFrame,
   type AgentWsV2Store,
@@ -1479,5 +1480,173 @@ describe("managed rollout v2 ingress", () => {
     await incapable.handleText(agentFrame("hello", CURRENT_HELLO));
     await incapable.handleText(agentFrame("link_probe.result", PROBE_RESULT));
     expect(incapableProbe).not.toHaveBeenCalled();
+  });
+});
+
+describe("agent WebSocket v2 rebuilt-session state", () => {
+  const MANAGED_HELLO: AgentWsV2HelloPayload = {
+    ...CURRENT_HELLO,
+    capabilities: [
+      "config-v3",
+      "managed-networking-v1",
+      "managed-link-probe-v1",
+    ],
+  };
+  const PROBE_RESULT = {
+    probeId: "probe-1",
+    rolloutId: "rollout-1",
+    stageOrdinal: 2,
+    linkId: "link-1",
+    outcome: "succeeded" as const,
+    applied: {
+      desiredRevisionSeq: 8,
+      managedFingerprint: `sha256:${"a".repeat(64)}`,
+    },
+    latencyMs: 12,
+    completedAt: "2026-11-20T00:00:05.000Z",
+  };
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("exposes the negotiated capabilities and snapshot generation after a frame", async () => {
+    const session = open(makeStore(), makePeer());
+    await session.handleText(agentFrame("hello", MANAGED_HELLO));
+    await session.handleText(
+      agentFrame("config.get", { requestId: "snap-1", reason: "notify" }),
+    );
+
+    expect(session.capabilities).toEqual(MANAGED_HELLO.capabilities);
+    expect(session.snapshotGeneration).toBe(1);
+  });
+
+  it("compiles a rebuilt session with the capabilities restored from its attachment", async () => {
+    const store = makeStore();
+    const rebuilt = openAgentWsV2Session({
+      serverId: SERVER_ID,
+      sessionId: SESSION_ID,
+      credential: { kind: "static", tokenHash: "hash-1" },
+      peer: makePeer(),
+      store,
+      welcomed: true,
+      capabilities: ["managed-networking-v1"],
+      snapshotGeneration: 4,
+    });
+
+    await rebuilt.handleText(
+      agentFrame("config.get", { requestId: "snap-2", reason: "notify" }),
+    );
+
+    expect(store.compile).toHaveBeenCalledWith(expect.anything(), {
+      agentCapabilities: ["managed-networking-v1"],
+    });
+    expect(rebuilt.snapshotGeneration).toBe(5);
+  });
+
+  it("accepts a probe result in a rebuilt session that restored the capability", async () => {
+    const onProbe = vi.fn();
+    const rebuilt = openAgentWsV2Session({
+      serverId: SERVER_ID,
+      sessionId: SESSION_ID,
+      credential: { kind: "static", tokenHash: "hash-1" },
+      peer: makePeer(),
+      store: makeStore(),
+      welcomed: true,
+      capabilities: ["managed-link-probe-v1"],
+      onManagedProbeResult: onProbe,
+    });
+
+    await rebuilt.handleText(agentFrame("link_probe.result", PROBE_RESULT));
+
+    expect(onProbe).toHaveBeenCalledTimes(1);
+  });
+
+  describe("streaming frame lease checks", () => {
+    const SAMPLE_FRAME = () =>
+      agentFrame("telemetry.sample", {
+        ...METRIC_SAMPLE,
+        purpose: "live",
+        subscriptionId: "live-session",
+      });
+
+    function rebuilt(
+      store: AgentWsV2Store,
+      lastRevalidatedAt: number | undefined,
+    ) {
+      return openAgentWsV2Session({
+        serverId: SERVER_ID,
+        sessionId: SESSION_ID,
+        credential: { kind: "static", tokenHash: "hash-1" },
+        peer: makePeer(),
+        store,
+        welcomed: true,
+        ...(lastRevalidatedAt === undefined ? {} : { lastRevalidatedAt }),
+      });
+    }
+
+    it("skips the database lease check for a data frame inside the interval", async () => {
+      vi.useFakeTimers();
+      const store = makeStore();
+      const session = rebuilt(store, Date.now() - 1_000);
+
+      await session.handleText(SAMPLE_FRAME());
+
+      expect(store.revalidateSession).not.toHaveBeenCalled();
+    });
+
+    it("checks the lease for a data frame once the interval has passed", async () => {
+      vi.useFakeTimers();
+      const store = makeStore();
+      const session = rebuilt(
+        store,
+        Date.now() - STREAMING_REVALIDATE_INTERVAL_MS - 1,
+      );
+
+      await session.handleText(SAMPLE_FRAME());
+
+      expect(store.revalidateSession).toHaveBeenCalledTimes(1);
+      expect(session.lastRevalidatedAt).toBe(Date.now());
+    });
+
+    it("checks the lease for a first data frame with no recorded check", async () => {
+      const store = makeStore();
+      await rebuilt(store, undefined).handleText(SAMPLE_FRAME());
+      expect(store.revalidateSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("always checks the lease before control and state-mutating frames", async () => {
+      vi.useFakeTimers();
+      const store = makeStore();
+      const session = rebuilt(store, Date.now());
+
+      await session.handleText(
+        agentFrame("config.get", { requestId: "snap-3", reason: "notify" }),
+      );
+
+      expect(store.revalidateSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops a session whose lease was lost when the interval check runs", async () => {
+      vi.useFakeTimers();
+      const store = makeStore({
+        revalidateSession: vi.fn(async () => "replaced" as const),
+      });
+      const peer = makePeer();
+      const session = openAgentWsV2Session({
+        serverId: SERVER_ID,
+        sessionId: SESSION_ID,
+        credential: { kind: "static", tokenHash: "hash-1" },
+        peer,
+        store,
+        welcomed: true,
+        lastRevalidatedAt: Date.now() - STREAMING_REVALIDATE_INTERVAL_MS - 1,
+      });
+
+      await session.handleText(SAMPLE_FRAME());
+
+      expect(peer.close).toHaveBeenCalledWith(4000, "session_replaced");
+      expect(store.recordMetricHistory).not.toHaveBeenCalled();
+    });
   });
 });

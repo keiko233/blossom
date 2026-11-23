@@ -669,7 +669,9 @@ export async function handleAcmeDnsPresent(
     (record) => record.fqdn === fqdn && record.value === payload.txtValue,
   );
   if (existing) {
-    if (existing.providerRecordId) {
+    // A manual record has no provider id; the operator's approval is what
+    // makes a retried present acknowledgeable.
+    if (existing.providerRecordId || policy.challengeApprovedAt) {
       await sendDnsAck(job, fqdn, payload.txtValue, true);
     }
     return;
@@ -937,6 +939,8 @@ export async function handleAcmeResult(
     await notifyAgentConfigChanged(
       bindings.map((binding) => binding.serverId),
       "certificate renewed",
+      undefined,
+      database,
     );
   } catch (error) {
     await failJob(

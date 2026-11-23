@@ -226,12 +226,22 @@ export class CloudflareRealtimeHub implements RealtimeHub {
     connectedAt: string,
     sessionId: string | null,
   ): Promise<TelemetryResult | null> {
-    if (sessionId) {
-      // The Durable Object serves v2 inspection to the admin metric socket it
-      // already holds; there is no stateless route into that request context.
+    if (!sessionId) {
+      return this.requestTelemetry(serverId, "snapshot", connectedAt);
+    }
+    try {
+      const response = await durableObjectStub(serverId).fetch(
+        new Request(
+          `https://agent-session.internal/internal/telemetry?kind=snapshot&connectedAt=${encodeURIComponent(connectedAt)}&sessionId=${encodeURIComponent(sessionId)}`,
+          { method: "POST" },
+        ),
+      );
+      return response.status === 200
+        ? ((await response.json()) as TelemetryResult)
+        : null;
+    } catch {
       return null;
     }
-    return this.requestTelemetry(serverId, "snapshot", connectedAt);
   }
 
   async notifyConfigChanged(

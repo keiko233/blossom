@@ -43,15 +43,11 @@ export const PTY_REVALIDATE_INTERVAL_MS = 30 * 1000;
 /** A re-check that does not answer within this window counts as failed. */
 export const PTY_REVALIDATE_TIMEOUT_MS = 10 * 1000;
 
-export interface PtyDoStorage {
-  getAlarm(): Promise<number | null>;
-  setAlarm(scheduledTime: number): Promise<void>;
-}
-
 export interface PtyDoContext {
   getWebSockets(tag?: string): WebSocket[];
   acceptWebSocket(ws: WebSocket, tags?: string[]): void;
-  storage: PtyDoStorage;
+  /** Re-arms the object's single storage alarm from every subsystem's deadline. */
+  reconcileAlarm(): Promise<void>;
 }
 
 export interface AgentSocketAttachment {
@@ -286,8 +282,6 @@ export async function handlePtyConnect(
     Number(request.headers.get("x-blossom-pty-cols")),
     Number(request.headers.get("x-blossom-pty-rows")),
   );
-  // Arm before accepting, so a failed alarm write leaves no unchecked shell.
-  await schedulePtyRevalidation(ctx);
   const pair = new WebSocketPair();
   const client = pair[0];
   const server = pair[1];
@@ -307,10 +301,9 @@ export async function handlePtyConnect(
   };
   server.serializeAttachment(attachment);
 
-  // The agent is looked up again here: it may have gone during the alarm
-  // write above. Nothing awaits between registering the browser socket and
-  // sending `pty.open`, so the agent's `pty.started` or `pty.data` always
-  // finds this relay.
+  // Nothing awaits between registering the browser socket and sending
+  // `pty.open`, so the agent's `pty.started` or `pty.data` always finds this
+  // relay.
   let opened = false;
   try {
     const agent = findAgentSocket(ctx, serverId, target);
@@ -331,7 +324,24 @@ export async function handlePtyConnect(
   } catch {
     // The agent socket is closing; the browser is closed below.
   }
-  if (!opened) {
+  if (opened) {
+    // The relay is counted by the alarm only once it is registered. A failed
+    // alarm write must not leave an unchecked shell, so the relay is ended.
+    try {
+      await ctx.reconcileAlarm();
+    } catch {
+      await closePtySocket(
+        server,
+        attachment,
+        "agent_disconnected",
+        recordClose,
+        {
+          closeCode: 1011,
+          sendExit: true,
+        },
+      );
+    }
+  } else {
     // No `pty.open` reached the agent, so no shell exists to orphan.
     await closePtySocket(
       server,
@@ -669,15 +679,18 @@ export type PtyAuthorizationCheck = (
 ) => Promise<boolean>;
 
 /**
- * Arms the re-check alarm when the first shell opens. An alarm that is already
- * set is kept, so a steady stream of new shells cannot push the re-check back.
+ * Next moment the shells need this object to wake: one re-check interval from
+ * `now` while any shell is open, nothing otherwise. A caller keeps an alarm
+ * that is already earlier, so a steady stream of frames cannot push it back.
  */
-export async function schedulePtyRevalidation(
-  ctx: PtyDoContext,
-): Promise<void> {
-  if ((await ctx.storage.getAlarm()) === null) {
-    await ctx.storage.setAlarm(Date.now() + PTY_REVALIDATE_INTERVAL_MS);
+export function nextPtyAlarm(ctx: PtyDoContext, now: number): number | null {
+  for (const ws of ctx.getWebSockets()) {
+    const attachment = readPtyAttachment(ws);
+    if (attachment ? !attachment.closeAudited : isPtyKindAttachment(ws)) {
+      return now + PTY_REVALIDATE_INTERVAL_MS;
+    }
   }
+  return null;
 }
 
 function isPtyKindAttachment(ws: WebSocket): boolean {
@@ -742,7 +755,7 @@ export async function revalidatePtySockets(
     return;
   }
   // Re-arm before checking, so an unexpected error cannot leave shells unchecked.
-  await ctx.storage.setAlarm(Date.now() + PTY_REVALIDATE_INTERVAL_MS);
+  await ctx.reconcileAlarm();
 
   for (const { ws, attachment } of open) {
     const agent = findAgentSocket(

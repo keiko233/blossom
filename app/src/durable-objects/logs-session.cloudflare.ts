@@ -18,16 +18,11 @@ import type { AdminLogsActor } from "@/query/log-audit";
 export const LOGS_REVALIDATE_INTERVAL_MS = 30 * 1000;
 export const LOGS_REVALIDATE_TIMEOUT_MS = 10 * 1000;
 
-export interface LogsDoStorage {
-  getAlarm(): Promise<number | null>;
-  setAlarm(scheduledTime: number): Promise<void>;
-  deleteAlarm(): Promise<void>;
-}
-
 export interface LogsDoContext {
   getWebSockets(tag?: string): WebSocket[];
   acceptWebSocket(ws: WebSocket, tags?: string[]): void;
-  storage: LogsDoStorage;
+  /** Re-arms the object's single storage alarm from every subsystem's deadline. */
+  reconcileAlarm(): Promise<void>;
 }
 
 export interface LogSocketAttachment {
@@ -218,11 +213,10 @@ function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
 }
 
 /**
- * Next moment this object must wake: the earliest request deadline or the
- * next authority check. A closed relay contributes nothing, so the alarm is
- * removed once no relay remains.
+ * Next moment the log relays need this object to wake: the earliest request
+ * deadline or the next authority check. A closed relay contributes nothing.
  */
-function nextAlarm(ctx: LogsDoContext): number | null {
+export function nextLogAlarm(ctx: LogsDoContext): number | null {
   let next: number | null = null;
   for (const ws of ctx.getWebSockets()) {
     const attachment = readLogSocketAttachment(ws);
@@ -240,25 +234,6 @@ function nextAlarm(ctx: LogsDoContext): number | null {
     }
   }
   return next;
-}
-
-/**
- * Re-arms the single storage alarm. An alarm already scheduled earlier is
- * kept, and no open relay deletes it, so hibernation leaves nothing armed.
- */
-export async function scheduleLogAlarm(
-  ctx: LogsDoContext,
-  now: number,
-): Promise<void> {
-  const next = nextAlarm(ctx);
-  if (next === null) {
-    await ctx.storage.deleteAlarm().catch(() => undefined);
-    return;
-  }
-  const current = await ctx.storage.getAlarm();
-  if (current === null || next < current) {
-    await ctx.storage.setAlarm(Math.max(next, now + 1));
-  }
 }
 
 /**
@@ -438,7 +413,7 @@ export async function handleLogsConnect(
     lastRevalidatedAt: now,
   };
   persist(server, attachment);
-  await scheduleLogAlarm(ctx, now);
+  await ctx.reconcileAlarm();
   return new Response(null, {
     status: 101,
     webSocket: client,
@@ -462,7 +437,7 @@ export async function handleLogsBrowserMessage(
     { type: "browser", text, nowMs: now },
     dependencies,
   );
-  await scheduleLogAlarm(ctx, now);
+  await ctx.reconcileAlarm();
 }
 
 export async function handleLogsBrowserClose(
@@ -481,7 +456,7 @@ export async function handleLogsBrowserClose(
     { type: "browserClosed", nowMs: now },
     dependencies,
   );
-  await scheduleLogAlarm(ctx, now);
+  await ctx.reconcileAlarm();
 }
 
 /** Routes one validated agent log frame to every relay of its session. */
@@ -510,7 +485,7 @@ export async function handleAgentLogFrame(
       dependencies,
     );
   }
-  await scheduleLogAlarm(ctx, now);
+  await ctx.reconcileAlarm();
 }
 
 export async function closeLogSocketsForAgent(
@@ -540,7 +515,7 @@ export async function closeLogSocketsForAgent(
       dependencies,
     );
   }
-  await scheduleLogAlarm(ctx, now);
+  await ctx.reconcileAlarm();
 }
 
 /**
@@ -555,7 +530,7 @@ export async function revalidateLogSockets(
 ): Promise<void> {
   const now = dependencies.now();
   // Re-arm first, so an unexpected error cannot leave relays unchecked.
-  await scheduleLogAlarm(ctx, now);
+  await ctx.reconcileAlarm();
   for (const ws of ctx.getWebSockets()) {
     await enqueueRelay(ws, async () => {
       const attachment = readLogSocketAttachment(ws);
@@ -614,5 +589,5 @@ export async function revalidateLogSockets(
       }
     });
   }
-  await scheduleLogAlarm(ctx, now);
+  await ctx.reconcileAlarm();
 }

@@ -230,6 +230,19 @@ export interface AgentWsV2Store {
   endSession(serverId: string, sessionId: string): Promise<void>;
 }
 
+/**
+ * High-frequency data frames (`pty.data`, `logs.batch`, `telemetry.sample`)
+ * check the lease at most this often. Control and state-mutating frames
+ * always check it first.
+ */
+export const STREAMING_REVALIDATE_INTERVAL_MS = 5_000;
+
+const STREAMING_FRAME_KINDS: ReadonlySet<string> = new Set([
+  "pty.data",
+  "logs.batch",
+  "telemetry.sample",
+]);
+
 export interface OpenAgentWsV2SessionOptions {
   serverId: string;
   /** The session id the upgrade handler already made current. */
@@ -249,6 +262,19 @@ export interface OpenAgentWsV2SessionOptions {
    * attachment; a Nitro connection starts false.
    */
   welcomed?: boolean;
+  /**
+   * Capabilities negotiated by `hello` and the last `config.get` generation.
+   * A Durable Object rebuilds the session per message and restores them from
+   * the socket attachment; a Nitro connection starts empty.
+   */
+  capabilities?: readonly string[];
+  snapshotGeneration?: number;
+  /**
+   * Epoch milliseconds of the last successful lease check. High-frequency
+   * data frames skip the database check until it is older than
+   * `STREAMING_REVALIDATE_INTERVAL_MS`.
+   */
+  lastRevalidatedAt?: number;
   /** Advertised early reconnect deadline (Vercel function lifetime). */
   reconnectBeforeSeconds?: number;
   /**
@@ -293,6 +319,10 @@ export interface AgentWsV2Session {
   readonly welcomed: boolean;
   /** True while a pending identity still needs its `hello` promotion. */
   readonly pending: boolean;
+  readonly capabilities: readonly string[];
+  readonly snapshotGeneration: number;
+  /** Epoch milliseconds of the last successful lease check, if any. */
+  readonly lastRevalidatedAt: number | null;
   /** Re-checks the authoritative lease; closes the session when it fails. */
   revalidate(): Promise<void>;
   readonly sessionId: string;
@@ -380,8 +410,9 @@ export function openAgentWsV2Session(
   let welcomed = options.welcomed ?? false;
   let pending = options.pending ?? false;
   let closed = false;
-  let snapshotGeneration = 0;
-  let capabilities: readonly string[] = [];
+  let snapshotGeneration = options.snapshotGeneration ?? 0;
+  let capabilities: readonly string[] = options.capabilities ?? [];
+  let lastRevalidatedAt: number | null = options.lastRevalidatedAt ?? null;
 
   function send<T extends AgentWsV2ControlMessageType>(
     type: T,
@@ -437,6 +468,8 @@ export function openAgentWsV2Session(
       stop("session_replaced", "session is no longer current");
     } else if (lease === "disabled") {
       stop("server_disabled", "server is disabled");
+    } else {
+      lastRevalidatedAt = Date.now();
     }
   }
 
@@ -850,6 +883,18 @@ export function openAgentWsV2Session(
       return pending;
     },
 
+    get capabilities() {
+      return capabilities;
+    },
+
+    get snapshotGeneration() {
+      return snapshotGeneration;
+    },
+
+    get lastRevalidatedAt() {
+      return lastRevalidatedAt;
+    },
+
     revalidate,
     get sessionId() {
       return sessionId;
@@ -871,11 +916,19 @@ export function openAgentWsV2Session(
       if (closed) {
         return;
       }
-      await revalidate();
-      if (closed) {
-        return;
-      }
       const parsed = parseAgentWsV2Frame(text, "agent");
+      const streaming =
+        parsed.ok &&
+        welcomed &&
+        STREAMING_FRAME_KINDS.has(parsed.message.kind) &&
+        lastRevalidatedAt !== null &&
+        Date.now() - lastRevalidatedAt < STREAMING_REVALIDATE_INTERVAL_MS;
+      if (!streaming) {
+        await revalidate();
+        if (closed) {
+          return;
+        }
+      }
       if (!parsed.ok) {
         const code =
           parsed.code === "invalid-direction"

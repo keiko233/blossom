@@ -6,6 +6,7 @@ import type {
 } from "@blossom/contracts/agent-ws";
 import type { LogPolicyNotifyPayload } from "@blossom/contracts/log-policy";
 
+import type { Database } from "@/db";
 import type { Server } from "@/db/proxy-schema";
 
 import type { RealtimeHub } from "./realtime-hub-types";
@@ -25,40 +26,57 @@ export interface AgentNotificationDependencies {
   >;
 }
 
-const defaultDependencies: AgentNotificationDependencies = {
-  loadServer: async (serverId) => {
-    const [{ db }, { eq }, { server }] = await Promise.all([
-      import("@/db"),
-      import("drizzle-orm"),
-      import("@/db/proxy-schema"),
-    ]);
-    const [row] = await db.select().from(server).where(eq(server.id, serverId));
-    return row ?? null;
-  },
-  loadDesiredRevision: async (row) => {
-    const { buildAgentDesiredState } =
-      await import("@/orpc/proxy/agent-desired-state");
-    return (await buildAgentDesiredState(row)).desiredRevision;
-  },
-  invalidateDesiredRevision: async (serverId) => {
-    const { invalidateDesiredConfigRevisions } = await import("@/query/agent");
-    await invalidateDesiredConfigRevisions([serverId]);
-  },
-  hub: {
-    acceptAgent: async (...args) =>
-      (await import("@/lib/realtime-hub"))
-        .getRealtimeHub()
-        .acceptAgent(...args),
-    notifyConfigChanged: async (...args) =>
-      (await import("@/lib/realtime-hub"))
-        .getRealtimeHub()
-        .notifyConfigChanged(...args),
-    notifyUpdateTrigger: async (...args) =>
-      (await import("@/lib/realtime-hub"))
-        .getRealtimeHub()
-        .notifyUpdateTrigger(...args),
-  },
+const defaultHub: AgentNotificationDependencies["hub"] = {
+  acceptAgent: async (...args) =>
+    (await import("@/lib/realtime-hub")).getRealtimeHub().acceptAgent(...args),
+  notifyConfigChanged: async (...args) =>
+    (await import("@/lib/realtime-hub"))
+      .getRealtimeHub()
+      .notifyConfigChanged(...args),
+  notifyUpdateTrigger: async (...args) =>
+    (await import("@/lib/realtime-hub"))
+      .getRealtimeHub()
+      .notifyUpdateTrigger(...args),
 };
+
+/**
+ * Without `database` the reads use the shared request-scoped facade. A caller
+ * with no request, such as a Durable Object message, passes its own handle.
+ */
+function createDefaultDependencies(
+  database?: Database,
+): AgentNotificationDependencies {
+  return {
+    loadServer: async (serverId) => {
+      const [{ eq }, { server }] = await Promise.all([
+        import("drizzle-orm"),
+        import("@/db/proxy-schema"),
+      ]);
+      const handle = database ?? (await import("@/db")).db;
+      const [row] = await handle
+        .select()
+        .from(server)
+        .where(eq(server.id, serverId));
+      return row ?? null;
+    },
+    loadDesiredRevision: async (row) => {
+      const { buildAgentDesiredState } =
+        await import("@/orpc/proxy/agent-desired-state");
+      return (
+        await buildAgentDesiredState(
+          row,
+          database ? { database, advanceCertificates: false } : {},
+        )
+      ).desiredRevision;
+    },
+    invalidateDesiredRevision: async (serverId) => {
+      const { invalidateDesiredConfigRevisions } =
+        await import("@/query/agent");
+      await invalidateDesiredConfigRevisions([serverId], database);
+    },
+    hub: defaultHub,
+  };
+}
 
 function logFailure(operation: string, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
@@ -68,26 +86,29 @@ function logFailure(operation: string, error: unknown): void {
 /**
  * Best-effort push after a publish-gate mutation has committed. Failures,
  * including an unavailable socket/DO/Redis, are logged and never propagated
- * back into the SQL mutation.
+ * back into the SQL mutation. A caller without a request-scoped facade, such
+ * as a Durable Object, passes its own `database`.
  */
 export async function notifyAgentConfigChanged(
   serverIds: readonly string[],
   reason?: string,
-  dependencies: AgentNotificationDependencies = defaultDependencies,
+  dependencies?: AgentNotificationDependencies,
+  database?: Database,
 ): Promise<void> {
+  const deps = dependencies ?? createDefaultDependencies(database);
   for (const serverId of new Set(serverIds)) {
     try {
-      await dependencies.invalidateDesiredRevision?.(serverId);
-      const row = await dependencies.loadServer(serverId);
+      await deps.invalidateDesiredRevision?.(serverId);
+      const row = await deps.loadServer(serverId);
       if (!row) {
         continue;
       }
       const payload: AgentWsConfigNotifyPayload = {
         desiredRevisionSeq: row.desiredRevisionSeq,
-        desiredRevision: await dependencies.loadDesiredRevision(row),
+        desiredRevision: await deps.loadDesiredRevision(row),
         ...(reason ? { reason } : {}),
       };
-      await dependencies.hub.notifyConfigChanged(serverId, payload);
+      await deps.hub.notifyConfigChanged(serverId, payload);
     } catch (error) {
       logFailure("config.notify", error);
     }

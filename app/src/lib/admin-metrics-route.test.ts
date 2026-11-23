@@ -7,8 +7,12 @@ import {
   type AdminMetricsServerState,
 } from "./admin-metrics-route";
 
+const mocks = vi.hoisted(() => ({
+  getSession: vi.fn(async (_options: unknown) => null),
+}));
+
 vi.mock("@/lib/auth", () => ({
-  getAuth: () => ({ api: { getSession: vi.fn() } }),
+  getAuth: () => ({ api: { getSession: mocks.getSession } }),
 }));
 
 const ORIGIN = "https://panel.example.com";
@@ -57,6 +61,21 @@ function dependencies(
 }
 
 describe("admin metric WebSocket upgrade", () => {
+  it("reads the session without refreshing its cookie", async () => {
+    const response = await handleAdminMetricsRequest(
+      new Request(URL, {
+        headers: { origin: ORIGIN, upgrade: "websocket", cookie: "session=1" },
+      }),
+      { serverId: "srv-1" },
+    );
+
+    expect(response.status).toBe(403);
+    expect(mocks.getSession).toHaveBeenCalledWith({
+      headers: expect.objectContaining({ get: expect.any(Function) }),
+      query: { disableRefresh: true },
+    });
+  });
+
   it("requires an upgrade before authenticating", async () => {
     const deps = dependencies();
     const response = await handleAdminMetricsRequest(
