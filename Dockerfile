@@ -2,7 +2,7 @@
 FROM node:26-alpine AS base
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
-RUN npm install --global pnpm@12.16.1
+RUN npm install --global pnpm@12.21.0
 
 FROM base AS builder
 WORKDIR /repo
