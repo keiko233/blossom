@@ -32,6 +32,9 @@ import type { PendingConfigChange } from "@/lib/publish-gate";
 
 export type DbHandle = Database;
 
+/** Caps one heartbeat's orphan sweep; leftovers are picked up next time. */
+const ORPHAN_PRUNE_BATCH_SIZE = 500;
+
 export interface RecordConfigChangeInput {
   kind: ConfigChangeKind;
   subjectId: string;
@@ -293,7 +296,8 @@ export async function pruneAppliedConfigChanges(
       configChangeServer,
       eq(configChangeServer.changeId, configChange.id),
     )
-    .where(isNull(configChangeServer.changeId));
+    .where(isNull(configChangeServer.changeId))
+    .limit(ORPHAN_PRUNE_BATCH_SIZE);
   if (orphans.length > 0) {
     await database.delete(configChange).where(
       inArray(
