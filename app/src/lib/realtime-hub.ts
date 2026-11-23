@@ -77,7 +77,7 @@ import {
   type ManagedRolloutFollowUp,
 } from "./managed-rollout-runtime";
 import {
-  REALTIME_BACKPLANE_CHANNEL,
+  realtimeBackplaneChannel,
   type AgentPtyTarget,
   type RealtimeBackplane,
   type RealtimeBackplaneMessage,
@@ -141,9 +141,13 @@ function reconnectBeforeSecondsForRuntime(): number | undefined {
   return process.env.VERCEL ? VERCEL_RECONNECT_BEFORE_SECONDS : undefined;
 }
 
-class RedisBackplane implements RealtimeBackplane {
+export class RedisBackplane implements RealtimeBackplane {
   private readonly publisher: Redis;
   private readonly subscriber: Redis;
+  private deliver?: (message: RealtimeBackplaneMessage) => void;
+  private readonly subscribedServers = new Set<string>();
+  private connected = false;
+  private connecting?: Promise<void>;
 
   constructor(url: string) {
     this.publisher = new Redis(url, {
@@ -158,23 +162,65 @@ class RedisBackplane implements RealtimeBackplane {
     this.subscriber.on("error", () => undefined);
   }
 
+  private async ensureConnected(): Promise<void> {
+    if (this.connected) return;
+    if (this.connecting) return this.connecting;
+    this.connecting = (async () => {
+      try {
+        const connects: Promise<unknown>[] = [];
+        if (this.publisher.status === "wait")
+          connects.push(this.publisher.connect());
+        if (this.subscriber.status === "wait")
+          connects.push(this.subscriber.connect());
+        await Promise.all(connects);
+        this.subscriber.on("message", (_channel, payload) => {
+          try {
+            this.deliver?.(JSON.parse(payload) as RealtimeBackplaneMessage);
+          } catch {
+            // A malformed backplane frame is ignored; local delivery still works.
+          }
+        });
+        this.connected = true;
+      } catch (error) {
+        this.connecting = undefined;
+        throw error;
+      }
+    })();
+    return this.connecting;
+  }
+
   async subscribe(
     deliver: (message: RealtimeBackplaneMessage) => void,
+    serverId?: string,
   ): Promise<void> {
-    await Promise.all([this.publisher.connect(), this.subscriber.connect()]);
-    this.subscriber.on("message", (_channel, payload) => {
-      try {
-        deliver(JSON.parse(payload) as RealtimeBackplaneMessage);
-      } catch {
-        // A malformed backplane frame is ignored; local delivery still works.
-      }
-    });
-    await this.subscriber.subscribe(REALTIME_BACKPLANE_CHANNEL);
+    this.deliver = deliver;
+    await this.ensureConnected();
+    if (serverId) {
+      await this.subscribeServer(serverId);
+    }
+  }
+
+  async subscribeServer(serverId: string): Promise<void> {
+    if (this.subscribedServers.has(serverId)) return;
+    this.subscribedServers.add(serverId);
+    await this.ensureConnected();
+    await this.subscriber.subscribe(realtimeBackplaneChannel(serverId));
+  }
+
+  async unsubscribeServer(serverId: string): Promise<void> {
+    if (!this.subscribedServers.has(serverId)) return;
+    this.subscribedServers.delete(serverId);
+    if (this.connected) {
+      await this.subscriber
+        .unsubscribe(realtimeBackplaneChannel(serverId))
+        .catch(() => undefined);
+    }
   }
 
   async publish(message: RealtimeBackplaneMessage): Promise<void> {
+    await this.ensureConnected();
     await this.publisher.publish(
-      REALTIME_BACKPLANE_CHANNEL,
+      realtimeBackplaneChannel(message.serverId),
       JSON.stringify(message),
     );
   }
@@ -493,7 +539,7 @@ export class NitroRealtimeHub implements RealtimeHub {
         }
         connection.session = session;
         peers.add(connection);
-        this.startBackplane();
+        this.startBackplane(serverId);
         try {
           const opened = await session;
           if (!opened) {
@@ -598,6 +644,7 @@ export class NitroRealtimeHub implements RealtimeHub {
       if (this.currentV2Sessions.get(serverId) === connection) {
         this.currentV2Sessions.delete(serverId);
       }
+      this.maybeUnsubscribeServer(serverId);
     }
     return connection;
   }
@@ -665,10 +712,9 @@ export class NitroRealtimeHub implements RealtimeHub {
 
   private publishV2(serverId: string, frame: string): void {
     const agentSessionId = this.currentV2Sessions.get(serverId)?.sessionId;
-    if (!agentSessionId) {
-      return;
+    if (agentSessionId) {
+      this.deliverV2(serverId, frame, agentSessionId);
     }
-    this.deliverV2(serverId, frame, agentSessionId);
     const backplane = this.backplane;
     if (!backplane) return;
     const ready = this.startBackplane();
@@ -678,7 +724,7 @@ export class NitroRealtimeHub implements RealtimeHub {
         serverId,
         frame,
         protocol: "v2",
-        agentSessionId,
+        ...(agentSessionId ? { agentSessionId } : {}),
       });
     void (ready ? ready.then(relay) : relay()).catch((error: unknown) => {
       const reason = error instanceof Error ? error.message : String(error);
@@ -695,13 +741,16 @@ export class NitroRealtimeHub implements RealtimeHub {
     context: LiveMetricsSubscriptionContext,
     handler: LiveMetricsHandler,
   ): () => void {
+    if (this.backplane) {
+      this.startBackplane(context.serverId);
+    }
     const key = liveMetricsKey(context);
     let group = this.liveMetrics.get(key);
     if (!group) {
       group = { context, handlers: new Set() };
       this.liveMetrics.set(key, group);
       if (context.protocol === "v2" && context.sessionId) {
-        group.subscriptionId = `live-${context.sessionId}`;
+        group.subscriptionId = `live-${this.id}-${context.sessionId}`;
         this.sendV2TelemetrySubscription(context, group.subscriptionId);
       } else {
         this.startV1LiveSampling(key, group);
@@ -722,6 +771,7 @@ export class NitroRealtimeHub implements RealtimeHub {
           current.subscriptionId,
         );
       }
+      this.maybeUnsubscribeServer(current.context.serverId);
     };
   }
 
@@ -872,7 +922,7 @@ export class NitroRealtimeHub implements RealtimeHub {
         }
         peers.add({ peer, session });
         await session;
-        this.startBackplane();
+        this.startBackplane(serverId);
       },
       message: async (peer, message) => {
         const connection = this.findConnection(serverId, peer);
@@ -966,6 +1016,7 @@ export class NitroRealtimeHub implements RealtimeHub {
       peers?.delete(connection);
       if (peers?.size === 0) {
         this.connections.delete(serverId);
+        this.maybeUnsubscribeServer(serverId);
       }
     }
     return connection;
@@ -1024,12 +1075,14 @@ export class NitroRealtimeHub implements RealtimeHub {
     }
     const relay = { target, handler };
     relays.set(sessionId, relay);
+    this.startBackplane(serverId);
     return () => {
       const current = this.ptyRelays.get(serverId);
       if (current?.get(sessionId) === relay) {
         current.delete(sessionId);
         if (current.size === 0) {
           this.ptyRelays.delete(serverId);
+          this.maybeUnsubscribeServer(serverId);
         }
       }
     };
@@ -1275,13 +1328,14 @@ export class NitroRealtimeHub implements RealtimeHub {
     relays.set(relayId, relay);
     // Agent frames arrive from the instance that owns the agent socket even
     // when this browser is alone on its own instance, so subscribe eagerly.
-    this.startBackplane();
+    this.startBackplane(serverId);
     return () => {
       const current = this.logRelays.get(serverId);
       if (current?.get(relayId) === relay) {
         current.delete(relayId);
         if (current.size === 0) {
           this.logRelays.delete(serverId);
+          this.maybeUnsubscribeServer(serverId);
         }
       }
     };
@@ -1468,132 +1522,158 @@ export class NitroRealtimeHub implements RealtimeHub {
     });
   }
 
-  private startBackplane(): Promise<void> | undefined {
-    if (!this.backplane || this.backplaneReady) {
-      return this.backplaneReady;
+  private startBackplane(serverId?: string): Promise<void> | undefined {
+    if (!this.backplane) {
+      return undefined;
     }
-    this.backplaneReady = this.backplane
-      .subscribe((message) => {
-        if (message.origin === this.id) {
-          return;
-        }
-        if (message.logTarget === "browser" && message.logSessionId) {
-          if (message.logSuperseded) {
-            this.closeSupersededRemoteRelays(
-              message.serverId,
-              message.logSessionId,
-            );
-            return;
-          }
-          if (message.logAgentGone) {
-            this.closeLogRelays(
-              message.serverId,
-              message.logSessionId,
-              "agent_disconnected",
-            );
-            return;
-          }
-          this.deliverLocalLogAgentFrame(
-            message.serverId,
-            message.logSessionId,
-            message.frame,
-          );
-          return;
-        }
-        if (message.logTarget === "agent" && message.logSessionId) {
-          this.sendLocalLogFrame(
-            message.serverId,
-            message.logSessionId,
-            message.frame,
-          );
-          return;
-        }
-        if (message.protocol === "v2") {
-          this.deliverV2(
-            message.serverId,
-            message.frame,
-            message.agentSessionId,
-          );
-          return;
-        }
-        if (message.agentDisconnected) {
-          const target = ptyTargetFromBackplane(message);
-          if (target) {
-            this.closePtyRelays(message.serverId, target);
-          }
-          return;
-        }
-        if (message.liveMetricSample && message.liveMetricSessionId) {
-          this.deliverLiveMetric(
-            message.serverId,
-            message.liveMetricSessionId,
-            message.liveMetricSample,
-          );
-          return;
-        }
-        if (message.agentSnapshot) {
-          this.resolveSnapshot(
-            message.agentSnapshot.requestId,
-            message.agentSnapshot.snapshot,
-          );
-          return;
-        }
-        if (message.ptyTarget === "browser" && message.ptySessionId) {
-          const target = ptyTargetFromBackplane(message);
-          if (!target) {
-            return;
-          }
-          this.deliverPtyFrame(
-            message.serverId,
-            target,
-            message.ptySessionId,
-            message.frame,
-          );
-          return;
-        }
-        if (message.ptyTarget === "agent" && message.connectedAt) {
-          const target = ptyTargetFromBackplane(message);
-          if (target?.protocol === "v2") {
-            const connection = target.agentSessionId
-              ? this.findV2ConnectionBySession(
-                  message.serverId,
-                  target.agentSessionId,
-                )
-              : undefined;
-            if (connection) {
-              void connection.session
-                .then((session) => {
-                  if (session?.welcomed) {
-                    connection.peer.send(message.frame);
-                  }
-                })
-                .catch(() => undefined);
-            }
-          } else {
-            void this.sendLocalAgentFrame(
-              message.serverId,
-              message.connectedAt,
-              message.frame,
-            );
-          }
-          return;
-        }
-        if (message.telemetryReply) {
-          const reply = telemetryReply(message.frame);
-          if (reply && message.connectedAt)
-            this.telemetry.accept(
-              JSON.stringify([message.serverId, message.connectedAt]),
-              reply,
-            );
-          return;
-        }
-        this.sendLocal(message.serverId, message.frame, message.connectedAt);
-      })
-      .catch((error: unknown) => {
-        const reason = error instanceof Error ? error.message : String(error);
-        console.warn(`realtime backplane subscribe failed: ${reason}`);
-      });
+    if (!this.backplaneReady) {
+      this.backplaneReady = this.backplane
+        .subscribe((message) => {
+          this.handleBackplaneMessage(message);
+        }, serverId)
+        .catch((error: unknown) => {
+          const reason = error instanceof Error ? error.message : String(error);
+          console.warn(`realtime backplane subscribe failed: ${reason}`);
+        });
+    }
+    if (serverId && this.backplane.subscribeServer) {
+      void this.backplaneReady
+        .then(() => {
+          void this.backplane?.subscribeServer?.(serverId);
+        })
+        .catch((error: unknown) => {
+          const reason = error instanceof Error ? error.message : String(error);
+          console.warn(`realtime backplane subscribeServer failed: ${reason}`);
+        });
+    }
     return this.backplaneReady;
+  }
+
+  private maybeUnsubscribeServer(serverId: string): void {
+    if (
+      !this.connections.has(serverId) &&
+      !this.v2Connections.has(serverId) &&
+      !this.ptyRelays.has(serverId) &&
+      !this.logRelays.has(serverId) &&
+      ![...this.liveMetrics.values()].some(
+        (group) => group.context.serverId === serverId,
+      )
+    ) {
+      void this.backplane?.unsubscribeServer?.(serverId);
+    }
+  }
+
+  private handleBackplaneMessage(message: RealtimeBackplaneMessage): void {
+    if (message.origin === this.id) {
+      return;
+    }
+    if (message.logTarget === "browser" && message.logSessionId) {
+      if (message.logSuperseded) {
+        this.closeSupersededRemoteRelays(
+          message.serverId,
+          message.logSessionId,
+        );
+        return;
+      }
+      if (message.logAgentGone) {
+        this.closeLogRelays(
+          message.serverId,
+          message.logSessionId,
+          "agent_disconnected",
+        );
+        return;
+      }
+      this.deliverLocalLogAgentFrame(
+        message.serverId,
+        message.logSessionId,
+        message.frame,
+      );
+      return;
+    }
+    if (message.logTarget === "agent" && message.logSessionId) {
+      this.sendLocalLogFrame(
+        message.serverId,
+        message.logSessionId,
+        message.frame,
+      );
+      return;
+    }
+    if (message.protocol === "v2") {
+      this.deliverV2(message.serverId, message.frame, message.agentSessionId);
+      return;
+    }
+    if (message.agentDisconnected) {
+      const target = ptyTargetFromBackplane(message);
+      if (target) {
+        this.closePtyRelays(message.serverId, target);
+      }
+      return;
+    }
+    if (message.liveMetricSample && message.liveMetricSessionId) {
+      this.deliverLiveMetric(
+        message.serverId,
+        message.liveMetricSessionId,
+        message.liveMetricSample,
+      );
+      return;
+    }
+    if (message.agentSnapshot) {
+      this.resolveSnapshot(
+        message.agentSnapshot.requestId,
+        message.agentSnapshot.snapshot,
+      );
+      return;
+    }
+    if (message.ptyTarget === "browser" && message.ptySessionId) {
+      const target = ptyTargetFromBackplane(message);
+      if (!target) {
+        return;
+      }
+      this.deliverPtyFrame(
+        message.serverId,
+        target,
+        message.ptySessionId,
+        message.frame,
+      );
+      return;
+    }
+    if (message.ptyTarget === "agent" && message.connectedAt) {
+      const target = ptyTargetFromBackplane(message);
+      if (target?.protocol === "v2") {
+        const connection = target.agentSessionId
+          ? this.findV2ConnectionBySession(
+              message.serverId,
+              target.agentSessionId,
+            )
+          : undefined;
+        if (connection) {
+          void connection.session
+            .then((session) => {
+              if (session?.welcomed) {
+                connection.peer.send(message.frame);
+              }
+            })
+            .catch(() => undefined);
+        }
+      } else {
+        void this.sendLocalAgentFrame(
+          message.serverId,
+          message.connectedAt,
+          message.frame,
+        );
+      }
+      return;
+    }
+    if (message.telemetryReply) {
+      const reply = telemetryReply(message.frame);
+      if (reply && message.connectedAt)
+        this.telemetry.accept(
+          JSON.stringify([message.serverId, message.connectedAt]),
+          reply,
+        );
+      return;
+    }
+    this.sendLocal(message.serverId, message.frame, message.connectedAt);
   }
 
   private sendLocal(

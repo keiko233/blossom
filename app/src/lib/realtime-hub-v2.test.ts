@@ -533,4 +533,95 @@ describe("NitroRealtimeHub v2 sessions", () => {
 
     expect(v2Store.endSession).toHaveBeenCalledWith("srv-1", SESSION_ID);
   });
+
+  it("delivers cross-instance v2 pushes from hubB to agent socket on hubA via in-memory backplane", async () => {
+    const deliverers = new Set<(message: RealtimeBackplaneMessage) => void>();
+    const inMemoryBackplane: RealtimeBackplane = {
+      subscribe: async (deliver) => {
+        deliverers.add(deliver);
+      },
+      publish: async (message) => {
+        for (const deliver of deliverers) {
+          deliver(message);
+        }
+      },
+    };
+
+    const v2StoreA = fakeV2Store();
+    const hubA = new NitroRealtimeHub({
+      backplane: inMemoryBackplane,
+      store: fakeV1Store(),
+      v2Store: v2StoreA,
+    });
+    const hubB = new NitroRealtimeHub({
+      backplane: inMemoryBackplane,
+      store: fakeV1Store(),
+      v2Store: fakeV2Store(),
+    });
+
+    // Accept agent socket on hubA
+    const hooksA = await acceptV2(hubA);
+    const peerA = makePeer("peer-a");
+    await hooksA.open(peerA);
+    await hooksA.message(
+      peerA,
+      agentFrame("hello", {
+        agentVersion: "0.4.0",
+        agentBuildId: "build-1",
+        capabilities: ["telemetry-v1"],
+        applied: null,
+        certificateDeployments: [],
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(sentTypes(peerA)).toEqual(["welcome"]);
+
+    // hubB has NO local connection or socket for srv-1
+    await hubB.notifyConfigChanged("srv-1", {
+      desiredRevisionSeq: 8,
+      desiredRevision: NEXT,
+      reason: "cross-instance notify",
+    });
+
+    await hubB.notifyUpdateTrigger("srv-1", {
+      target: "all",
+      desiredAgentVersion: "0.4.1",
+      force: true,
+    });
+
+    await hubB.notifyAcmeIssue("srv-1", {
+      jobId: "job-1",
+      certificateId: "cert-1",
+      generation: 1,
+      domains: ["example.com"],
+      acmeProvider: "letsencrypt",
+      acmeStaging: false,
+      challengeType: "dns-01",
+    });
+
+    await hubB.notifyAcmeDnsAck("srv-1", {
+      jobId: "job-1",
+      fqdn: "_acme-challenge.example.com",
+      txtValue: "token-val",
+      accepted: true,
+    });
+
+    await hubB.notifyLogPolicy("srv-1", {
+      revision: 3,
+      source: "agent",
+      reason: "log policy changed",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(sentTypes(peerA)).toEqual([
+      "welcome",
+      "config.notify",
+      "update.trigger",
+      "acme.issue",
+      "acme.dns_ack",
+      "log.policy.notify",
+    ]);
+  });
 });

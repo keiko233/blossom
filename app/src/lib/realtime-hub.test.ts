@@ -12,11 +12,57 @@ import { describe, expect, it, vi } from "vitest";
 import type { Server } from "@/db/proxy-schema";
 
 import type { AgentWsStore } from "./agent-ws-session";
-import { NitroRealtimeHub, withRuntimeReconnectHint } from "./realtime-hub";
-import type {
-  RealtimeBackplane,
-  RealtimeBackplaneMessage,
+import {
+  NitroRealtimeHub,
+  RedisBackplane,
+  withRuntimeReconnectHint,
+} from "./realtime-hub";
+import {
+  REALTIME_BACKPLANE_CHANNEL,
+  realtimeBackplaneChannel,
+  type RealtimeBackplane,
+  type RealtimeBackplaneMessage,
 } from "./realtime-hub-types";
+
+const { MockRedis, mockInstances } = vi.hoisted(() => {
+  const mockInstances: any[] = [];
+  class MockRedis {
+    status = "wait";
+    listeners = new Map<string, Array<(...args: any[]) => void>>();
+    subscribed = new Set<string>();
+
+    constructor(_url: string, _options?: unknown) {
+      mockInstances.push(this);
+    }
+
+    on(event: string, fn: (...args: any[]) => void) {
+      const list = this.listeners.get(event) ?? [];
+      list.push(fn);
+      this.listeners.set(event, list);
+      return this;
+    }
+
+    async connect() {
+      this.status = "ready";
+    }
+
+    async subscribe(channel: string) {
+      this.subscribed.add(channel);
+    }
+
+    async unsubscribe(channel: string) {
+      this.subscribed.delete(channel);
+    }
+
+    publish = vi.fn(async (_channel: string, _message: string) => 1);
+  }
+  return { MockRedis, mockInstances };
+});
+
+vi.mock("ioredis", () => ({
+  Redis: MockRedis,
+  default: MockRedis,
+}));
 
 const server = {
   id: "srv-1",
@@ -183,5 +229,56 @@ describe("NitroRealtimeHub", () => {
 
     await response.crossws.close(peer, {});
     expect(store.markDisconnected).toHaveBeenCalledWith("srv-1", "session-1");
+  });
+});
+
+describe("RedisBackplane channel sharding", () => {
+  it("formats server-specific and broadcast channels", () => {
+    expect(realtimeBackplaneChannel()).toBe(REALTIME_BACKPLANE_CHANNEL);
+    expect(realtimeBackplaneChannel("srv-123")).toBe(
+      `${REALTIME_BACKPLANE_CHANNEL}:srv-123`,
+    );
+  });
+
+  it("publishes to the per-server channel when serverId is present", async () => {
+    mockInstances.length = 0;
+    const backplane = new RedisBackplane("redis://localhost:6379");
+    await backplane.publish({
+      origin: "test",
+      serverId: "srv-99",
+      frame: "ping",
+    });
+
+    const publisher = mockInstances[0];
+    expect(publisher.publish).toHaveBeenCalledWith(
+      `${REALTIME_BACKPLANE_CHANNEL}:srv-99`,
+      JSON.stringify({
+        origin: "test",
+        serverId: "srv-99",
+        frame: "ping",
+      }),
+    );
+  });
+
+  it("subscribes and unsubscribes to per-server channels", async () => {
+    mockInstances.length = 0;
+    const backplane = new RedisBackplane("redis://localhost:6379");
+    const deliver = vi.fn();
+    await backplane.subscribe(deliver, "srv-1");
+
+    const subscriber = mockInstances[1];
+    expect(
+      subscriber.subscribed.has(`${REALTIME_BACKPLANE_CHANNEL}:srv-1`),
+    ).toBe(true);
+
+    await backplane.subscribeServer("srv-2");
+    expect(
+      subscriber.subscribed.has(`${REALTIME_BACKPLANE_CHANNEL}:srv-2`),
+    ).toBe(true);
+
+    await backplane.unsubscribeServer("srv-1");
+    expect(
+      subscriber.subscribed.has(`${REALTIME_BACKPLANE_CHANNEL}:srv-1`),
+    ).toBe(false);
   });
 });
