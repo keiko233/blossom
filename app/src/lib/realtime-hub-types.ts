@@ -131,11 +131,20 @@ export interface AgentPtyTarget {
 export interface RealtimeBackplane {
   subscribe(
     deliver: (message: RealtimeBackplaneMessage) => void,
+    serverId?: string,
   ): Promise<void>;
   publish(message: RealtimeBackplaneMessage): Promise<void>;
+  subscribeServer?(serverId: string): Promise<void>;
+  unsubscribeServer?(serverId: string): Promise<void>;
 }
 
 export const REALTIME_BACKPLANE_CHANNEL = "blossom:agent-ws:v1";
+
+export function realtimeBackplaneChannel(serverId?: string): string {
+  return serverId
+    ? `${REALTIME_BACKPLANE_CHANNEL}:${serverId}`
+    : REALTIME_BACKPLANE_CHANNEL;
+}
 
 export const AGENT_WS_INTERNAL_SERVER_ID = "x-blossom-agent-server-id";
 export const AGENT_WS_INTERNAL_CONNECTED_AT = "x-blossom-agent-connected-at";
