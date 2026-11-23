@@ -7,7 +7,7 @@
 
 ARG BUILD_ID=local
 
-FROM alpine:latest
+FROM alpine:3.22
 ARG BUILD_ID
 LABEL org.opencontainers.image.revision=$BUILD_ID
 

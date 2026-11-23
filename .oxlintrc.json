@@ -3,7 +3,10 @@
   "plugins": null,
   "categories": {},
   "rules": {
-    "eslint/no-unused-vars": "error"
+    "eslint/no-unused-vars": "error",
+    "eslint/no-debugger": "error",
+    "eslint/no-duplicate-case": "error",
+    "eslint/no-unreachable": "error"
   },
   "settings": {
     "jsx-a11y": {
