@@ -39,6 +39,12 @@ export const serverEnvSchema = z.object({
   ACME_EAB_HMAC_KEY: z.string().optional(),
   CLOUDFLARE_DNS_API_TOKEN: z.string().optional(),
   CLOUDFLARE_DNS_ZONE_ID: z.string().optional(),
+  // Bootstrap resolver for server sing-box configs (and peer hostnames). It is
+  // an IP literal, since a hostname here would need the resolver it names.
+  SING_BOX_BOOTSTRAP_DNS_TYPE: z.enum(["tls", "udp", "local"]).default("tls"),
+  SING_BOX_BOOTSTRAP_DNS_SERVER: z
+    .union([z.ipv4(), z.ipv6()])
+    .default("8.8.8.8"),
   // Optional shared backplane for agent WebSocket fan-out across Node/Vercel
   // instances. Cloudflare uses the AgentSessionDO binding instead.
   REDIS_URL: z.string().url().optional(),

@@ -231,7 +231,7 @@ function subscriberConfig(): SingboxConfig {
   return {
     log: { level: "info", timestamp: true },
     dns: {
-      servers: [{ tag: "google", type: "tls", server: "8.8.8.8" }],
+      servers: [{ tag: "bootstrap", type: "tls", server: "8.8.8.8" }],
     },
     inbounds: [
       {
@@ -525,7 +525,7 @@ describe("managed snapshot compiler", () => {
         domain_resolver?: string;
       }[]
     ).find((outbound) => outbound.tag === "peer-out-pout1");
-    expect(peer?.domain_resolver).toBe("google");
+    expect(peer?.domain_resolver).toBe("bootstrap");
   });
 
   it("fails closed when a pinned artifact or credential is missing", () => {

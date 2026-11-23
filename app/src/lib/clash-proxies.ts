@@ -340,9 +340,16 @@ const BUILDERS: Record<string, ProxyBuilder> = {
       if (realityOpts === null) return null;
       tlsEnabled = true;
       proxy.tls = true;
-      if (typeof tlsObj.server_name === "string") {
-        proxy.servername = tlsObj.server_name;
-        proxy.sni = tlsObj.server_name;
+      // The explicit SNI column wins; a `server_name` left in settings by an
+      // older row is only the fallback.
+      const sni =
+        node.tlsServerName ??
+        (typeof tlsObj.server_name === "string"
+          ? tlsObj.server_name
+          : undefined);
+      if (sni !== undefined) {
+        proxy.servername = sni;
+        proxy.sni = sni;
       }
       proxy["client-fingerprint"] = "chrome";
       proxy["reality-opts"] = realityOpts;

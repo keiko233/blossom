@@ -42,6 +42,7 @@ use crate::ws::codec::{
     frame_type,
 };
 use crate::ws::ports::{AgentCommandSink, ChannelCommandSink, WsCommand, WsEvent};
+use crate::ws::v2::codec::truncate_utf8_bytes;
 use crate::{AGENT_BUILD_ID, AGENT_VERSION, client, config, pty, ws};
 
 const RUNTIME_PROBATION: Duration = Duration::from_secs(11);
@@ -1622,7 +1623,7 @@ fn send_pty_started(sink: &dyn AgentCommandSink, session_id: &str, started: &pty
 
 /// Startup diagnostics are short; the control plane bounds them to 256 chars.
 fn bounded_detail(message: &str) -> String {
-    message.chars().take(256).collect()
+    truncate_utf8_bytes(message, 256)
 }
 
 pub(crate) fn send_pty_exit(sink: &dyn AgentCommandSink, exit: pty::PtyExit) {
@@ -2108,6 +2109,15 @@ async fn heartbeat(
 mod tests {
     use super::*;
     use crate::log_policy::{Level as PolicyLevel, PolicyRequest, RecordingFilter};
+
+    #[test]
+    fn pty_exit_detail_is_cut_on_a_character_boundary() {
+        // Each CJK character is three bytes; the wire bound is 256 bytes.
+        let detail = bounded_detail(&"错".repeat(200));
+        assert_eq!(detail.len(), 255);
+        assert_eq!(detail.chars().count(), 85);
+        assert_eq!(bounded_detail("exit failed"), "exit failed");
+    }
 
     #[test]
     fn maps_singbox_inbound_index_back_to_node() {
