@@ -381,6 +381,11 @@ impl Args {
                 "the native service lifecycle requires protocol v2; legacy HTTP-only mode keeps processkit supervision"
             ));
         }
+        if self.native_service_control && self.pty_enabled {
+            return Err(anyhow::anyhow!(
+                "--native-service-control cannot be combined with --pty-enabled: the privileged control socket authorizes callers by SO_PEERCRED alone, so a PTY shell running as the agent uid would gain native service control"
+            ));
+        }
         if implicit_legacy {
             warn!(WS_DISABLED_DEPRECATION);
         }
@@ -555,6 +560,57 @@ mod tests {
                 "/tmp/credentials.json",
                 "--token",
                 "agt_test",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn native_service_control_and_pty_are_mutually_exclusive() {
+        assert!(
+            service_startup(&[
+                "--url",
+                "http://127.0.0.1:1/api",
+                "--token",
+                "agt_test",
+                "--native-service-control",
+                "--pty-enabled",
+            ])
+            .is_err()
+        );
+        assert!(
+            service_startup(&[
+                "--url",
+                "http://127.0.0.1:1/api",
+                "--token",
+                "agt_test",
+                "--native-service-control",
+            ])
+            .is_ok()
+        );
+        assert!(
+            service_startup(&[
+                "--url",
+                "http://127.0.0.1:1/api",
+                "--token",
+                "agt_test",
+                "--pty-enabled",
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn native_service_control_requires_protocol_v2() {
+        assert!(
+            service_startup(&[
+                "--url",
+                "http://127.0.0.1:1/api",
+                "--token",
+                "agt_test",
+                "--native-service-control",
+                "--ws-protocol",
+                "legacy",
             ])
             .is_err()
         );

@@ -7,9 +7,10 @@
 //! the unit files or this trust key; only the operator-controlled installer
 //! changes those.
 
+use std::ffi::OsStr;
 use std::fmt;
 use std::fs::{self, OpenOptions};
-use std::io::Read as _;
+use std::io::{Read as _, Write as _};
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 
@@ -25,8 +26,19 @@ const MANIFEST_DOMAIN: &str = "blossom-release-manifest-v1";
 const MANIFEST_SCHEMA: u32 = 1;
 const MAX_BINARY_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_CONFIG_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_ARTIFACT_BYTES: u64 = 32 * 1024 * 1024;
 const PUBLIC_KEY_BYTES: usize = 32;
 const SIGNATURE_BYTES: usize = 64;
+/// Directory names below the agent state directory whose files the runtime
+/// unit may read. Anything else the candidate references is refused.
+const STAGED_ROOTS: [&str; 3] = ["certificates", "peer-trust", "rule-sets"];
+/// sing-box TLS keys that name a local file the runtime process must open.
+const TLS_PATH_FIELDS: [&str; 4] = [
+    "certificate_path",
+    "key_path",
+    "client_certificate_path",
+    "client_key_path",
+];
 
 /// The fixed component a release belongs to. A candidate for the agent unit
 /// can never be promoted as the sing-box runtime, and vice versa.
@@ -251,6 +263,14 @@ impl ReleaseLayout {
             .join(digest.to_string())
             .join("config.json")
     }
+
+    pub(crate) fn artifact_path(&self, digest: &ArtifactDigest, name: &OsStr) -> PathBuf {
+        self.release_dir
+            .join("releases")
+            .join("artifacts")
+            .join(digest.to_string())
+            .join(name)
+    }
 }
 
 /// Owns the protected release tree for the helper. All writes are serialized
@@ -282,18 +302,117 @@ impl Promoter {
 
     /// Copies a config-only update. Binary updates always use
     /// [`TrustedPromoter::promote`] with a signed manifest.
+    ///
+    /// Certificate, peer-trust CA, and `.srs` files the candidate references
+    /// live in the agent's `0700` state directory, which the runtime unit
+    /// cannot read. They are copied into the protected release tree and the
+    /// staged config names the readable copies instead. The returned digest
+    /// addresses the rewritten config document.
     pub(crate) fn stage_config(
         &self,
         source: PathBuf,
         digest: ArtifactDigest,
     ) -> Result<ArtifactDigest, PromoteError> {
         let source = self.allowed_source(&source)?;
-        let actual = hash_file(&source, MAX_CONFIG_BYTES)?;
+        let bytes = fs::read(&source).map_err(PromoteError::Io)?;
+        if bytes.len() as u64 > MAX_CONFIG_BYTES {
+            return Err(PromoteError::TooLarge);
+        }
+        let actual = digest_bytes(&bytes)?;
         if actual != digest {
             return Err(PromoteError::DigestMismatch("config"));
         }
-        self.copy_config(&digest, &source)?;
+        let mut document: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|_| PromoteError::InvalidConfig("staged config is not valid JSON"))?;
+        if !self.stage_referenced_artifacts(&mut document)? {
+            self.store_config(&digest, &bytes)?;
+            return Ok(digest);
+        }
+        let rewritten = serde_json::to_vec(&document)
+            .map_err(|_| PromoteError::InvalidConfig("cannot encode the staged config"))?;
+        let digest = digest_bytes(&rewritten)?;
+        self.store_config(&digest, &rewritten)?;
         Ok(digest)
+    }
+
+    /// Rewrites every runtime file reference to a content-addressed copy under
+    /// `releases/artifacts/<sha256>/`. Returns whether anything changed.
+    fn stage_referenced_artifacts(
+        &self,
+        value: &mut serde_json::Value,
+    ) -> Result<bool, PromoteError> {
+        let mut changed = false;
+        match value {
+            serde_json::Value::Object(object) => {
+                let local_rule_set = object
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|kind| kind.eq_ignore_ascii_case("local"));
+                for (key, child) in object.iter_mut() {
+                    if let serde_json::Value::String(path) = child
+                        && (TLS_PATH_FIELDS.contains(&key.as_str())
+                            || (local_rule_set && key == "path"))
+                    {
+                        *path = self.stage_artifact(Path::new(path))?;
+                        changed = true;
+                        continue;
+                    }
+                    if self.stage_referenced_artifacts(child)? {
+                        changed = true;
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    if self.stage_referenced_artifacts(item)? {
+                        changed = true;
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(changed)
+    }
+
+    fn stage_artifact(&self, source: &Path) -> Result<String, PromoteError> {
+        let canonical = self.staged_artifact_path(source)?;
+        let metadata = fs::metadata(&canonical).map_err(PromoteError::Io)?;
+        if !metadata.file_type().is_file() || metadata.uid() != self.agent_uid {
+            return Err(PromoteError::PathNotAllowed);
+        }
+        let digest = hash_file(&canonical, MAX_ARTIFACT_BYTES)?;
+        let name = canonical.file_name().ok_or(PromoteError::PathNotAllowed)?;
+        let destination = self.store_artifact(&digest, name, &canonical)?;
+        Ok(destination.to_string_lossy().into_owned())
+    }
+
+    /// Accepts only regular, agent-owned files below the three directories
+    /// where the agent stages runtime material. Canonicalization removes any
+    /// traversal or symlink escape before the prefix is checked.
+    fn staged_artifact_path(&self, source: &Path) -> Result<PathBuf, PromoteError> {
+        if !source.is_absolute() {
+            return Err(PromoteError::PathNotAllowed);
+        }
+        let canonical = fs::canonicalize(source).map_err(PromoteError::Io)?;
+        let root = fs::canonicalize(&self.agent_state_dir).map_err(PromoteError::Io)?;
+        let relative = canonical
+            .strip_prefix(&root)
+            .map_err(|_| PromoteError::PathNotAllowed)?;
+        let staged_root = relative
+            .components()
+            .next()
+            .and_then(|component| match component {
+                std::path::Component::Normal(name) => Some(name),
+                _ => None,
+            })
+            .ok_or(PromoteError::PathNotAllowed)?;
+        if !STAGED_ROOTS
+            .iter()
+            .any(|allowed| std::ffi::OsStr::new(allowed) == staged_root)
+        {
+            return Err(PromoteError::PathNotAllowed);
+        }
+        Ok(canonical)
     }
 
     /// Installer-only bootstrap: copies root-owned installer artifacts into the
@@ -367,7 +486,7 @@ impl Promoter {
             return Ok(destination);
         }
         let parent = destination.parent().ok_or(PromoteError::PathNotAllowed)?;
-        fs::create_dir_all(parent).map_err(PromoteError::Io)?;
+        self.prepare_runtime_directory(parent)?;
         fs::set_permissions(parent, fs::Permissions::from_mode(0o755)).map_err(PromoteError::Io)?;
         let temporary = parent.join(format!(".{}.tmp", std::process::id()));
         let _ = fs::remove_file(&temporary);
@@ -382,6 +501,15 @@ impl Promoter {
     }
 
     fn copy_config(&self, digest: &ArtifactDigest, source: &Path) -> Result<PathBuf, PromoteError> {
+        let metadata = fs::metadata(source).map_err(PromoteError::Io)?;
+        if metadata.len() > MAX_CONFIG_BYTES {
+            return Err(PromoteError::TooLarge);
+        }
+        let bytes = fs::read(source).map_err(PromoteError::Io)?;
+        self.store_config(digest, &bytes)
+    }
+
+    fn store_config(&self, digest: &ArtifactDigest, bytes: &[u8]) -> Result<PathBuf, PromoteError> {
         let destination = self.layout.config_path(digest);
         if destination.is_file() {
             if hash_file(&destination, MAX_CONFIG_BYTES)? != *digest {
@@ -390,12 +518,19 @@ impl Promoter {
             return Ok(destination);
         }
         let parent = destination.parent().ok_or(PromoteError::PathNotAllowed)?;
-        fs::create_dir_all(parent).map_err(PromoteError::Io)?;
-        fs::set_permissions(parent, fs::Permissions::from_mode(0o750)).map_err(PromoteError::Io)?;
+        self.prepare_runtime_directory(parent)?;
         let temporary = parent.join(format!(".{}.tmp", std::process::id()));
         let _ = fs::remove_file(&temporary);
-        copy_file(source, &temporary, 0o400)?;
-        if hash_file(&temporary, MAX_CONFIG_BYTES)? != *digest {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o400)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&temporary)
+            .map_err(PromoteError::Io)?;
+        file.write_all(bytes).map_err(PromoteError::Io)?;
+        file.sync_all().map_err(PromoteError::Io)?;
+        if digest_bytes(bytes)? != *digest {
             let _ = fs::remove_file(&temporary);
             return Err(PromoteError::DigestMismatch("promoted config"));
         }
@@ -405,6 +540,57 @@ impl Promoter {
         fs::rename(&temporary, &destination).map_err(PromoteError::Io)?;
         sync_directory(parent)?;
         Ok(destination)
+    }
+
+    fn store_artifact(
+        &self,
+        digest: &ArtifactDigest,
+        name: &OsStr,
+        source: &Path,
+    ) -> Result<PathBuf, PromoteError> {
+        let destination = self.layout.artifact_path(digest, name);
+        if destination.is_file() {
+            if hash_file(&destination, MAX_ARTIFACT_BYTES)? != *digest {
+                return Err(PromoteError::DigestMismatch("promoted artifact"));
+            }
+            return Ok(destination);
+        }
+        let parent = destination.parent().ok_or(PromoteError::PathNotAllowed)?;
+        self.prepare_runtime_directory(parent)?;
+        let temporary = parent.join(format!(".{}.tmp", std::process::id()));
+        let _ = fs::remove_file(&temporary);
+        copy_file(source, &temporary, 0o400)?;
+        if hash_file(&temporary, MAX_ARTIFACT_BYTES)? != *digest {
+            let _ = fs::remove_file(&temporary);
+            return Err(PromoteError::DigestMismatch("promoted artifact"));
+        }
+        set_group(&temporary, self.runtime_gid)?;
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o440))
+            .map_err(PromoteError::Io)?;
+        fs::rename(&temporary, &destination).map_err(PromoteError::Io)?;
+        sync_directory(parent)?;
+        Ok(destination)
+    }
+
+    /// Creates a directory the runtime group may traverse. The protected tree
+    /// is written with the helper's `0077` umask, so every ancestor the helper
+    /// creates below the release root must be group-scoped explicitly.
+    fn prepare_runtime_directory(&self, path: &Path) -> Result<(), PromoteError> {
+        fs::create_dir_all(path).map_err(PromoteError::Io)?;
+        let release_root = self.layout.release_dir.as_path();
+        let directories: Vec<&Path> = path
+            .ancestors()
+            .take_while(|directory| directory.starts_with(release_root))
+            .collect();
+        let Some(_root) = directories.last() else {
+            return Err(PromoteError::PathNotAllowed);
+        };
+        for directory in directories.into_iter().rev() {
+            set_group(directory, self.runtime_gid)?;
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o750))
+                .map_err(PromoteError::Io)?;
+        }
+        Ok(())
     }
 
     fn next_generation(
@@ -479,6 +665,11 @@ impl TrustedPromoter {
     }
 }
 
+fn digest_bytes(bytes: &[u8]) -> Result<ArtifactDigest, PromoteError> {
+    ArtifactDigest::try_from(hex::encode(Sha256::digest(bytes)))
+        .map_err(|_| PromoteError::DigestMismatch("artifact"))
+}
+
 fn hash_file(path: &Path, max_bytes: u64) -> Result<ArtifactDigest, PromoteError> {
     let metadata = fs::metadata(path).map_err(PromoteError::Io)?;
     if metadata.len() > max_bytes {
@@ -547,6 +738,7 @@ pub(crate) enum PromoteError {
     DigestMismatch(&'static str),
     PathNotAllowed,
     TooLarge,
+    InvalidConfig(&'static str),
     Journal(String),
     Io(std::io::Error),
 }
@@ -564,6 +756,7 @@ impl fmt::Display for PromoteError {
             Self::DigestMismatch(artifact) => write!(formatter, "{artifact} digest mismatch"),
             Self::PathNotAllowed => formatter.write_str("staged artifact path is not allowed"),
             Self::TooLarge => formatter.write_str("staged artifact exceeds the size bound"),
+            Self::InvalidConfig(message) => write!(formatter, "invalid staged config: {message}"),
             Self::Journal(message) => write!(formatter, "deployment journal error: {message}"),
             Self::Io(error) => write!(formatter, "release promotion I/O error: {error}"),
         }
@@ -814,6 +1007,154 @@ mod tests {
             ),
             Err(PromoteError::DigestMismatch("config"))
         ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn artifact_strings(value: &serde_json::Value) -> Vec<String> {
+        match value {
+            serde_json::Value::Object(object) => {
+                object.values().flat_map(artifact_strings).collect()
+            }
+            serde_json::Value::Array(items) => items.iter().flat_map(artifact_strings).collect(),
+            serde_json::Value::String(text) => vec![text.clone()],
+            _ => Vec::new(),
+        }
+    }
+
+    #[test]
+    fn referenced_runtime_files_are_staged_into_the_release_tree() {
+        let root = fixture_dir("artifacts");
+        let state = root.join("state");
+        for dir in [
+            state.join("certificates/cert-1/generation-1"),
+            state.join("peer-trust/peer-1/generation-1"),
+            state.join("rule-sets/rules-1"),
+        ] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        let fullchain = state.join("certificates/cert-1/generation-1/fullchain.pem");
+        let private_key = state.join("certificates/cert-1/generation-1/private-key.pem");
+        let peer_ca = state.join("peer-trust/peer-1/generation-1/ca.pem");
+        let rule_set = state.join("rule-sets/rules-1/v1.srs");
+        fs::write(&fullchain, b"certificate pem").unwrap();
+        fs::write(&private_key, b"private key pem").unwrap();
+        fs::write(&peer_ca, b"peer ca pem").unwrap();
+        fs::write(&rule_set, b"SRS rules").unwrap();
+
+        let document = serde_json::json!({
+            "inbounds": [{
+                "type": "vless",
+                "tls": {
+                    "enabled": true,
+                    "certificate_path": fullchain.to_string_lossy(),
+                    "key_path": private_key.to_string_lossy()
+                }
+            }],
+            "outbounds": [{
+                "type": "vless",
+                "tls": {"enabled": true, "certificate_path": peer_ca.to_string_lossy()}
+            }],
+            "route": {
+                "rule_set": [{
+                    "type": "local",
+                    "tag": "rules-1",
+                    "path": rule_set.to_string_lossy()
+                }]
+            }
+        });
+        let candidate = state.join("candidate.json");
+        fs::write(&candidate, serde_json::to_vec(&document).unwrap()).unwrap();
+        let digest = hash_file(&candidate, MAX_CONFIG_BYTES).unwrap();
+        let runtime_gid = unsafe { libc::getegid() };
+        let promoter = Promoter::new(
+            root.join("releases"),
+            root.join("journal"),
+            &state,
+            unsafe { libc::geteuid() },
+            runtime_gid,
+        );
+        let rewritten_digest = promoter.stage_config(candidate, digest.clone()).unwrap();
+        assert_ne!(rewritten_digest, digest);
+
+        let layout = ReleaseLayout::new(root.join("releases"));
+        let stored: serde_json::Value =
+            serde_json::from_slice(&fs::read(layout.config_path(&rewritten_digest)).unwrap())
+                .unwrap();
+        let strings = artifact_strings(&stored);
+        let state_text = state.to_string_lossy().into_owned();
+        assert!(
+            !strings
+                .iter()
+                .any(|path| path.contains(state_text.as_str()))
+        );
+        let staged: Vec<&String> = strings
+            .iter()
+            .filter(|path| path.contains("/releases/artifacts/"))
+            .collect();
+        assert_eq!(staged.len(), 4);
+        for path in staged {
+            let path = Path::new(path);
+            assert!(path.is_file(), "{} is not staged", path.display());
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o440
+            );
+            assert_eq!(fs::metadata(path).unwrap().gid(), runtime_gid);
+            let parent = path.parent().unwrap();
+            assert_eq!(
+                fs::metadata(parent).unwrap().permissions().mode() & 0o777,
+                0o750
+            );
+            assert_eq!(fs::metadata(parent).unwrap().gid(), runtime_gid);
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_references_outside_the_staged_directories_are_refused() {
+        let root = fixture_dir("artifact-traversal");
+        let state = root.join("state");
+        fs::create_dir_all(state.join("certificates")).unwrap();
+        let candidate = state.join("candidate.json");
+        let outside = std::env::temp_dir().join("blossom-outside-ca.pem");
+        fs::write(&outside, b"not the agent's").unwrap();
+        fs::write(
+            &candidate,
+            serde_json::to_vec(&serde_json::json!({
+                "inbounds": [{"tls": {"certificate_path": outside.to_string_lossy()}}]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let digest = hash_file(&candidate, MAX_CONFIG_BYTES).unwrap();
+        let promoter = Promoter::new(
+            root.join("releases"),
+            root.join("journal"),
+            &state,
+            unsafe { libc::geteuid() },
+            unsafe { libc::getegid() },
+        );
+        assert!(matches!(
+            promoter.stage_config(candidate, digest),
+            Err(PromoteError::PathNotAllowed)
+        ));
+        let traversal = state.join("certificates/../active.json");
+        fs::write(state.join("active.json"), b"{}").unwrap();
+        let candidate = state.join("traversal.json");
+        fs::write(
+            &candidate,
+            serde_json::to_vec(&serde_json::json!({
+                "inbounds": [{"tls": {"key_path": traversal.to_string_lossy()}}]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let digest = hash_file(&candidate, MAX_CONFIG_BYTES).unwrap();
+        assert!(matches!(
+            promoter.stage_config(candidate, digest),
+            Err(PromoteError::PathNotAllowed)
+        ));
+        let _ = fs::remove_file(outside);
         let _ = fs::remove_dir_all(root);
     }
 }
