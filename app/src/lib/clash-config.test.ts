@@ -380,6 +380,60 @@ describe("buildClashConfig", () => {
     });
   });
 
+  it("emits the explicit SNI for Reality nodes whose settings carry no server_name", () => {
+    const resolved = makeResolved("vless", {
+      tls: {
+        enabled: true,
+        reality: {
+          enabled: true,
+          private_key: "RU-e9PZ4FAHqaQSBSQl4Jq0_CVNZN1q493YbS7C5I7g",
+          short_id: ["0123456789abcdef"],
+        },
+      },
+    });
+    const node = {
+      ...resolved,
+      node: { ...resolved.node, tlsServerName: "reality.example.com" },
+    };
+    const { config } = buildClashConfig([node], { credentials });
+    expect(config).toMatchObject({
+      proxies: [
+        expect.objectContaining({
+          type: "vless",
+          servername: "reality.example.com",
+          sni: "reality.example.com",
+        }),
+      ],
+    });
+  });
+
+  it("prefers the explicit SNI over a legacy server_name in Reality settings", () => {
+    const resolved = makeResolved("vless", {
+      tls: {
+        enabled: true,
+        server_name: "legacy.example.com",
+        reality: {
+          enabled: true,
+          private_key: "RU-e9PZ4FAHqaQSBSQl4Jq0_CVNZN1q493YbS7C5I7g",
+          short_id: ["0123456789abcdef"],
+        },
+      },
+    });
+    const node = {
+      ...resolved,
+      node: { ...resolved.node, tlsServerName: "reality.example.com" },
+    };
+    const { config } = buildClashConfig([node], { credentials });
+    expect(config).toMatchObject({
+      proxies: [
+        expect.objectContaining({
+          servername: "reality.example.com",
+          sni: "reality.example.com",
+        }),
+      ],
+    });
+  });
+
   it("skips vless Reality nodes with an invalid private key", () => {
     const node = makeResolved("vless", {
       tls: {

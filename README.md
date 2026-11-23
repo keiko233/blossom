@@ -68,6 +68,8 @@ Server env vars are validated at runtime on the first request, so production bui
 | `ACME_EAB_HMAC_KEY` | For ZeroSSL | Runtime | ACME external account binding HMAC key. |
 | `CLOUDFLARE_DNS_API_TOKEN` | No | Runtime | Cloudflare token with DNS Edit on the zone, for automatic ACME DNS-01 validation. Set together with `CLOUDFLARE_DNS_ZONE_ID`. |
 | `CLOUDFLARE_DNS_ZONE_ID` | No | Runtime | Cloudflare zone ID used with the token above. |
+| `SING_BOX_BOOTSTRAP_DNS_TYPE` | No | Runtime | Bootstrap DNS type for server sing-box configs: `tls` (default), `udp`, or `local` (host resolver). |
+| `SING_BOX_BOOTSTRAP_DNS_SERVER` | No | Runtime | Bootstrap DNS server IP literal (default `8.8.8.8`). Ignored when the type is `local`. Use a resolver reachable from your proxy hosts where TCP/853 to the default is blocked. |
 | `REDIS_URL` | No | Runtime | Redis pub/sub backplane for agent WebSocket fan-out across multiple Node or Vercel instances. Cloudflare Durable Objects do not use it. |
 | `MAINTENANCE_TOKEN` | No | Runtime | Bearer token accepted by `/api/maintenance/server-metrics` for bounded retention cleanup and `/api/maintenance/managed-rollouts` for the bounded managed-rollout sweep. Unset disables both routes. |
 

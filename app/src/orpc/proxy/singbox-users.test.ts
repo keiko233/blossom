@@ -110,13 +110,15 @@ describe("buildInboundUser", () => {
     expect(user).toEqual({ name: codedName, password: PASSWORD });
   });
 
-  it("keys naive users by username instead of name", () => {
-    // Username-keyed protocols keep the bare subscription id — they have no
-    // `name` field, so the connection stream reports `username`. Per-node
-    // attribution loss is an accepted limitation for these protocols.
-    const user = buildInboundUser(makeNode("naive"), sub);
-    expect(user).toEqual({ username: "sub-1", password: PASSWORD });
-  });
+  it.each(["naive", "socks", "http"])(
+    "keys %s users by a coded username so native metering can decode them",
+    (protocol) => {
+      // No `name` field: the connection stream reports `username`, which must
+      // carry the same coded (node, subscription) identifier as `name`.
+      const user = buildInboundUser(makeNode(protocol), sub);
+      expect(user).toEqual({ username: codedName, password: PASSWORD });
+    },
+  );
 
   it("returns null for inbounds without users", () => {
     expect(buildInboundUser(makeNode("direct"), sub)).toBeNull();

@@ -442,6 +442,17 @@ fn bounded(value: &str, min: usize, max: usize) -> bool {
     (min..=max).contains(&value.len())
 }
 
+/// Truncates `value` to at most `max_bytes` UTF-8 bytes, cutting only on a
+/// character boundary. The wire bounds count bytes, so cutting by characters
+/// can overshoot them for non-ASCII text.
+pub(crate) fn truncate_utf8_bytes(value: &str, max_bytes: usize) -> String {
+    let mut end = value.len().min(max_bytes);
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_owned()
+}
+
 /// `null` is a value, not an absence: `error: null` clears the last error and
 /// an omitted key leaves it unchanged. `Some(None)` keeps that distinction.
 fn present_or_null<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
@@ -2455,5 +2466,62 @@ mod tests {
             ..both_ids
         };
         assert!(!neither.check());
+    }
+
+    #[test]
+    fn truncate_utf8_bytes_keeps_values_within_the_limit() {
+        assert_eq!(truncate_utf8_bytes("ok", 512), "ok");
+        assert_eq!(truncate_utf8_bytes("", 0), "");
+        assert_eq!(truncate_utf8_bytes("中文", 6), "中文");
+    }
+
+    #[test]
+    fn truncate_utf8_bytes_cuts_cjk_on_a_character_boundary() {
+        // Each CJK character is three bytes; 600 of them are 1800 bytes.
+        let cut = truncate_utf8_bytes(&"错".repeat(600), 512);
+        assert_eq!(cut.len(), 510);
+        assert_eq!(cut.chars().count(), 170);
+        assert!(cut.chars().all(|c| c == '错'));
+
+        // A cut inside a character backs up to the previous boundary.
+        assert_eq!(truncate_utf8_bytes("中文", 4), "中");
+        assert_eq!(truncate_utf8_bytes("中文", 2), "");
+    }
+
+    #[test]
+    fn truncated_cjk_log_policy_error_passes_the_wire_bound() {
+        let ack = LogPolicyAck {
+            source: LogPolicySource::Agent,
+            source_revision: 1,
+            requested: LogLevel::Debug,
+            baseline: LogLevel::Info,
+            effective: LogLevel::Info,
+            deadline: Some(
+                chrono::DateTime::parse_from_rfc3339("2099-01-01T00:00:00Z")
+                    .unwrap()
+                    .with_timezone(&chrono::Utc),
+            ),
+            error: Some(truncate_utf8_bytes(&"失败".repeat(400), 512)),
+            pending: false,
+        };
+        assert!(ack.check());
+        // Unbounded CJK text overshoots the byte bound that the codec enforces.
+        let overshoot = LogPolicyAck {
+            error: Some("失败".repeat(400)),
+            ..ack
+        };
+        assert!(!overshoot.check());
+    }
+
+    #[test]
+    fn truncated_cjk_pty_exit_detail_passes_the_wire_bound() {
+        let exit = PtyExit {
+            session_id: "pty-1".to_string(),
+            code: None,
+            signal: None,
+            reason: Some("io_error".to_string()),
+            detail: Some(truncate_utf8_bytes(&"错误".repeat(300), 256)),
+        };
+        assert!(exit.check());
     }
 }

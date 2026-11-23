@@ -9,9 +9,8 @@ import { INBOUND_BY_TYPE } from "@/orpc/proxy/sing-box-registry";
  * (`StartedService.SubscribeConnections`), whose `user` field is the inbound
  * user identifier. `buildInboundUser` gives name-keyed protocols a coded node +
  * subscription identifier and username-keyed protocols (naive/socks/http/mixed)
- * the bare subscription id. Both reach the subscription quota; username-keyed
- * traffic loses per-node attribution because the identifier carries no node.
- * The classification below reads the same registry shape instead of keeping a
+ * the same coded node + subscription identifier, so both reach the quota and
+ * both keep per-node attribution. The classification below reads the same registry shape instead of keeping a
  * protocol-name table, and `traffic-capabilities.test.ts` checks it against the
  * real compiler output.
  *
@@ -28,7 +27,7 @@ export type AccountingStatus = "accounted" | "unaccounted" | "unknown";
 export type AccountingReason =
   /** The inbound user has a coded `name` (node + subscription). */
   | "name-keyed-user"
-  /** The inbound user is keyed by `username`; quota works, per-node does not. */
+  /** The inbound user is keyed by `username`, with the same coded identifier. */
   | "username-keyed-user"
   /** The protocol is not an inbound type of the sing-box schema we compile. */
   | "unregistered-protocol"

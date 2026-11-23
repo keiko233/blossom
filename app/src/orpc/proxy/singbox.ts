@@ -64,11 +64,35 @@ export interface NodeInbound {
   users: SingboxUser[];
 }
 
+/**
+ * The DNS server every server config resolves through before any tunnel
+ * exists. Peer hostnames reference it by tag (`domain_resolver`), so the tag is
+ * part of the managed compiler's contract.
+ */
+export const BOOTSTRAP_DNS_TAG = "bootstrap";
+
+/**
+ * Bootstrap resolver. `local` uses the host resolver and takes no server; the
+ * `server` of `tls`/`udp` is an IP literal, because a hostname here would have
+ * to be resolved by the very resolver it names.
+ */
+export interface BootstrapDns {
+  type: "tls" | "udp" | "local";
+  server: string;
+}
+
+export const DEFAULT_BOOTSTRAP_DNS: BootstrapDns = {
+  type: "tls",
+  server: "8.8.8.8",
+};
+
 export interface CompileOptions {
   /** One entry per node to compile. The order is preserved in `inbounds`. */
   inbounds: NodeInbound[];
   /** Server-side routing rules in sing-box rule-action syntax; default none. */
   routeRules?: SingboxRouteRule[];
+  /** Bootstrap resolver; default `DEFAULT_BOOTSTRAP_DNS`. */
+  bootstrapDns?: BootstrapDns;
 }
 
 /**
@@ -80,7 +104,11 @@ export interface CompileOptions {
  * The agent applies it and tears down every previous listener.
  */
 export function compileServerConfig(options: CompileOptions): SingboxConfig {
-  const { inbounds, routeRules = [] } = options;
+  const {
+    inbounds,
+    routeRules = [],
+    bootstrapDns = DEFAULT_BOOTSTRAP_DNS,
+  } = options;
 
   const compiled = inbounds
     .filter(({ users }) => users.length > 0)
@@ -89,7 +117,15 @@ export function compileServerConfig(options: CompileOptions): SingboxConfig {
   const draft: Json = {
     log: { level: "info", timestamp: true },
     dns: {
-      servers: [{ tag: "google", type: "tls", server: "8.8.8.8" }],
+      servers: [
+        {
+          tag: BOOTSTRAP_DNS_TAG,
+          type: bootstrapDns.type,
+          ...(bootstrapDns.type === "local"
+            ? {}
+            : { server: bootstrapDns.server }),
+        },
+      ],
     },
     inbounds: compiled,
     outbounds: [{ type: "direct", tag: "direct" }],
@@ -102,33 +138,29 @@ export function compileServerConfig(options: CompileOptions): SingboxConfig {
 }
 
 function buildInbound(node: Node, users: SingboxUser[]): Json {
-  const certificateId = node.certificateId;
-  const usesManagedCertificate =
-    certificateId !== null &&
-    protocolSupportsTls(node.protocol) &&
-    isNodeTlsEnabled(node.settings) &&
-    !isNodeRealityEnabled(node.settings);
   // Sanitize at the compiler boundary unconditionally: node X.509 material is
   // never owned by a node. Old rows may still contain inline certificate/key
   // values that sing-box gives precedence over paths, even though current
   // create/update handlers strip those fields on write. The explicit SNI
   // column (`node.tlsServerName`) is the only source for `server_name`.
   const settings = withoutNodeTlsMaterial(node.settings) as Json;
-  if (usesManagedCertificate) {
+  // V3: the base config never carries certificate material or its on-disk
+  // location. The agent installs material from the V3 `certificateArtifacts`
+  // itself and wires it into sing-box locally; the control plane only
+  // preserves the non-material TLS options and the explicit server name. The
+  // SNI applies to managed-certificate and Reality TLS alike.
+  if (
+    protocolSupportsTls(node.protocol) &&
+    isNodeTlsEnabled(node.settings) &&
+    node.tlsServerName
+  ) {
     const previousTls =
       typeof settings.tls === "object" &&
       settings.tls !== null &&
       !Array.isArray(settings.tls)
         ? (settings.tls as Json)
         : {};
-    // V3: the base config never carries certificate material or its on-disk
-    // location. The agent installs material from the V3 `certificateArtifacts`
-    // itself and wires it into sing-box locally; the control plane only
-    // preserves the non-material TLS options and the explicit server name.
-    settings.tls = {
-      ...previousTls,
-      ...(node.tlsServerName ? { server_name: node.tlsServerName } : {}),
-    };
+    settings.tls = { ...previousTls, server_name: node.tlsServerName };
   }
   // Managed fields override anything in the stored fragment.
   return {

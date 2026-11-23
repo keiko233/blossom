@@ -28,6 +28,7 @@ import {
 import type { SingboxRouteRule } from "@/lib/routing-rules";
 
 import {
+  BOOTSTRAP_DNS_TAG,
   canonicalize,
   computeManagedStageIntentDigest,
   computeManagedStateFingerprint,
@@ -227,7 +228,7 @@ function buildManagedOutbound(
   // A peer hostname must resolve through direct egress, never through the
   // link being commissioned. IP literals need no resolver.
   if (!isIpAddress(outbound.serverAddress)) {
-    base.domain_resolver = "google";
+    base.domain_resolver = BOOTSTRAP_DNS_TAG;
   }
   return base;
 }

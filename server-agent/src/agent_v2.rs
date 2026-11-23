@@ -54,7 +54,7 @@ use crate::ws::ports::WsCommand;
 use crate::ws::v2::adapter::V2Connector;
 use crate::ws::v2::codec::{
     AckStage, ConfigIdentifier, ConfigState, LOGS_SEARCH_CAPABILITY, LOGS_TAIL_CAPABILITY,
-    LogPolicyAck, RuntimeState, StatusError, UpdatePolicy,
+    LogPolicyAck, RuntimeState, StatusError, UpdatePolicy, truncate_utf8_bytes,
 };
 use crate::ws::v2::link::{self, LinkOptions};
 use crate::ws::v2::session::{
@@ -758,10 +758,7 @@ async fn apply_log_policy_job(
                 }
             }
             Err(error) => {
-                errors.insert(
-                    source,
-                    error.to_string().chars().take(512).collect::<String>(),
-                );
+                errors.insert(source, truncate_utf8_bytes(&error.to_string(), 512));
             }
         }
     }
