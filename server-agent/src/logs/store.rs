@@ -84,7 +84,8 @@ impl LogStore {
     /// Makes `secrets` the complete set for `scope`. Call it before a credential
     /// is first sent, logged or written, and again whenever the set changes.
     /// If the registry bound would be exceeded it changes no registered set,
-    /// fails, and makes capture redact every later line whole.
+    /// fails, and makes capture redact every later line whole until the same
+    /// scope is successfully replaced with a smaller set.
     pub(crate) fn replace_secrets<I>(
         &self,
         scope: SecretScope,

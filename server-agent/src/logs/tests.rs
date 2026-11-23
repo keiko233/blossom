@@ -1,12 +1,14 @@
 //! Store-level scenarios that cross ring, search and redaction boundaries.
 
+use std::time::Instant;
+
 use chrono::{Duration, Utc};
 use tokio_util::sync::CancellationToken;
 
 use super::model::{GapReason, LogCursor, LogLevel, LogSource, RingLimits, SearchCursor};
 use super::search::{LogQuery, SearchRequest};
 use super::store::LogStore;
-use super::text::{MAX_SECRET_FORMS, PrivateKeyBlock, SecretScope};
+use super::text::{MAX_SECRET_FORMS, PrivateKeyBlock, SecretRedactor, SecretScope};
 
 fn text_request(text: &str, cursor: Option<SearchCursor>, limit: usize) -> SearchRequest {
     SearchRequest {
@@ -352,4 +354,75 @@ fn registry_overflow_masks_new_records_across_every_egress_path() {
     assert_eq!(context.target.text, "[REDACTED]");
     assert!(context.before.is_empty());
     assert!(context.after.is_empty());
+}
+
+#[test]
+fn redacts_quickly_with_more_than_five_thousand_secrets() {
+    let redactor = SecretRedactor::default();
+    let secrets: Vec<String> = (0..6_000)
+        .map(|n| format!("log-redaction-needle-{n:05}"))
+        .collect();
+    redactor
+        .replace(SecretScope::NodeCredentials, &secrets)
+        .unwrap();
+
+    let needle = "log-redaction-needle-05999";
+    let line = format!("{} done", format!("{needle} ").repeat(150));
+    assert!(
+        line.len() <= 4096,
+        "the fixture must stay inside one log line"
+    );
+
+    // Above the old 4,096-form bound each line used to cost thousands of
+    // independent scans. A bounded automaton keeps 200 lines comfortably inside
+    // a second even in a debug test build; the linear matcher needed many.
+    let started = Instant::now();
+    let mut total_bytes = 0;
+    for _ in 0..200 {
+        total_bytes += redactor.redact(&line).len();
+    }
+    let elapsed = started.elapsed();
+    assert!(total_bytes > 0);
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "redaction of 200 lines with 6,000 secrets took {elapsed:?}"
+    );
+
+    let redacted = redactor.redact(&line);
+    assert!(!redacted.contains(needle));
+    assert_eq!(
+        redacted.matches("[REDACTED]").count(),
+        line.matches(needle).count()
+    );
+}
+
+#[test]
+fn overflow_masking_clears_when_the_offending_scope_fits_again() {
+    let redactor = SecretRedactor::default();
+    let many: Vec<String> = (0..=MAX_SECRET_FORMS)
+        .map(|n| format!("log-redaction-needle-{n:05}"))
+        .collect();
+    assert!(
+        redactor
+            .replace(SecretScope::NodeCredentials, &many)
+            .is_err()
+    );
+    // While over the bound capture must fail closed.
+    assert_eq!(redactor.redact("ordinary line").as_ref(), "[REDACTED]");
+
+    // The same scope dropping back under the bound ends the blackout; an
+    // unrelated scope's success must not (that set may still be running).
+    redactor
+        .replace(SecretScope::Agent, ["agt_recovered"])
+        .unwrap();
+    assert_eq!(redactor.redact("ordinary line").as_ref(), "[REDACTED]");
+
+    redactor
+        .replace(SecretScope::NodeCredentials, ["recovered-credential"])
+        .unwrap();
+    assert_eq!(redactor.redact("ordinary line").as_ref(), "ordinary line");
+    assert_eq!(
+        redactor.redact("uses recovered-credential").as_ref(),
+        "uses [REDACTED]"
+    );
 }

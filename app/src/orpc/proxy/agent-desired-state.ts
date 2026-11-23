@@ -14,7 +14,7 @@ import { listEnabledServerNodes } from "@/query/agent";
 import { getCertificateAgentContext } from "@/query/certificate-agent";
 import { loadManagedCompileState } from "@/query/managed-compile-state";
 import { listEnabledRules } from "@/query/rule-access";
-import { getNodeActiveSubscriptions } from "@/query/subscription-access";
+import { getServerActiveSubscriptionsByNode } from "@/query/subscription-access";
 
 import {
   assertManagedOutputBudget,
@@ -72,17 +72,19 @@ async function compileAgentServerConfig(
     listEnabledRules(database),
   ]);
   const expiries: number[] = [];
-  const perNodeUsers = await Promise.all(
-    nodes.map(async (node) => {
-      const subscriptions = await getNodeActiveSubscriptions(node.id, database);
-      for (const subscription of subscriptions) {
-        expiries.push(subscription.expiresAt.getTime());
-      }
-      return subscriptions
-        .map((subscription) => buildInboundUser(node, subscription))
-        .filter((user): user is NonNullable<typeof user> => user !== null);
-    }),
+  const subscriptionsByNode = await getServerActiveSubscriptionsByNode(
+    nodes.map((node) => node.id),
+    database,
   );
+  const perNodeUsers = nodes.map((node) => {
+    const subscriptions = subscriptionsByNode.get(node.id) ?? [];
+    for (const subscription of subscriptions) {
+      expiries.push(subscription.expiresAt.getTime());
+    }
+    return subscriptions
+      .map((subscription) => buildInboundUser(node, subscription))
+      .filter((user): user is NonNullable<typeof user> => user !== null);
+  });
   const built: NodeInbound[] = nodes.map((node, index) => ({
     node,
     users: perNodeUsers[index]!,
