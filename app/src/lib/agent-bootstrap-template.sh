@@ -84,9 +84,11 @@ curl_with_proto() {
   esac
 }
 
-download() {
+GITHUB_DIRECT_FAILED=0
+
+download_direct() {
   curl_with_proto "$1" \
-    --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 300 \
+    --connect-timeout 5 --max-time 300 \
     --output "$2"
 }
 
@@ -100,10 +102,16 @@ download_proxy() {
 download_github() {
   github_path=$1
   dest=$2
-  if ! download "https://github.com/$github_path" "$dest"; then
+  if [ "$GITHUB_DIRECT_FAILED" -eq 0 ]; then
+    if download_direct "https://github.com/$github_path" "$dest"; then
+      return 0
+    fi
+    GITHUB_DIRECT_FAILED=1
     log "direct GitHub download failed; retrying via control-plane proxy"
-    download_proxy "$ORIGIN/api/agent/github/$github_path" "$dest"
+  else
+    log "using control-plane proxy for GitHub download"
   fi
+  download_proxy "$ORIGIN/api/agent/github/$github_path" "$dest"
 }
 
 detect_arch() {
@@ -127,10 +135,18 @@ agent_github_path() {
 resolve_sing_box_version() {
   if [ "${SING_BOX_VERSION:-latest}" = latest ]; then
     github_path="$SING_BOX_REPO/releases/latest"
-    if ! effective=$(curl_with_proto "https://github.com/$github_path" \
-      --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 60 \
-      -o /dev/null -w '%{url_effective}'); then
-      log "direct GitHub release lookup failed; retrying via control-plane proxy"
+    effective=
+    if [ "$GITHUB_DIRECT_FAILED" -eq 0 ]; then
+      if ! effective=$(curl_with_proto "https://github.com/$github_path" \
+        --connect-timeout 5 --max-time 30 \
+        -o /dev/null -w '%{url_effective}'); then
+        GITHUB_DIRECT_FAILED=1
+        log "direct GitHub release lookup failed; retrying via control-plane proxy"
+      fi
+    else
+      log "using control-plane proxy for GitHub release lookup"
+    fi
+    if [ -z "$effective" ]; then
       effective=$(printf 'header = "Authorization: Bearer %s"\n' "$ENROLLMENT_GRANT" |
         curl_with_proto "$ORIGIN/api/agent/github/$github_path" --config - \
           --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 60 \
@@ -162,6 +178,23 @@ install_docker() {
 
   log "downloading server-agent $AGENT_VERSION for $architecture"
   download_github "$(agent_github_path "$architecture")" "$staging/server-agent"
+
+  if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    if ! docker pull "$IMAGE"; then
+      log "direct ghcr.io pull failed; retrying via control-plane proxy"
+      origin_authority=${ORIGIN#https://}
+      origin_authority=${origin_authority#http://}
+      proxy_image="$origin_authority/keiko233/blossom/server-agent:${AGENT_VERSION#v}"
+      docker_cfg="$staging/docker"
+      mkdir -m 0700 "$docker_cfg"
+      printf '%s\n' "$ENROLLMENT_GRANT" |
+        DOCKER_CONFIG="$docker_cfg" docker login "$origin_authority" -u blossom --password-stdin >/dev/null
+      DOCKER_CONFIG="$docker_cfg" docker pull "$proxy_image"
+      docker tag "$proxy_image" "$IMAGE"
+      docker rmi "$proxy_image" >/dev/null 2>&1 || true
+      rm -rf "$docker_cfg"
+    fi
+  fi
 
   log "preparing the $IMAGE runtime in the $volume volume"
   docker run --rm -i -v "$volume:/data" --entrypoint sh "$IMAGE" -c \

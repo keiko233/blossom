@@ -18,6 +18,7 @@ import { Route as DotwellKnownOauthProtectedResourceRouteImport } from './routes
 import { Route as ApiSplatRouteImport } from './routes/api/$'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as ApiMcpRouteImport } from './routes/api/mcp'
+import { Route as V2SplatRouteImport } from './routes/v2/$'
 import { Route as adminAdminIndexRouteImport } from './routes/(admin)/admin/index'
 import { Route as adminAdminSplatRouteImport } from './routes/(admin)/admin/$'
 import { Route as adminAdminAccessRouteRouteImport } from './routes/(admin)/admin/access/route'
@@ -62,6 +63,7 @@ import { Route as userDashboardSubscriptionsIndexRouteImport } from './routes/(u
 import { Route as DotwellKnownOauthAuthorizationServerApiAuthRouteImport } from './routes/[.]well-known.oauth-authorization-server.api.auth'
 import { Route as DotwellKnownOauthProtectedResourceApiMcpRouteImport } from './routes/[.]well-known.oauth-protected-resource.api.mcp'
 import { Route as ApiAgentEnrollmentRedeemRouteImport } from './routes/api/agent/enrollment/redeem'
+import { Route as ApiAgentGhcrTokenRouteImport } from './routes/api/agent/ghcr/token'
 import { Route as ApiAgentGithubSplatRouteImport } from './routes/api/agent/github/$'
 import { Route as ApiAgentInstallTokenRouteImport } from './routes/api/agent/install/$token'
 import { Route as adminAdminAccessClientRulesIndexRouteImport } from './routes/(admin)/admin/access/client-rules/index'
@@ -152,6 +154,11 @@ const ApiHealthRoute = ApiHealthRouteImport.update({
 const ApiMcpRoute = ApiMcpRouteImport.update({
   id: '/api/mcp',
   path: '/api/mcp',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const V2SplatRoute = V2SplatRouteImport.update({
+  id: '/v2/$',
+  path: '/v2/$',
   getParentRoute: () => rootRouteImport,
 } as any)
 const adminAdminIndexRoute = adminAdminIndexRouteImport.update({
@@ -399,6 +406,11 @@ const ApiAgentEnrollmentRedeemRoute =
     path: '/api/agent/enrollment/redeem',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiAgentGhcrTokenRoute = ApiAgentGhcrTokenRouteImport.update({
+  id: '/api/agent/ghcr/token',
+  path: '/api/agent/ghcr/token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAgentGithubSplatRoute = ApiAgentGithubSplatRouteImport.update({
   id: '/api/agent/github/$',
   path: '/api/agent/github/$',
@@ -626,6 +638,7 @@ export interface FileRoutesByFullPath {
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
+  '/v2/$': typeof V2SplatRoute
   '/admin/access': typeof adminAdminAccessRouteRouteWithChildren
   '/admin/networking': typeof adminAdminNetworkingRouteRouteWithChildren
   '/admin/operations': typeof adminAdminOperationsRouteRouteWithChildren
@@ -665,6 +678,7 @@ export interface FileRoutesByFullPath {
   '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
   '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
   '/api/agent/enrollment/redeem': typeof ApiAgentEnrollmentRedeemRoute
+  '/api/agent/ghcr/token': typeof ApiAgentGhcrTokenRoute
   '/api/agent/github/$': typeof ApiAgentGithubSplatRoute
   '/api/agent/install/$token': typeof ApiAgentInstallTokenRoute
   '/admin/access/': typeof adminAdminAccessIndexRoute
@@ -715,6 +729,7 @@ export interface FileRoutesByTo {
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
+  '/v2/$': typeof V2SplatRoute
   '/admin/$': typeof adminAdminSplatRoute
   '/auth/forgot': typeof authAuthForgotRoute
   '/auth/login': typeof authAuthLoginRoute
@@ -740,6 +755,7 @@ export interface FileRoutesByTo {
   '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
   '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
   '/api/agent/enrollment/redeem': typeof ApiAgentEnrollmentRedeemRoute
+  '/api/agent/ghcr/token': typeof ApiAgentGhcrTokenRoute
   '/api/agent/github/$': typeof ApiAgentGithubSplatRoute
   '/api/agent/install/$token': typeof ApiAgentInstallTokenRoute
   '/admin/access': typeof adminAdminAccessIndexRoute
@@ -795,6 +811,7 @@ export interface FileRoutesById {
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/api/mcp': typeof ApiMcpRoute
+  '/v2/$': typeof V2SplatRoute
   '/(static)/': typeof staticIndexRoute
   '/(admin)/admin/access': typeof adminAdminAccessRouteRouteWithChildren
   '/(admin)/admin/networking': typeof adminAdminNetworkingRouteRouteWithChildren
@@ -835,6 +852,7 @@ export interface FileRoutesById {
   '/.well-known/oauth-authorization-server/api/auth': typeof DotwellKnownOauthAuthorizationServerApiAuthRoute
   '/.well-known/oauth-protected-resource/api/mcp': typeof DotwellKnownOauthProtectedResourceApiMcpRoute
   '/api/agent/enrollment/redeem': typeof ApiAgentEnrollmentRedeemRoute
+  '/api/agent/ghcr/token': typeof ApiAgentGhcrTokenRoute
   '/api/agent/github/$': typeof ApiAgentGithubSplatRoute
   '/api/agent/install/$token': typeof ApiAgentInstallTokenRoute
   '/(admin)/admin/access/': typeof adminAdminAccessIndexRoute
@@ -889,6 +907,7 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/api/health'
     | '/api/mcp'
+    | '/v2/$'
     | '/admin/access'
     | '/admin/networking'
     | '/admin/operations'
@@ -928,6 +947,7 @@ export interface FileRouteTypes {
     | '/.well-known/oauth-authorization-server/api/auth'
     | '/.well-known/oauth-protected-resource/api/mcp'
     | '/api/agent/enrollment/redeem'
+    | '/api/agent/ghcr/token'
     | '/api/agent/github/$'
     | '/api/agent/install/$token'
     | '/admin/access/'
@@ -978,6 +998,7 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/api/health'
     | '/api/mcp'
+    | '/v2/$'
     | '/admin/$'
     | '/auth/forgot'
     | '/auth/login'
@@ -1003,6 +1024,7 @@ export interface FileRouteTypes {
     | '/.well-known/oauth-authorization-server/api/auth'
     | '/.well-known/oauth-protected-resource/api/mcp'
     | '/api/agent/enrollment/redeem'
+    | '/api/agent/ghcr/token'
     | '/api/agent/github/$'
     | '/api/agent/install/$token'
     | '/admin/access'
@@ -1057,6 +1079,7 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/api/health'
     | '/api/mcp'
+    | '/v2/$'
     | '/(static)/'
     | '/(admin)/admin/access'
     | '/(admin)/admin/networking'
@@ -1097,6 +1120,7 @@ export interface FileRouteTypes {
     | '/.well-known/oauth-authorization-server/api/auth'
     | '/.well-known/oauth-protected-resource/api/mcp'
     | '/api/agent/enrollment/redeem'
+    | '/api/agent/ghcr/token'
     | '/api/agent/github/$'
     | '/api/agent/install/$token'
     | '/(admin)/admin/access/'
@@ -1150,6 +1174,7 @@ export interface RootRouteChildren {
   ApiSplatRoute: typeof ApiSplatRoute
   ApiHealthRoute: typeof ApiHealthRoute
   ApiMcpRoute: typeof ApiMcpRoute
+  V2SplatRoute: typeof V2SplatRoute
   staticIndexRoute: typeof staticIndexRoute
   ApiAgentWsRoute: typeof ApiAgentWsRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
@@ -1160,6 +1185,7 @@ export interface RootRouteChildren {
   ApiRpcSplatRoute: typeof ApiRpcSplatRoute
   ApiSubTokenRoute: typeof ApiSubTokenRoute
   ApiAgentEnrollmentRedeemRoute: typeof ApiAgentEnrollmentRedeemRoute
+  ApiAgentGhcrTokenRoute: typeof ApiAgentGhcrTokenRoute
   ApiAgentGithubSplatRoute: typeof ApiAgentGithubSplatRoute
   ApiAgentInstallTokenRoute: typeof ApiAgentInstallTokenRoute
   ApiAdminServersIdStreamRoute: typeof ApiAdminServersIdStreamRoute
@@ -1248,6 +1274,13 @@ declare module '@tanstack/react-router' {
       path: '/api/mcp'
       fullPath: '/api/mcp'
       preLoaderRoute: typeof ApiMcpRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/v2/$': {
+      id: '/v2/$'
+      path: '/v2/$'
+      fullPath: '/v2/$'
+      preLoaderRoute: typeof V2SplatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/(admin)/admin/': {
@@ -1556,6 +1589,13 @@ declare module '@tanstack/react-router' {
       path: '/api/agent/enrollment/redeem'
       fullPath: '/api/agent/enrollment/redeem'
       preLoaderRoute: typeof ApiAgentEnrollmentRedeemRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/agent/ghcr/token': {
+      id: '/api/agent/ghcr/token'
+      path: '/api/agent/ghcr/token'
+      fullPath: '/api/agent/ghcr/token'
+      preLoaderRoute: typeof ApiAgentGhcrTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/agent/github/$': {
@@ -2224,6 +2264,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiSplatRoute: ApiSplatRoute,
   ApiHealthRoute: ApiHealthRoute,
   ApiMcpRoute: ApiMcpRoute,
+  V2SplatRoute: V2SplatRoute,
   staticIndexRoute: staticIndexRoute,
   ApiAgentWsRoute: ApiAgentWsRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
@@ -2234,6 +2275,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiRpcSplatRoute: ApiRpcSplatRoute,
   ApiSubTokenRoute: ApiSubTokenRoute,
   ApiAgentEnrollmentRedeemRoute: ApiAgentEnrollmentRedeemRoute,
+  ApiAgentGhcrTokenRoute: ApiAgentGhcrTokenRoute,
   ApiAgentGithubSplatRoute: ApiAgentGithubSplatRoute,
   ApiAgentInstallTokenRoute: ApiAgentInstallTokenRoute,
   ApiAdminServersIdStreamRoute: ApiAdminServersIdStreamRoute,
