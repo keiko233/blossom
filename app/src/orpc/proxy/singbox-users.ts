@@ -75,9 +75,9 @@ export function passwordFor(node: Node, password: string): string {
  *  - `name` → coded (node, subscription) identifier. The codec encodes both
  *    so connection events map back to the producing inbound; see
  *    `traffic-user-codec` for the wire format.
- *  - `username` → subscription id (naive/socks/http; per-node attribution
- *    is lost for these protocols, a known limitation; quota accounting still
- *    receives the bare subscription id)
+ *  - `username` → coded (node, subscription) identifier, the same as `name`
+ *    (naive/socks/http). The native agent accepts only the coded form, so the
+ *    bare subscription id would drop these users from metering.
  *  - `uuid` → credentialUuid (vless/vmess/tuic)
  *  - `password` → credentialPassword, SS2022 key-length adjusted (trojan/ss/
  *    hysteria2/anytls/shadowtls/tuic/naive/socks/http)
@@ -97,7 +97,7 @@ export function buildInboundUser(
   if ("name" in shape) {
     user.name = encodeTrafficUser(node.id, sub.id);
   } else if ("username" in shape) {
-    user.username = sub.id;
+    user.username = encodeTrafficUser(node.id, sub.id);
   }
   if ("uuid" in shape) {
     user.uuid = sub.credentialUuid;

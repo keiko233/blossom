@@ -309,6 +309,67 @@ describe("compileServerConfig", () => {
     expect(disabledConfig.inbounds[0]?.tls).not.toHaveProperty("key_path");
   });
 
+  it("injects the explicit SNI into a VLESS + Reality inbound and strips X.509 material", () => {
+    const reality = makeNode("r1", "vless");
+    reality.certificateId = null;
+    reality.tlsServerName = "reality.example.com";
+    // Saved settings never keep server_name; a stale legacy one must not win.
+    reality.settings = {
+      tls: {
+        enabled: true,
+        server_name: "legacy.example.com",
+        certificate_path: "/stale/fullchain.pem",
+        key_path: "/stale/private-key.pem",
+        reality: {
+          enabled: true,
+          handshake: { server: "www.microsoft.com", server_port: 443 },
+          private_key: "RU-e9PZ4FAHqaQSBSQl4Jq0_CVNZN1q493YbS7C5I7g",
+          short_id: ["0123456789abcdef"],
+        },
+      },
+    };
+
+    const config = compileServerConfig({
+      inbounds: [
+        {
+          node: reality,
+          users: [{ name: encodeTrafficUser("r1", "s1"), uuid: UUID_A }],
+        },
+      ],
+    }) as unknown as { inbounds: { tls: Record<string, unknown> }[] };
+
+    expect(config.inbounds[0]?.tls).toMatchObject({
+      enabled: true,
+      server_name: "reality.example.com",
+      reality: { enabled: true },
+    });
+    expect(config.inbounds[0]?.tls).not.toHaveProperty("certificate_path");
+    expect(config.inbounds[0]?.tls).not.toHaveProperty("key_path");
+  });
+
+  it("resolves through the bootstrap DNS server, configurable per server", () => {
+    const defaults = compileServerConfig({ inbounds: [] }) as unknown as {
+      dns: { servers: unknown[] };
+    };
+    expect(defaults.dns.servers).toEqual([
+      { tag: "bootstrap", type: "tls", server: "8.8.8.8" },
+    ]);
+
+    const udp = compileServerConfig({
+      inbounds: [],
+      bootstrapDns: { type: "udp", server: "223.5.5.5" },
+    }) as unknown as { dns: { servers: unknown[] } };
+    expect(udp.dns.servers).toEqual([
+      { tag: "bootstrap", type: "udp", server: "223.5.5.5" },
+    ]);
+
+    const local = compileServerConfig({
+      inbounds: [],
+      bootstrapDns: { type: "local", server: "8.8.8.8" },
+    }) as unknown as { dns: { servers: unknown[] } };
+    expect(local.dns.servers).toEqual([{ tag: "bootstrap", type: "local" }]);
+  });
+
   it("does not add TLS to a protocol whose schema has no TLS block", () => {
     const node = makeNode("n1", "shadowsocks");
     node.certificateId = "stale-cert";

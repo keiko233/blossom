@@ -8,6 +8,7 @@ import { formatDesiredRevision } from "@blossom/domain/config-revision";
 
 import type { Database } from "@/db";
 import type { Server } from "@/db/proxy-schema";
+import { getServerEnv } from "@/lib/env";
 import { toSingboxRouteRules } from "@/lib/routing-rules";
 import { listEnabledServerNodes } from "@/query/agent";
 import { getCertificateAgentContext } from "@/query/certificate-agent";
@@ -88,9 +89,14 @@ async function compileAgentServerConfig(
   }));
   const materialized = built.filter(({ users }) => users.length > 0);
   const legacyRouteRules = toSingboxRouteRules(rules);
+  const env = getServerEnv();
   const config = compileServerConfig({
     inbounds: built,
     routeRules: legacyRouteRules,
+    bootstrapDns: {
+      type: env.SING_BOX_BOOTSTRAP_DNS_TYPE,
+      server: env.SING_BOX_BOOTSTRAP_DNS_SERVER,
+    },
   });
   return {
     config,
