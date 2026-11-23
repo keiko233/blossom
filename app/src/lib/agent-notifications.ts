@@ -65,7 +65,9 @@ function createDefaultDependencies(
       return (
         await buildAgentDesiredState(
           row,
-          database ? { database, advanceCertificates: false } : {},
+          database
+            ? { database, advanceCertificates: false }
+            : { advanceCertificates: false },
         )
       ).desiredRevision;
     },

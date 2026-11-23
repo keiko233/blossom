@@ -432,6 +432,34 @@ describe("agent WebSocket route", () => {
     expect(hub.acceptAgent).not.toHaveBeenCalled();
   });
 
+  it("wakes certificate issuance only after the v2 socket is accepted", async () => {
+    const hub = makeHub();
+    const order: string[] = [];
+    hub.acceptAgentV2.mockImplementation(async () => {
+      order.push("accept");
+      return new Response(null, { status: 200 });
+    });
+    const wakeCertificateIssuance = vi.fn(async () => {
+      order.push("wake");
+    });
+
+    await handleAgentWsRequest(
+      request({
+        upgrade: "websocket",
+        "sec-websocket-protocol": "blossom-agent.v2",
+      }),
+      {
+        authenticate: async () => authenticated(),
+        authenticateDisabled: async () => null,
+        buildWelcome: async () => welcome,
+        wakeCertificateIssuance,
+        hub,
+      },
+    );
+
+    expect(order).toEqual(["accept", "wake"]);
+  });
+
   it("rejects an unknown subprotocol before the upgrade", async () => {
     const hub = makeHub();
     const response = await handleAgentWsRequest(

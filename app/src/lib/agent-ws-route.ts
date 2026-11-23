@@ -319,8 +319,15 @@ export async function handleAgentWsRequest(
 
   try {
     if (negotiation.protocol === "v2") {
-      await dependencies.wakeCertificateIssuance();
-      return await dependencies.hub.acceptAgentV2(request, server, credential);
+      const response = await dependencies.hub.acceptAgentV2(
+        request,
+        server,
+        credential,
+      );
+      // Wake only once the socket is registered, so an `acme.issue` produced
+      // by the sweep reaches this connection instead of being dropped.
+      void dependencies.wakeCertificateIssuance().catch(() => undefined);
+      return response;
     }
     const welcome = await dependencies.buildWelcome(server);
     return await dependencies.hub.acceptAgent(request, server, welcome);

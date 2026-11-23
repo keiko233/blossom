@@ -33,6 +33,7 @@ import { Route as userDashboardIndexRouteImport } from './routes/(user)/dashboar
 import { Route as userWelcomeIndexRouteImport } from './routes/(user)/welcome/index'
 import { Route as ApiAgentWsRouteImport } from './routes/api/agent/ws'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiMaintenanceCertificatesRouteImport } from './routes/api/maintenance/certificates'
 import { Route as ApiMaintenanceManagedRolloutsRouteImport } from './routes/api/maintenance/managed-rollouts'
 import { Route as ApiMaintenanceMigrateRouteImport } from './routes/api/maintenance/migrate'
 import { Route as ApiMaintenanceServerMetricsRouteImport } from './routes/api/maintenance/server-metrics'
@@ -229,6 +230,12 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiMaintenanceCertificatesRoute =
+  ApiMaintenanceCertificatesRouteImport.update({
+    id: '/api/maintenance/certificates',
+    path: '/api/maintenance/certificates',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiMaintenanceManagedRolloutsRoute =
   ApiMaintenanceManagedRolloutsRouteImport.update({
     id: '/api/maintenance/managed-rollouts',
@@ -625,6 +632,7 @@ export interface FileRoutesByFullPath {
   '/auth/signup': typeof authAuthSignupRoute
   '/api/agent/ws': typeof ApiAgentWsRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/maintenance/certificates': typeof ApiMaintenanceCertificatesRoute
   '/api/maintenance/managed-rollouts': typeof ApiMaintenanceManagedRolloutsRoute
   '/api/maintenance/migrate': typeof ApiMaintenanceMigrateRoute
   '/api/maintenance/server-metrics': typeof ApiMaintenanceServerMetricsRoute
@@ -708,6 +716,7 @@ export interface FileRoutesByTo {
   '/auth/signup': typeof authAuthSignupRoute
   '/api/agent/ws': typeof ApiAgentWsRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/maintenance/certificates': typeof ApiMaintenanceCertificatesRoute
   '/api/maintenance/managed-rollouts': typeof ApiMaintenanceManagedRolloutsRoute
   '/api/maintenance/migrate': typeof ApiMaintenanceMigrateRoute
   '/api/maintenance/server-metrics': typeof ApiMaintenanceServerMetricsRoute
@@ -791,6 +800,7 @@ export interface FileRoutesById {
   '/(auth)/auth/signup': typeof authAuthSignupRoute
   '/api/agent/ws': typeof ApiAgentWsRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/maintenance/certificates': typeof ApiMaintenanceCertificatesRoute
   '/api/maintenance/managed-rollouts': typeof ApiMaintenanceManagedRolloutsRoute
   '/api/maintenance/migrate': typeof ApiMaintenanceMigrateRoute
   '/api/maintenance/server-metrics': typeof ApiMaintenanceServerMetricsRoute
@@ -882,6 +892,7 @@ export interface FileRouteTypes {
     | '/auth/signup'
     | '/api/agent/ws'
     | '/api/auth/$'
+    | '/api/maintenance/certificates'
     | '/api/maintenance/managed-rollouts'
     | '/api/maintenance/migrate'
     | '/api/maintenance/server-metrics'
@@ -965,6 +976,7 @@ export interface FileRouteTypes {
     | '/auth/signup'
     | '/api/agent/ws'
     | '/api/auth/$'
+    | '/api/maintenance/certificates'
     | '/api/maintenance/managed-rollouts'
     | '/api/maintenance/migrate'
     | '/api/maintenance/server-metrics'
@@ -1047,6 +1059,7 @@ export interface FileRouteTypes {
     | '/(auth)/auth/signup'
     | '/api/agent/ws'
     | '/api/auth/$'
+    | '/api/maintenance/certificates'
     | '/api/maintenance/managed-rollouts'
     | '/api/maintenance/migrate'
     | '/api/maintenance/server-metrics'
@@ -1128,6 +1141,7 @@ export interface RootRouteChildren {
   staticIndexRoute: typeof staticIndexRoute
   ApiAgentWsRoute: typeof ApiAgentWsRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiMaintenanceCertificatesRoute: typeof ApiMaintenanceCertificatesRoute
   ApiMaintenanceManagedRolloutsRoute: typeof ApiMaintenanceManagedRolloutsRoute
   ApiMaintenanceMigrateRoute: typeof ApiMaintenanceMigrateRoute
   ApiMaintenanceServerMetricsRoute: typeof ApiMaintenanceServerMetricsRoute
@@ -1326,6 +1340,13 @@ declare module '@tanstack/react-router' {
       path: '/api/auth/$'
       fullPath: '/api/auth/$'
       preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/maintenance/certificates': {
+      id: '/api/maintenance/certificates'
+      path: '/api/maintenance/certificates'
+      fullPath: '/api/maintenance/certificates'
+      preLoaderRoute: typeof ApiMaintenanceCertificatesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/maintenance/managed-rollouts': {
@@ -2186,6 +2207,7 @@ const rootRouteChildren: RootRouteChildren = {
   staticIndexRoute: staticIndexRoute,
   ApiAgentWsRoute: ApiAgentWsRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiMaintenanceCertificatesRoute: ApiMaintenanceCertificatesRoute,
   ApiMaintenanceManagedRolloutsRoute: ApiMaintenanceManagedRolloutsRoute,
   ApiMaintenanceMigrateRoute: ApiMaintenanceMigrateRoute,
   ApiMaintenanceServerMetricsRoute: ApiMaintenanceServerMetricsRoute,
