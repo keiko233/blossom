@@ -112,6 +112,13 @@ describe("systemd installer script", () => {
     expect(stdin).not.toContain(`--grant ${grant}`);
   });
 
+  it("enables PTY for the v2 websocket capability", () => {
+    const script = render(undefined, ["pty-v2"]);
+
+    assertShellSyntax(script);
+    expect(script).toContain(" --pty-enabled");
+  });
+
   it("omits the PTY flag when the grant did not select it", () => {
     expect(render(undefined, [])).not.toContain("--pty-enabled");
   });
