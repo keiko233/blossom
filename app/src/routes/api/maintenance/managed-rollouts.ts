@@ -1,7 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { timingSafeEqual } from "node:crypto";
 
 import { getServerEnv } from "@/lib/env";
+import {
+  authorizeMaintenanceRequest,
+  NO_STORE_HEADERS,
+} from "@/lib/maintenance-auth";
 import { dispatchManagedRolloutThroughHub } from "@/lib/managed-rollout-dispatch";
 import type { ManagedRolloutDispatchResult } from "@/lib/managed-rollout-runtime";
 import {
@@ -12,27 +15,11 @@ import {
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 50;
 
-function bearer(request: Request): string | null {
-  const header = request.headers.get("authorization") ?? "";
-  const match = /^Bearer\s+(.+)$/i.exec(header);
-  return match?.[1] ?? null;
-}
-
-function sameSecret(actual: string, expected: string): boolean {
-  const left = Buffer.from(actual);
-  const right = Buffer.from(expected);
-  return left.length === right.length && timingSafeEqual(left, right);
-}
-
 function boundedLimit(value: string | null): number {
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0
     ? Math.min(parsed, MAX_LIMIT)
     : DEFAULT_LIMIT;
-}
-
-function headers(): HeadersInit {
-  return { "cache-control": "no-store" };
 }
 
 /**
@@ -67,16 +54,9 @@ export async function handleManagedRolloutMaintenance(
   request: Request,
   dependencies: ManagedRolloutMaintenanceDependencies = defaultDependencies,
 ): Promise<Response> {
-  const expected = dependencies.token();
-  if (!expected) {
-    return Response.json(
-      { error: "maintenance_disabled" },
-      { status: 503, headers: headers() },
-    );
-  }
-  const token = bearer(request);
-  if (!token || !sameSecret(token, expected)) {
-    return new Response(null, { status: 401, headers: headers() });
+  const denied = authorizeMaintenanceRequest(request, dependencies.token());
+  if (denied) {
+    return denied;
   }
   const limit = boundedLimit(new URL(request.url).searchParams.get("limit"));
   const swept = await dependencies.sweep({ limit, now: new Date() });
@@ -90,7 +70,7 @@ export async function handleManagedRolloutMaintenance(
         probes: 0,
         limit,
       },
-      { headers: headers() },
+      { headers: NO_STORE_HEADERS },
     );
   }
   const delivery = await dependencies.dispatch(swept.followUps);
@@ -103,7 +83,7 @@ export async function handleManagedRolloutMaintenance(
       probes: delivery.probeIds.length,
       limit,
     },
-    { headers: headers() },
+    { headers: NO_STORE_HEADERS },
   );
 }
 

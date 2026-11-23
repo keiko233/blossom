@@ -187,9 +187,9 @@ async function writeServerMetricMinute(
   );
   const outcome = rows[0];
 
-  await pruneServerMetricHistory({ now: receivedAt.getTime() }, database);
-
   if (!outcome || Number(outcome.fenced) === 0) return "fenced";
+
+  await pruneServerMetricHistory({ now: receivedAt.getTime() }, database);
   return Number(outcome.written) === 0 ? "superseded" : "written";
 }
 
