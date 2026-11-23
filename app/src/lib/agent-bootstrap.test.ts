@@ -69,6 +69,9 @@ describe("renderAgentBootstrapScript", () => {
     expect(script).toContain("--host");
     expect(script).toContain("ghcr.io/keiko233/blossom/server-agent:1.4.2");
     expect(script).toContain("/api/agent/github/");
+    expect(script).toContain("docker login");
+    expect(script).toContain("GITHUB_DIRECT_FAILED");
+    expect(script).toContain("--connect-timeout 5");
     expect(template).toContain("@@ENROLLMENT_GRANT@@");
   });
 
