@@ -176,6 +176,7 @@ describe.skipIf(!pgUrl).each(drivers)("recordAgentTraffic on %s", (driver) => {
       accepted: 2,
       dropped: 0,
       duplicate: false,
+      quotaExhausted: false,
     });
 
     expect(await used()).toMatchObject({ sa: 100, sb: 50 });
@@ -215,6 +216,7 @@ describe.skipIf(!pgUrl).each(drivers)("recordAgentTraffic on %s", (driver) => {
       accepted: 1,
       dropped: 1,
       duplicate: true,
+      quotaExhausted: false,
     });
   });
 
@@ -283,7 +285,12 @@ describe.skipIf(!pgUrl).each(drivers)("recordAgentTraffic on %s", (driver) => {
       report("srv1", "report-0008", entries(["sexpired", 30], ["ghost", 99])),
     );
 
-    expect(result).toEqual({ accepted: 1, dropped: 1, duplicate: false });
+    expect(result).toEqual({
+      accepted: 1,
+      dropped: 1,
+      duplicate: false,
+      quotaExhausted: false,
+    });
     expect(await used()).toMatchObject({ sexpired: 30 });
     expect(await count("traffic_record")).toBe(1);
   });
@@ -294,6 +301,7 @@ describe.skipIf(!pgUrl).each(drivers)("recordAgentTraffic on %s", (driver) => {
       accepted: 0,
       dropped: 1,
       duplicate: false,
+      quotaExhausted: false,
     });
     await expect(recordAgentTraffic(r)).resolves.toMatchObject({
       duplicate: true,
@@ -322,6 +330,32 @@ describe.skipIf(!pgUrl).each(drivers)("recordAgentTraffic on %s", (driver) => {
     ).rejects.toThrow();
     expect(await used()).toMatchObject({ sa: 0, sb: 0 });
     expect(await count("traffic_record")).toBe(0);
+  });
+
+  it("flags the report that crosses a traffic quota, and only that one", async () => {
+    await admin.query(
+      `update subscription set traffic_used_bytes = 90, traffic_quota_bytes = 100 where id = 'sa'`,
+    );
+
+    const crossing = report("srv1", "report-0011", entries(["sa", 10]));
+    await expect(recordAgentTraffic(crossing)).resolves.toEqual({
+      accepted: 1,
+      dropped: 0,
+      duplicate: false,
+      quotaExhausted: true,
+    });
+    expect(await used()).toMatchObject({ sa: 100 });
+
+    // Already at the quota: further usage accrues but neither crosses again nor
+    // re-flags the report.
+    const after = report("srv1", "report-0012", entries(["sa", 1]));
+    await expect(recordAgentTraffic(after)).resolves.toEqual({
+      accepted: 1,
+      dropped: 0,
+      duplicate: false,
+      quotaExhausted: false,
+    });
+    expect(await used()).toMatchObject({ sa: 101 });
   });
 
   it("prunes ledger rows past retention when a new report is claimed", async () => {

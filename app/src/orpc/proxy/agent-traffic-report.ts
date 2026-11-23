@@ -3,6 +3,7 @@ import type { z } from "zod";
 import type { Database } from "@/db";
 import {
   computeTrafficReportHash,
+  invalidateDesiredConfigRevisionsAfterCommit,
   listServerNodeIds,
   recordAgentTraffic,
   type RecordTrafficResult,
@@ -55,7 +56,7 @@ export async function applyAgentTrafficReport(
     };
   });
 
-  return recordAgentTraffic({
+  const result = await recordAgentTraffic({
     serverId,
     reportId: input.reportId,
     contentHash:
@@ -72,4 +73,14 @@ export async function applyAgentTrafficReport(
     windowEndedAt: input.windowEndedAt ? new Date(input.windowEndedAt) : null,
     entries,
   });
+  if (result.quotaExhausted) {
+    // The crossing subscription drops out of the compiled config on the next
+    // compile. Invalidate only after the traffic statement committed, so a
+    // failure here cannot fail the report (the cached deadline bounds it).
+    await invalidateDesiredConfigRevisionsAfterCommit(
+      [serverId],
+      options.database,
+    );
+  }
+  return result;
 }

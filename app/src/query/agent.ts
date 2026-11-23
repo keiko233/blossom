@@ -1349,6 +1349,13 @@ export interface RecordTrafficResult {
   dropped: number;
   /** The report id had already been applied; nothing was written. */
   duplicate: boolean;
+  /**
+   * This report pushed at least one subscription from below its traffic quota
+   * to at or above it. The subscription now drops out of the compiled agent
+   * config, so callers invalidate the cached desired revision instead of
+   * waiting for its deadline.
+   */
+  quotaExhausted: boolean;
 }
 
 /**
@@ -1426,6 +1433,11 @@ export function computeTrafficReportHash(report: {
  *
  * Unknown subscriptions are dropped (counted in `dropped`); expired or
  * cancelled ones still accrue, as before.
+ *
+ * The same statement reports whether the update pushed any subscription from
+ * below its quota to at or above it (`quotaExhausted`), so callers can
+ * invalidate the compiled agent config immediately rather than waiting for the
+ * cached identifier's deadline.
  */
 export async function recordAgentTraffic(
   report: RecordTrafficReport,
@@ -1504,22 +1516,42 @@ export async function recordAgentTraffic(
       WHERE ${apply}
       RETURNING id
     ),
-    usage AS (
-      UPDATE subscription s
-      SET traffic_used_bytes = s.traffic_used_bytes + t.delta::bigint,
-          updated_at = timezone('utc', now())
-      FROM (
+    candidates AS (
+      SELECT s.id AS subscription_id,
+             s.traffic_quota_bytes,
+             s.traffic_used_bytes,
+             t.delta::bigint AS delta
+      FROM subscription s
+      JOIN (
         SELECT subscription_id, sum(uplink_bytes + downlink_bytes) AS delta
         FROM resolved GROUP BY subscription_id
-      ) t
-      WHERE s.id = t.subscription_id AND ${apply}
-      RETURNING s.id
+      ) t ON s.id = t.subscription_id
+      WHERE ${apply}
+    ),
+    usage AS (
+      UPDATE subscription s
+      SET traffic_used_bytes = s.traffic_used_bytes + c.delta,
+          updated_at = timezone('utc', now())
+      FROM candidates c
+      WHERE s.id = c.subscription_id
+      RETURNING s.id AS subscription_id,
+                c.traffic_quota_bytes AS traffic_quota_bytes,
+                c.traffic_used_bytes AS prior_used_bytes,
+                s.traffic_used_bytes AS used_bytes
+    ),
+    quota_exhausted AS (
+      SELECT u.subscription_id
+      FROM usage u
+      WHERE u.traffic_quota_bytes > 0
+        AND u.prior_used_bytes < u.traffic_quota_bytes
+        AND u.used_bytes >= u.traffic_quota_bytes
     )
     SELECT ${claimedColumn} AS claimed,
            ${fencedColumn} AS fenced,
            (SELECT count(*) FROM history)::int AS accepted,
            ((SELECT count(*) FROM incoming) - (SELECT count(*) FROM resolved))::int AS dropped,
-           (SELECT count(*) FROM usage)::int AS usage_rows
+           (SELECT count(*) FROM usage)::int AS usage_rows,
+           (SELECT count(*) FROM quota_exhausted)::int AS quota_exhausted
   `;
 
   // A pruned ledger row can vanish between the conflict and the lookup below;
@@ -1530,6 +1562,7 @@ export async function recordAgentTraffic(
       fenced: number;
       accepted: number;
       dropped: number;
+      quota_exhausted: number;
     }>(statement, "objects");
     if (!outcome) {
       throw new Error("traffic statement returned no row");
@@ -1545,6 +1578,7 @@ export async function recordAgentTraffic(
         accepted: Number(outcome.accepted),
         dropped: Number(outcome.dropped),
         duplicate: false,
+        quotaExhausted: Number(outcome.quota_exhausted) > 0,
       };
     }
 
@@ -1565,6 +1599,8 @@ export async function recordAgentTraffic(
       accepted: existing.accepted,
       dropped: existing.dropped,
       duplicate: true,
+      // The original delivery did any quota crossing; a replay writes nothing.
+      quotaExhausted: false,
     };
   }
   throw new Error("traffic report could not be recorded");

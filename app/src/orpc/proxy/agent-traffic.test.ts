@@ -6,6 +6,7 @@ import { hashAgentToken } from "@/lib/agent-token";
 const mocks = vi.hoisted(() => ({
   recordAgentTraffic: vi.fn(),
   listServerNodeIds: vi.fn(),
+  invalidateDesiredConfigRevisionsAfterCommit: vi.fn(async () => {}),
 }));
 
 vi.mock("@/db", () => ({ db: {} }));
@@ -16,6 +17,8 @@ vi.mock("@/query/agent", async (importActual) => ({
   ),
   listServerNodeIds: mocks.listServerNodeIds,
   recordAgentTraffic: mocks.recordAgentTraffic,
+  invalidateDesiredConfigRevisionsAfterCommit:
+    mocks.invalidateDesiredConfigRevisionsAfterCommit,
 }));
 vi.mock("@/query/certificate-agent", () => ({}));
 vi.mock("@/query/rule-access", () => ({}));
@@ -34,11 +37,13 @@ const report = (input: unknown) =>
 beforeEach(() => {
   mocks.recordAgentTraffic.mockReset();
   mocks.listServerNodeIds.mockReset();
+  mocks.invalidateDesiredConfigRevisionsAfterCommit.mockReset();
   mocks.listServerNodeIds.mockResolvedValue(["n1", "n2"]);
   mocks.recordAgentTraffic.mockResolvedValue({
     accepted: 1,
     dropped: 0,
     duplicate: false,
+    quotaExhausted: false,
   });
 });
 
@@ -112,6 +117,50 @@ describe("agent traffic report ingestion", () => {
 
     expect(error).toBeInstanceOf(ORPCError);
     expect(error.code).toBe("CONFLICT");
+  });
+
+  it("invalidates the desired configuration when a report exhausts a quota", async () => {
+    mocks.recordAgentTraffic.mockResolvedValue({
+      accepted: 1,
+      dropped: 0,
+      duplicate: false,
+      quotaExhausted: true,
+    });
+
+    await report({
+      reportId: "rpt-0000006",
+      entries: [
+        {
+          subscriptionId: encodeTrafficUser("n1", "sub-a"),
+          uplinkBytes: 1,
+          downlinkBytes: 0,
+        },
+      ],
+    });
+
+    expect(mocks.recordAgentTraffic).toHaveBeenCalledWith(
+      expect.objectContaining({ serverId: "srv1" }),
+    );
+    expect(
+      mocks.invalidateDesiredConfigRevisionsAfterCommit,
+    ).toHaveBeenCalledWith(["srv1"], undefined);
+  });
+
+  it("leaves the desired revision alone when no quota was crossed", async () => {
+    await report({
+      reportId: "rpt-0000007",
+      entries: [
+        {
+          subscriptionId: encodeTrafficUser("n1", "sub-a"),
+          uplinkBytes: 1,
+          downlinkBytes: 0,
+        },
+      ],
+    });
+
+    expect(
+      mocks.invalidateDesiredConfigRevisionsAfterCommit,
+    ).not.toHaveBeenCalled();
   });
 
   it("keeps legacy agents working: no id, no hash, no echo", async () => {
