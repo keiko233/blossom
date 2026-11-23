@@ -12,8 +12,11 @@ import {
   snapshotNodeForGate,
 } from "@/lib/node-config-change";
 import { parseNodeSettings } from "@/orpc/proxy/schema";
+import { withoutNodeTlsMaterial } from "@/orpc/proxy/sing-box-registry";
 import {
+  type DbHandle,
   type RecordConfigChangeInput,
+  type RecordConfigChangeResult,
   listServerIdsForSubscriptionId,
   listServerIdsForUserId,
   recordConfigChange,
@@ -77,10 +80,23 @@ function toUserSummary(row: typeof user.$inferSelect): UserSummary {
   };
 }
 
-async function recordMCPConfigChange(input: RecordConfigChangeInput) {
-  const change = await recordConfigChange(db, input);
-  await notifyAgentConfigChanged(change.serverIds, `MCP ${input.kind} change`);
-  return change;
+/**
+ * Runs an entity write and its publish-gate `recordConfigChange` in one
+ * transaction on `node-postgres` (sequentially on `neon-http`, which has no
+ * interactive transactions). Agent notifications must wait until the
+ * transaction has committed; see {@link notifyMCPConfigChange}.
+ */
+function inMCPTransaction<T>(run: (tx: DbHandle) => Promise<T>): Promise<T> {
+  return withDatabaseTransaction(db, getDatabaseDriver(), run);
+}
+
+async function notifyMCPConfigChange(
+  kind: RecordConfigChangeInput["kind"],
+  change: RecordConfigChangeResult | null,
+): Promise<void> {
+  if (change) {
+    await notifyAgentConfigChanged(change.serverIds, `MCP ${kind} change`);
+  }
 }
 
 export async function requireActorAdmin(actorUserId: string): Promise<void> {
@@ -210,39 +226,41 @@ export async function banUserMCP(
 
   await requireUserExists(targetUserId);
 
-  // Publish gate: capture the pre-ban state so an unban can be held back
-  // until agents serve the user's credentials again.
-  const [preBan] = await db
-    .select({ banned: user.banned, banExpires: user.banExpires })
-    .from(user)
-    .where(eq(user.id, targetUserId));
-
   const banExpires = expiresInDays
     ? new Date(Date.now() + expiresInDays * 86400 * 1000)
     : undefined;
 
-  await db
-    .update(user)
-    .set({
-      banned: true,
-      banReason: reason ?? null,
-      banExpires: banExpires ?? null,
-    })
-    .where(eq(user.id, targetUserId));
+  const change = await inMCPTransaction(async (tx) => {
+    // Publish gate: capture the pre-ban state so an unban can be held back
+    // until agents serve the user's credentials again.
+    const [preBan] = await tx
+      .select({ banned: user.banned, banExpires: user.banExpires })
+      .from(user)
+      .where(eq(user.id, targetUserId));
 
-  await db.delete(session).where(eq(session.userId, targetUserId));
+    await tx
+      .update(user)
+      .set({
+        banned: true,
+        banReason: reason ?? null,
+        banExpires: banExpires ?? null,
+      })
+      .where(eq(user.id, targetUserId));
 
-  if (preBan && !preBan.banned) {
-    await recordMCPConfigChange({
+    await tx.delete(session).where(eq(session.userId, targetUserId));
+
+    if (!preBan || preBan.banned) return null;
+    return recordConfigChange(tx, {
       kind: "authorization",
       subjectId: targetUserId,
       prevRow: {
         banned: preBan.banned,
         banExpires: preBan.banExpires?.toISOString() ?? null,
       },
-      serverIds: await listServerIdsForUserId(db, targetUserId),
+      serverIds: await listServerIdsForUserId(tx, targetUserId),
     });
-  }
+  });
+  await notifyMCPConfigChange("authorization", change);
 
   return { id: targetUserId };
 }
@@ -253,25 +271,27 @@ export async function unbanUserMCP(
 ): Promise<{ id: string }> {
   await requireActorAdmin(actorUserId);
   await requireUserExists(targetUserId);
-  const [preUnban] = await db
-    .select({ banned: user.banned, banExpires: user.banExpires })
-    .from(user)
-    .where(eq(user.id, targetUserId));
-  await db
-    .update(user)
-    .set({ banned: false, banReason: null, banExpires: null })
-    .where(eq(user.id, targetUserId));
-  if (preUnban?.banned) {
-    await recordMCPConfigChange({
+  const change = await inMCPTransaction(async (tx) => {
+    const [preUnban] = await tx
+      .select({ banned: user.banned, banExpires: user.banExpires })
+      .from(user)
+      .where(eq(user.id, targetUserId));
+    await tx
+      .update(user)
+      .set({ banned: false, banReason: null, banExpires: null })
+      .where(eq(user.id, targetUserId));
+    if (!preUnban?.banned) return null;
+    return recordConfigChange(tx, {
       kind: "authorization",
       subjectId: targetUserId,
       prevRow: {
         banned: preUnban.banned,
         banExpires: preUnban.banExpires?.toISOString() ?? null,
       },
-      serverIds: await listServerIdsForUserId(db, targetUserId),
+      serverIds: await listServerIdsForUserId(tx, targetUserId),
     });
-  }
+  });
+  await notifyMCPConfigChange("authorization", change);
   return { id: targetUserId };
 }
 
@@ -305,41 +325,60 @@ export async function createNodeMCP(
 ): Promise<Node | LegacyNodeWriteRejection> {
   await requireActorAdmin(actorUserId);
 
-  const written = await writeLegacySubscriberNode(
-    {
-      kind: "create",
-      values: {
-        id: crypto.randomUUID(),
-        name: input.name,
-        remark: input.remark ?? null,
-        tags: input.tags ?? [],
-        enabled: input.enabled ?? true,
-        serverId: input.serverId,
-        address: input.address ?? null,
-        listenPort: input.listenPort,
-        protocol: input.protocol,
-        settings: parseNodeSettings(input.protocol, input.settings),
-      },
-    },
-    { database: db },
+  // Strip X.509 material and the raw `server_name` (as `createNode` does) so
+  // MCP cannot persist inline certificate fields.
+  const settings = parseNodeSettings(
+    input.protocol,
+    withoutNodeTlsMaterial(input.settings),
   );
-  if (!written.ok) {
-    if (written.reason === "not_found") {
-      throw new Error("Failed to create node");
-    }
-    return written;
-  }
-  const row = written.node;
-  // Publish gate: hold a newly enabled node out of subscriptions until the
-  // agent confirms the revision that first serves it.
-  if (row.enabled) {
-    await recordMCPConfigChange({
-      kind: "node",
-      subjectId: row.id,
-      prevRow: null,
-      serverIds: [row.serverId],
+
+  let change: RecordConfigChangeResult | null = null;
+  let row: Node;
+  try {
+    row = await inMCPTransaction(async (tx) => {
+      const written = await writeLegacySubscriberNode(
+        {
+          kind: "create",
+          values: {
+            id: crypto.randomUUID(),
+            name: input.name,
+            remark: input.remark ?? null,
+            tags: input.tags ?? [],
+            enabled: input.enabled ?? true,
+            serverId: input.serverId,
+            address: input.address ?? null,
+            listenPort: input.listenPort,
+            protocol: input.protocol,
+            settings,
+          },
+        },
+        { database: tx },
+      );
+      if (!written.ok) {
+        if (written.reason === "not_found") {
+          throw new Error("Failed to create node");
+        }
+        throw new LegacyNodeWriteRejectedError(written);
+      }
+      // Publish gate: hold a newly enabled node out of subscriptions until the
+      // agent confirms the revision that first serves it.
+      if (written.node.enabled) {
+        change = await recordConfigChange(tx, {
+          kind: "node",
+          subjectId: written.node.id,
+          prevRow: null,
+          serverIds: [written.node.serverId],
+        });
+      }
+      return written.node;
     });
+  } catch (error) {
+    if (error instanceof LegacyNodeWriteRejectedError) {
+      return error.rejection;
+    }
+    throw error;
   }
+  await notifyMCPConfigChange("node", change);
   return row;
 }
 
@@ -371,86 +410,100 @@ export async function updateNodeMCP(
 
   const { protocol, settings, address, ...rest } = input;
 
-  const [existingNode] = await db
-    .select()
-    .from(node)
-    .where(eq(node.id, nodeId));
-  if (!existingNode) throw new Error("Not found");
+  let change: RecordConfigChangeResult | null = null;
+  let row: Node;
+  try {
+    row = await inMCPTransaction(async (tx) => {
+      const [existingNode] = await tx
+        .select()
+        .from(node)
+        .where(eq(node.id, nodeId));
+      if (!existingNode) throw new Error("Not found");
 
-  let effectiveProtocol: string | undefined;
-  if (settings !== undefined) {
-    effectiveProtocol = protocol;
-    if (!effectiveProtocol) {
-      effectiveProtocol = existingNode.protocol;
-    }
-  }
+      const addressUpdate =
+        address === undefined
+          ? {}
+          : { address: address === null ? null : address };
 
-  const addressUpdate =
-    address === undefined ? {} : { address: address === null ? null : address };
+      // Strip X.509 material and the raw `server_name` (as `updateNode` does)
+      // before the schema re-validates the fragment.
+      const settingsUpdate =
+        settings !== undefined
+          ? {
+              settings: parseNodeSettings(
+                protocol ?? existingNode.protocol,
+                withoutNodeTlsMaterial(settings),
+              ),
+            }
+          : {};
 
-  const settingsUpdate =
-    settings !== undefined
-      ? { settings: parseNodeSettings(effectiveProtocol!, settings) }
-      : {};
+      // Publish gate: record only changes that alter the compiled agent config
+      // or the client connection tuple.
+      const after = {
+        protocol: protocol ?? existingNode.protocol,
+        listenPort: rest.listenPort ?? existingNode.listenPort,
+        settings: settingsUpdate.settings ?? existingNode.settings,
+        certificateId: existingNode.certificateId,
+        tlsServerName: existingNode.tlsServerName,
+        serverId: rest.serverId ?? existingNode.serverId,
+        enabled: rest.enabled ?? existingNode.enabled,
+      };
+      const configChanged = isNodeConfigChange(existingNode, after);
+      const structural = isLegacyNodeStructuralChange(existingNode, after);
+      const prevRow = configChanged
+        ? await snapshotNodeForGate(tx, existingNode)
+        : null;
 
-  // Publish gate: record only changes that alter the compiled agent config
-  // or the client connection tuple.
-  const after = {
-    protocol: protocol ?? existingNode.protocol,
-    listenPort: rest.listenPort ?? existingNode.listenPort,
-    settings: settingsUpdate.settings ?? existingNode.settings,
-    certificateId: existingNode.certificateId,
-    tlsServerName: existingNode.tlsServerName,
-    serverId: rest.serverId ?? existingNode.serverId,
-    enabled: rest.enabled ?? existingNode.enabled,
-  };
-  const configChanged = isNodeConfigChange(existingNode, after);
-  const structural = isLegacyNodeStructuralChange(existingNode, after);
-  const prevRow = configChanged
-    ? await snapshotNodeForGate(db, existingNode)
-    : null;
-
-  let row: Node | undefined;
-  if (structural) {
-    const written = await writeLegacySubscriberNode(
-      {
-        kind: "update",
-        nodeId,
-        values: {
-          ...rest,
-          ...(protocol ? { protocol } : {}),
-          ...settingsUpdate,
-          ...addressUpdate,
-        },
-      },
-      { database: db },
-    );
-    if (!written.ok) {
-      if (written.reason === "not_found") throw new Error("Not found");
-      return written;
-    }
-    row = written.node;
-  } else {
-    [row] = await db
-      .update(node)
-      .set({
-        ...rest,
-        ...(protocol ? { protocol } : {}),
-        ...settingsUpdate,
-        ...addressUpdate,
-      })
-      .where(eq(node.id, nodeId))
-      .returning();
-  }
-  if (!row) throw new Error("Not found");
-  if (configChanged) {
-    await recordMCPConfigChange({
-      kind: "node",
-      subjectId: nodeId,
-      prevRow,
-      serverIds: [...new Set([existingNode.serverId, row.serverId])],
+      let updated: Node | undefined;
+      if (structural) {
+        const written = await writeLegacySubscriberNode(
+          {
+            kind: "update",
+            nodeId,
+            values: {
+              ...rest,
+              ...(protocol ? { protocol } : {}),
+              ...settingsUpdate,
+              ...addressUpdate,
+            },
+          },
+          { database: tx },
+        );
+        if (!written.ok) {
+          if (written.reason === "not_found") throw new Error("Not found");
+          throw new LegacyNodeWriteRejectedError(written);
+        }
+        updated = written.node;
+      } else {
+        [updated] = await tx
+          .update(node)
+          .set({
+            ...rest,
+            ...(protocol ? { protocol } : {}),
+            ...settingsUpdate,
+            ...addressUpdate,
+          })
+          .where(eq(node.id, nodeId))
+          .returning();
+      }
+      if (!updated) throw new Error("Not found");
+      if (configChanged) {
+        change = await recordConfigChange(tx, {
+          kind: "node",
+          subjectId: nodeId,
+          prevRow,
+          serverIds: [...new Set([existingNode.serverId, updated.serverId])],
+        });
+      }
+      return updated;
     });
+  } catch (error) {
+    if (error instanceof LegacyNodeWriteRejectedError) {
+      return error.rejection;
+    }
+    throw error;
   }
+  await notifyMCPConfigChange("node", change);
   return row;
 }
 
@@ -510,26 +563,7 @@ export async function updateServerMCP(
   if (Object.keys(input).length === 0) {
     throw new Error("Invalid server update: no changes supplied");
   }
-  const [existingServer] = await db
-    .select({ enabled: server.enabled })
-    .from(server)
-    .where(eq(server.id, serverId));
-  if (!existingServer) throw new Error("Not found");
-  const [row] = await db
-    .update(server)
-    .set(input)
-    .where(eq(server.id, serverId))
-    .returning();
-  if (!row) throw new Error("Not found");
-  if (input.enabled !== undefined && input.enabled !== existingServer.enabled) {
-    await recordMCPConfigChange({
-      kind: "server",
-      subjectId: serverId,
-      prevRow: { enabled: existingServer.enabled },
-      serverIds: [serverId],
-    });
-  }
-  return toServerDTO(row);
+  return writeServerWithGate(serverId, input);
 }
 
 export async function enableServerMCP(
@@ -537,26 +571,7 @@ export async function enableServerMCP(
   serverId: string,
 ): Promise<ServerDTO> {
   await requireActorAdmin(actorUserId);
-  const [existing] = await db
-    .select({ enabled: server.enabled })
-    .from(server)
-    .where(eq(server.id, serverId));
-  if (!existing) throw new Error("Not found");
-  const [row] = await db
-    .update(server)
-    .set({ enabled: true })
-    .where(eq(server.id, serverId))
-    .returning();
-  if (!row) throw new Error("Not found");
-  if (!existing.enabled) {
-    await recordMCPConfigChange({
-      kind: "server",
-      subjectId: serverId,
-      prevRow: { enabled: false },
-      serverIds: [serverId],
-    });
-  }
-  return toServerDTO(row);
+  return writeServerWithGate(serverId, { enabled: true });
 }
 
 export async function disableServerMCP(
@@ -564,25 +579,41 @@ export async function disableServerMCP(
   serverId: string,
 ): Promise<ServerDTO> {
   await requireActorAdmin(actorUserId);
-  const [existing] = await db
-    .select({ enabled: server.enabled })
-    .from(server)
-    .where(eq(server.id, serverId));
-  if (!existing) throw new Error("Not found");
-  const [row] = await db
-    .update(server)
-    .set({ enabled: false })
-    .where(eq(server.id, serverId))
-    .returning();
-  if (!row) throw new Error("Not found");
-  if (existing.enabled) {
-    await recordMCPConfigChange({
-      kind: "server",
-      subjectId: serverId,
-      prevRow: { enabled: true },
-      serverIds: [serverId],
-    });
-  }
+  return writeServerWithGate(serverId, { enabled: false });
+}
+
+/**
+ * Updates a server and, when its `enabled` flag flips, records the publish-gate
+ * change in the same transaction.
+ */
+async function writeServerWithGate(
+  serverId: string,
+  values: Partial<typeof server.$inferInsert>,
+): Promise<ServerDTO> {
+  let change: RecordConfigChangeResult | null = null;
+  const row = await inMCPTransaction(async (tx) => {
+    const [existing] = await tx
+      .select({ enabled: server.enabled })
+      .from(server)
+      .where(eq(server.id, serverId));
+    if (!existing) throw new Error("Not found");
+    const [updated] = await tx
+      .update(server)
+      .set(values)
+      .where(eq(server.id, serverId))
+      .returning();
+    if (!updated) throw new Error("Not found");
+    if (values.enabled !== undefined && values.enabled !== existing.enabled) {
+      change = await recordConfigChange(tx, {
+        kind: "server",
+        subjectId: serverId,
+        prevRow: { enabled: existing.enabled },
+        serverIds: [serverId],
+      });
+    }
+    return updated;
+  });
+  await notifyMCPConfigChange("server", change);
   return toServerDTO(row);
 }
 
@@ -620,44 +651,46 @@ export async function updateSubscriptionMCP(
     }
   }
 
-  const [existingSub] = await db
-    .select()
-    .from(subscription)
-    .where(eq(subscription.id, subscriptionId));
-  if (!existingSub) throw new Error("Not found");
+  const { row, change } = await inMCPTransaction(async (tx) => {
+    const [existingSub] = await tx
+      .select()
+      .from(subscription)
+      .where(eq(subscription.id, subscriptionId));
+    if (!existingSub) throw new Error("Not found");
 
-  const [row] = await db
-    .update(subscription)
-    .set({
-      ...(input.status !== undefined ? { status: input.status } : {}),
-      ...(input.expiresAt !== undefined
-        ? { expiresAt: new Date(input.expiresAt) }
-        : {}),
-      ...(input.trafficUsedBytes !== undefined
-        ? { trafficUsedBytes: input.trafficUsedBytes }
-        : {}),
-    })
-    .where(eq(subscription.id, subscriptionId))
-    .returning();
-  if (!row) throw new Error("Not found");
-  // Publish gate: re-activations stay hidden from the subscription endpoint
-  // until agents serve the user again; de-activations apply immediately.
-  if (
-    (input.status !== undefined && input.status !== existingSub.status) ||
-    (input.expiresAt !== undefined &&
-      new Date(input.expiresAt).getTime() !== existingSub.expiresAt.getTime())
-  ) {
-    await recordMCPConfigChange({
-      kind: "authorization",
-      subjectId: subscriptionId,
-      prevRow: {
-        planId: existingSub.planId,
-        status: existingSub.status,
-        expiresAt: existingSub.expiresAt.toISOString(),
-      },
-      serverIds: await listServerIdsForSubscriptionId(db, subscriptionId),
-    });
-  }
+    const [updated] = await tx
+      .update(subscription)
+      .set({
+        ...(input.status !== undefined ? { status: input.status } : {}),
+        ...(input.expiresAt !== undefined
+          ? { expiresAt: new Date(input.expiresAt) }
+          : {}),
+        ...(input.trafficUsedBytes !== undefined
+          ? { trafficUsedBytes: input.trafficUsedBytes }
+          : {}),
+      })
+      .where(eq(subscription.id, subscriptionId))
+      .returning();
+    if (!updated) throw new Error("Not found");
+    // Publish gate: re-activations stay hidden from the subscription endpoint
+    // until agents serve the user again; de-activations apply immediately.
+    const gated =
+      (input.status !== undefined && input.status !== existingSub.status) ||
+      (input.expiresAt !== undefined &&
+        new Date(input.expiresAt).getTime() !==
+          existingSub.expiresAt.getTime());
+    return {
+      row: updated,
+      change: gated
+        ? await recordSubscriptionAuthorizationChange(
+            tx,
+            subscriptionId,
+            existingSub,
+          )
+        : null,
+    };
+  });
+  await notifyMCPConfigChange("authorization", change);
   return stripSubscriptionCredentials(row);
 }
 
@@ -666,32 +699,51 @@ export async function cancelSubscriptionMCP(
   subscriptionId: string,
 ): Promise<SubscriptionSummary> {
   await requireActorAdmin(actorUserId);
-  const [existingSub] = await db
-    .select()
-    .from(subscription)
-    .where(eq(subscription.id, subscriptionId));
-  if (!existingSub) throw new Error("Not found");
-  const [row] = await db
-    .update(subscription)
-    .set({ status: "cancelled" })
-    .where(eq(subscription.id, subscriptionId))
-    .returning();
-  if (!row) throw new Error("Not found");
-  // Cancellation is the safe direction (the subscription endpoint already
-  // refuses it); the record only tracks the pending agent-side removal.
-  if (existingSub.status !== "cancelled") {
-    await recordMCPConfigChange({
-      kind: "authorization",
-      subjectId: subscriptionId,
-      prevRow: {
-        planId: existingSub.planId,
-        status: existingSub.status,
-        expiresAt: existingSub.expiresAt.toISOString(),
-      },
-      serverIds: await listServerIdsForSubscriptionId(db, subscriptionId),
-    });
-  }
+  const { row, change } = await inMCPTransaction(async (tx) => {
+    const [existingSub] = await tx
+      .select()
+      .from(subscription)
+      .where(eq(subscription.id, subscriptionId));
+    if (!existingSub) throw new Error("Not found");
+    const [updated] = await tx
+      .update(subscription)
+      .set({ status: "cancelled" })
+      .where(eq(subscription.id, subscriptionId))
+      .returning();
+    if (!updated) throw new Error("Not found");
+    // Cancellation is the safe direction (the subscription endpoint already
+    // refuses it); the record only tracks the pending agent-side removal.
+    return {
+      row: updated,
+      change:
+        existingSub.status !== "cancelled"
+          ? await recordSubscriptionAuthorizationChange(
+              tx,
+              subscriptionId,
+              existingSub,
+            )
+          : null,
+    };
+  });
+  await notifyMCPConfigChange("authorization", change);
   return stripSubscriptionCredentials(row);
+}
+
+async function recordSubscriptionAuthorizationChange(
+  tx: DbHandle,
+  subscriptionId: string,
+  previous: Subscription,
+): Promise<RecordConfigChangeResult> {
+  return recordConfigChange(tx, {
+    kind: "authorization",
+    subjectId: subscriptionId,
+    prevRow: {
+      planId: previous.planId,
+      status: previous.status,
+      expiresAt: previous.expiresAt.toISOString(),
+    },
+    serverIds: await listServerIdsForSubscriptionId(tx, subscriptionId),
+  });
 }
 
 // ── Sing-box documentation ───────────────────────────────────────────
