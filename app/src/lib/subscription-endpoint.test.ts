@@ -71,7 +71,10 @@ function gateOf(nodes: ResolvedNode[], eligible = true) {
   return { eligible, nodes, credentialsByNodeId: new Map() };
 }
 
-async function fetchSubscription(): Promise<Response> {
+async function fetchSubscription(
+  url = "https://example.test/api/sub/fake-token",
+  headers: Record<string, string> = {},
+): Promise<Response> {
   const handlers = (
     Route.options as unknown as {
       server: {
@@ -86,7 +89,7 @@ async function fetchSubscription(): Promise<Response> {
   ).server.handlers;
   return handlers.GET({
     params: { token: "fake-token" },
-    request: new Request("https://example.test/api/sub/fake-token"),
+    request: new Request(url, { headers }),
   });
 }
 
@@ -113,10 +116,131 @@ describe("GET /api/sub/$token", () => {
     arrange(nodes, nodes);
     const response = await fetchSubscription();
     expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe(
+      "text/yaml; charset=utf-8",
+    );
+    expect(response.headers.get("ETag")).toMatch(/^"[a-f0-9]{64}"$/);
+    expect(response.headers.get("Content-Disposition")).toContain(
+      "blossom.yaml",
+    );
     const config = parseYaml(await response.text()) as {
       proxies: { type: string }[];
     };
     expect(config.proxies.map((proxy) => proxy.type)).toEqual(["trojan"]);
+  });
+
+  it("serves a native sing-box config when ?format=singbox is requested", async () => {
+    const nodes = [makeNode("a", "trojan")];
+    arrange(nodes, nodes);
+    const response = await fetchSubscription(
+      "https://example.test/api/sub/fake-token?format=singbox",
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe(
+      "application/json; charset=utf-8",
+    );
+    expect(response.headers.get("ETag")).toMatch(/^"[a-f0-9]{64}"$/);
+    expect(response.headers.get("Content-Disposition")).toContain(
+      "blossom.json",
+    );
+    const config = JSON.parse(await response.text()) as {
+      outbounds: { type: string; tag: string }[];
+    };
+    expect(config.outbounds).toBeDefined();
+    const tags = config.outbounds.map((o) => o.tag);
+    expect(tags).toContain("node a");
+    expect(tags).toContain("select");
+    expect(tags).toContain("auto");
+  });
+
+  it("serves a native sing-box config for sing-box User-Agent when ?format is omitted", async () => {
+    const nodes = [makeNode("a", "trojan")];
+    arrange(nodes, nodes);
+    for (const ua of [
+      "sing-box/1.9.0",
+      "SFA/1.10.0 (Linux; Android 14)",
+      "SFI/1.8.0",
+      "SFM/1.8.0",
+    ]) {
+      const response = await fetchSubscription(
+        "https://example.test/api/sub/fake-token",
+        { "user-agent": ua },
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Type")).toBe(
+        "application/json; charset=utf-8",
+      );
+      expect(response.headers.get("Content-Disposition")).toContain(
+        "blossom.json",
+      );
+    }
+  });
+
+  it("keeps Clash Meta YAML when ?format=clash is specified even with sing-box UA", async () => {
+    const nodes = [makeNode("a", "trojan")];
+    arrange(nodes, nodes);
+    const response = await fetchSubscription(
+      "https://example.test/api/sub/fake-token?format=clash",
+      { "user-agent": "sing-box/1.9.0" },
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe(
+      "text/yaml; charset=utf-8",
+    );
+    expect(response.headers.get("Content-Disposition")).toContain(
+      "blossom.yaml",
+    );
+  });
+
+  it("returns 304 Not Modified when If-None-Match matches ETag", async () => {
+    const nodes = [makeNode("a", "trojan")];
+    arrange(nodes, nodes);
+    const initialResponse = await fetchSubscription();
+    expect(initialResponse.status).toBe(200);
+    const etag = initialResponse.headers.get("ETag")!;
+    expect(etag).toBeDefined();
+
+    // Matching strong ETag
+    const cachedResponse = await fetchSubscription(
+      "https://example.test/api/sub/fake-token",
+      { "if-none-match": etag },
+    );
+    expect(cachedResponse.status).toBe(304);
+    expect(cachedResponse.headers.get("ETag")).toBe(etag);
+    expect(cachedResponse.headers.get("Subscription-Userinfo")).toBe(
+      initialResponse.headers.get("Subscription-Userinfo"),
+    );
+    expect(cachedResponse.headers.get("Profile-Update-Interval")).toBe(
+      initialResponse.headers.get("Profile-Update-Interval"),
+    );
+    expect(cachedResponse.headers.get("Content-Disposition")).toBe(
+      initialResponse.headers.get("Content-Disposition"),
+    );
+    expect(await cachedResponse.text()).toBe("");
+  });
+
+  it("supports weak ETag in If-None-Match", async () => {
+    const nodes = [makeNode("a", "trojan")];
+    arrange(nodes, nodes);
+    const initialResponse = await fetchSubscription();
+    const etag = initialResponse.headers.get("ETag")!;
+
+    const cachedResponse = await fetchSubscription(
+      "https://example.test/api/sub/fake-token",
+      { "if-none-match": `W/${etag}` },
+    );
+    expect(cachedResponse.status).toBe(304);
+  });
+
+  it("returns 200 when If-None-Match does not match", async () => {
+    const nodes = [makeNode("a", "trojan")];
+    arrange(nodes, nodes);
+    const response = await fetchSubscription(
+      "https://example.test/api/sub/fake-token",
+      { "if-none-match": '"outdated-etag"' },
+    );
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("proxies:");
   });
 
   it("still serves the convertible nodes when others are unsupported", async () => {

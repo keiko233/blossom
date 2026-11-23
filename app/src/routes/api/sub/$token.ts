@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { createHash } from "node:crypto";
 import { stringify } from "yaml";
 
 import { dbCached } from "@/db";
@@ -6,6 +7,10 @@ import type { Subscription } from "@/db/plan-schema";
 import { buildClashConfig, toClashOutputOptions } from "@/lib/clash-config";
 import { getClientIp } from "@/lib/client-ip";
 import { toClashRules } from "@/lib/routing-rules";
+import {
+  buildSingboxClientConfig,
+  toSingboxOutputOptions,
+} from "@/lib/singbox-client-config";
 import {
   classifyDeliveryFailure,
   deliveryFailureResponse,
@@ -56,6 +61,55 @@ function buildSubscriptionUserinfoHeader(subscription: Subscription): string {
   return parts.join("; ");
 }
 
+function determineFormat(request: Request): "clash" | "singbox" {
+  const url = new URL(request.url);
+  const param = url.searchParams.get("format")?.toLowerCase();
+  if (param === "singbox") {
+    return "singbox";
+  }
+  if (param === "clash") {
+    return "clash";
+  }
+  const userAgent = request.headers.get("user-agent") ?? "";
+  if (
+    /(?:^|[^a-zA-Z0-9])(?:sing-box|sfa|sfi|sfm)(?:[^a-zA-Z0-9]|$)/i.test(
+      userAgent,
+    )
+  ) {
+    return "singbox";
+  }
+  return "clash";
+}
+
+function buildSubContentDisposition(
+  title: string,
+  format: "clash" | "singbox",
+): string {
+  const base = buildContentDisposition(title);
+  if (format === "singbox") {
+    return base.replaceAll(".yaml", ".json");
+  }
+  return base;
+}
+
+function matchesIfNoneMatch(header: string | null, etag: string): boolean {
+  if (!header) {
+    return false;
+  }
+  const rawTarget = etag.replace(/^W\//, "").replace(/^"|"$/g, "");
+  for (const part of header.split(",")) {
+    const trimmed = part.trim();
+    if (trimmed === "*") {
+      return true;
+    }
+    const clean = trimmed.replace(/^W\//, "").replace(/^"|"$/g, "");
+    if (clean === rawTarget) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export const Route = createFileRoute("/api/sub/$token")({
   server: {
     handlers: {
@@ -88,22 +142,51 @@ export const Route = createFileRoute("/api/sub/$token")({
         const [enabledRules, { subscription_output: output }] =
           await Promise.all([listEnabledRules(dbCached), getSettings()]);
         const rules = toClashRules(enabledRules);
+        const format = determineFormat(request);
 
-        let config: unknown;
+        let body: string;
+        let contentType: string;
         try {
-          config = buildClashConfig(gate.nodes, {
-            rules,
-            output: toClashOutputOptions(output),
-            credentials: {
-              uuid: subscription.credentialUuid,
-              password: subscription.credentialPassword,
-            },
-            resolveCredentials: (resolved) =>
-              gate.credentialsByNodeId.get(resolved.node.id) ?? {
+          if (format === "singbox") {
+            const result = buildSingboxClientConfig(gate.nodes, {
+              output: toSingboxOutputOptions(output),
+              credentials: {
+                uuid: subscription.credentialUuid,
+                password: subscription.credentialPassword,
+                subscriptionId: subscription.id,
+              },
+              resolveCredentials: (resolved) => {
+                const creds = gate.credentialsByNodeId.get(
+                  resolved.node.id,
+                ) ?? {
+                  uuid: subscription.credentialUuid,
+                  password: subscription.credentialPassword,
+                };
+                return {
+                  ...creds,
+                  subscriptionId: subscription.id,
+                };
+              },
+            });
+            body = JSON.stringify(result.config, null, 2);
+            contentType = "application/json; charset=utf-8";
+          } else {
+            const result = buildClashConfig(gate.nodes, {
+              rules,
+              output: toClashOutputOptions(output),
+              credentials: {
                 uuid: subscription.credentialUuid,
                 password: subscription.credentialPassword,
               },
-          }).config;
+              resolveCredentials: (resolved) =>
+                gate.credentialsByNodeId.get(resolved.node.id) ?? {
+                  uuid: subscription.credentialUuid,
+                  password: subscription.credentialPassword,
+                },
+            });
+            body = stringify(result.config, { indent: 2 });
+            contentType = "text/yaml; charset=utf-8";
+          }
         } catch (error) {
           // Say why there is nothing to serve: only a publish-gate wait is
           // worth a retry. The body stays generic; details (node names,
@@ -136,12 +219,34 @@ export const Route = createFileRoute("/api/sub/$token")({
           // Logging failures must not break subscription delivery.
         });
 
-        const yaml = stringify(config, { indent: 2 });
-        return new Response(yaml, {
+        const etag = `"${createHash("sha256").update(body).digest("hex")}"`;
+        const contentDisposition = buildSubContentDisposition(
+          output.profileTitle,
+          format,
+        );
+        const ifNoneMatch = request.headers.get("if-none-match");
+
+        if (matchesIfNoneMatch(ifNoneMatch, etag)) {
+          return new Response(null, {
+            status: 304,
+            headers: {
+              ETag: etag,
+              "Content-Disposition": contentDisposition,
+              "Profile-Update-Interval": buildProfileUpdateInterval(
+                output.profileUpdateIntervalHours,
+              ),
+              "Subscription-Userinfo":
+                buildSubscriptionUserinfoHeader(subscription),
+            },
+          });
+        }
+
+        return new Response(body, {
           status: 200,
           headers: {
-            "Content-Type": "text/yaml; charset=utf-8",
-            "Content-Disposition": buildContentDisposition(output.profileTitle),
+            "Content-Type": contentType,
+            ETag: etag,
+            "Content-Disposition": contentDisposition,
             "Profile-Update-Interval": buildProfileUpdateInterval(
               output.profileUpdateIntervalHours,
             ),
