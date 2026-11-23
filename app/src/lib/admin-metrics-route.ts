@@ -34,6 +34,7 @@ const defaultDependencies: AdminMetricsRouteDependencies = {
   async authenticate(request) {
     const session = await getAuth().api.getSession({
       headers: request.headers,
+      query: { disableRefresh: true },
     });
     return session?.user.role === "admin" ? session : null;
   },

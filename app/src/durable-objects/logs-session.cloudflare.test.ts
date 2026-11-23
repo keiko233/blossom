@@ -24,6 +24,7 @@ import {
   handleAgentLogFrame,
   handleLogsBrowserMessage,
   handleLogsConnect,
+  nextLogAlarm,
   readLogSocketAttachment,
   revalidateLogSockets,
   type LogsDoContext,
@@ -92,10 +93,15 @@ function fakeCtx(sockets: FakeSocket[] = []): FakeCtx {
       (ws as unknown as FakeSocket).tags = tags;
       ctx.sockets.push(ws as unknown as FakeSocket);
     },
-    storage: {
-      getAlarm: async () => ctx.alarm,
-      setAlarm: (time: number) => ctx.setAlarm(time),
-      deleteAlarm: () => ctx.deleteAlarm(),
+    // The Durable Object's coordinator also weighs other subsystems; only the
+    // log relay deadlines exist in these tests.
+    async reconcileAlarm() {
+      const next = nextLogAlarm(ctx);
+      if (next === null) {
+        await ctx.deleteAlarm();
+      } else if (ctx.alarm === null || next < ctx.alarm) {
+        await ctx.setAlarm(next);
+      }
     },
   };
   return ctx;
