@@ -1,6 +1,78 @@
 # Changelog
 
 All notable changes to Blossom.
+## v1.7.0 - 2026-11-23
+
+### Added
+
+- Support one-line install/upgrade and token migration in connection tab (#214)
+
+- Add dual Hyperdrive bindings for fresh and cached reads
+
+- Add scheduled handler, certificate sweep, and fix hot-path pruning (#234)
+
+- Add native sing-box client output and ETag support (#235)
+
+
+### Documentation
+
+- Add architecture design audit and remediation roadmap (#226)
+
+
+### Fixed
+
+- Pass placeholder token when priming docker volume (#215)
+
+- Refresh stale agent binary in docker volume before enroll
+
+- Download agent and sing-box without api.github.com
+
+- Update dependency ioredis to v6 (#196)
+
+- Restore Reality SNI, encode traffic usernames, and bound UTF-8 frames (#227)
+
+- Persist v2 DO session state, coordinate alarms, and fix telemetry/ACME (#228)
+
+- Restore cross-instance Redis backplane delivery for v2 sessions (#229)
+
+- Stage native runtime artifacts and harden systemd guards (#230)
+
+- Align TLS sanitization, transactional writes, and admin auth tests (#232)
+
+
+### Maintenance
+
+- Update tanstack-query monorepo to v5.108.2 (#190)
+
+- Update dependency @iconify/json to v2.2.560 (#216)
+
+- Update dependency lucide-react to v1.77.0 (#96)
+
+- Update dependency wrangler to v4.166.0 (#208)
+
+- Update dependency lint-staged to v17.6.2 (#217)
+
+- Update dependency @tanstack/react-virtual to v3.14.28 (#218)
+
+- Update dependency meta-json-schema to v1.19.34 (#219)
+
+- Update orpc monorepo to v1.16.5 (#221)
+
+- Update rust crate anyhow to v1.0.105 (#223)
+
+- Update tanstack-query monorepo to v5.108.3 (#220)
+
+- Update dependency ioredis to v6.1.0 (#224)
+
+- Remove dead scaffolding, harden OpenAPI docs, and align tooling (#231)
+
+- Pin base image, cache admin session, tighten oxlint (#236)
+
+
+### Performance
+
+- Batch node subscription queries, push quota exhaustion, and scale log redaction (#233)
+
 ## v1.6.0 - 2026-11-21
 
 ### Added
