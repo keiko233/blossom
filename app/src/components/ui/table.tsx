@@ -2,11 +2,41 @@
 
 import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
+import { cva } from "class-variance-authority";
 import type React from "react";
 
 import { cn } from "@/lib/utils";
 
-export type TableVariant = "default" | "card";
+export type TableVariant = "default" | "card" | "pane";
+
+const tableVariants = cva("relative w-full overflow-x-auto", {
+  defaultVariants: {
+    variant: "default",
+  },
+  variants: {
+    variant: {
+      default: "",
+      card: "",
+      pane: "overflow-visible",
+    },
+  },
+});
+
+const tableElementVariants = cva(
+  "w-full caption-bottom text-sm in-data-[variant=card]:border-separate in-data-[variant=card]:border-spacing-0",
+  {
+    defaultVariants: {
+      variant: "default",
+    },
+    variants: {
+      variant: {
+        default: "overflow-clip rounded-xl",
+        card: "overflow-clip rounded-xl",
+        pane: "rounded-none",
+      },
+    },
+  },
+);
 
 export type TableProps = React.ComponentProps<"table"> & {
   variant?: TableVariant;
@@ -22,16 +52,12 @@ export function Table({
   const defaultProps = {
     children: (
       <table
-        className={cn(
-          "w-full caption-bottom text-sm in-data-[variant=card]:border-separate in-data-[variant=card]:border-spacing-0",
-          "overflow-clip rounded-xl",
-          className,
-        )}
+        className={cn(tableElementVariants({ variant }), className)}
         data-slot="table"
         {...props}
       />
     ),
-    className: "relative w-full overflow-x-auto",
+    className: tableVariants({ variant }),
     "data-slot": "table-container",
     "data-variant": variant,
   };
@@ -49,7 +75,11 @@ export function TableHeader({
 }: React.ComponentProps<"thead">): React.ReactElement {
   return (
     <thead
-      className={cn("bg-primary-foreground [&_tr]:border-b", className)}
+      className={cn(
+        "bg-primary-foreground [&_tr]:border-b",
+        "in-data-[variant=pane]:sticky in-data-[variant=pane]:top-[calc(var(--page-header-h)+var(--page-toolbar-h))] in-data-[variant=pane]:z-[1] in-data-[variant=pane]:bg-background",
+        className,
+      )}
       data-slot="table-header"
       {...props}
     />
@@ -96,6 +126,7 @@ export function TableRow({
     <tr
       className={cn(
         "relative border-b not-in-data-[variant=card]:hover:bg-[color-mix(in_srgb,var(--background),var(--color-black)_2%)] not-in-data-[variant=card]:data-[state=selected]:bg-[color-mix(in_srgb,var(--background),var(--color-black)_4%)] dark:not-in-data-[variant=card]:hover:bg-[color-mix(in_srgb,var(--background),var(--color-white)_2%)] dark:not-in-data-[variant=card]:data-[state=selected]:bg-[color-mix(in_srgb,var(--background),var(--color-white)_4%)]",
+        "in-data-[variant=pane]:h-9",
         className,
       )}
       data-slot="table-row"
@@ -112,6 +143,7 @@ export function TableHead({
     <th
       className={cn(
         "h-10 px-2.5 text-left align-middle leading-none font-medium whitespace-nowrap text-muted-foreground has-[[role=checkbox]]:w-px first:has-[[role=checkbox]]:pe-0 last:has-[[role=checkbox]]:ps-0",
+        "in-data-[variant=pane]:px-4 in-data-[variant=pane]:first:ps-4 lg:in-data-[variant=pane]:px-6 lg:in-data-[variant=pane]:first:ps-6",
         className,
       )}
       data-slot="table-head"
@@ -128,6 +160,7 @@ export function TableCell({
     <td
       className={cn(
         "bg-clip-padding p-2.5 align-middle leading-none whitespace-nowrap in-data-[slot=table-footer]:py-3.5 in-data-[variant=card]:first:ps-[calc(--spacing(2.5)-1px)] in-data-[variant=card]:last:pe-[calc(--spacing(2.5)-1px)] has-[[role=checkbox]]:w-px first:has-[[role=checkbox]]:pe-0 last:has-[[role=checkbox]]:ps-0",
+        "in-data-[variant=pane]:px-4 in-data-[variant=pane]:first:ps-4 lg:in-data-[variant=pane]:px-6 lg:in-data-[variant=pane]:first:ps-6",
         className,
       )}
       data-slot="table-cell"

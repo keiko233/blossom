@@ -20,8 +20,10 @@ export interface AdminWorkspaceFrameProps extends PropsWithChildren {
 
 /**
  * Two-pane workspace frame: a text context sidebar beside a single bounded
- * viewport. The scroll id includes the current pathname so Back restores the
- * same section and another section never inherits its position.
+ * viewport. Pages own their `PageHeader`/`PageContent` chrome; the frame only
+ * composes the shell primitives. The scroll id includes the current pathname
+ * so Back restores the same section and another section never inherits its
+ * position.
  */
 export function AdminWorkspaceFrame({
   title,
@@ -55,10 +57,7 @@ export function AdminWorkspaceFrame({
       />
 
       <WorkspacePane>
-        <WorkspaceViewport
-          scrollId={`workspace-${pathname}`}
-          className="[&_[data-slot=page-header]]:sticky [&_[data-slot=page-header]]:top-0 [&_[data-slot=page-header]]:z-10 [&_[data-slot=page-header]]:bg-background"
-        >
+        <WorkspaceViewport scrollId={`workspace-${pathname}`}>
           {children}
         </WorkspaceViewport>
       </WorkspacePane>

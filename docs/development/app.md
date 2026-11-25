@@ -20,19 +20,19 @@ Established, from `.oxfmtrc.json` and `.oxlintrc.json` at the repo root:
 
 ## Layout of `app/src`
 
-| Path                                | Holds                                                                                                                       |
-| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `routes/`                           | File-based TanStack Router routes. Pathless groups `(admin)`, `(user)`, `(auth)`, `(static)`; `api/` for HTTP handlers.       |
-| `routes/**/_modules/`               | Components, hooks and helpers private to one route. The router ignores `_modules` (`routeFileIgnorePattern`).                 |
-| `components/ui/`                    | shadcn-style primitives built on `@base-ui/react` (see `components.json`). Add new primitives here.                          |
-| `components/`                       | Shared, app-specific components (`app-shell/`, `schema-form/`, `charts/`, tables, pagination, …).                            |
-| `query/`                            | Server functions and server-side data access, plus the TanStack Query keys the UI uses. See [API, data and auth](api-data-auth.md). |
-| `lib/`                              | Domain logic, schemas, search/filter helpers, formatting, env. Most unit tests live here.                                    |
-| `orpc/`                             | The agent oRPC router, sing-box config compilation (`orpc/proxy/`), and the MCP router (`orpc/mcp/`).                         |
-| `db/`                               | Drizzle schemas, DB client and driver selection.                                                                             |
-| `hooks/`, `providers/`, `integrations/` | Small shared hooks, context providers, TanStack Query root setup.                                                       |
-| `templates/emails/`                 | react-email templates (`pnpm --filter @blossom/app email:dev` previews them).                                               |
-| `paraglide/`, `route-tree.gen.ts`   | Generated. Do not edit.                                                                                                      |
+| Path                                    | Holds                                                                                                                               |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `routes/`                               | File-based TanStack Router routes. Pathless groups `(admin)`, `(user)`, `(auth)`, `(static)`; `api/` for HTTP handlers.             |
+| `routes/**/_modules/`                   | Components, hooks and helpers private to one route. The router ignores `_modules` (`routeFileIgnorePattern`).                       |
+| `components/ui/`                        | shadcn-style primitives built on `@base-ui/react` (see `components.json`). Add new primitives here.                                 |
+| `components/`                           | Shared, app-specific components (`app-shell/`, `schema-form/`, `charts/`, tables, pagination, …).                                   |
+| `query/`                                | Server functions and server-side data access, plus the TanStack Query keys the UI uses. See [API, data and auth](api-data-auth.md). |
+| `lib/`                                  | Domain logic, schemas, search/filter helpers, formatting, env. Most unit tests live here.                                           |
+| `orpc/`                                 | The agent oRPC router, sing-box config compilation (`orpc/proxy/`), and the MCP router (`orpc/mcp/`).                               |
+| `db/`                                   | Drizzle schemas, DB client and driver selection.                                                                                    |
+| `hooks/`, `providers/`, `integrations/` | Small shared hooks, context providers, TanStack Query root setup.                                                                   |
+| `templates/emails/`                     | react-email templates (`pnpm --filter @blossom/app email:dev` previews them).                                                       |
+| `paraglide/`, `route-tree.gen.ts`       | Generated. Do not edit.                                                                                                             |
 
 ## Routes and pages
 
@@ -68,8 +68,8 @@ Established, from `.oxfmtrc.json` and `.oxlintrc.json` at the repo root:
 
 - Build on `components/ui/*` and the existing shared components before adding new markup. Use `lucide-react` icons (`XxxIcon` names) and `cn()` from `@/lib/utils` for class merging.
 - `FieldDescription` is a Base UI field part and requires a surrounding `Field` or `FormField`; use ordinary text for hints outside a field.
-- The list pages inspected use `PageHeader` → toolbar → table, with `Empty` for empty states and `Spinner` for pending states; reuse those before inventing new patterns.
-- The admin shell fills the viewport and admin pages scroll inside its `admin-viewport` container, not the window. A workspace with a context sidebar composes `Workspace`, `WorkspaceSidebar`, `WorkspacePane`, `WorkspaceHeader` and exactly one `WorkspaceViewport` from `components/app-shell/workspace.tsx`. The router resets that viewport on new navigations and restores it on Back; give it a `scrollId` scoped to the route and resource. The icon activity rail links to the canonical `/admin/servers`, `/admin/networking`, `/admin/access` and `/admin/operations` workspaces; `AdminWorkspaceFrame` adds each workspace's text sidebar and bounded viewport. `lib/admin-workspace.ts` owns the activity-rail workspaces and the map from pre-workspace admin URLs to their canonical destinations; the `/admin/$` splat route redirects those paths behind the admin guard, allowlists search params, and resolves node detail to its owning server through `getNodeServerId`.
+- Document pages use `PageHeader` → optional `PageToolbar` → `PageContent`, with `Table variant="pane"` for dense tables and `Empty` for empty states. First loads render the layout-matched skeletons from `components/app-shell/skeletons.tsx`; `Spinner` is reserved for buttons and toolbar refresh indicators. See [UI design standard](ui-design.md#4-page-chrome-padding-and-sticky-headers) and [loading states](ui-design.md#5-loading-empty-and-error-states).
+- The admin shell fills the viewport and admin pages scroll inside its `admin-viewport` container, not the window. A workspace with a context sidebar composes `Workspace`, `WorkspaceSidebar`, `WorkspacePane` and one pane archetype from `components/app-shell/workspace.tsx`: `WorkspaceViewport` for documents (one scroller, `scrollId` scoped to route and resource) or `WorkbenchViewport` + `WorkbenchBar`/`WorkbenchBody`/`WorkbenchCanvas`/`WorkbenchStatusBar` for tools that own their scroll. `PageHeader` must be the viewport's direct child, never inside `PageContent`. The router resets each viewport on new navigations and restores it on Back. The icon activity rail links to the canonical `/admin/servers`, `/admin/networking`, `/admin/access` and `/admin/operations` workspaces; `AdminWorkspaceFrame` adds each workspace's text sidebar and bounded viewport. `lib/admin-workspace.ts` owns the activity-rail workspaces and the map from pre-workspace admin URLs to their canonical destinations; the `/admin/$` splat route redirects those paths behind the admin guard, allowlists search params, and resolves node detail to its owning server through `getNodeServerId`.
 - Keep server-only imports (`@/db`, `node:*`) out of code that the browser bundles. Shared constants that the client needs are kept beside, not inside, the Drizzle table files for this reason (see the comment at the top of `lib/admin-audit.ts`). Use `createServerFn`/`createServerOnlyFn` at the boundary.
 - Read client environment through `lib/env-client.ts`; read server environment through `getServerEnv()` in server-only code (see [API, data and auth](api-data-auth.md#environment) for the few direct `process.env` uses).
 
