@@ -1,6 +1,5 @@
 "use client";
 
-import { EraserIcon, SquareTerminalIcon, UnplugIcon } from "lucide-react";
 import type React from "react";
 import { useEffect, useRef, useState } from "react";
 
@@ -8,18 +7,28 @@ import {
   XtermTerminal,
   type XtermTerminalHandle,
 } from "@/components/terminal/xterm-terminal";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Confirm } from "@/components/ui/confirm";
 import { PTY_OPEN_TIMEOUT_MS } from "@/lib/pty-protocol";
+import {
+  clampTerminalFontSize,
+  readTerminalFontSize,
+  TERMINAL_FONT_SIZE,
+  type TerminalPhase,
+  writeTerminalFontSize,
+} from "@/lib/terminal-view";
 import { m } from "@/paraglide/messages";
 import type { ServerDTO } from "@/query/servers";
+
+import { TerminalEmptyState } from "./terminal-empty-state";
+import {
+  TerminalSessionBar,
+  type TerminalIdentity,
+} from "./terminal-session-bar";
+import { TerminalStatusBar } from "./terminal-status-bar";
 
 export interface AgentTerminalPanelProps {
   server: ServerDTO;
 }
-
-type TerminalPhase = "idle" | "connecting" | "connected" | "closed" | "error";
 
 interface ServerFrame {
   type?: string;
@@ -159,13 +168,15 @@ export function AgentTerminalPanel({
   const pendingOutput = useRef("");
   const [phase, setPhase] = useState<TerminalPhase>("idle");
   const [notice, setNotice] = useState<string | null>(null);
-  const [identity, setIdentity] = useState<{
-    shell: string;
-    user: string;
-  } | null>(null);
+  const [identity, setIdentity] = useState<TerminalIdentity | null>(null);
   const [opening, setOpening] = useState(false);
   const [sessionKey, setSessionKey] = useState(0);
   const [terminalMounted, setTerminalMounted] = useState(false);
+  const [fontSize, setFontSize] = useState<number>(TERMINAL_FONT_SIZE.default);
+  const [size, setSize] = useState<{
+    cols: number | null;
+    rows: number | null;
+  }>({ cols: null, rows: null });
 
   const unavailableReason = !server.enabled
     ? "disabled"
@@ -181,6 +192,12 @@ export function AgentTerminalPanel({
     ? unavailableMessage(unavailableReason)
     : null;
 
+  // The server-rendered default avoids a hydration mismatch, then the stored
+  // preference applies once the browser storage is available.
+  useEffect(() => {
+    setFontSize(readTerminalFontSize(window.localStorage));
+  }, []);
+
   // Leaving the terminal view, or switching servers, ends the shell. A new
   // server starts from the idle state rather than showing the old session.
   useEffect(() => {
@@ -189,6 +206,7 @@ export function AgentTerminalPanel({
     setIdentity(null);
     setOpening(false);
     setTerminalMounted(false);
+    setSize({ cols: null, rows: null });
     return () => {
       finishedRef.current = true;
       if (startTimer.current !== undefined) {
@@ -380,111 +398,86 @@ export function AgentTerminalPanel({
       pendingOutput.current = "";
     }
     terminalRef.current?.fit();
+    const nextSize = terminalRef.current?.getSize();
+    if (nextSize) {
+      setSize(nextSize);
+    }
   };
 
-  const badge =
-    phase === "connected" ? (
-      <Badge variant="success">{m.agent_terminal_status_connected()}</Badge>
-    ) : phase === "connecting" ? (
-      <Badge variant="warning">{m.agent_terminal_status_connecting()}</Badge>
-    ) : phase === "error" ? (
-      <Badge variant="error">{m.agent_terminal_status_error()}</Badge>
-    ) : phase === "closed" ? (
-      <Badge variant="outline">{m.agent_terminal_status_closed()}</Badge>
-    ) : (
-      <Badge variant="outline">{m.agent_terminal_status_idle()}</Badge>
-    );
+  const changeFontSize = (next: number) => {
+    const clamped = clampTerminalFontSize(next);
+    setFontSize(clamped);
+    writeTerminalFontSize(window.localStorage, clamped);
+  };
+
+  const connect = () => void open();
+
+  // A shell that ended keeps its scrollback; only failures before a session
+  // exists take over the canvas.
+  const showEmptyState =
+    !terminalMounted || (phase === "error" && notice !== null);
 
   return (
     <section
-      className="flex flex-col gap-3 rounded-xl border bg-card p-4 shadow-xs"
+      className="flex min-h-0 flex-1 flex-col overflow-hidden"
       data-slot="agent-terminal-panel"
     >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <SquareTerminalIcon className="size-4 text-muted-foreground" />
-            <h2 className="font-medium">{m.agent_terminal_title()}</h2>
-            {badge}
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {m.agent_terminal_description()}
-          </p>
-          {phase === "connected" && identity ? (
-            <p
-              className="text-xs text-muted-foreground"
-              data-slot="terminal-identity"
-            >
-              {m.agent_terminal_identity({
-                user: identity.user,
-                shell: identity.shell,
-              })}
-            </p>
-          ) : null}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {terminalMounted &&
-          (phase === "connected" || phase === "connecting") ? (
-            <Button size="sm" variant="outline" onClick={disconnect}>
-              <UnplugIcon />
-              {m.agent_terminal_action_disconnect()}
-            </Button>
-          ) : (
-            <Button
-              size="sm"
-              disabled={Boolean(unavailable) || opening}
-              loading={opening}
-              onClick={() => void open()}
-            >
-              <SquareTerminalIcon />
-              {m.agent_terminal_action_connect()}
-            </Button>
-          )}
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={!terminalMounted}
-            onClick={() => terminalRef.current?.clear()}
-          >
-            <EraserIcon />
-            {m.agent_terminal_action_clear()}
-          </Button>
-        </div>
+      <TerminalSessionBar
+        fontSize={fontSize}
+        host={server.address}
+        identity={identity}
+        onClear={() => terminalRef.current?.clear()}
+        onConnect={connect}
+        onDisconnect={disconnect}
+        onFontSizeChange={changeFontSize}
+        onRefit={() => terminalRef.current?.fit()}
+        opening={opening}
+        phase={phase}
+        terminalMounted={terminalMounted}
+        unavailable={Boolean(unavailable)}
+      />
+
+      <div
+        className="relative min-h-0 flex-1 overflow-hidden bg-terminal"
+        data-slot="terminal-canvas"
+      >
+        {terminalMounted ? (
+          <XtermTerminal
+            key={sessionKey}
+            ref={terminalRef}
+            className="absolute inset-0"
+            fontSize={fontSize}
+            onReady={handleReady}
+            onData={(data) => send("pty.data", { data })}
+            onResize={(cols, rows) => {
+              setSize({ cols, rows });
+              send("pty.resize", { cols, rows });
+            }}
+            onSize={(cols, rows) => setSize({ cols, rows })}
+            onError={(message) => {
+              setPhase("error");
+              setNotice(m.agent_terminal_notice_render_error({ message }));
+            }}
+          />
+        ) : null}
+
+        {showEmptyState ? (
+          <TerminalEmptyState
+            notice={notice}
+            onConnect={connect}
+            opening={opening}
+            phase={phase}
+            unavailable={unavailable}
+          />
+        ) : null}
       </div>
 
-      {unavailable ? (
-        <p className="rounded-lg border border-dashed bg-muted/20 p-3 text-sm text-muted-foreground">
-          {unavailable}
-        </p>
-      ) : (
-        <p className="rounded-lg border border-dashed bg-muted/20 p-3 text-xs text-muted-foreground">
-          {m.agent_terminal_opt_in_note()}
-        </p>
-      )}
-
-      {notice ? (
-        <p
-          className="text-sm text-muted-foreground"
-          data-slot="terminal-notice"
-        >
-          {notice}
-        </p>
-      ) : null}
-
-      {terminalMounted ? (
-        <XtermTerminal
-          key={sessionKey}
-          ref={terminalRef}
-          className="h-[28rem]"
-          onReady={handleReady}
-          onData={(data) => send("pty.data", { data })}
-          onResize={(cols, rows) => send("pty.resize", { cols, rows })}
-          onError={(message) => {
-            setPhase("error");
-            setNotice(m.agent_terminal_notice_render_error({ message }));
-          }}
-        />
-      ) : null}
+      <TerminalStatusBar
+        cols={size.cols}
+        notice={notice}
+        phase={phase}
+        rows={size.rows}
+      />
     </section>
   );
 }
