@@ -10,6 +10,9 @@ export default defineConfig({
       "@/lib/realtime-hub": fileURLToPath(
         new URL("./src/lib/realtime-hub.ts", import.meta.url),
       ),
+      "@/lib/email-transport": fileURLToPath(
+        new URL("./src/lib/email-transport.ts", import.meta.url),
+      ),
       "@/durable-objects/agent-session": fileURLToPath(
         new URL("./src/durable-objects/agent-session.ts", import.meta.url),
       ),

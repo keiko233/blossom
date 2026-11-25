@@ -8,6 +8,7 @@ import {
   CardPanel,
   CardTitle,
 } from "@/components/ui/card";
+import type { EmailProvider } from "@/lib/email-config";
 import type { DeployRuntime } from "@/lib/runtime-info";
 import { m } from "@/paraglide/messages";
 import type { SystemStatus } from "@/query/settings";
@@ -18,6 +19,12 @@ const RUNTIME_LABELS: Record<DeployRuntime, () => string> = {
   netlify: () => m.admin_settings_status_runtime_netlify(),
   node: () => m.admin_settings_status_runtime_node(),
   unknown: () => m.admin_settings_status_runtime_unknown(),
+};
+
+const EMAIL_PROVIDER_LABELS: Record<EmailProvider, () => string> = {
+  resend: () => m.admin_settings_status_email_provider_resend(),
+  smtp: () => m.admin_settings_status_email_provider_smtp(),
+  cloudflare: () => m.admin_settings_status_email_provider_cloudflare(),
 };
 
 function ConfiguredBadge({
@@ -73,7 +80,11 @@ export function SystemStatusCard({
             <span className="font-mono text-xs">{status.authUrl}</span>
           </Row>
           <Row label={m.admin_settings_status_email()}>
-            <ConfiguredBadge configured={status.emailConfigured} />
+            {status.emailProvider ? (
+              EMAIL_PROVIDER_LABELS[status.emailProvider]()
+            ) : (
+              <ConfiguredBadge configured={false} />
+            )}
           </Row>
           <Row label="GitHub">
             <ConfiguredBadge configured={status.socialProviders.github} />

@@ -46,3 +46,41 @@ describe("supportsInteractiveTransactions", () => {
     expect(supportsInteractiveTransactions(DatabaseDriver.NodePg)).toBe(true);
   });
 });
+
+describe("email environment", () => {
+  const { EMAIL_PROVIDER, EMAIL_FROM, SMTP_PORT, SMTP_SECURE } =
+    serverEnvSchema.shape;
+
+  it("normalizes an empty EMAIL_PROVIDER to unset and accepts only known providers", () => {
+    expect(EMAIL_PROVIDER.parse("")).toBeUndefined();
+    expect(EMAIL_PROVIDER.parse(undefined)).toBeUndefined();
+    for (const provider of ["resend", "smtp", "cloudflare"]) {
+      expect(EMAIL_PROVIDER.parse(provider)).toBe(provider);
+    }
+    expect(EMAIL_PROVIDER.safeParse("mailgun").success).toBe(false);
+  });
+
+  it("keeps EMAIL_FROM optional", () => {
+    expect(EMAIL_FROM.parse(undefined)).toBeUndefined();
+  });
+
+  it("coerces SMTP_PORT and enforces the 1..65535 range", () => {
+    expect(SMTP_PORT.parse("")).toBeUndefined();
+    expect(SMTP_PORT.parse("465")).toBe(465);
+    expect(SMTP_PORT.parse(587)).toBe(587);
+    expect(SMTP_PORT.safeParse("0").success).toBe(false);
+    expect(SMTP_PORT.safeParse("65536").success).toBe(false);
+    expect(SMTP_PORT.safeParse("465.5").success).toBe(false);
+    expect(SMTP_PORT.safeParse("smtp").success).toBe(false);
+  });
+
+  it("parses SMTP_SECURE safely without treating 'false' as true", () => {
+    expect(SMTP_SECURE.parse("")).toBeUndefined();
+    expect(SMTP_SECURE.parse(undefined)).toBeUndefined();
+    expect(SMTP_SECURE.parse("true")).toBe(true);
+    expect(SMTP_SECURE.parse("false")).toBe(false);
+    expect(SMTP_SECURE.parse(true)).toBe(true);
+    expect(SMTP_SECURE.parse(false)).toBe(false);
+    expect(SMTP_SECURE.safeParse("yes").success).toBe(false);
+  });
+});

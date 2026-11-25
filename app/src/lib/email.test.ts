@@ -4,42 +4,63 @@ import { magicLink } from "better-auth/plugins";
 import { inspect } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import * as emailModule from "./email";
+
 const FAKE_API_KEY = "re_fake_api_key_for_tests";
+const FAKE_SMTP_USER = "mailbox-user";
+const FAKE_SMTP_PASSWORD = "fake-smtp-credential";
 const FAKE_URL =
-  "http://localhost:3000/api/auth/magic-link/verify?token=fake-secret-token&callbackURL=%2Fdashboard";
+  "http://localhost:3000/api/auth/magic-link/verify?token=fake-secret-token";
+const RECIPIENT = "person@example.test";
 
 const state = vi.hoisted(() => ({
-  env: {} as Record<string, string | undefined>,
-  send: vi.fn(),
+  env: {} as Record<string, unknown>,
+  hasCloudflareBinding: false,
+  resendSend: vi.fn(),
+  smtpSend: vi.fn(),
+  cloudflareSend: vi.fn(),
 }));
 
-vi.mock("./env", () => ({ getServerEnv: () => state.env }));
+vi.mock("./env", () => ({
+  getServerEnv: () => ({ APP_NAME: "Blossom Test", ...state.env }),
+}));
 vi.mock("resend", () => ({
   Resend: class {
-    emails = { send: state.send };
+    emails = { send: state.resendSend };
   },
 }));
+vi.mock("@/lib/email-transport", () => ({
+  hasCloudflareSendEmailBinding: () => state.hasCloudflareBinding,
+  sendSmtpEmail: state.smtpSend,
+  sendCloudflareEmail: state.cloudflareSend,
+}));
 
-const ENABLED_ENV = {
-  APP_NAME: "Blossom Test",
+const RESEND_ENV = {
+  EMAIL_FROM: "Blossom <noreply@example.test>",
   RESEND_API_KEY: FAKE_API_KEY,
-  RESEND_MAIL_FROM: "noreply@example.test",
 };
+const SMTP_ENV = {
+  EMAIL_FROM: "noreply@example.test",
+  SMTP_HOST: "smtp.example.test",
+  SMTP_USER: FAKE_SMTP_USER,
+  SMTP_PASSWORD: FAKE_SMTP_PASSWORD,
+};
+const CLOUDFLARE_ENV = { EMAIL_FROM: "noreply@example.test" };
 
-/** Loads `./email` fresh: `isEmailEnabled` is decided when the module loads. */
-async function loadEmail(env: Record<string, string | undefined>) {
+/** Provider resolution is dynamic, so only the env and binding need swapping. */
+function loadEmail(
+  env: Record<string, unknown>,
+  options: { hasCloudflareBinding?: boolean } = {},
+) {
   state.env = env;
-  vi.resetModules();
-  return import("./email");
+  state.hasCloudflareBinding = options.hasCloudflareBinding ?? false;
+  return emailModule;
 }
 
-let warn: ReturnType<typeof vi.spyOn>;
-let error: ReturnType<typeof vi.spyOn>;
-let others: ReturnType<typeof vi.spyOn>[];
+let spies: ReturnType<typeof vi.spyOn>[];
 
-/** Everything written through any console method, objects fully expanded. */
 function loggedText() {
-  return [warn, error, ...others]
+  return spies
     .flatMap((spy) => spy.mock.calls)
     .map((args) =>
       args.map((a: unknown) => inspect(a, { depth: null })).join(" "),
@@ -47,19 +68,21 @@ function loggedText() {
     .join("\n");
 }
 
-function expectNothingSensitiveLogged() {
-  const text = loggedText();
+function expectNothingSensitive(text: string) {
   expect(text).not.toContain("fake-secret-token");
   expect(text).not.toContain(FAKE_URL);
   expect(text).not.toContain(FAKE_API_KEY);
-  expect(text).not.toContain("person@example.test");
+  expect(text).not.toContain(FAKE_SMTP_PASSWORD);
+  expect(text).not.toContain(FAKE_SMTP_USER);
+  expect(text).not.toContain("smtp.example.test");
+  expect(text).not.toContain(RECIPIENT);
 }
 
 beforeEach(() => {
-  state.send.mockReset();
-  warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  error = vi.spyOn(console, "error").mockImplementation(() => {});
-  others = (["log", "info", "debug"] as const).map((method) =>
+  state.resendSend.mockReset();
+  state.smtpSend.mockReset();
+  state.cloudflareSend.mockReset();
+  spies = (["log", "info", "debug", "warn", "error"] as const).map((method) =>
     vi.spyOn(console, method).mockImplementation(() => {}),
   );
 });
@@ -69,34 +92,69 @@ afterEach(() => {
 });
 
 describe("sendMagicLinkEmail", () => {
-  const data = { email: "person@example.test", url: FAKE_URL };
+  const data = { email: RECIPIENT, url: FAKE_URL };
 
-  it("sends the link through the provider when email is configured", async () => {
-    state.send.mockResolvedValue({ data: { id: "msg_1" }, error: null });
-    const { sendMagicLinkEmail } = await loadEmail(ENABLED_ENV);
+  it("sends through Resend when Resend is configured", async () => {
+    state.resendSend.mockResolvedValue({ data: { id: "msg_1" }, error: null });
+    const { sendMagicLinkEmail } = await loadEmail(RESEND_ENV);
 
     await expect(sendMagicLinkEmail(data)).resolves.toBeUndefined();
 
-    expect(state.send).toHaveBeenCalledTimes(1);
-    const payload = state.send.mock.calls[0]![0];
-    expect(payload.from).toBe("noreply@example.test");
-    expect(payload.to).toBe("person@example.test");
+    expect(state.resendSend).toHaveBeenCalledTimes(1);
+    const payload = state.resendSend.mock.calls[0]![0];
+    expect(payload.from).toBe("Blossom <noreply@example.test>");
+    expect(payload.to).toBe(RECIPIENT);
     expect(payload.subject).toContain("Blossom Test");
-    expect(payload.react.props).toEqual({
-      email: "person@example.test",
-      link: FAKE_URL,
+    expect(payload.html).toContain(FAKE_URL);
+    expect(payload.text).toContain(FAKE_URL);
+    expect(state.smtpSend).not.toHaveBeenCalled();
+  });
+
+  it("sends through SMTP when SMTP is configured", async () => {
+    state.smtpSend.mockResolvedValue(undefined);
+    const { sendMagicLinkEmail } = await loadEmail(SMTP_ENV);
+
+    await expect(sendMagicLinkEmail(data)).resolves.toBeUndefined();
+
+    expect(state.smtpSend).toHaveBeenCalledTimes(1);
+    const [config, message] = state.smtpSend.mock.calls[0]!;
+    expect(config).toMatchObject({
+      host: "smtp.example.test",
+      port: 587,
+      secure: false,
     });
-    expect(error).not.toHaveBeenCalled();
-    expect(warn).not.toHaveBeenCalled();
+    expect(config.auth).toEqual({
+      username: FAKE_SMTP_USER,
+      password: FAKE_SMTP_PASSWORD,
+    });
+    expect(message.to).toBe(RECIPIENT);
+    expect(message.html).toContain(FAKE_URL);
+    expect(state.resendSend).not.toHaveBeenCalled();
+  });
+
+  it("sends through Cloudflare Workers Mail when the binding exists", async () => {
+    state.cloudflareSend.mockResolvedValue(undefined);
+    const { sendMagicLinkEmail } = await loadEmail(CLOUDFLARE_ENV, {
+      hasCloudflareBinding: true,
+    });
+
+    await expect(sendMagicLinkEmail(data)).resolves.toBeUndefined();
+
+    expect(state.cloudflareSend).toHaveBeenCalledTimes(1);
+    const [message] = state.cloudflareSend.mock.calls[0]!;
+    expect(message.from).toBe("noreply@example.test");
+    expect(message.to).toBe(RECIPIENT);
+    expect(message.html).toContain(FAKE_URL);
   });
 
   it.each([
     ["no provider settings", {}],
-    ["only the API key", { RESEND_API_KEY: FAKE_API_KEY }],
-    ["only the sender address", { RESEND_MAIL_FROM: "noreply@example.test" }],
+    ["only the Resend API key", { RESEND_API_KEY: FAKE_API_KEY }],
+    ["only the sender address", { EMAIL_FROM: "noreply@example.test" }],
+    ["only an SMTP host", { SMTP_HOST: "smtp.example.test" }],
   ])("fails generically and logs no secrets with %s", async (_name, env) => {
     const { sendMagicLinkEmail, MAGIC_LINK_UNAVAILABLE_MESSAGE } =
-      await loadEmail({ APP_NAME: "Blossom Test", ...env });
+      await loadEmail(env);
 
     const failure = await sendMagicLinkEmail(data).catch((e: unknown) => e);
 
@@ -105,23 +163,71 @@ describe("sendMagicLinkEmail", () => {
       statusCode: 503,
       body: { message: MAGIC_LINK_UNAVAILABLE_MESSAGE },
     });
-    expect(state.send).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledTimes(1);
-    expectNothingSensitiveLogged();
+    expect(state.resendSend).not.toHaveBeenCalled();
+    expect(state.smtpSend).not.toHaveBeenCalled();
+    expect(spies[3]).toHaveBeenCalledTimes(1);
+    expectNothingSensitive(loggedText());
   });
 
-  it("fails generically when the provider returns an error result", async () => {
-    // Resend reports most failures as `{ error }` rather than throwing.
-    state.send.mockResolvedValue({
-      data: null,
-      error: {
-        name: `${FAKE_URL} person@example.test ${FAKE_API_KEY}`,
-        statusCode: 422,
-        message: `bad request for person@example.test ${FAKE_URL} ${FAKE_API_KEY}`,
-      },
+  it("does not fall back from an incomplete explicit provider", async () => {
+    const { sendMagicLinkEmail } = await loadEmail({
+      EMAIL_PROVIDER: "smtp",
+      EMAIL_FROM: "noreply@example.test",
+      RESEND_API_KEY: FAKE_API_KEY,
+      SMTP_HOST: "smtp.example.test",
+      SMTP_USER: FAKE_SMTP_USER,
     });
+
+    await expect(sendMagicLinkEmail(data)).rejects.toMatchObject({
+      statusCode: 503,
+    });
+    expect(state.resendSend).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "Resend",
+      RESEND_ENV,
+      () =>
+        state.resendSend.mockResolvedValue({
+          data: null,
+          error: {
+            name: `${FAKE_URL} ${RECIPIENT} ${FAKE_API_KEY}`,
+            statusCode: 422,
+            message: `bad request for ${RECIPIENT} ${FAKE_URL} ${FAKE_API_KEY}`,
+          },
+        }),
+    ],
+    [
+      "Resend throws",
+      RESEND_ENV,
+      () =>
+        state.resendSend.mockRejectedValue(
+          new Error(`network down ${FAKE_URL} ${RECIPIENT} ${FAKE_API_KEY}`),
+        ),
+    ],
+    [
+      "SMTP throws",
+      SMTP_ENV,
+      () =>
+        state.smtpSend.mockRejectedValue(
+          new Error(
+            `smtp refused ${RECIPIENT} ${FAKE_SMTP_USER} ${FAKE_SMTP_PASSWORD} ${FAKE_URL}`,
+          ),
+        ),
+    ],
+    [
+      "Cloudflare throws",
+      CLOUDFLARE_ENV,
+      () =>
+        state.cloudflareSend.mockRejectedValue(
+          new Error(`binding rejected ${RECIPIENT} ${FAKE_URL}`),
+        ),
+    ],
+  ])("fails generically when %s fails", async (_name, env, arrange) => {
+    arrange();
     const { sendMagicLinkEmail, MAGIC_LINK_UNAVAILABLE_MESSAGE } =
-      await loadEmail(ENABLED_ENV);
+      await loadEmail(env, { hasCloudflareBinding: true });
 
     const failure = await sendMagicLinkEmail(data).catch((e: unknown) => e);
 
@@ -129,30 +235,21 @@ describe("sendMagicLinkEmail", () => {
       status: "SERVICE_UNAVAILABLE",
       body: { message: MAGIC_LINK_UNAVAILABLE_MESSAGE },
     });
-    expect(JSON.stringify(failure)).not.toContain("person@example.test");
-    expect(error).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(failure)).not.toContain(FAKE_API_KEY);
-    expectNothingSensitiveLogged();
+    expectNothingSensitive(JSON.stringify(failure));
+    expectNothingSensitive(loggedText());
+    expect(spies[4]).toHaveBeenCalledTimes(1);
   });
+});
 
-  it("fails generically when the provider call throws", async () => {
-    const cause = new Error(
-      `network down ${FAKE_URL} ${FAKE_API_KEY} person@example.test`,
-    );
-    cause.name = `${FAKE_URL} person@example.test ${FAKE_API_KEY}`;
-    state.send.mockRejectedValue(cause);
-    const { sendMagicLinkEmail, MAGIC_LINK_UNAVAILABLE_MESSAGE } =
-      await loadEmail(ENABLED_ENV);
+describe("provider introspection", () => {
+  it("reports the configured provider dynamically", async () => {
+    const email = await loadEmail(RESEND_ENV);
+    expect(email.isEmailEnabled()).toBe(true);
+    expect(email.getConfiguredEmailProvider()).toBe("resend");
 
-    const failure = await sendMagicLinkEmail(data).catch((e: unknown) => e);
-
-    expect(failure).toMatchObject({
-      status: "SERVICE_UNAVAILABLE",
-      body: { message: MAGIC_LINK_UNAVAILABLE_MESSAGE },
-    });
-    expect(JSON.stringify(failure)).not.toContain(FAKE_API_KEY);
-    expect(error).toHaveBeenCalledTimes(1);
-    expectNothingSensitiveLogged();
+    state.env = {};
+    expect(email.isEmailEnabled()).toBe(false);
+    expect(email.getConfiguredEmailProvider()).toBeNull();
   });
 });
 
@@ -172,24 +269,22 @@ describe("magic-link sign-in with the real better-auth", () => {
       plugins: [magicLink({ sendMagicLink })],
     });
   }
-  const body = { email: "person@example.test", callbackURL: "/dashboard" };
+  const body = { email: RECIPIENT, callbackURL: "/dashboard" };
   const headers = new Headers();
 
   it("reports success only when the email was delivered", async () => {
-    state.send.mockResolvedValue({ data: { id: "msg_1" }, error: null });
-    const { sendMagicLinkEmail } = await loadEmail(ENABLED_ENV);
+    state.resendSend.mockResolvedValue({ data: { id: "msg_1" }, error: null });
+    const { sendMagicLinkEmail } = await loadEmail(RESEND_ENV);
     const auth = makeAuth(sendMagicLinkEmail);
 
     await expect(auth.api.signInMagicLink({ body, headers })).resolves.toEqual({
       status: true,
     });
-    expect(state.send).toHaveBeenCalledTimes(1);
+    expect(state.resendSend).toHaveBeenCalledTimes(1);
   });
 
   it("rejects the request instead of claiming success when email is not configured", async () => {
-    const { sendMagicLinkEmail } = await loadEmail({
-      APP_NAME: "Blossom Test",
-    });
+    const { sendMagicLinkEmail } = await loadEmail({});
     const auth = makeAuth(sendMagicLinkEmail);
 
     const apiFailure = await auth.api
@@ -197,7 +292,6 @@ describe("magic-link sign-in with the real better-auth", () => {
       .catch((e: unknown) => e);
     expect(apiFailure).toMatchObject({ statusCode: 503 });
 
-    // The public HTTP endpoint fails the same way, with nothing sensitive.
     const response = await auth.handler(
       new Request("http://localhost:3000/api/auth/sign-in/magic-link", {
         method: "POST",
@@ -212,13 +306,11 @@ describe("magic-link sign-in with the real better-auth", () => {
     const text = await response.text();
     expect(text).toContain("Email sign-in is currently unavailable");
     expect(text).not.toContain("token=");
-    expectNothingSensitiveLogged();
+    expectNothingSensitive(loggedText());
   });
 
   it("gives an unknown address the same outcome as a known one", async () => {
-    const { sendMagicLinkEmail } = await loadEmail({
-      APP_NAME: "Blossom Test",
-    });
+    const { sendMagicLinkEmail } = await loadEmail({});
     const auth = makeAuth(sendMagicLinkEmail);
 
     const outcomes = await Promise.all(

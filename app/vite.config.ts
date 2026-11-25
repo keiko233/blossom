@@ -95,6 +95,14 @@ const config = defineConfig(({ mode, command }) => {
             import.meta.url,
           ),
         ),
+        "@/lib/email-transport": fileURLToPath(
+          new URL(
+            isCloudflare
+              ? "./src/lib/email-transport.cloudflare.ts"
+              : "./src/lib/email-transport.ts",
+            import.meta.url,
+          ),
+        ),
         "@/durable-objects/agent-session": fileURLToPath(
           new URL(
             isCloudflare

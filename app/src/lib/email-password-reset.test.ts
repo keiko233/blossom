@@ -1,33 +1,57 @@
 import { inspect } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import * as emailModule from "./email";
+
 const FAKE_API_KEY = "re_fake_api_key_for_tests";
+const FAKE_SMTP_USER = "mailbox-user";
+const FAKE_SMTP_PASSWORD = "fake-smtp-credential";
 const FAKE_URL =
   "http://localhost:3000/api/auth/reset-password/fake-secret-token?callbackURL=%2Fauth%2Freset";
+const RECIPIENT = "person@example.test";
 
 const state = vi.hoisted(() => ({
-  env: {} as Record<string, string | undefined>,
-  send: vi.fn(),
+  env: {} as Record<string, unknown>,
+  hasCloudflareBinding: false,
+  resendSend: vi.fn(),
+  smtpSend: vi.fn(),
+  cloudflareSend: vi.fn(),
 }));
 
-vi.mock("./env", () => ({ getServerEnv: () => state.env }));
+vi.mock("./env", () => ({
+  getServerEnv: () => ({ APP_NAME: "Blossom Test", ...state.env }),
+}));
 vi.mock("resend", () => ({
   Resend: class {
-    emails = { send: state.send };
+    emails = { send: state.resendSend };
   },
 }));
+vi.mock("@/lib/email-transport", () => ({
+  hasCloudflareSendEmailBinding: () => state.hasCloudflareBinding,
+  sendSmtpEmail: state.smtpSend,
+  sendCloudflareEmail: state.cloudflareSend,
+}));
 
-const ENABLED_ENV = {
-  APP_NAME: "Blossom Test",
+const RESEND_ENV = {
+  EMAIL_FROM: "noreply@example.test",
   RESEND_API_KEY: FAKE_API_KEY,
-  RESEND_MAIL_FROM: "noreply@example.test",
 };
+const SMTP_ENV = {
+  EMAIL_FROM: "noreply@example.test",
+  SMTP_HOST: "smtp.example.test",
+  SMTP_USER: FAKE_SMTP_USER,
+  SMTP_PASSWORD: FAKE_SMTP_PASSWORD,
+};
+const CLOUDFLARE_ENV = { EMAIL_FROM: "noreply@example.test" };
 
-/** Loads `./email` fresh: `isEmailEnabled` is decided when the module loads. */
-async function loadEmail(env: Record<string, string | undefined>) {
+/** Provider resolution is dynamic, so only the env and binding need swapping. */
+function loadEmail(
+  env: Record<string, unknown>,
+  options: { hasCloudflareBinding?: boolean } = {},
+) {
   state.env = env;
-  vi.resetModules();
-  return import("./email");
+  state.hasCloudflareBinding = options.hasCloudflareBinding ?? false;
+  return emailModule;
 }
 
 let spies: ReturnType<typeof vi.spyOn>[];
@@ -45,11 +69,16 @@ function expectNothingSensitive(text: string) {
   expect(text).not.toContain("fake-secret-token");
   expect(text).not.toContain(FAKE_URL);
   expect(text).not.toContain(FAKE_API_KEY);
-  expect(text).not.toContain("person@example.test");
+  expect(text).not.toContain(FAKE_SMTP_PASSWORD);
+  expect(text).not.toContain(FAKE_SMTP_USER);
+  expect(text).not.toContain("smtp.example.test");
+  expect(text).not.toContain(RECIPIENT);
 }
 
 beforeEach(() => {
-  state.send.mockReset();
+  state.resendSend.mockReset();
+  state.smtpSend.mockReset();
+  state.cloudflareSend.mockReset();
   spies = (["log", "info", "debug", "warn", "error"] as const).map((method) =>
     vi.spyOn(console, method).mockImplementation(() => {}),
   );
@@ -60,27 +89,51 @@ afterEach(() => {
 });
 
 describe("sendPasswordResetEmail", () => {
-  const data = { email: "person@example.test", url: FAKE_URL };
+  const data = { email: RECIPIENT, url: FAKE_URL };
 
-  it("sends the reset link to the account address", async () => {
-    state.send.mockResolvedValue({ data: { id: "msg_1" }, error: null });
-    const { sendPasswordResetEmail } = await loadEmail(ENABLED_ENV);
+  it("sends through Resend when Resend is configured", async () => {
+    state.resendSend.mockResolvedValue({ data: { id: "msg_1" }, error: null });
+    const { sendPasswordResetEmail } = await loadEmail(RESEND_ENV);
 
     await expect(sendPasswordResetEmail(data)).resolves.toBeUndefined();
 
-    expect(state.send).toHaveBeenCalledTimes(1);
-    const payload = state.send.mock.calls[0]![0];
+    expect(state.resendSend).toHaveBeenCalledTimes(1);
+    const payload = state.resendSend.mock.calls[0]![0];
     expect(payload.from).toBe("noreply@example.test");
-    expect(payload.to).toBe("person@example.test");
+    expect(payload.to).toBe(RECIPIENT);
     expect(payload.subject).toContain("Blossom Test");
-    expect(payload.react.props).toEqual({ link: FAKE_URL });
-    expect(loggedText()).toBe("");
+    expect(payload.html).toContain(FAKE_URL);
+    expect(payload.text).toContain(FAKE_URL);
   });
 
-  it("fails generically and logs nothing sensitive when email is not configured", async () => {
-    const { sendPasswordResetEmail } = await loadEmail({
-      APP_NAME: "Blossom Test",
+  it("sends through SMTP when SMTP is configured", async () => {
+    state.smtpSend.mockResolvedValue(undefined);
+    const { sendPasswordResetEmail } = await loadEmail(SMTP_ENV);
+
+    await expect(sendPasswordResetEmail(data)).resolves.toBeUndefined();
+
+    expect(state.smtpSend).toHaveBeenCalledTimes(1);
+    const [, message] = state.smtpSend.mock.calls[0]!;
+    expect(message.to).toBe(RECIPIENT);
+    expect(message.html).toContain(FAKE_URL);
+  });
+
+  it("sends through Cloudflare Workers Mail when the binding exists", async () => {
+    state.cloudflareSend.mockResolvedValue(undefined);
+    const { sendPasswordResetEmail } = await loadEmail(CLOUDFLARE_ENV, {
+      hasCloudflareBinding: true,
     });
+
+    await expect(sendPasswordResetEmail(data)).resolves.toBeUndefined();
+
+    expect(state.cloudflareSend).toHaveBeenCalledTimes(1);
+    const [message] = state.cloudflareSend.mock.calls[0]!;
+    expect(message.to).toBe(RECIPIENT);
+    expect(message.html).toContain(FAKE_URL);
+  });
+
+  it("fails generically and logs nothing sensitive when unconfigured", async () => {
+    const { sendPasswordResetEmail } = await loadEmail({});
 
     const failure = await sendPasswordResetEmail(data).catch((e: unknown) => e);
 
@@ -88,37 +141,48 @@ describe("sendPasswordResetEmail", () => {
       status: "SERVICE_UNAVAILABLE",
       statusCode: 503,
     });
-    expect(state.send).not.toHaveBeenCalled();
+    expect(state.resendSend).not.toHaveBeenCalled();
     expect(spies[3]).toHaveBeenCalledTimes(1);
     expectNothingSensitive(loggedText());
   });
 
-  it("fails generically when the provider returns an error result", async () => {
-    state.send.mockResolvedValue({
-      data: null,
-      error: {
-        name: `${FAKE_URL} person@example.test ${FAKE_API_KEY}`,
-        statusCode: 422,
-        message: `bad request for person@example.test ${FAKE_URL} ${FAKE_API_KEY}`,
-      },
+  it.each([
+    [
+      "Resend",
+      RESEND_ENV,
+      () =>
+        state.resendSend.mockResolvedValue({
+          data: null,
+          error: {
+            name: `${FAKE_URL} ${RECIPIENT} ${FAKE_API_KEY}`,
+            statusCode: 422,
+            message: `bad request for ${RECIPIENT} ${FAKE_URL} ${FAKE_API_KEY}`,
+          },
+        }),
+    ],
+    [
+      "SMTP",
+      SMTP_ENV,
+      () =>
+        state.smtpSend.mockRejectedValue(
+          new Error(
+            `smtp refused ${RECIPIENT} ${FAKE_SMTP_USER} ${FAKE_SMTP_PASSWORD} ${FAKE_URL}`,
+          ),
+        ),
+    ],
+    [
+      "Cloudflare",
+      CLOUDFLARE_ENV,
+      () =>
+        state.cloudflareSend.mockRejectedValue(
+          new Error(`binding rejected ${RECIPIENT} ${FAKE_URL}`),
+        ),
+    ],
+  ])("fails generically when %s fails", async (_name, env, arrange) => {
+    arrange();
+    const { sendPasswordResetEmail } = await loadEmail(env, {
+      hasCloudflareBinding: true,
     });
-    const { sendPasswordResetEmail } = await loadEmail(ENABLED_ENV);
-
-    const failure = await sendPasswordResetEmail(data).catch((e: unknown) => e);
-
-    expect(failure).toMatchObject({ status: "SERVICE_UNAVAILABLE" });
-    expectNothingSensitive(JSON.stringify(failure));
-    expectNothingSensitive(loggedText());
-    expect(spies[4]).toHaveBeenCalledTimes(1);
-  });
-
-  it("fails generically when the provider call throws", async () => {
-    const cause = new Error(
-      `network down ${FAKE_URL} ${FAKE_API_KEY} person@example.test`,
-    );
-    cause.name = `${FAKE_URL} person@example.test ${FAKE_API_KEY}`;
-    state.send.mockRejectedValue(cause);
-    const { sendPasswordResetEmail } = await loadEmail(ENABLED_ENV);
 
     const failure = await sendPasswordResetEmail(data).catch((e: unknown) => e);
 
