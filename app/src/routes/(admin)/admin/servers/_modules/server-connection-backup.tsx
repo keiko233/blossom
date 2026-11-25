@@ -1,6 +1,10 @@
 import { KeyRoundIcon, ShieldOffIcon } from "lucide-react";
 import type React from "react";
 
+import {
+  SectionHeader,
+  SectionTitle,
+} from "@/components/app-shell/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,18 +43,19 @@ export function ServerConnectionBackup({
   return (
     <section
       data-slot="server-connection-backup"
-      className="flex flex-col gap-4 rounded-xl border bg-muted/24 p-4 shadow-xs"
+      className="flex min-w-0 flex-col gap-3 border-t pt-6"
+      aria-labelledby="connection-backup-title"
     >
-      <div className="flex flex-wrap items-center gap-2">
-        <h2 className="font-medium">
+      <SectionHeader>
+        <SectionTitle id="connection-backup-title">
           {m.admin_proxies_servers_connection_backup_title()}
-        </h2>
+        </SectionTitle>
         <Badge variant={backupTokenEnabled ? "warning" : "success"}>
           {backupTokenEnabled
             ? m.admin_proxies_servers_connection_backup_badge_enabled()
             : m.admin_proxies_servers_connection_backup_badge_oauth_only()}
         </Badge>
-      </div>
+      </SectionHeader>
       <p className="text-xs text-muted-foreground">
         {backupTokenEnabled
           ? m.admin_proxies_servers_connection_backup_description_enabled()

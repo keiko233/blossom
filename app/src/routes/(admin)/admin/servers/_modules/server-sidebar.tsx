@@ -3,19 +3,30 @@ import { PlusIcon } from "lucide-react";
 import type React from "react";
 import { useRef, useState } from "react";
 
+import { SidebarListSkeleton } from "@/components/app-shell/skeletons";
 import { WorkspaceSidebar } from "@/components/app-shell/workspace";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Spinner } from "@/components/ui/spinner";
+import { StatusDot } from "@/components/ui/status-dot";
 import {
   filterServersByQuery,
   nextServerListIndex,
+  serverWorkspaceStatus,
 } from "@/lib/server-workspace";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import type { ServerListItem } from "@/query/servers";
 
-import { ServerStatusBadge } from "./server-status";
+import { serverStatusContent } from "./server-status";
+
+function ServerRowStatus({
+  server,
+}: {
+  server: ServerListItem;
+}): React.ReactElement {
+  const content = serverStatusContent(serverWorkspaceStatus(server));
+  return <StatusDot label={content.label()} tone={content.tone} />;
+}
 
 export interface ServerSidebarProps {
   id: string;
@@ -106,9 +117,7 @@ export function ServerSidebar({
       />
 
       {isPending ? (
-        <div className="flex justify-center py-8">
-          <Spinner />
-        </div>
+        <SidebarListSkeleton rows={6} />
       ) : isError ? (
         <p className="text-sm text-destructive">
           {m.admin_proxies_servers_sidebar_list_error()}
@@ -145,7 +154,7 @@ export function ServerSidebar({
                     <span className="min-w-0 truncate text-sm font-medium">
                       {server.name}
                     </span>
-                    <ServerStatusBadge server={server} />
+                    <ServerRowStatus server={server} />
                   </span>
                   <span className="truncate font-mono text-xs text-muted-foreground">
                     {server.address}

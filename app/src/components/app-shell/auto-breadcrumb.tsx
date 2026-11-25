@@ -23,7 +23,7 @@ export function AutoBreadcrumb(props: ComponentProps<typeof BreadcrumbList>) {
     .filter((match) => match.staticData.crumb)
     .map((match) => ({
       pathname: match.pathname,
-      title: match.staticData.crumb?.(),
+      title: match.staticData.crumb?.({ loaderData: match.loaderData }),
     }));
 
   return (

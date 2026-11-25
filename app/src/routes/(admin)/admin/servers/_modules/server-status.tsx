@@ -1,10 +1,12 @@
 import type React from "react";
 
 import { Badge } from "@/components/ui/badge";
+import { StatusDot } from "@/components/ui/status-dot";
 import {
   serverWorkspaceStatus,
   type ServerWorkspaceStatus,
 } from "@/lib/server-workspace";
+import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import type { ServerDTO } from "@/query/servers";
 
@@ -19,16 +21,26 @@ const statusLabel: Record<ServerWorkspaceStatus, () => string> = {
   awaiting_installation: m.admin_proxies_servers_status_awaiting_installation,
 };
 
-const statusDotClass: Record<ServerWorkspaceStatus, string> = {
-  online: "bg-emerald-500",
-  degraded: "bg-amber-500",
-  unknown: "bg-amber-500",
-  agent_offline: "bg-red-500",
-  runtime_error: "bg-red-500",
-  config_error: "bg-red-500",
-  disabled: "bg-muted-foreground/64",
-  awaiting_installation: "bg-muted-foreground/64",
+export const statusDotTone: Record<
+  ServerWorkspaceStatus,
+  "success" | "warning" | "danger" | "muted"
+> = {
+  online: "success",
+  degraded: "warning",
+  unknown: "warning",
+  agent_offline: "danger",
+  runtime_error: "danger",
+  config_error: "danger",
+  disabled: "muted",
+  awaiting_installation: "muted",
 };
+
+export function serverStatusContent(status: ServerWorkspaceStatus): {
+  label: () => string;
+  tone: "success" | "warning" | "danger" | "muted";
+} {
+  return { label: statusLabel[status], tone: statusDotTone[status] };
+}
 
 export function updateStateLabel(state: string): string | null {
   switch (state) {
@@ -62,11 +74,35 @@ export function ServerStatusBadge({
   const status = serverWorkspaceStatus(server);
   return (
     <Badge variant="outline" title={server.lastErrorMessage ?? undefined}>
-      <span
-        aria-hidden="true"
-        className={`size-1.5 rounded-full ${statusDotClass[status]}`}
-      />
+      <StatusDot className="size-1.5" tone={statusDotTone[status]} />
       {statusLabel[status]()}
     </Badge>
+  );
+}
+
+/**
+ * Compact workspace header status: the dot stays visible at every width and
+ * the label appears from `lg`. The full agent error stays a native tooltip.
+ */
+export function ServerStatusPill({
+  server,
+  className,
+}: {
+  server: ServerDTO;
+  className?: string;
+}): React.ReactElement {
+  const status = serverWorkspaceStatus(server);
+  const label = statusLabel[status]();
+  return (
+    <span
+      className={cn(
+        "flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground",
+        className,
+      )}
+      title={server.lastErrorMessage ?? label}
+    >
+      <StatusDot label={label} tone={statusDotTone[status]} />
+      <span className="max-lg:sr-only">{label}</span>
+    </span>
   );
 }

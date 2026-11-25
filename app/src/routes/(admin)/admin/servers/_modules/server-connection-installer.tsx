@@ -2,6 +2,10 @@ import { CheckIcon, CopyIcon, SparklesIcon, XIcon } from "lucide-react";
 import type React from "react";
 import { useState } from "react";
 
+import {
+  SectionHeader,
+  SectionTitle,
+} from "@/components/app-shell/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -12,7 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Spinner } from "@/components/ui/spinner";
+import { Skeleton } from "@/components/ui/skeleton";
 import { toastManager } from "@/components/ui/toast";
 import type {
   EnrollmentCreateBlock,
@@ -180,21 +184,25 @@ export function ServerConnectionInstaller({
   return (
     <section
       data-slot="server-connection-installer"
-      className="flex flex-col gap-4 rounded-xl border bg-card p-4 shadow-xs"
+      className="flex flex-col gap-4"
+      aria-labelledby="connection-installer-title"
     >
-      <div>
-        <h2 className="font-medium">
+      <SectionHeader>
+        <SectionTitle id="connection-installer-title">
           {m.admin_proxies_servers_connection_installer_title()}
-        </h2>
-        <p className="text-xs text-muted-foreground">
-          {m.admin_proxies_servers_connection_installer_description()}
-        </p>
-      </div>
+        </SectionTitle>
+      </SectionHeader>
+      <p className="text-xs text-muted-foreground">
+        {m.admin_proxies_servers_connection_installer_description()}
+      </p>
 
       {versionsPending ? (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Spinner />
-          {m.admin_proxies_servers_connection_installer_version_loading()}
+        <div className="flex flex-col gap-2" role="status" aria-busy="true">
+          <span className="sr-only">
+            {m.admin_proxies_servers_connection_installer_version_loading()}
+          </span>
+          <Skeleton className="h-3 w-20" />
+          <Skeleton className="h-9 w-full" />
         </div>
       ) : versionsError ? (
         <Alert variant="error">

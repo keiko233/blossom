@@ -1,6 +1,8 @@
 import { useRouter } from "@tanstack/react-router";
 import type React from "react";
 
+import { PageContent, PageToolbar } from "@/components/app-shell/page-header";
+import { WorkspaceViewport } from "@/components/app-shell/workspace";
 import { Button } from "@/components/ui/button";
 import { m } from "@/paraglide/messages";
 import type { ServerDTO } from "@/query/servers";
@@ -12,11 +14,7 @@ export interface ServerSettingsPanelProps {
   server: ServerDTO;
 }
 
-/**
- * Settings tab: the existing server form for this server. Saving keeps the
- * operator on the tab and refreshes the route loader so the workspace header
- * shows the saved name and state.
- */
+/** Settings: the server form in the R4 narrow column, flat on the page. */
 export function ServerSettingsPanel({
   server,
 }: ServerSettingsPanelProps): React.ReactElement {
@@ -28,22 +26,19 @@ export function ServerSettingsPanel({
   });
 
   return (
-    <section
-      data-slot="server-settings"
-      className="flex flex-col gap-4 rounded-xl border bg-card p-4 shadow-xs"
+    <WorkspaceViewport
+      scrollId={`server-${server.id}-settings`}
+      className="[--page-header-h:0px]"
     >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="font-medium">
-            {m.admin_proxies_servers_settings_title()}
-          </h2>
-          <p className="text-xs text-muted-foreground">
-            {m.admin_proxies_servers_form_description()}
-          </p>
-        </div>
+      <PageToolbar>
+        <span className="text-xs text-muted-foreground">
+          {m.admin_proxies_servers_settings_title()}
+        </span>
         <form.Subscribe selector={(s) => s.isSubmitting}>
           {(isSubmitting) => (
             <Button
+              className="ms-auto"
+              size="sm"
               type="submit"
               form="server-settings-form"
               loading={isSubmitting}
@@ -52,18 +47,23 @@ export function ServerSettingsPanel({
             </Button>
           )}
         </form.Subscribe>
-      </div>
+      </PageToolbar>
 
-      <form
-        id="server-settings-form"
-        onSubmit={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          void form.handleSubmit();
-        }}
-      >
-        <ServerFormFields form={form} />
-      </form>
-    </section>
+      <PageContent width="form">
+        <p className="text-xs text-muted-foreground">
+          {m.admin_proxies_servers_form_description()}
+        </p>
+        <form
+          id="server-settings-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            void form.handleSubmit();
+          }}
+        >
+          <ServerFormFields form={form} />
+        </form>
+      </PageContent>
+    </WorkspaceViewport>
   );
 }

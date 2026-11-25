@@ -1,18 +1,23 @@
 import { createFileRoute, Outlet } from "@tanstack/react-router";
 import type React from "react";
+import { Fragment } from "react";
 
-import {
-  WorkspaceHeader,
-  WorkspaceViewport,
-} from "@/components/app-shell/workspace";
 import { getServer } from "@/query/servers";
 
-import { ServerWorkspaceHeader } from "../_modules/server-workspace-header";
-import { ServerWorkspaceTabs } from "../_modules/server-workspace-tabs";
+import { ServerTabBar } from "../_modules/server-tab-bar";
 import { useServerList } from "../_modules/use-server-list";
 
 export const Route = createFileRoute("/(admin)/admin/servers/$serverId")({
   loader: ({ params }) => getServer({ data: { id: params.serverId } }),
+  staticData: {
+    crumb: ({ loaderData }) =>
+      typeof loaderData === "object" &&
+      loaderData !== null &&
+      "name" in loaderData &&
+      typeof loaderData.name === "string"
+        ? loaderData.name
+        : null,
+  },
   component: RouteComponent,
 });
 
@@ -23,19 +28,12 @@ function RouteComponent(): React.ReactElement {
 
   return (
     <>
-      <WorkspaceHeader className="px-4 pt-4 md:px-6 md:pt-6">
-        <ServerWorkspaceHeader server={server} item={item} />
-        <ServerWorkspaceTabs serverId={server.id} />
-      </WorkspaceHeader>
-      {/* Keyed by server so switching servers remounts the active tab and no
-          state from the previous server carries over. */}
-      <WorkspaceViewport
-        key={server.id}
-        scrollId={`server-${server.id}`}
-        className="gap-4 p-4 md:p-6"
-      >
+      <ServerTabBar server={server} item={item} />
+      {/* Keyed so switching servers remounts the active tab and drops its
+          state. Each tab owns its viewport and scroll restoration id. */}
+      <Fragment key={server.id}>
         <Outlet />
-      </WorkspaceViewport>
+      </Fragment>
     </>
   );
 }

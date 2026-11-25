@@ -37,7 +37,7 @@ export function ServerActionsMenu({
         render={
           <Button
             loading={isBusy}
-            size="icon"
+            size="icon-sm"
             variant="outline"
             aria-label={m.admin_proxies_servers_workspace_actions_label()}
           />

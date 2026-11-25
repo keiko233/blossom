@@ -1,5 +1,9 @@
 import type React from "react";
 
+import {
+  SectionHeader,
+  SectionTitle,
+} from "@/components/app-shell/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import type { InstallationPhase } from "@/lib/agent-connection";
@@ -82,18 +86,16 @@ export function ServerConnectionSummary({
   return (
     <section
       data-slot="server-connection-summary"
-      className="flex flex-col gap-4 rounded-xl border bg-card p-4 shadow-xs"
+      className="flex min-w-0 flex-col gap-3"
+      aria-labelledby="connection-summary-title"
     >
-      <div>
-        <h2 className="font-medium">
+      <SectionHeader>
+        <SectionTitle id="connection-summary-title">
           {m.admin_proxies_servers_connection_agent_title()}
-        </h2>
-        <p className="text-xs text-muted-foreground">
-          {m.admin_proxies_servers_connection_agent_description()}
-        </p>
-      </div>
+        </SectionTitle>
+      </SectionHeader>
 
-      <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <dl className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
         <Fact label={m.admin_proxies_servers_connection_installation_label()}>
           <Badge variant={phaseTone[phase]}>{phaseLabel[phase]()}</Badge>
         </Fact>
@@ -110,7 +112,7 @@ export function ServerConnectionSummary({
           </span>
         </Fact>
         <Fact label={m.admin_proxies_servers_connection_last_seen_label()}>
-          <span className="text-sm">
+          <span className="text-sm tabular-nums">
             {server.lastSeenAt
               ? formatDateTime(server.lastSeenAt)
               : m.admin_proxies_servers_connection_never()}
@@ -132,7 +134,7 @@ export function ServerConnectionSummary({
         </Fact>
         <Fact
           label={m.admin_proxies_servers_connection_revision_label()}
-          className="sm:col-span-2 lg:col-span-1"
+          className="sm:col-span-2"
         >
           <span className="text-sm tabular-nums">
             {m.admin_proxies_servers_connection_revision_sequence({
@@ -144,7 +146,7 @@ export function ServerConnectionSummary({
       </dl>
 
       <div className="flex flex-col gap-2 border-t pt-3">
-        <span className="text-sm font-medium">
+        <span className="text-sm font-semibold">
           {m.admin_proxies_servers_connection_capabilities_label()}
         </span>
         {server.agentCapabilities.length === 0 ? (

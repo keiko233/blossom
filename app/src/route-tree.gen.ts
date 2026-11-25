@@ -86,6 +86,7 @@ import { Route as adminAdminOperationsSettingsIndexRouteImport } from './routes/
 import { Route as adminAdminOperationsTrafficIndexRouteImport } from './routes/(admin)/admin/operations/traffic/index'
 import { Route as adminAdminServersServerIdIndexRouteImport } from './routes/(admin)/admin/servers/$serverId/index'
 import { Route as adminAdminServersServerIdConnectionRouteImport } from './routes/(admin)/admin/servers/$serverId/connection'
+import { Route as adminAdminServersServerIdLiveRouteImport } from './routes/(admin)/admin/servers/$serverId/live'
 import { Route as adminAdminServersServerIdLogsRouteImport } from './routes/(admin)/admin/servers/$serverId/logs'
 import { Route as adminAdminServersServerIdOutboundsRouteImport } from './routes/(admin)/admin/servers/$serverId/outbounds'
 import { Route as adminAdminServersServerIdOverviewRouteImport } from './routes/(admin)/admin/servers/$serverId/overview'
@@ -541,6 +542,12 @@ const adminAdminServersServerIdConnectionRoute =
     path: '/connection',
     getParentRoute: () => adminAdminServersServerIdRouteRoute,
   } as any)
+const adminAdminServersServerIdLiveRoute =
+  adminAdminServersServerIdLiveRouteImport.update({
+    id: '/live',
+    path: '/live',
+    getParentRoute: () => adminAdminServersServerIdRouteRoute,
+  } as any)
 const adminAdminServersServerIdLogsRoute =
   adminAdminServersServerIdLogsRouteImport.update({
     id: '/logs',
@@ -693,6 +700,7 @@ export interface FileRoutesByFullPath {
   '/admin/access/redeem/$batchId': typeof adminAdminAccessRedeemBatchIdRoute
   '/admin/access/users/$userId': typeof adminAdminAccessUsersUserIdRoute
   '/admin/servers/$serverId/connection': typeof adminAdminServersServerIdConnectionRoute
+  '/admin/servers/$serverId/live': typeof adminAdminServersServerIdLiveRoute
   '/admin/servers/$serverId/logs': typeof adminAdminServersServerIdLogsRoute
   '/admin/servers/$serverId/outbounds': typeof adminAdminServersServerIdOutboundsRoute
   '/admin/servers/$serverId/overview': typeof adminAdminServersServerIdOverviewRoute
@@ -770,6 +778,7 @@ export interface FileRoutesByTo {
   '/admin/access/redeem/$batchId': typeof adminAdminAccessRedeemBatchIdRoute
   '/admin/access/users/$userId': typeof adminAdminAccessUsersUserIdRoute
   '/admin/servers/$serverId/connection': typeof adminAdminServersServerIdConnectionRoute
+  '/admin/servers/$serverId/live': typeof adminAdminServersServerIdLiveRoute
   '/admin/servers/$serverId/logs': typeof adminAdminServersServerIdLogsRoute
   '/admin/servers/$serverId/outbounds': typeof adminAdminServersServerIdOutboundsRoute
   '/admin/servers/$serverId/overview': typeof adminAdminServersServerIdOverviewRoute
@@ -867,6 +876,7 @@ export interface FileRoutesById {
   '/(admin)/admin/access/redeem/$batchId': typeof adminAdminAccessRedeemBatchIdRoute
   '/(admin)/admin/access/users/$userId': typeof adminAdminAccessUsersUserIdRoute
   '/(admin)/admin/servers/$serverId/connection': typeof adminAdminServersServerIdConnectionRoute
+  '/(admin)/admin/servers/$serverId/live': typeof adminAdminServersServerIdLiveRoute
   '/(admin)/admin/servers/$serverId/logs': typeof adminAdminServersServerIdLogsRoute
   '/(admin)/admin/servers/$serverId/outbounds': typeof adminAdminServersServerIdOutboundsRoute
   '/(admin)/admin/servers/$serverId/overview': typeof adminAdminServersServerIdOverviewRoute
@@ -962,6 +972,7 @@ export interface FileRouteTypes {
     | '/admin/access/redeem/$batchId'
     | '/admin/access/users/$userId'
     | '/admin/servers/$serverId/connection'
+    | '/admin/servers/$serverId/live'
     | '/admin/servers/$serverId/logs'
     | '/admin/servers/$serverId/outbounds'
     | '/admin/servers/$serverId/overview'
@@ -1039,6 +1050,7 @@ export interface FileRouteTypes {
     | '/admin/access/redeem/$batchId'
     | '/admin/access/users/$userId'
     | '/admin/servers/$serverId/connection'
+    | '/admin/servers/$serverId/live'
     | '/admin/servers/$serverId/logs'
     | '/admin/servers/$serverId/outbounds'
     | '/admin/servers/$serverId/overview'
@@ -1135,6 +1147,7 @@ export interface FileRouteTypes {
     | '/(admin)/admin/access/redeem/$batchId'
     | '/(admin)/admin/access/users/$userId'
     | '/(admin)/admin/servers/$serverId/connection'
+    | '/(admin)/admin/servers/$serverId/live'
     | '/(admin)/admin/servers/$serverId/logs'
     | '/(admin)/admin/servers/$serverId/outbounds'
     | '/(admin)/admin/servers/$serverId/overview'
@@ -1752,6 +1765,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof adminAdminServersServerIdConnectionRouteImport
       parentRoute: typeof adminAdminServersServerIdRouteRoute
     }
+    '/(admin)/admin/servers/$serverId/live': {
+      id: '/(admin)/admin/servers/$serverId/live'
+      path: '/live'
+      fullPath: '/admin/servers/$serverId/live'
+      preLoaderRoute: typeof adminAdminServersServerIdLiveRouteImport
+      parentRoute: typeof adminAdminServersServerIdRouteRoute
+    }
     '/(admin)/admin/servers/$serverId/logs': {
       id: '/(admin)/admin/servers/$serverId/logs'
       path: '/logs'
@@ -2085,6 +2105,7 @@ const adminAdminOperationsRouteRouteWithChildren =
 
 interface adminAdminServersServerIdRouteRouteChildren {
   adminAdminServersServerIdConnectionRoute: typeof adminAdminServersServerIdConnectionRoute
+  adminAdminServersServerIdLiveRoute: typeof adminAdminServersServerIdLiveRoute
   adminAdminServersServerIdLogsRoute: typeof adminAdminServersServerIdLogsRoute
   adminAdminServersServerIdOutboundsRoute: typeof adminAdminServersServerIdOutboundsRoute
   adminAdminServersServerIdOverviewRoute: typeof adminAdminServersServerIdOverviewRoute
@@ -2100,6 +2121,7 @@ const adminAdminServersServerIdRouteRouteChildren: adminAdminServersServerIdRout
   {
     adminAdminServersServerIdConnectionRoute:
       adminAdminServersServerIdConnectionRoute,
+    adminAdminServersServerIdLiveRoute: adminAdminServersServerIdLiveRoute,
     adminAdminServersServerIdLogsRoute: adminAdminServersServerIdLogsRoute,
     adminAdminServersServerIdOutboundsRoute:
       adminAdminServersServerIdOutboundsRoute,
