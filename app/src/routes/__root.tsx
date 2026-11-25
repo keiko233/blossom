@@ -9,6 +9,7 @@ import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 import type { PropsWithChildren } from "react";
 import { ThemeProvider } from "tanstack-theme-kit";
 
+import { TopProgressBar } from "@/components/top-progress-bar";
 import { AnchoredToastProvider, ToastProvider } from "@/components/ui/toast";
 import { clientEnv } from "@/lib/env-client";
 import { getLocale } from "@/paraglide/runtime";
@@ -69,6 +70,7 @@ function RootDocument({ children }: PropsWithChildren) {
       </head>
 
       <body>
+        <TopProgressBar />
         <LanguageProvider>
           <ThemeProvider
             attribute="class"
