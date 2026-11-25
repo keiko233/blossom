@@ -232,6 +232,7 @@ export async function buildAgentDesiredState(
       ruleSetArtifacts: managedState.ruleSetArtifacts,
       tlsMaterial: managedState.tlsMaterial,
       peerCredentials: managedState.peerCredentials,
+      customOutboundSecrets: managedState.customOutboundSecrets,
     });
   } catch (error) {
     if (error instanceof ManagedCompileError) {

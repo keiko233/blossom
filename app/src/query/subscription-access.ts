@@ -28,7 +28,7 @@ import {
   type SubscriptionAuthzPrevRow,
 } from "@/lib/publish-gate";
 import { listPendingConfigChanges } from "@/query/config-change";
-import { listSubscriptionPortForwards } from "@/query/port-forwards";
+import { listSubscriptionPortForwards } from "@/query/port-forward-store";
 
 /**
  * Minimal, never-secret-bearing summary of the server a node lives on. Only

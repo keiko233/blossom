@@ -15,6 +15,7 @@ import { eq, inArray } from "drizzle-orm";
 import { type Database, db } from "@/db";
 import {
   managedConfigVersion,
+  managedOutbound,
   managedRuleSetAsset,
   managedServerState,
   peerLinkCredential,
@@ -23,7 +24,10 @@ import { certificateMaterial } from "@/db/proxy-schema";
 import { server } from "@/db/proxy-schema";
 import { decryptCertificateSecret } from "@/lib/certificate-crypto";
 import { ManagedCompileError } from "@/lib/managed-compile-error";
-import { decryptManagedPeerCredential } from "@/lib/managed-credential-crypto";
+import {
+  decryptManagedCustomProxySecret,
+  decryptManagedPeerCredential,
+} from "@/lib/managed-credential-crypto";
 import {
   managedPeerCredentialKey,
   type ManagedPeerTlsMaterial,
@@ -59,6 +63,7 @@ export interface ManagedCompileState {
   managedFingerprint: string;
   ruleSetArtifacts: ManagedRuleSetArtifact[];
   peerCredentials: Map<string, string>;
+  customOutboundSecrets: Map<string, Record<string, unknown>>;
   tlsMaterial: ManagedPeerTlsMaterial;
   /** Deterministic identifier usable when a compile must be refused. */
   fallbackRevision: string;
@@ -224,13 +229,16 @@ export async function loadManagedCompileState(
 
   let ruleSetArtifacts: ManagedRuleSetArtifact[];
   let peerCredentials: Map<string, string>;
+  let customOutboundSecrets: Map<string, Record<string, unknown>>;
   let tlsMaterial: ManagedPeerTlsMaterial;
   try {
-    [ruleSetArtifacts, peerCredentials, tlsMaterial] = await Promise.all([
-      loadRuleSetArtifacts(intent, database),
-      loadPeerCredentials(intent, database),
-      loadPeerTlsMaterial(intent, database),
-    ]);
+    [ruleSetArtifacts, peerCredentials, customOutboundSecrets, tlsMaterial] =
+      await Promise.all([
+        loadRuleSetArtifacts(intent, database),
+        loadPeerCredentials(intent, database),
+        loadCustomOutboundSecrets(intent, database),
+        loadPeerTlsMaterial(intent, database),
+      ]);
   } catch (error) {
     if (error instanceof ManagedCompileError) {
       throw new ManagedCompileError(
@@ -256,6 +264,7 @@ export async function loadManagedCompileState(
     managedFingerprint,
     ruleSetArtifacts,
     peerCredentials,
+    customOutboundSecrets,
     tlsMaterial,
     fallbackRevision: expectedFallback,
   };
@@ -351,6 +360,41 @@ async function loadPeerCredentials(
     }
   }
   return credentials;
+}
+
+async function loadCustomOutboundSecrets(
+  intent: ManagedStageIntent,
+  database: Database,
+): Promise<Map<string, Record<string, unknown>>> {
+  const customOutboundIds = intent.outbounds
+    .filter((outbound) => outbound.kind === "custom_proxy")
+    .map((outbound) => outbound.outboundId);
+  if (customOutboundIds.length === 0) {
+    return new Map();
+  }
+  const rows = await database
+    .select({
+      id: managedOutbound.id,
+      secretCiphertext: managedOutbound.secretCiphertext,
+    })
+    .from(managedOutbound)
+    .where(inArray(managedOutbound.id, customOutboundIds));
+  const secrets = new Map<string, Record<string, unknown>>();
+  for (const row of rows) {
+    if (!row.secretCiphertext) continue;
+    try {
+      secrets.set(
+        row.id,
+        decryptManagedCustomProxySecret(row.secretCiphertext, row.id),
+      );
+    } catch {
+      throw new ManagedCompileError(
+        "managed_state_inconsistent",
+        `custom proxy outbound ${row.id} secrets cannot be decrypted`,
+      );
+    }
+  }
+  return secrets;
 }
 
 interface CertificateRow {

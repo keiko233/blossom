@@ -10,6 +10,7 @@ import {
 import {
   MANAGED_TOPOLOGY_ID,
   managedRuntimeTag,
+  peerProtocolCapability,
   type ManagedOutboundKind,
   type PeerProtocol,
 } from "@blossom/domain/managed-networking";
@@ -55,6 +56,7 @@ import {
   readManagedRolloutSnapshot,
   type ManagedRolloutDetail,
 } from "@/query/managed-rollout-write";
+import { loadServerPortForwards } from "@/query/port-forward-store";
 
 /**
  * Read model for the Networking workspace (Task 09). It only reads managed
@@ -155,6 +157,9 @@ export interface NetworkingOutboundView {
   name: string;
   runtimeTag: string;
   linkId: string | null;
+  protocol?: string | null;
+  settings?: Record<string, JsonValue>;
+  memberOutboundTags?: string[];
   revision: number;
   ipFamily: string | null;
   bindInterface: string | null;
@@ -648,6 +653,9 @@ async function loadOutbounds(
       name: row.name,
       runtimeTag: row.runtimeTag,
       linkId: row.linkId,
+      protocol: row.protocol,
+      settings: row.settings,
+      memberOutboundTags: row.memberOutboundTags,
       revision: row.revision,
       ipFamily:
         options.inet6 === false
@@ -1410,6 +1418,10 @@ function peerInboundIntentFor(
       listenPort: inbound.listenPort,
       advertisedAddress: inbound.advertisedAddress,
       advertisedPort: inbound.advertisedPort,
+      ...(inbound.network !== "both" ? { network: inbound.network } : {}),
+      ...(Object.keys(inbound.settings).length > 0
+        ? { settings: inbound.settings }
+        : {}),
       tlsServerName: inbound.tlsServerName,
       certificateId: inbound.certificateId,
       certificateGeneration:
@@ -1449,6 +1461,53 @@ function outboundIntentFor(
         destinationServerId: null,
         destinationInboundId: null,
         protocol: null,
+        serverAddress: null,
+        serverPort: null,
+        tlsServerName: null,
+        credentialGeneration: null,
+        trustMode: null,
+        trustedCertificates: [],
+      },
+      issues,
+    };
+  }
+  if (row.kind === "custom_proxy") {
+    return {
+      value: {
+        outboundId: row.id!,
+        runtimeTag: row.runtimeTag,
+        kind: "custom_proxy",
+        dialOptions: {},
+        settings: row.settings ?? {},
+        supportsUdp: true,
+        linkId: null,
+        destinationServerId: null,
+        destinationInboundId: null,
+        protocol: row.protocol ?? null,
+        serverAddress: null,
+        serverPort: null,
+        tlsServerName: null,
+        credentialGeneration: null,
+        trustMode: null,
+        trustedCertificates: [],
+      },
+      issues,
+    };
+  }
+  if (row.kind === "outbound_group") {
+    return {
+      value: {
+        outboundId: row.id!,
+        runtimeTag: row.runtimeTag,
+        kind: "outbound_group",
+        dialOptions: {},
+        settings: row.settings ?? {},
+        supportsUdp: true,
+        memberOutboundTags: row.memberOutboundTags ?? [],
+        linkId: null,
+        destinationServerId: null,
+        destinationInboundId: null,
+        protocol: row.protocol ?? null,
         serverAddress: null,
         serverPort: null,
         tlsServerName: null,
@@ -1536,6 +1595,12 @@ function outboundIntentFor(
       destinationServerId: inbound.serverId,
       destinationInboundId: inbound.id,
       protocol: inbound.protocol,
+      ...(Object.keys(inbound.settings).length > 0
+        ? { settings: inbound.settings }
+        : {}),
+      supportsUdp:
+        inbound.network !== "tcp" &&
+        peerProtocolCapability(inbound.protocol).supportsUdp,
       serverAddress: inbound.advertisedAddress,
       serverPort: inbound.advertisedPort,
       tlsServerName: inbound.tlsServerName,
@@ -1558,11 +1623,10 @@ export async function buildServerIntent(
   database: Database = db,
   activationEnabled: boolean,
 ): Promise<IntentBuildResult> {
-  const context = await loadServerRoutingContext(
-    serverId,
-    database,
-    activationEnabled,
-  );
+  const [context, portForwards] = await Promise.all([
+    loadServerRoutingContext(serverId, database, activationEnabled),
+    loadServerPortForwards(serverId, database),
+  ]);
   const issues: NetworkingIssue[] = [];
 
   const subscriberInbounds = context.nodes.map((row) => ({
@@ -1662,6 +1726,7 @@ export async function buildServerIntent(
         ...previous.peerInbounds
           .filter((peer) => peer.admissions.length > 0)
           .map((peer) => peer.runtimeTag),
+        ...(previous.portForwards ?? []).map((pf) => pf.runtimeTag),
         ...previous.outbounds.map((outbound) => outbound.runtimeTag),
         ...previous.ruleSets.map((binding) => binding.runtimeTag),
       ]
@@ -1670,6 +1735,7 @@ export async function buildServerIntent(
     ...peerInbounds
       .filter((peer) => peer.admissions.length > 0)
       .map((peer) => peer.runtimeTag),
+    ...portForwards.map((pf) => pf.runtimeTag),
     ...outbounds.map((outbound) => outbound.runtimeTag),
     ...ruleSets.map((binding) => binding.runtimeTag),
   ].sort();
@@ -1685,6 +1751,7 @@ export async function buildServerIntent(
     topologyGeneration: options.topologyGeneration,
     subscriberInbounds,
     peerInbounds,
+    ...(portForwards.length > 0 ? { portForwards } : {}),
     outbounds,
     routingPolicy: {
       rules: [...options.rules],

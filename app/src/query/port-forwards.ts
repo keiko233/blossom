@@ -1,11 +1,10 @@
-import type { ManagedIntentPortForward } from "@blossom/contracts/agent-config-v3";
 import {
   MANAGED_TOPOLOGY_ID,
   managedRuntimeTag,
 } from "@blossom/domain/managed-networking";
 import { createServerFn } from "@tanstack/react-start";
 import type { SQL } from "drizzle-orm";
-import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
 import type { Database } from "@/db";
@@ -536,113 +535,8 @@ export const deletePortForward = createServerFn({ method: "POST" })
     return deletePortForwardDraft(data.id, data.expectedTopologyGeneration, db);
   });
 
-export interface SubscriptionPortForward {
-  forward: {
-    id: string;
-    runtimeTag: string;
-    name: string;
-    listenPort: number;
-    network: "tcp" | "udp" | "both";
-    targetNodeId: string | null;
-    enabled: boolean;
-  };
-  transitServer: {
-    id: string;
-    name: string;
-    address: string;
-    enabled: boolean;
-  };
-}
-
-/**
- * Enabled port forwards on enabled transit servers that target any of the
- * supplied exit nodes. The subscription path overlays them after the access
- * query; the publish gate decides whether both halves are applied.
- */
-export async function listSubscriptionPortForwards(
-  targetNodeIds: readonly string[],
-  database: Database = db,
-): Promise<SubscriptionPortForward[]> {
-  if (targetNodeIds.length === 0) {
-    return [];
-  }
-  const rows = await database
-    .select({
-      forward: {
-        id: portForward.id,
-        runtimeTag: portForward.runtimeTag,
-        name: portForward.name,
-        listenPort: portForward.listenPort,
-        network: portForward.network,
-        targetNodeId: portForward.targetNodeId,
-        enabled: portForward.enabled,
-      },
-      transitServer: {
-        id: server.id,
-        name: server.name,
-        address: server.address,
-        enabled: server.enabled,
-      },
-    })
-    .from(portForward)
-    .innerJoin(server, eq(server.id, portForward.serverId))
-    .where(
-      and(
-        inArray(portForward.targetNodeId, [...targetNodeIds]),
-        eq(portForward.enabled, true),
-        eq(server.enabled, true),
-      ),
-    )
-    .orderBy(portForward.id);
-  return rows;
-}
-
-/**
- * Resolves the enabled port forwards of one server into the immutable stage
- * intent shape. A managed exit node contributes its client-facing address
- * fallback and its listen port; an external target contributes its own
- * host:port. The caller (the managed intent builder) decides when to include
- * them in a config version.
- */
-export async function loadServerPortForwards(
-  serverId: string,
-  database: Database = db,
-): Promise<ManagedIntentPortForward[]> {
-  const rows = await database
-    .select({
-      forward: portForward,
-      targetNode: node,
-      targetServer: server,
-    })
-    .from(portForward)
-    .leftJoin(node, eq(node.id, portForward.targetNodeId))
-    .leftJoin(server, eq(server.id, node.serverId))
-    .where(
-      and(eq(portForward.serverId, serverId), eq(portForward.enabled, true)),
-    )
-    .orderBy(portForward.id);
-
-  const forwards: ManagedIntentPortForward[] = [];
-  for (const row of rows) {
-    const overrideAddress = row.forward.targetNodeId
-      ? (row.targetNode?.address ?? row.targetServer?.address ?? null)
-      : row.forward.targetAddress;
-    const overridePort = row.forward.targetNodeId
-      ? (row.targetNode?.listenPort ?? null)
-      : row.forward.targetPort;
-    if (overrideAddress === null || overridePort === null) {
-      continue;
-    }
-    forwards.push({
-      forwardId: row.forward.id,
-      runtimeTag: row.forward.runtimeTag,
-      listenAddress: row.forward.listenAddress,
-      listenPort: row.forward.listenPort,
-      network: row.forward.network,
-      overrideAddress,
-      overridePort,
-      outboundTag: row.forward.outboundTag,
-    });
-  }
-  return forwards;
-}
+export {
+  listSubscriptionPortForwards,
+  loadServerPortForwards,
+  type SubscriptionPortForward,
+} from "@/query/port-forward-store";
