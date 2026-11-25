@@ -60,6 +60,7 @@ export function SiteCard({
   return (
     <SettingsCard
       formId="settings-site"
+      sectionId="settings-site"
       title={m.admin_settings_site_title()}
       description={m.admin_settings_site_description()}
       isDirty={isDirty}

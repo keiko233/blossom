@@ -4,6 +4,7 @@ import { ChartColumnIcon } from "lucide-react";
 import type React from "react";
 import { useEffect } from "react";
 
+import { TableSkeleton } from "@/components/app-shell/skeletons";
 import { ListPagination } from "@/components/list-pagination";
 import { SortHeader } from "@/components/sort-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -14,7 +15,6 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -178,23 +178,23 @@ export function TrafficBreakdown({
   );
 
   if (query.isPending) {
-    return (
-      <div className="flex justify-center py-12">
-        <Spinner />
-      </div>
-    );
+    return <TableSkeleton columns={5} rows={10} />;
   }
 
   if (query.isError) {
     return (
-      <div className="flex flex-col items-center gap-4 py-12">
+      <div className="flex flex-col items-start gap-4 py-12">
         <Alert variant="error" className="max-w-md">
           <AlertTitle>{m.admin_traffic_load_error()}</AlertTitle>
           <AlertDescription>
             {query.error instanceof Error ? query.error.message : null}
           </AlertDescription>
         </Alert>
-        <Button loading={query.isFetching} onClick={() => void query.refetch()}>
+        <Button
+          loading={query.isFetching}
+          size="sm"
+          onClick={() => void query.refetch()}
+        >
           {m.admin_traffic_load_retry()}
         </Button>
       </div>
@@ -220,14 +220,14 @@ export function TrafficBreakdown({
     <div
       className={query.isPlaceholderData ? "opacity-60 transition-opacity" : ""}
     >
-      <Table>
+      <Table variant="pane">
         <TableHeader>
           <TableRow>
             <TableHead>{header("name", entityLabel(dimension))}</TableHead>
-            <TableHead className="text-end">
+            <TableHead className="hidden text-end md:table-cell">
               {header("uplink", m.admin_traffic_uplink())}
             </TableHead>
-            <TableHead className="text-end">
+            <TableHead className="hidden text-end md:table-cell">
               {header("downlink", m.admin_traffic_downlink())}
             </TableHead>
             <TableHead className="text-end">
@@ -244,10 +244,10 @@ export function TrafficBreakdown({
                 <TableCell>
                   <EntityCell dimension={dimension} row={row} />
                 </TableCell>
-                <TableCell className="text-end tabular-nums">
+                <TableCell className="hidden text-end tabular-nums md:table-cell">
                   {formatBytes(row.uplink)}
                 </TableCell>
-                <TableCell className="text-end tabular-nums">
+                <TableCell className="hidden text-end tabular-nums md:table-cell">
                   {formatBytes(row.downlink)}
                 </TableCell>
                 <TableCell className="text-end font-medium tabular-nums">
@@ -278,28 +278,30 @@ export function TrafficBreakdown({
         </TableBody>
       </Table>
 
-      <ListPagination
-        link={(target) => (
-          <Link
-            from="/admin/operations/traffic/"
-            to="/admin/operations/traffic"
-            search={(prev) => ({
-              ...prev,
-              page: target === 1 ? undefined : target,
-            })}
-          />
-        )}
-        page={page}
-        pageCount={pageCount}
-        pageSize={pageSize}
-        pageSizes={TRAFFIC_PAGE_SIZES}
-        total={total}
-        onPageSizeChange={(size) =>
-          onChange({
-            pageSize: size === DEFAULT_TRAFFIC_PAGE_SIZE ? undefined : size,
-          })
-        }
-      />
+      <div className="border-t">
+        <ListPagination
+          link={(target) => (
+            <Link
+              from="/admin/operations/traffic/"
+              to="/admin/operations/traffic"
+              search={(prev) => ({
+                ...prev,
+                page: target === 1 ? undefined : target,
+              })}
+            />
+          )}
+          page={page}
+          pageCount={pageCount}
+          pageSize={pageSize}
+          pageSizes={TRAFFIC_PAGE_SIZES}
+          total={total}
+          onPageSizeChange={(size) =>
+            onChange({
+              pageSize: size === DEFAULT_TRAFFIC_PAGE_SIZE ? undefined : size,
+            })
+          }
+        />
+      </div>
     </div>
   );
 }

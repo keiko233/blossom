@@ -1,6 +1,11 @@
 import type React from "react";
 
+import {
+  SectionHeader,
+  SectionTitle,
+} from "@/components/app-shell/page-header";
 import { Badge } from "@/components/ui/badge";
+import { StatusDot } from "@/components/ui/status-dot";
 import { linkHealthTone, linkPhaseTone } from "@/lib/networking-topology";
 import type {
   RoutingAction,
@@ -72,6 +77,48 @@ export function LinkPhaseBadge({
   phase: Parameters<typeof linkPhaseTone>[0];
 }): React.ReactElement {
   return <Badge variant={linkPhaseTone(phase)}>{PHASE_LABEL[phase]()}</Badge>;
+}
+
+const PHASE_DOT_TONE = {
+  draft: "muted",
+  pending: "info",
+  applying: "info",
+  stalled: "warning",
+  failed: "danger",
+  applied: "success",
+  removing: "warning",
+} as const;
+
+const HEALTH_DOT_TONE = {
+  unknown: "muted",
+  healthy: "success",
+  degraded: "warning",
+} as const;
+
+export function LinkPhaseCell({
+  phase,
+}: {
+  phase: Parameters<typeof linkPhaseTone>[0];
+}): React.ReactElement {
+  return (
+    <span className="flex items-center gap-2 text-sm">
+      <StatusDot tone={PHASE_DOT_TONE[phase]} />
+      {PHASE_LABEL[phase]()}
+    </span>
+  );
+}
+
+export function LinkHealthCell({
+  health,
+}: {
+  health: Parameters<typeof linkHealthTone>[0];
+}): React.ReactElement {
+  return (
+    <span className="flex items-center gap-2 text-sm">
+      <StatusDot tone={HEALTH_DOT_TONE[health]} />
+      {HEALTH_LABEL[health]()}
+    </span>
+  );
 }
 
 export function LinkHealthBadge({
@@ -171,20 +218,17 @@ export function NetworkingSection({
   return (
     <section
       data-slot="networking-section"
-      className={cn(
-        "flex flex-col gap-3 rounded-xl border bg-card p-4 shadow-xs",
-        className,
-      )}
+      className={cn("flex min-w-0 flex-col gap-3", className)}
     >
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <SectionHeader className="border-b pb-2">
         <div className="flex min-w-0 flex-col gap-1">
-          <h2 className="font-medium">{title}</h2>
+          <SectionTitle>{title}</SectionTitle>
           {description ? (
             <p className="text-xs text-muted-foreground">{description}</p>
           ) : null}
         </div>
         {actions ? <div className="flex flex-wrap gap-2">{actions}</div> : null}
-      </div>
+      </SectionHeader>
       {children}
     </section>
   );

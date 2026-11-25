@@ -16,15 +16,26 @@ import { useEffect, useState } from "react";
 import { z } from "zod";
 
 import {
+  PageContent,
   PageHeader,
+  PageHeaderActions,
+  PageHeaderDescription,
   PageHeaderTitle,
 } from "@/components/app-shell/page-header";
+import { TableSkeleton } from "@/components/app-shell/skeletons";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Confirm } from "@/components/ui/confirm";
 import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
-import { Spinner } from "@/components/ui/spinner";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { toastManager } from "@/components/ui/toast";
 import { useLockFn } from "@/hooks/use-lock-fn";
 import { m } from "@/paraglide/messages";
@@ -38,8 +49,8 @@ import {
 import { AutoBridgeDialog } from "./_modules/auto-bridge-dialog";
 import { LinkEditorDialog } from "./_modules/link-editor-dialog";
 import {
-  LinkHealthBadge,
-  LinkPhaseBadge,
+  LinkHealthCell,
+  LinkPhaseCell,
   NetworkingSection,
 } from "./_modules/networking-badges";
 import { NetworkingRollouts } from "./_modules/networking-rollouts";
@@ -185,29 +196,8 @@ function RouteComponent(): React.ReactElement {
       },
     });
   });
-
-  if (isPending) {
-    return (
-      <div className="flex justify-center p-6">
-        <Spinner />
-      </div>
-    );
-  }
-  if (isError || !data) {
-    return (
-      <div className="flex flex-col gap-3 p-4 md:p-6">
-        <p className="text-sm text-destructive">
-          {m.admin_networking_load_error()}
-        </p>
-        <Button size="sm" variant="outline" onClick={() => void refetch()}>
-          {m.admin_networking_action_retry()}
-        </Button>
-      </div>
-    );
-  }
-
   const editing =
-    editingId === null
+    !data || editingId === null
       ? null
       : (data.links.find((row) => row.id === editingId) ?? null);
   const editingForward: PortForwardRow | null =
@@ -217,20 +207,21 @@ function RouteComponent(): React.ReactElement {
         null);
 
   return (
-    <div className="flex flex-col gap-4 p-4 md:p-6">
+    <>
       <PageHeader>
-        <div className="flex min-w-0 flex-col gap-1">
+        <div className="flex min-w-0 items-baseline gap-3">
           <PageHeaderTitle>
             {m.admin_workspace_networking_links()}
           </PageHeaderTitle>
-          <p className="text-sm text-muted-foreground">
+          <PageHeaderDescription className="hidden lg:block">
             {m.admin_networking_links_description()}
-          </p>
+          </PageHeaderDescription>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <PageHeaderActions>
           <Button
             size="sm"
             variant="outline"
+            disabled={!data}
             onClick={() => setAutoBridgeOpen(true)}
           >
             <SparklesIcon />
@@ -246,313 +237,357 @@ function RouteComponent(): React.ReactElement {
             <PlusIcon />
             {m.admin_networking_action_add_link()}
           </Button>
-        </div>
+        </PageHeaderActions>
       </PageHeader>
 
-      {data.activationEnabled ? null : (
-        <Alert variant="info">
-          <AlertTitle>
-            {m.admin_networking_activation_disabled_title()}
-          </AlertTitle>
-          <AlertDescription>
-            {m.admin_networking_activation_disabled_description()}
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {actionError ? (
-        <p role="alert" className="text-sm text-destructive">
-          {actionError}
-        </p>
-      ) : null}
-
-      <NetworkingSection
-        title={m.admin_networking_links_list_title()}
-        description={m.admin_networking_links_list_description()}
-      >
-        {data.links.length === 0 ? (
-          <Empty>
-            <EmptyHeader>
-              <EmptyTitle>{m.admin_networking_links_empty_title()}</EmptyTitle>
-            </EmptyHeader>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                setEditingId(null);
-                setEditorOpen(true);
-              }}
-            >
-              {m.admin_networking_action_add_link()}
+      <PageContent>
+        {isPending ? (
+          <TableSkeleton columns={6} rows={8} />
+        ) : isError || !data ? (
+          <div className="flex flex-col items-start gap-3 py-8">
+            <p className="text-sm text-destructive">
+              {m.admin_networking_load_error()}
+            </p>
+            <Button size="sm" variant="outline" onClick={() => void refetch()}>
+              {m.admin_networking_action_retry()}
             </Button>
-          </Empty>
+          </div>
         ) : (
-          <ul className="flex flex-col gap-2">
-            {data.links.map((link) => (
-              <li
-                key={link.id}
-                data-slot="networking-link-row"
-                className="flex flex-col gap-2 rounded-lg border bg-background p-3"
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="inline-flex min-w-0 items-center gap-1.5">
-                    <Link2Icon aria-hidden className="size-4 shrink-0" />
-                    <span className="min-w-0 truncate text-sm font-medium">
-                      {link.sourceServerName}
-                    </span>
-                    <ArrowRightIcon
-                      aria-hidden
-                      className="size-3.5 shrink-0 text-muted-foreground"
-                    />
-                    <span className="min-w-0 truncate text-sm font-medium">
-                      {link.destinationServerName}
-                    </span>
-                  </span>
-                  <Badge variant="outline">{link.protocol}</Badge>
-                  <LinkPhaseBadge phase={link.phase} />
-                  <LinkHealthBadge health={link.health} />
-                  <span className="ms-auto flex gap-1">
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      aria-label={m.admin_networking_action_edit()}
-                      onClick={() => {
-                        setEditingId(link.id);
-                        setEditorOpen(true);
-                      }}
-                    >
-                      <SettingsIcon />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      aria-label={m.admin_networking_action_rotate()}
-                      onClick={() => void rotate(link.id)}
-                    >
-                      <RotateCwIcon />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      aria-label={m.admin_networking_action_delete()}
-                      onClick={() => void remove(link.id)}
-                    >
-                      <Trash2Icon />
-                    </Button>
-                  </span>
-                </div>
+          <>
+            {data.activationEnabled ? null : (
+              <Alert variant="info">
+                <AlertTitle>
+                  {m.admin_networking_activation_disabled_title()}
+                </AlertTitle>
+                <AlertDescription>
+                  {m.admin_networking_activation_disabled_description()}
+                </AlertDescription>
+              </Alert>
+            )}
 
-                <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
-                  <span>
-                    {m.admin_networking_links_inbound({
-                      inbound: link.destinationInboundName,
-                    })}
-                  </span>
-                  <span>
-                    {m.admin_networking_links_outbound({
-                      outbound: link.outboundName,
-                      tag: link.outboundTag,
-                    })}
-                  </span>
-                  <span>
-                    {m.admin_networking_links_credential({
-                      generation: link.credentialGeneration ?? 0,
-                      revisions: link.credentialRevision,
-                    })}
-                  </span>
-                  <span>
-                    {m.admin_networking_links_routes({
-                      count: link.routeRuleIds.length,
-                    })}
-                  </span>
-                  {link.probeAt ? (
-                    <span>
-                      {m.admin_networking_links_probe({
-                        outcome: link.probeOutcome ?? "unknown",
-                      })}
-                    </span>
-                  ) : null}
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </NetworkingSection>
+            {actionError ? (
+              <p role="alert" className="text-sm text-destructive">
+                {actionError}
+              </p>
+            ) : null}
 
-      <NetworkingSection
-        title={m.admin_networking_port_forward_title()}
-        description={m.admin_networking_port_forward_description()}
-        actions={
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              setEditingForwardId(null);
-              setPortForwardOpen(true);
-            }}
-          >
-            <PlusIcon />
-            {m.admin_networking_port_forward_add()}
-          </Button>
-        }
-      >
-        {(portForwards ?? []).length === 0 ? (
-          <Empty>
-            <EmptyHeader>
-              <EmptyTitle>{m.admin_networking_port_forward_empty()}</EmptyTitle>
-            </EmptyHeader>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                setEditingForwardId(null);
-                setPortForwardOpen(true);
-              }}
+            <NetworkingSection
+              title={m.admin_networking_links_list_title()}
+              description={m.admin_networking_links_list_description()}
             >
-              {m.admin_networking_port_forward_add()}
-            </Button>
-          </Empty>
-        ) : (
-          <ul className="flex flex-col gap-2">
-            {(portForwards ?? []).map((forward) => {
-              const transit = data.servers.find(
-                (row) => row.id === forward.serverId,
-              );
-              const targetNode = forward.targetNodeId
-                ? data.nodes.find((row) => row.id === forward.targetNodeId)
-                : null;
-              return (
-                <li
-                  key={forward.id}
-                  data-slot="networking-port-forward-row"
-                  className="flex flex-col gap-2 rounded-lg border bg-background p-3"
+              {data.links.length === 0 ? (
+                <Empty>
+                  <EmptyHeader>
+                    <EmptyTitle>
+                      {m.admin_networking_links_empty_title()}
+                    </EmptyTitle>
+                  </EmptyHeader>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setEditingId(null);
+                      setEditorOpen(true);
+                    }}
+                  >
+                    {m.admin_networking_action_add_link()}
+                  </Button>
+                </Empty>
+              ) : (
+                <Table variant="pane">
+                  <TableHeader className="top-(--page-header-h)!">
+                    <TableRow>
+                      <TableHead>{m.admin_page_links_col_route()}</TableHead>
+                      <TableHead className="hidden md:table-cell">
+                        {m.admin_page_links_col_protocol()}
+                      </TableHead>
+                      <TableHead className="hidden md:table-cell">
+                        {m.admin_page_links_col_phase()}
+                      </TableHead>
+                      <TableHead>{m.admin_page_links_col_health()}</TableHead>
+                      <TableHead className="hidden lg:table-cell">
+                        {m.admin_page_links_col_details()}
+                      </TableHead>
+                      <TableHead className="w-28 text-end">
+                        <span className="sr-only">
+                          {m.admin_page_links_actions()}
+                        </span>
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {data.links.map((link) => (
+                      <TableRow data-slot="networking-link-row" key={link.id}>
+                        <TableCell>
+                          <span className="inline-flex min-w-0 items-center gap-1.5">
+                            <Link2Icon
+                              aria-hidden
+                              className="size-4 shrink-0 text-muted-foreground"
+                            />
+                            <span className="min-w-0 truncate text-sm font-medium">
+                              {link.sourceServerName}
+                            </span>
+                            <ArrowRightIcon
+                              aria-hidden
+                              className="size-3.5 shrink-0 text-muted-foreground"
+                            />
+                            <span className="min-w-0 truncate text-sm font-medium">
+                              {link.destinationServerName}
+                            </span>
+                          </span>
+                        </TableCell>
+                        <TableCell className="hidden md:table-cell">
+                          <Badge variant="outline">{link.protocol}</Badge>
+                        </TableCell>
+                        <TableCell className="hidden md:table-cell">
+                          <LinkPhaseCell phase={link.phase} />
+                        </TableCell>
+                        <TableCell className="hidden lg:table-cell">
+                          <LinkHealthCell health={link.health} />
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+                            <span className="truncate">
+                              {m.admin_networking_links_inbound({
+                                inbound: link.destinationInboundName,
+                              })}
+                            </span>
+                            <span className="truncate">
+                              {m.admin_networking_links_credential({
+                                generation: link.credentialGeneration ?? 0,
+                                revisions: link.credentialRevision,
+                              })}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-end">
+                          <div className="flex justify-end gap-0.5">
+                            <Button
+                              size="icon-xs"
+                              variant="ghost"
+                              aria-label={m.admin_networking_action_edit()}
+                              onClick={() => {
+                                setEditingId(link.id);
+                                setEditorOpen(true);
+                              }}
+                            >
+                              <SettingsIcon />
+                            </Button>
+                            <Button
+                              size="icon-xs"
+                              variant="ghost"
+                              aria-label={m.admin_networking_action_rotate()}
+                              onClick={() => void rotate(link.id)}
+                            >
+                              <RotateCwIcon />
+                            </Button>
+                            <Button
+                              size="icon-xs"
+                              variant="ghost"
+                              aria-label={m.admin_networking_action_delete()}
+                              onClick={() => void remove(link.id)}
+                            >
+                              <Trash2Icon />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </NetworkingSection>
+
+            <NetworkingSection
+              title={m.admin_networking_port_forward_title()}
+              description={m.admin_networking_port_forward_description()}
+              actions={
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setEditingForwardId(null);
+                    setPortForwardOpen(true);
+                  }}
                 >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="inline-flex min-w-0 items-center gap-1.5">
-                      <NetworkIcon aria-hidden className="size-4 shrink-0" />
-                      <span className="min-w-0 truncate text-sm font-medium">
-                        {forward.name}
-                      </span>
-                    </span>
-                    <Badge variant="outline">
-                      {NETWORK_LABEL[forward.network]()}
-                    </Badge>
-                    <Badge variant={forward.enabled ? "success" : "outline"}>
-                      {forward.enabled
-                        ? m.admin_networking_port_forward_enabled_label()
-                        : m.admin_networking_port_forward_disabled_label()}
-                    </Badge>
-                    <span className="font-mono text-xs text-muted-foreground">
-                      {forward.runtimeTag}
-                    </span>
-                    <span className="ms-auto flex gap-1">
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        aria-label={m.admin_networking_action_edit()}
-                        onClick={() => {
-                          setEditingForwardId(forward.id);
-                          setPortForwardOpen(true);
-                        }}
+                  <PlusIcon />
+                  {m.admin_networking_port_forward_add()}
+                </Button>
+              }
+            >
+              {(portForwards ?? []).length === 0 ? (
+                <Empty>
+                  <EmptyHeader>
+                    <EmptyTitle>
+                      {m.admin_networking_port_forward_empty()}
+                    </EmptyTitle>
+                  </EmptyHeader>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setEditingForwardId(null);
+                      setPortForwardOpen(true);
+                    }}
+                  >
+                    {m.admin_networking_port_forward_add()}
+                  </Button>
+                </Empty>
+              ) : (
+                <div className="divide-y border-y">
+                  {(portForwards ?? []).map((forward) => {
+                    const transit = data.servers.find(
+                      (row) => row.id === forward.serverId,
+                    );
+                    const targetNode = forward.targetNodeId
+                      ? data.nodes.find(
+                          (row) => row.id === forward.targetNodeId,
+                        )
+                      : null;
+                    return (
+                      <div
+                        key={forward.id}
+                        data-slot="networking-port-forward-row"
+                        className="flex flex-col gap-1.5 py-2.5"
                       >
-                        <PencilIcon />
-                      </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        aria-label={m.admin_networking_action_delete()}
-                        onClick={() => void removePortForward(forward.id)}
-                      >
-                        <Trash2Icon />
-                      </Button>
-                    </span>
-                  </div>
-                  <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
-                    <span>
-                      {m.admin_networking_port_forward_transit({
-                        server: transit?.name ?? forward.serverId,
-                      })}
-                    </span>
-                    <span>
-                      {m.admin_networking_port_forward_listen({
-                        address: forward.listenAddress,
-                        port: forward.listenPort,
-                      })}
-                    </span>
-                    <span>
-                      {targetNode
-                        ? m.admin_networking_port_forward_node_target({
-                            node: targetNode.name,
-                          })
-                        : m.admin_networking_port_forward_external_target({
-                            address: forward.targetAddress ?? "",
-                            port: forward.targetPort ?? 0,
-                          })}
-                    </span>
-                    {forward.outboundTag ? (
-                      <span>
-                        {m.admin_networking_port_forward_outbound({
-                          tag: forward.outboundTag,
-                        })}
-                      </span>
-                    ) : null}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="inline-flex min-w-0 items-center gap-1.5">
+                            <NetworkIcon
+                              aria-hidden
+                              className="size-4 shrink-0 text-muted-foreground"
+                            />
+                            <span className="min-w-0 truncate text-sm font-medium">
+                              {forward.name}
+                            </span>
+                          </span>
+                          <Badge variant="outline">
+                            {NETWORK_LABEL[forward.network]()}
+                          </Badge>
+                          <Badge
+                            variant={forward.enabled ? "success" : "outline"}
+                          >
+                            {forward.enabled
+                              ? m.admin_networking_port_forward_enabled_label()
+                              : m.admin_networking_port_forward_disabled_label()}
+                          </Badge>
+                          <span className="font-mono text-xs text-muted-foreground">
+                            {forward.runtimeTag}
+                          </span>
+                          <span className="ms-auto flex gap-0.5">
+                            <Button
+                              size="icon-xs"
+                              variant="ghost"
+                              aria-label={m.admin_networking_action_edit()}
+                              onClick={() => {
+                                setEditingForwardId(forward.id);
+                                setPortForwardOpen(true);
+                              }}
+                            >
+                              <PencilIcon />
+                            </Button>
+                            <Button
+                              size="icon-xs"
+                              variant="ghost"
+                              aria-label={m.admin_networking_action_delete()}
+                              onClick={() => void removePortForward(forward.id)}
+                            >
+                              <Trash2Icon />
+                            </Button>
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                          <span>
+                            {m.admin_networking_port_forward_transit({
+                              server: transit?.name ?? forward.serverId,
+                            })}
+                          </span>
+                          <span className="font-mono tabular-nums">
+                            {m.admin_networking_port_forward_listen({
+                              address: forward.listenAddress,
+                              port: forward.listenPort,
+                            })}
+                          </span>
+                          <span>
+                            {targetNode
+                              ? m.admin_networking_port_forward_node_target({
+                                  node: targetNode.name,
+                                })
+                              : m.admin_networking_port_forward_external_target(
+                                  {
+                                    address: forward.targetAddress ?? "",
+                                    port: forward.targetPort ?? 0,
+                                  },
+                                )}
+                          </span>
+                          {forward.outboundTag ? (
+                            <span className="font-mono">
+                              {m.admin_networking_port_forward_outbound({
+                                tag: forward.outboundTag,
+                              })}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </NetworkingSection>
+
+            <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_24rem]">
+              <NetworkingSection
+                title={m.admin_networking_links_editor_title()}
+                description={m.admin_networking_links_editor_description()}
+              >
+                <p className="text-sm text-muted-foreground">
+                  {m.admin_networking_links_editor_hint()}
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  render={<Link to="/admin/networking/topology" />}
+                >
+                  {m.admin_networking_action_view_topology()}
+                </Button>
+              </NetworkingSection>
+              <NetworkingRollouts
+                rollouts={data.rollouts}
+                activationEnabled={data.activationEnabled}
+              />
+            </div>
+          </>
         )}
-      </NetworkingSection>
+      </PageContent>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <NetworkingSection
-          title={m.admin_networking_links_editor_title()}
-          description={m.admin_networking_links_editor_description()}
-        >
-          <p className="text-sm text-muted-foreground">
-            {m.admin_networking_links_editor_hint()}
-          </p>
-          <Button
-            size="sm"
-            variant="outline"
-            render={<Link to="/admin/networking/topology" />}
-          >
-            {m.admin_networking_action_view_topology()}
-          </Button>
-        </NetworkingSection>
-        <NetworkingRollouts
-          rollouts={data.rollouts}
-          activationEnabled={data.activationEnabled}
-        />
-      </div>
-
-      <LinkEditorDialog
-        open={editorOpen}
-        onOpenChange={(open) => {
-          setEditorOpen(open);
-          if (!open) setEditingId(null);
-        }}
-        workspace={data}
-        link={editing}
-        defaultSourceServerId={search.source}
-      />
-
-      <AutoBridgeDialog
-        open={autoBridgeOpen}
-        onOpenChange={setAutoBridgeOpen}
-        workspace={data}
-        defaultSourceServerId={search.source}
-      />
-
-      <PortForwardDialog
-        open={portForwardOpen}
-        onOpenChange={(open) => {
-          setPortForwardOpen(open);
-          if (!open) setEditingForwardId(null);
-        }}
-        workspace={data}
-        forward={editingForward}
-      />
-    </div>
+      {data ? (
+        <>
+          <LinkEditorDialog
+            open={editorOpen}
+            onOpenChange={(open) => {
+              setEditorOpen(open);
+              if (!open) setEditingId(null);
+            }}
+            workspace={data}
+            link={editing}
+            defaultSourceServerId={search.source}
+          />
+          <AutoBridgeDialog
+            open={autoBridgeOpen}
+            onOpenChange={setAutoBridgeOpen}
+            workspace={data}
+            defaultSourceServerId={search.source}
+          />
+          <PortForwardDialog
+            open={portForwardOpen}
+            onOpenChange={(open) => {
+              setPortForwardOpen(open);
+              if (!open) setEditingForwardId(null);
+            }}
+            workspace={data}
+            forward={editingForward}
+          />
+        </>
+      ) : null}
+    </>
   );
 }

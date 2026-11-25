@@ -1,6 +1,6 @@
 import type { ManagedIntentRouteRule } from "@blossom/contracts/agent-config-v3";
 import { useMutation } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -14,12 +14,27 @@ import { useEffect, useState } from "react";
 import { z } from "zod";
 
 import {
+  PageContent,
   PageHeader,
+  PageHeaderActions,
+  PageHeaderDescription,
   PageHeaderTitle,
 } from "@/components/app-shell/page-header";
+import {
+  InspectorSkeleton,
+  TableSkeleton,
+} from "@/components/app-shell/skeletons";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import {
   Select,
@@ -28,7 +43,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Spinner } from "@/components/ui/spinner";
 import { toastManager } from "@/components/ui/toast";
 import type {
   ApplyNetworkingRolloutInput,
@@ -161,31 +175,104 @@ function RouteComponent(): React.ReactElement {
       applyNetworkingRollout({ data: input }),
   });
 
-  if (workspacePending || isPending) {
+  const renderPicker = () => (
+    <Field className="w-56">
+      <FieldLabel>{m.admin_networking_routing_server_label()}</FieldLabel>
+      <Select
+        value={effectiveServerId ?? ""}
+        onValueChange={(value) => {
+          setServerId(value ?? null);
+          setLoadedServerId(null);
+        }}
+      >
+        <SelectTrigger size="sm">
+          <SelectValue>
+            {(value: string) =>
+              servers.find((row) => row.id === value)?.name ?? value
+            }
+          </SelectValue>
+        </SelectTrigger>
+        <SelectPopup>
+          {servers.map((row) => (
+            <SelectItem key={row.id} value={row.id}>
+              {row.name}
+            </SelectItem>
+          ))}
+        </SelectPopup>
+      </Select>
+    </Field>
+  );
+
+  if (workspacePending) {
     return (
-      <div className="flex justify-center p-6">
-        <Spinner />
-      </div>
-    );
-  }
-  if (isError || !view || !effectiveServerId) {
-    return (
-      <div className="flex flex-col gap-3 p-4 md:p-6">
-        <p className="text-sm text-destructive">
-          {m.admin_networking_load_error()}
-        </p>
-        <Button size="sm" variant="outline" onClick={() => void refetch()}>
-          {m.admin_networking_action_retry()}
-        </Button>
-      </div>
+      <>
+        <PageHeader>
+          <PageHeaderTitle>
+            {m.admin_workspace_networking_routing()}
+          </PageHeaderTitle>
+        </PageHeader>
+        <PageContent>
+          <RoutingRegionSkeleton />
+        </PageContent>
+      </>
     );
   }
 
-  if (!draft || draft.serverId !== effectiveServerId) {
+  if (!workspace || servers.length === 0) {
     return (
-      <div className="flex justify-center p-6">
-        <Spinner />
-      </div>
+      <>
+        <PageHeader>
+          <PageHeaderTitle>
+            {m.admin_workspace_networking_routing()}
+          </PageHeaderTitle>
+        </PageHeader>
+        <PageContent>
+          <EmptyRoutingServer />
+        </PageContent>
+      </>
+    );
+  }
+
+  if (isError || !effectiveServerId) {
+    return (
+      <>
+        <PageHeader>
+          <PageHeaderTitle>
+            {m.admin_workspace_networking_routing()}
+          </PageHeaderTitle>
+        </PageHeader>
+        <PageContent>
+          <div className="flex flex-col items-start gap-3">
+            <p className="text-sm text-destructive">
+              {m.admin_networking_load_error()}
+            </p>
+            <Button size="sm" variant="outline" onClick={() => void refetch()}>
+              {m.admin_networking_action_retry()}
+            </Button>
+          </div>
+        </PageContent>
+      </>
+    );
+  }
+
+  if (isPending || !view || !draft || draft.serverId !== effectiveServerId) {
+    return (
+      <>
+        <PageHeader>
+          <div className="flex min-w-0 items-baseline gap-3">
+            <PageHeaderTitle>
+              {m.admin_workspace_networking_routing()}
+            </PageHeaderTitle>
+            <PageHeaderDescription className="hidden lg:block">
+              {m.admin_networking_routing_description()}
+            </PageHeaderDescription>
+          </div>
+          <PageHeaderActions>{renderPicker()}</PageHeaderActions>
+        </PageHeader>
+        <PageContent>
+          <RoutingRegionSkeleton />
+        </PageContent>
+      </>
     );
   }
 
@@ -323,17 +410,18 @@ function RouteComponent(): React.ReactElement {
   };
 
   return (
-    <div className="flex flex-col gap-4 p-4 md:p-6">
+    <>
       <PageHeader>
-        <div className="flex min-w-0 flex-col gap-1">
+        <div className="flex min-w-0 items-baseline gap-3">
           <PageHeaderTitle>
             {m.admin_workspace_networking_routing()}
           </PageHeaderTitle>
-          <p className="text-sm text-muted-foreground">
+          <PageHeaderDescription className="hidden lg:block">
             {m.admin_networking_routing_description()}
-          </p>
+          </PageHeaderDescription>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <PageHeaderActions>
+          {renderPicker()}
           <Button
             size="sm"
             variant="outline"
@@ -369,262 +457,245 @@ function RouteComponent(): React.ReactElement {
           >
             {m.admin_networking_action_apply()}
           </Button>
-        </div>
+        </PageHeaderActions>
       </PageHeader>
 
-      {view.activationEnabled ? null : (
-        <Alert variant="info">
-          <AlertTitle>
-            {m.admin_networking_activation_disabled_title()}
-          </AlertTitle>
-          <AlertDescription>
-            {m.admin_networking_activation_disabled_description()}
-          </AlertDescription>
-        </Alert>
-      )}
+      <PageContent>
+        {view.activationEnabled ? null : (
+          <Alert variant="info">
+            <AlertTitle>
+              {m.admin_networking_activation_disabled_title()}
+            </AlertTitle>
+            <AlertDescription>
+              {m.admin_networking_activation_disabled_description()}
+            </AlertDescription>
+          </Alert>
+        )}
 
-      {saveResult && !saveResult.ok ? (
-        <div className="flex flex-col gap-2">
-          <p role="alert" className="text-sm text-destructive">
-            {saveResult.reason === "validation"
-              ? m.admin_networking_validation_blocked()
-              : networkingWriteReasonMessage(saveResult.reason ?? "unknown")}
-          </p>
-          <NetworkingIssues issues={saveResult.issues} />
-        </div>
-      ) : null}
-      {planError ? (
-        <p role="alert" className="text-sm text-destructive">
-          {planError}
-        </p>
-      ) : null}
-      {applyResult && !applyResult.ok ? (
-        <p role="alert" className="text-sm text-destructive">
-          {networkingApplyReasonMessage(
-            applyResult.reason ?? "invalid_admission",
-          )}
-        </p>
-      ) : null}
-      {applyResult?.ok ? (
-        <p className="text-sm text-success-foreground">
-          {m.admin_networking_apply_admitted({
-            count: applyResult.plan?.stages.length ?? 0,
-          })}
-        </p>
-      ) : null}
-
-      <div className="flex flex-wrap items-center gap-2">
-        <Field className="w-full max-w-sm">
-          <FieldLabel>{m.admin_networking_routing_server_label()}</FieldLabel>
-          <Select
-            value={effectiveServerId}
-            onValueChange={(value) => {
-              setServerId(value ?? null);
-              setLoadedServerId(null);
-            }}
-          >
-            <SelectTrigger>
-              <SelectValue>
-                {(value: string) =>
-                  servers.find((row) => row.id === value)?.name ?? value
-                }
-              </SelectValue>
-            </SelectTrigger>
-            <SelectPopup>
-              {servers.map((row) => (
-                <SelectItem key={row.id} value={row.id}>
-                  {row.name}
-                </SelectItem>
-              ))}
-            </SelectPopup>
-          </Select>
-        </Field>
-        <Badge variant={dirty ? "warning" : "outline"}>
-          {dirty
-            ? m.admin_networking_unsaved()
-            : m.admin_networking_routing_saved_badge({
-                version: view.routing?.version ?? 0,
-              })}
-        </Badge>
-        {view.managedState?.desiredConfigVersionId ? (
-          <Badge variant="outline">
-            {m.admin_networking_routing_pointer({
-              version: view.managedState.desiredConfigVersionId.slice(0, 12),
-            })}
-          </Badge>
-        ) : null}
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
-        <div className="flex min-w-0 flex-col gap-4">
-          <NetworkingSection
-            title={m.admin_networking_routing_rules_title()}
-            description={m.admin_networking_routing_rules_description()}
-            actions={
-              <Button
-                size="sm"
-                onClick={() => {
-                  setEditingRuleId(null);
-                  setRuleDialogOpen(true);
-                }}
-              >
-                <PlusIcon />
-                {m.admin_networking_routing_add_rule()}
-              </Button>
-            }
-          >
-            <Field>
-              <FieldLabel>
-                {m.admin_networking_routing_final_label()}
-              </FieldLabel>
-              <Select
-                value={draft.finalOutboundTag}
-                onValueChange={(value) =>
-                  value &&
-                  setDraft((current) =>
-                    current ? { ...current, finalOutboundTag: value } : current,
-                  )
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue>
-                    {(value: string) =>
-                      view.outboundOptions.find((row) => row.tag === value)
-                        ?.name ?? value
-                    }
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup>
-                  {view.outboundOptions
-                    .filter((row) => row.kind !== "peer_link")
-                    .map((row) => (
-                      <SelectItem key={row.tag} value={row.tag}>
-                        {row.name}
-                      </SelectItem>
-                    ))}
-                </SelectPopup>
-              </Select>
-              <FieldDescription>
-                {m.admin_networking_routing_final_hint()}
-              </FieldDescription>
-            </Field>
-
-            {preview.issues.filter(
-              (issue) =>
-                issue.code === "unknown_final_outbound" ||
-                issue.code === "final_outbound_is_peer",
-            ).length > 0 ? (
-              <p className="text-sm text-destructive">
-                <CircleAlertIcon className="me-1 inline size-4" />
-                {m.admin_networking_routing_final_invalid()}
-              </p>
-            ) : null}
-
-            {draft.rules.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                {m.admin_networking_routing_no_rules()}
-              </p>
-            ) : (
-              <ol className="flex flex-col gap-2">
-                {draft.rules.map((rule, index) => (
-                  <li
-                    key={rule.ruleId}
-                    data-slot="routing-rule"
-                    className="flex flex-col gap-2 rounded-lg border bg-background p-2"
-                  >
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono text-xs text-muted-foreground">
-                        {index + 1}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate font-mono text-xs">
-                        {rule.ruleId}
-                      </span>
-                      <Badge
-                        variant={rule.action === "reject" ? "error" : "success"}
-                      >
-                        {rule.action === "reject"
-                          ? m.admin_networking_routing_rule_reject()
-                          : m.admin_networking_routing_rule_route()}
-                      </Badge>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        aria-label={m.admin_networking_routing_move_up()}
-                        disabled={index === 0}
-                        onClick={() => moveRule(index, -1)}
-                      >
-                        <ArrowUpIcon />
-                      </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        aria-label={m.admin_networking_routing_move_down()}
-                        disabled={index === draft.rules.length - 1}
-                        onClick={() => moveRule(index, 1)}
-                      >
-                        <ArrowDownIcon />
-                      </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        aria-label={m.admin_networking_action_edit()}
-                        onClick={() => {
-                          setEditingRuleId(rule.ruleId);
-                          setRuleDialogOpen(true);
-                        }}
-                      >
-                        <PencilIcon />
-                      </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        aria-label={m.admin_networking_action_delete()}
-                        onClick={() => removeRule(rule.ruleId)}
-                      >
-                        <Trash2Icon />
-                      </Button>
-                    </div>
-                    <div className="flex flex-wrap gap-1 text-xs text-muted-foreground">
-                      <span className="font-mono">
-                        {rule.inboundTags.join(", ")}
-                      </span>
-                      {rule.network ? (
-                        <Badge variant="outline">{rule.network}</Badge>
-                      ) : null}
-                      {rule.sniff ? (
-                        <Badge variant="outline">
-                          {m.admin_networking_routing_rule_sniff_short()}
-                        </Badge>
-                      ) : null}
-                      {rule.outboundTag ? (
-                        <span className="font-mono">→ {rule.outboundTag}</span>
-                      ) : null}
-                    </div>
-                  </li>
-                ))}
-              </ol>
-            )}
-          </NetworkingSection>
-
-          {savedSnapshot ? (
-            <p className="text-xs text-muted-foreground">
-              {m.admin_networking_routing_last_saved()}
+        {saveResult && !saveResult.ok ? (
+          <div className="flex flex-col gap-2">
+            <p role="alert" className="text-sm text-destructive">
+              {saveResult.reason === "validation"
+                ? m.admin_networking_validation_blocked()
+                : networkingWriteReasonMessage(saveResult.reason ?? "unknown")}
             </p>
+            <NetworkingIssues issues={saveResult.issues} />
+          </div>
+        ) : null}
+        {planError ? (
+          <p role="alert" className="text-sm text-destructive">
+            {planError}
+          </p>
+        ) : null}
+        {applyResult && !applyResult.ok ? (
+          <p role="alert" className="text-sm text-destructive">
+            {networkingApplyReasonMessage(
+              applyResult.reason ?? "invalid_admission",
+            )}
+          </p>
+        ) : null}
+        {applyResult?.ok ? (
+          <p className="text-sm text-success-foreground">
+            {m.admin_networking_apply_admitted({
+              count: applyResult.plan?.stages.length ?? 0,
+            })}
+          </p>
+        ) : null}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={dirty ? "warning" : "outline"}>
+            {dirty
+              ? m.admin_networking_unsaved()
+              : m.admin_networking_routing_saved_badge({
+                  version: view.routing?.version ?? 0,
+                })}
+          </Badge>
+          {view.managedState?.desiredConfigVersionId ? (
+            <Badge variant="outline">
+              {m.admin_networking_routing_pointer({
+                version: view.managedState.desiredConfigVersionId.slice(0, 12),
+              })}
+            </Badge>
           ) : null}
         </div>
 
-        <div className="flex min-w-0 flex-col gap-4">
-          <RoutingPreviewPanel preview={preview} diff={diff} />
-          <RoutingPlanPanel
-            plan={plan ?? null}
-            pending={planMutation.isPending}
-          />
-          <NetworkingRollouts
-            rollouts={view.rollouts}
-            activationEnabled={view.activationEnabled}
-          />
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_26rem]">
+          <div className="flex min-w-0 flex-col gap-6">
+            <NetworkingSection
+              title={m.admin_networking_routing_rules_title()}
+              description={m.admin_networking_routing_rules_description()}
+              actions={
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setEditingRuleId(null);
+                    setRuleDialogOpen(true);
+                  }}
+                >
+                  <PlusIcon />
+                  {m.admin_networking_routing_add_rule()}
+                </Button>
+              }
+            >
+              <Field>
+                <FieldLabel>
+                  {m.admin_networking_routing_final_label()}
+                </FieldLabel>
+                <Select
+                  value={draft.finalOutboundTag}
+                  onValueChange={(value) =>
+                    value &&
+                    setDraft((current) =>
+                      current
+                        ? { ...current, finalOutboundTag: value }
+                        : current,
+                    )
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue>
+                      {(value: string) =>
+                        view.outboundOptions.find((row) => row.tag === value)
+                          ?.name ?? value
+                      }
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup>
+                    {view.outboundOptions
+                      .filter((row) => row.kind !== "peer_link")
+                      .map((row) => (
+                        <SelectItem key={row.tag} value={row.tag}>
+                          {row.name}
+                        </SelectItem>
+                      ))}
+                  </SelectPopup>
+                </Select>
+                <FieldDescription>
+                  {m.admin_networking_routing_final_hint()}
+                </FieldDescription>
+              </Field>
+
+              {preview.issues.filter(
+                (issue) =>
+                  issue.code === "unknown_final_outbound" ||
+                  issue.code === "final_outbound_is_peer",
+              ).length > 0 ? (
+                <p className="text-sm text-destructive">
+                  <CircleAlertIcon className="me-1 inline size-4" />
+                  {m.admin_networking_routing_final_invalid()}
+                </p>
+              ) : null}
+
+              {draft.rules.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  {m.admin_networking_routing_no_rules()}
+                </p>
+              ) : (
+                <ol className="flex flex-col divide-y border-y">
+                  {draft.rules.map((rule, index) => (
+                    <li
+                      key={rule.ruleId}
+                      data-slot="routing-rule"
+                      className="flex min-h-9 flex-col gap-1 py-2"
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="w-6 shrink-0 text-end font-mono text-xs text-muted-foreground tabular-nums">
+                          {index + 1}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate font-mono text-xs">
+                          {rule.ruleId}
+                        </span>
+                        <Badge
+                          variant={
+                            rule.action === "reject" ? "error" : "success"
+                          }
+                        >
+                          {rule.action === "reject"
+                            ? m.admin_networking_routing_rule_reject()
+                            : m.admin_networking_routing_rule_route()}
+                        </Badge>
+                        <Button
+                          size="icon-xs"
+                          variant="ghost"
+                          aria-label={m.admin_networking_routing_move_up()}
+                          disabled={index === 0}
+                          onClick={() => moveRule(index, -1)}
+                        >
+                          <ArrowUpIcon />
+                        </Button>
+                        <Button
+                          size="icon-xs"
+                          variant="ghost"
+                          aria-label={m.admin_networking_routing_move_down()}
+                          disabled={index === draft.rules.length - 1}
+                          onClick={() => moveRule(index, 1)}
+                        >
+                          <ArrowDownIcon />
+                        </Button>
+                        <Button
+                          size="icon-xs"
+                          variant="ghost"
+                          aria-label={m.admin_networking_action_edit()}
+                          onClick={() => {
+                            setEditingRuleId(rule.ruleId);
+                            setRuleDialogOpen(true);
+                          }}
+                        >
+                          <PencilIcon />
+                        </Button>
+                        <Button
+                          size="icon-xs"
+                          variant="ghost"
+                          aria-label={m.admin_networking_action_delete()}
+                          onClick={() => removeRule(rule.ruleId)}
+                        >
+                          <Trash2Icon />
+                        </Button>
+                      </div>
+                      <div className="flex flex-wrap gap-1 ps-8 text-xs text-muted-foreground">
+                        <span className="font-mono">
+                          {rule.inboundTags.join(", ")}
+                        </span>
+                        {rule.network ? (
+                          <Badge variant="outline">{rule.network}</Badge>
+                        ) : null}
+                        {rule.sniff ? (
+                          <Badge variant="outline">
+                            {m.admin_networking_routing_rule_sniff_short()}
+                          </Badge>
+                        ) : null}
+                        {rule.outboundTag ? (
+                          <span className="font-mono">
+                            → {rule.outboundTag}
+                          </span>
+                        ) : null}
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </NetworkingSection>
+
+            {savedSnapshot ? (
+              <p className="text-xs text-muted-foreground">
+                {m.admin_networking_routing_last_saved()}
+              </p>
+            ) : null}
+          </div>
+
+          <div className="flex min-w-0 flex-col gap-6">
+            <RoutingPreviewPanel preview={preview} diff={diff} />
+            <RoutingPlanPanel
+              plan={plan ?? null}
+              pending={planMutation.isPending}
+            />
+            <NetworkingRollouts
+              rollouts={view.rollouts}
+              activationEnabled={view.activationEnabled}
+            />
+          </div>
         </div>
-      </div>
+      </PageContent>
 
       <RoutingRuleDialog
         open={ruleDialogOpen}
@@ -638,6 +709,40 @@ function RouteComponent(): React.ReactElement {
         ruleSets={view.ruleSetOptions}
         onSave={(rule) => (editingRule ? setRule(rule) : addRule(rule))}
       />
+    </>
+  );
+}
+
+function RoutingRegionSkeleton() {
+  return (
+    <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_26rem]">
+      <div className="flex flex-col gap-3">
+        <TableSkeleton columns={4} rows={8} />
+      </div>
+      <InspectorSkeleton />
     </div>
+  );
+}
+
+function EmptyRoutingServer() {
+  return (
+    <Empty>
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <CircleAlertIcon />
+        </EmptyMedia>
+        <EmptyTitle>{m.admin_overview_servers_none_title()}</EmptyTitle>
+        <EmptyDescription>{m.admin_networking_no_servers()}</EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent>
+        <Button
+          size="sm"
+          variant="outline"
+          render={<Link to="/admin/servers" />}
+        >
+          {m.admin_overview_servers_view_all()}
+        </Button>
+      </EmptyContent>
+    </Empty>
   );
 }

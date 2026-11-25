@@ -56,6 +56,7 @@ export function RegistrationCard({
   return (
     <SettingsCard
       formId="settings-registration"
+      sectionId="settings-registration"
       title={m.admin_settings_registration_title()}
       description={m.admin_settings_registration_description()}
       isDirty={isDirty}

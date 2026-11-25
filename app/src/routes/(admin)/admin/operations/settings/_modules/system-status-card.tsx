@@ -1,13 +1,10 @@
 import type React from "react";
 
-import { Badge } from "@/components/ui/badge";
 import {
-  Card,
-  CardDescription,
-  CardHeader,
-  CardPanel,
-  CardTitle,
-} from "@/components/ui/card";
+  SectionHeader,
+  SectionTitle,
+} from "@/components/app-shell/page-header";
+import { Badge } from "@/components/ui/badge";
 import type { EmailProvider } from "@/lib/email-config";
 import type { DeployRuntime } from "@/lib/runtime-info";
 import { m } from "@/paraglide/messages";
@@ -66,14 +63,19 @@ export function SystemStatusCard({
   status: SystemStatus;
 }): React.ReactElement {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{m.admin_settings_status_title()}</CardTitle>
-        <CardDescription>
-          {m.admin_settings_status_description()}
-        </CardDescription>
-      </CardHeader>
-      <CardPanel>
+    <section
+      id="settings-status"
+      className="flex scroll-mt-(--page-header-h) flex-col gap-4 border-b pb-6"
+    >
+      <SectionHeader>
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <SectionTitle>{m.admin_settings_status_title()}</SectionTitle>
+          <span className="text-xs text-muted-foreground">
+            {m.admin_settings_status_description()}
+          </span>
+        </div>
+      </SectionHeader>
+      <div>
         <dl className="divide-y">
           <Row label={m.admin_settings_status_app_name()}>{status.appName}</Row>
           <Row label={m.admin_settings_status_auth_url()}>
@@ -99,7 +101,7 @@ export function SystemStatusCard({
             <span className="font-mono text-xs">{status.databaseDriver}</span>
           </Row>
         </dl>
-      </CardPanel>
-    </Card>
+      </div>
+    </section>
   );
 }

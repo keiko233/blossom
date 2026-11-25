@@ -88,6 +88,7 @@ export function SubscriptionOutputCard({
   return (
     <SettingsCard
       formId="settings-subscription-output"
+      sectionId="settings-subscription-output"
       title={m.admin_settings_output_title()}
       description={m.admin_settings_output_description()}
       isDirty={isDirty}

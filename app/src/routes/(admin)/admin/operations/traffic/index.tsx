@@ -1,31 +1,26 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import {
-  ArrowDownIcon,
-  ArrowUpIcon,
-  ChartColumnIcon,
-  DownloadIcon,
-  UsersIcon,
-} from "lucide-react";
+import { DownloadIcon } from "lucide-react";
 import type React from "react";
-import { type ReactNode, useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import {
+  PageContent,
   PageHeader,
+  PageHeaderActions,
+  PageHeaderDescription,
   PageHeaderTitle,
+  PageToolbar,
+  SectionHeader,
+  SectionTitle,
 } from "@/components/app-shell/page-header";
+import { ChartSkeleton } from "@/components/app-shell/skeletons";
+import { StatStrip, StatStripItem } from "@/components/app-shell/stat-strip";
 import { TrafficChart } from "@/components/charts/traffic-chart";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "@/components/ui/menu";
-import { Spinner } from "@/components/ui/spinner";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTab } from "@/components/ui/tabs";
 import { toastManager } from "@/components/ui/toast";
 import { downloadCsv } from "@/lib/download-csv";
@@ -175,145 +170,156 @@ function RouteComponent(): React.ReactElement {
   const summary = summaryQuery.data;
 
   return (
-    <div className="flex flex-col gap-4 p-4">
-      <PageHeader className="flex-wrap gap-2">
-        <div className="flex flex-col gap-0.5">
+    <>
+      <PageHeader>
+        <div className="flex min-w-0 items-baseline gap-3">
           <PageHeaderTitle>{m.admin_traffic_title()}</PageHeaderTitle>
-          <p className="text-sm text-muted-foreground">
+          <PageHeaderDescription className="hidden lg:block">
             {m.admin_traffic_description()}
-          </p>
+          </PageHeaderDescription>
         </div>
-        <Menu>
-          <MenuTrigger
-            render={
-              <Button loading={exportingKind !== undefined} variant="outline" />
-            }
-          >
-            <DownloadIcon />
-            {m.admin_traffic_export()}
-          </MenuTrigger>
-          <MenuPopup align="end">
-            {(["series", ...TRAFFIC_DIMENSIONS] as const).map((kind) => (
-              <MenuItem key={kind} onClick={() => void exportCsv(kind)}>
-                {exportKindLabel(kind)}
-              </MenuItem>
-            ))}
-          </MenuPopup>
-        </Menu>
+        <PageHeaderActions>
+          <Menu>
+            <MenuTrigger
+              render={
+                <Button
+                  loading={exportingKind !== undefined}
+                  size="sm"
+                  variant="outline"
+                />
+              }
+            >
+              <DownloadIcon />
+              {m.admin_traffic_export()}
+            </MenuTrigger>
+            <MenuPopup align="end">
+              {(["series", ...TRAFFIC_DIMENSIONS] as const).map((kind) => (
+                <MenuItem key={kind} onClick={() => void exportCsv(kind)}>
+                  {exportKindLabel(kind)}
+                </MenuItem>
+              ))}
+            </MenuPopup>
+          </Menu>
+        </PageHeaderActions>
       </PageHeader>
 
-      <TrafficToolbar
-        hasFilters={hasFilters}
-        options={optionsQuery.data}
-        range={range}
-        search={search}
-        onChange={updateSearch}
-        onClear={clearFilters}
-      />
+      <PageToolbar>
+        <TrafficToolbar
+          hasFilters={hasFilters}
+          options={optionsQuery.data}
+          range={range}
+          search={search}
+          onChange={updateSearch}
+          onClear={clearFilters}
+        />
+      </PageToolbar>
 
-      {summaryQuery.isError || seriesQuery.isError ? (
-        <div className="flex flex-col items-center gap-4 py-12">
-          <Alert variant="error" className="max-w-md">
-            <AlertTitle>{m.admin_traffic_load_error()}</AlertTitle>
-            <AlertDescription>
-              {(summaryQuery.error ?? seriesQuery.error) instanceof Error
-                ? (summaryQuery.error ?? seriesQuery.error)?.message
-                : null}
-            </AlertDescription>
-          </Alert>
-          <Button
-            loading={summaryQuery.isFetching || seriesQuery.isFetching}
-            onClick={() => {
-              void summaryQuery.refetch();
-              void seriesQuery.refetch();
-            }}
-          >
-            {m.admin_traffic_load_retry()}
-          </Button>
-        </div>
-      ) : (
-        <>
-          <div
-            className={
-              summaryQuery.isPlaceholderData
-                ? "grid gap-4 opacity-60 transition-opacity sm:grid-cols-2 xl:grid-cols-4"
-                : "grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
-            }
-          >
-            <StatTile
-              change={summary?.changePercent}
-              icon={<ChartColumnIcon />}
-              label={m.admin_traffic_total()}
-              value={summary ? formatBytes(summary.current.total) : null}
-            />
-            <StatTile
-              change={
-                summary
-                  ? changePercent(
-                      summary.current.uplink,
-                      summary.previous.uplink,
-                    )
-                  : null
-              }
-              icon={<ArrowUpIcon />}
-              label={m.admin_traffic_uplink()}
-              value={summary ? formatBytes(summary.current.uplink) : null}
-            />
-            <StatTile
-              change={
-                summary
-                  ? changePercent(
-                      summary.current.downlink,
-                      summary.previous.downlink,
-                    )
-                  : null
-              }
-              icon={<ArrowDownIcon />}
-              label={m.admin_traffic_downlink()}
-              value={summary ? formatBytes(summary.current.downlink) : null}
-            />
-            <StatTile
-              icon={<UsersIcon />}
-              label={m.admin_traffic_active_users()}
-              value={summary ? summary.current.activeUsers : null}
-            />
+      <PageContent>
+        {summaryQuery.isError || seriesQuery.isError ? (
+          <div className="flex flex-col items-start gap-4 py-12">
+            <Alert variant="error" className="max-w-md">
+              <AlertTitle>{m.admin_traffic_load_error()}</AlertTitle>
+              <AlertDescription>
+                {(summaryQuery.error ?? seriesQuery.error) instanceof Error
+                  ? (summaryQuery.error ?? seriesQuery.error)?.message
+                  : null}
+              </AlertDescription>
+            </Alert>
+            <Button
+              loading={summaryQuery.isFetching || seriesQuery.isFetching}
+              size="sm"
+              onClick={() => {
+                void summaryQuery.refetch();
+                void seriesQuery.refetch();
+              }}
+            >
+              {m.admin_traffic_load_retry()}
+            </Button>
           </div>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>{m.admin_traffic_chart_title()}</CardTitle>
-              <CardDescription>
-                {m.admin_traffic_chart_description()}
-              </CardDescription>
-            </CardHeader>
-            <CardContent
+        ) : (
+          <>
+            <div
               className={
-                seriesQuery.isPlaceholderData
+                summaryQuery.isPlaceholderData
                   ? "opacity-60 transition-opacity"
                   : undefined
               }
             >
-              {series ? (
-                <TrafficChart
-                  buckets={series.buckets}
-                  granularity={series.granularity}
-                />
+              {summary ? (
+                <StatStrip columns={4}>
+                  <StatStripItem
+                    detail={changeSummary(summary.changePercent)}
+                    label={m.admin_traffic_total()}
+                    value={formatBytes(summary.current.total)}
+                  />
+                  <StatStripItem
+                    detail={changeSummary(
+                      changePercent(
+                        summary.current.uplink,
+                        summary.previous.uplink,
+                      ),
+                    )}
+                    label={m.admin_traffic_uplink()}
+                    value={formatBytes(summary.current.uplink)}
+                  />
+                  <StatStripItem
+                    detail={changeSummary(
+                      changePercent(
+                        summary.current.downlink,
+                        summary.previous.downlink,
+                      ),
+                    )}
+                    label={m.admin_traffic_downlink()}
+                    value={formatBytes(summary.current.downlink)}
+                  />
+                  <StatStripItem
+                    label={m.admin_traffic_active_users()}
+                    value={summary.current.activeUsers}
+                  />
+                </StatStrip>
               ) : (
-                <div className="flex h-60 items-center justify-center">
-                  <Spinner />
-                </div>
+                <SummarySkeleton />
               )}
-            </CardContent>
-          </Card>
+            </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>{m.admin_traffic_breakdown_title()}</CardTitle>
-              <CardDescription>
-                {m.admin_traffic_breakdown_description()}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
+            <section className="flex min-w-0 flex-col gap-3">
+              <SectionHeader>
+                <div className="flex min-w-0 flex-col gap-0.5">
+                  <SectionTitle>{m.admin_traffic_chart_title()}</SectionTitle>
+                  <span className="text-xs text-muted-foreground">
+                    {m.admin_traffic_chart_description()}
+                  </span>
+                </div>
+              </SectionHeader>
+              <div
+                className={
+                  seriesQuery.isPlaceholderData
+                    ? "opacity-60 transition-opacity"
+                    : undefined
+                }
+              >
+                {series ? (
+                  <TrafficChart
+                    buckets={series.buckets}
+                    granularity={series.granularity}
+                  />
+                ) : (
+                  <ChartSkeleton className="h-60" />
+                )}
+              </div>
+            </section>
+
+            <section className="flex min-w-0 flex-col gap-3">
+              <SectionHeader>
+                <div className="flex min-w-0 flex-col gap-0.5">
+                  <SectionTitle>
+                    {m.admin_traffic_breakdown_title()}
+                  </SectionTitle>
+                  <span className="text-xs text-muted-foreground">
+                    {m.admin_traffic_breakdown_description()}
+                  </span>
+                </div>
+              </SectionHeader>
               <Tabs
                 value={dimension}
                 onValueChange={(next) =>
@@ -339,47 +345,35 @@ function RouteComponent(): React.ReactElement {
                 search={search}
                 onChange={updateSearch}
               />
-            </CardContent>
-          </Card>
-        </>
-      )}
-    </div>
+            </section>
+          </>
+        )}
+      </PageContent>
+    </>
   );
 }
 
-function StatTile({
-  icon,
-  label,
-  value,
-  change,
-}: {
-  icon: ReactNode;
-  label: string;
-  value: ReactNode;
-  /** Percent change vs the previous equal-length period; undefined hides the line. */
-  change?: number | null;
-}): React.ReactElement {
-  let description: string | undefined;
-  if (change !== undefined) {
-    description =
-      change === null
-        ? m.admin_traffic_change_none()
-        : m.admin_traffic_change({
-            percent: `${change > 0 ? "+" : ""}${change.toFixed(1)}%`,
-          });
-  }
+function changeSummary(change: number | null): string {
+  return change === null
+    ? m.admin_traffic_change_none()
+    : m.admin_traffic_change({
+        percent: `${change > 0 ? "+" : ""}${change.toFixed(1)}%`,
+      });
+}
+
+function SummarySkeleton() {
   return (
-    <Card>
-      <CardHeader>
-        <CardDescription className="flex items-center gap-1.5 [&_svg]:size-4">
-          {icon}
-          {label}
-        </CardDescription>
-        <CardTitle className="text-2xl tabular-nums">
-          {value ?? <Spinner className="size-5" />}
-        </CardTitle>
-        {description ? <CardDescription>{description}</CardDescription> : null}
-      </CardHeader>
-    </Card>
+    <div
+      className="grid divide-y border-y sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-4"
+      aria-busy="true"
+    >
+      {Array.from({ length: 4 }, (_, item) => (
+        <div key={item} className="flex flex-col gap-2 px-4 py-3">
+          <Skeleton className="h-3 w-16" />
+          <Skeleton className="h-5 w-24" />
+          <Skeleton className="h-3 w-20" />
+        </div>
+      ))}
+    </div>
   );
 }

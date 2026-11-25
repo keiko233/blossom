@@ -41,6 +41,7 @@ export function DebouncedSearchInput({
         className="[&_input]:ps-8"
         defaultValue={defaultValue}
         placeholder={placeholder}
+        size="sm"
         type="search"
         onChange={(e) => onInput(e.target.value)}
       />

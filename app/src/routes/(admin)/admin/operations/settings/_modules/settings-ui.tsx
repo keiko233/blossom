@@ -1,15 +1,11 @@
 import type React from "react";
 
+import {
+  SectionHeader,
+  SectionTitle,
+} from "@/components/app-shell/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardPanel,
-  CardTitle,
-} from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { m } from "@/paraglide/messages";
@@ -59,6 +55,8 @@ export function SwitchField({
 export interface SettingsCardProps {
   /** DOM id of the section's `<form>`, so the footer button can submit it. */
   formId: string;
+  /** DOM id of the section root, used by the in-page section nav. */
+  sectionId: string;
   title: string;
   description: string;
   isDirty: boolean;
@@ -74,6 +72,7 @@ export interface SettingsCardProps {
  */
 export function SettingsCard({
   formId,
+  sectionId,
   title,
   description,
   isDirty,
@@ -83,13 +82,18 @@ export function SettingsCard({
   children,
 }: SettingsCardProps): React.ReactElement {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
-      </CardHeader>
+    <section
+      id={sectionId}
+      className="flex scroll-mt-(--page-header-h) flex-col gap-4 border-b pb-6"
+    >
+      <SectionHeader>
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <SectionTitle>{title}</SectionTitle>
+          <span className="text-xs text-muted-foreground">{description}</span>
+        </div>
+      </SectionHeader>
 
-      <CardPanel>
+      <div>
         <form
           id={formId}
           className="flex flex-col gap-4"
@@ -102,9 +106,9 @@ export function SettingsCard({
         >
           {children}
         </form>
-      </CardPanel>
+      </div>
 
-      <CardFooter className="justify-between gap-2">
+      <div className="flex justify-between gap-2 border-t pt-3">
         <Button
           type="button"
           variant="ghost"
@@ -126,7 +130,7 @@ export function SettingsCard({
             {m.admin_settings_save()}
           </Button>
         </div>
-      </CardFooter>
-    </Card>
+      </div>
+    </section>
   );
 }

@@ -98,7 +98,7 @@ export function RoutingPreviewPanel({
           {preview.actions.map((action, index) => (
             <li
               key={action.key}
-              className="flex flex-wrap items-start gap-2 rounded-md border bg-background px-2 py-1.5 text-sm"
+              className="flex flex-wrap items-start gap-2 border-b py-1.5 text-sm last:border-b-0"
             >
               <span className="w-6 shrink-0 text-end font-mono text-xs text-muted-foreground">
                 {index + 1}
@@ -208,7 +208,7 @@ function DiffCount({
   count: number;
 }): React.ReactElement {
   return (
-    <span className="flex items-center justify-between gap-2 rounded-md border px-2 py-1">
+    <span className="flex items-center justify-between gap-2 border-b py-1 text-sm">
       <span className="text-muted-foreground">{label}</span>
       <span className="font-mono">{count}</span>
     </span>
