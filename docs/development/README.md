@@ -2,7 +2,7 @@
 
 Working notes and engineering standards for human contributors and coding agents changing Blossom. [`AGENTS.md`](../../AGENTS.md) is the short entry point; these guides hold the detailed rules. For setup, deployment, and environment variables, start with the [root README](../../README.md).
 
-Forward-looking proposals and phased execution plans live under [docs/spec/](../spec/) and the [product improvement plan](../roadmap/README.md). They are plans, not descriptions of current repository behavior, and do not replace `AGENTS.md` or these guides.
+Forward-looking proposals and phased execution plans live under [docs/spec/](../spec/) and the [product improvement plan](../roadmap/README.md); the [desktop UI overhaul spec](../spec/2026-11-26-desktop-ui-overhaul/README.md) is the migration plan for the [UI design standard](ui-design.md). They are plans, not descriptions of current repository behavior, and do not replace `AGENTS.md` or these guides.
 
 ## Choose a guide
 
@@ -11,6 +11,7 @@ Forward-looking proposals and phased execution plans live under [docs/spec/](../
 | How the pieces fit: surfaces, runtimes, deploy targets, publish gate              | [Architecture](architecture.md)                          |
 | TypeScript & React style: grouping, `data-slot`, `cva()`, modals, module scope    | [TypeScript and React style](typescript.md)              |
 | App structure in `app/`: routes, forms, queries, i18n, formatting                 | [App conventions](app.md)                                |
+| Admin UI layout, scroll ownership, page chrome, loading states, anti-slop rules   | [UI design standard](ui-design.md)                       |
 | Server functions, the agent oRPC API, MCP, Drizzle schema, migrations, env, auth  | [API, data and auth](api-data-auth.md)                   |
 | Rust style for `server-agent/`: visibility, ports, errors, async, tests           | [Rust code guide](rust.md)                               |
 | `server-agent/` architecture, OpenAPI client, sing-box supervision, updates       | [Server agent](server-agent.md)                          |
