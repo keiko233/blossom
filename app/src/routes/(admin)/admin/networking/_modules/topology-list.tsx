@@ -1,24 +1,26 @@
-import { cva } from "class-variance-authority";
-import { ArrowDownLeftIcon, ArrowUpRightIcon, ServerIcon } from "lucide-react";
 import type React from "react";
-import { useId, useRef } from "react";
+import { Fragment, useId, useRef } from "react";
 
-import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
   isSameSelection,
-  linkHealthTone,
-  linkPhaseTone,
   moveTopologySelection,
   topologySelectionOrder,
-  type TopologyLinkHealth,
-  type TopologyLinkPhase,
   type TopologyList as TopologyListModel,
-  type TopologyListLink,
   type TopologyMove,
   type TopologySelection,
 } from "@/lib/networking-topology";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
+
+import { HEALTH_LABEL, PHASE_LABEL } from "./topology-labels";
 
 export interface TopologyListProps {
   list: TopologyListModel;
@@ -36,32 +38,32 @@ const MOVE_KEYS: Partial<Record<string, TopologyMove>> = {
   End: "last",
 };
 
-const PHASE_LABEL: Record<TopologyLinkPhase, () => string> = {
-  draft: m.admin_networking_link_phase_draft,
-  pending: m.admin_networking_link_phase_pending,
-  applying: m.admin_networking_link_phase_applying,
-  stalled: m.admin_networking_link_phase_stalled,
-  failed: m.admin_networking_link_phase_failed,
-  applied: m.admin_networking_link_phase_applied,
-  removing: m.admin_networking_link_phase_removing,
-};
-
-const HEALTH_LABEL: Record<TopologyLinkHealth, () => string> = {
-  unknown: m.admin_networking_link_health_unknown,
-  healthy: m.admin_networking_link_health_healthy,
-  degraded: m.admin_networking_link_health_degraded,
-};
-
 function itemKey(selection: TopologySelection): string {
   return `${selection.kind}:${selection.id}`;
 }
 
+function parseItem(element: Element | null): TopologySelection | null {
+  const item = element?.closest<HTMLElement>("[data-topology-kind]");
+  const kind = item?.dataset.topologyKind;
+  const id = item?.dataset.topologyId;
+  if (!id || (kind !== "server" && kind !== "link")) return null;
+  return { kind, id };
+}
+
+function summarize<T extends string>(
+  values: readonly T[],
+  label: Record<T, () => string>,
+): string {
+  const distinct = [...new Set(values)];
+  if (distinct.length === 0) return "—";
+  return distinct.map((value) => label[value]()).join(" · ");
+}
+
 /**
- * Keyboard-accessible list equivalent of the topology canvas. Servers and
- * their outgoing links are selectable with one roving tab stop; incoming links
- * are summaries, selectable under their source server. Selection is owned by
- * the caller so the canvas and inspector can share it. Edit actions are not
- * rendered here; they belong in the inspector once rollout wiring lands.
+ * Dense, keyboard-accessible table equivalent of the graph. One roving tab
+ * stop: arrows, Home and End move the shared selection between servers and
+ * their outgoing links. Selecting a link here lights the same edge in the
+ * graph and fills the inspector.
  */
 export function TopologyList({
   list,
@@ -71,19 +73,32 @@ export function TopologyList({
   className,
 }: TopologyListProps): React.ReactElement {
   const hintId = useId();
-  const listRef = useRef<HTMLUListElement>(null);
-  const tabStop = selection ?? topologySelectionOrder(list.servers)[0] ?? null;
+  const bodyRef = useRef<HTMLTableSectionElement>(null);
+  const order = topologySelectionOrder(list.servers);
+  const tabStop = selection ?? order[0] ?? null;
 
   const select = (next: TopologySelection) => {
-    listRef.current
-      ?.querySelector<HTMLButtonElement>(
-        `[data-topology-item="${CSS.escape(itemKey(next))}"]`,
-      )
+    const escape =
+      typeof CSS !== "undefined" && typeof CSS.escape === "function"
+        ? CSS.escape(itemKey(next))
+        : itemKey(next);
+    bodyRef.current
+      ?.querySelector<HTMLElement>(`[data-topology-item="${escape}"]`)
       ?.focus();
     onSelectionChange(next);
   };
 
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLUListElement>) => {
+  const handleKeyDown = (
+    event: React.KeyboardEvent<HTMLTableSectionElement>,
+  ) => {
+    if (event.key === "Enter" || event.key === " ") {
+      const focused = parseItem(document.activeElement);
+      if (!focused) return;
+      event.preventDefault();
+      onSelectionChange(focused);
+      return;
+    }
+
     const move = MOVE_KEYS[event.key];
     if (!move) return;
     const next = moveTopologySelection(list.servers, selection, move);
@@ -93,18 +108,24 @@ export function TopologyList({
   };
 
   const itemProps = (item: TopologySelection) => ({
-    type: "button" as const,
     "data-topology-item": itemKey(item),
+    "data-topology-kind": item.kind,
+    "data-topology-id": item.id,
+    "data-state": isSameSelection(item, selection) ? "selected" : undefined,
     "aria-current": isSameSelection(item, selection)
       ? ("true" as const)
       : undefined,
     tabIndex: isSameSelection(item, tabStop) ? 0 : -1,
-    onClick: () => select(item),
+    onClick: () => onSelectionChange(item),
+    className: cn(
+      "cursor-pointer outline-none focus-visible:ring-[3px] focus-visible:ring-ring/24",
+      !isSameSelection(item, selection) && "text-muted-foreground",
+    ),
   });
 
   if (list.servers.length === 0) {
     return (
-      <p className={cn("text-sm text-muted-foreground", className)}>
+      <p className={cn("p-4 text-sm text-muted-foreground", className)}>
         {filtered
           ? m.admin_networking_topology_no_match()
           : m.admin_networking_topology_empty()}
@@ -115,138 +136,122 @@ export function TopologyList({
   return (
     <div
       data-slot="topology-list"
-      className={cn("flex flex-col gap-3", className)}
+      // The pane table pins its header against `--page-header-h` and
+      // `--page-toolbar-h`; a workbench canvas has neither, so zero them here
+      // and the header sticks to the top of its own scroller.
+      className={cn(
+        "h-full min-h-0 overflow-y-auto [--page-header-h:0rem] [--page-toolbar-h:0rem]",
+        className,
+      )}
     >
       <p id={hintId} className="sr-only">
         {m.admin_networking_topology_list_hint()}
       </p>
       {list.unresolvedLinkIds.length > 0 ? (
-        <p role="status" className="text-sm text-warning-foreground">
+        <p
+          role="status"
+          className="border-b px-4 py-2 text-xs text-warning-foreground"
+        >
           {m.admin_networking_topology_unresolved({
             count: list.unresolvedLinkIds.length,
           })}
         </p>
       ) : null}
 
-      <ul
-        ref={listRef}
+      <Table
+        variant="pane"
         aria-label={m.admin_networking_topology_list_label()}
-        aria-describedby={hintId}
-        className="flex flex-col gap-2"
-        onKeyDown={handleKeyDown}
       >
-        {list.servers.map((server) => (
-          <li
-            key={server.id}
-            data-slot="topology-list-server"
-            className="flex flex-col gap-1 rounded-lg border p-2"
-          >
-            <button
-              {...itemProps({ kind: "server", id: server.id })}
-              className={topologyItemVariants()}
-            >
-              <ServerIcon aria-hidden className="size-4 shrink-0" />
-              <span className="min-w-0 flex-1 truncate font-medium">
-                {server.name}
-              </span>
-              {server.enabled ? null : (
-                <Badge variant="secondary">
-                  {m.admin_networking_topology_server_disabled()}
-                </Badge>
-              )}
-            </button>
+        <TableHeader className="[&_tr]:border-b [&_tr]:bg-background">
+          <TableRow>
+            <TableHead>
+              {m.admin_networking_topology_wb_column_server()}
+            </TableHead>
+            <TableHead>
+              {m.admin_networking_topology_wb_column_state()}
+            </TableHead>
+            <TableHead className="text-end">
+              {m.admin_networking_topology_wb_column_outgoing()}
+            </TableHead>
+            <TableHead className="text-end">
+              {m.admin_networking_topology_wb_column_incoming()}
+            </TableHead>
+            <TableHead>
+              {m.admin_networking_topology_wb_column_phase()}
+            </TableHead>
+            <TableHead>
+              {m.admin_networking_topology_wb_column_health()}
+            </TableHead>
+          </TableRow>
+        </TableHeader>
 
-            {server.outgoing.length === 0 && server.incoming.length === 0 ? (
-              <p className="px-2 text-xs text-muted-foreground">
-                {m.admin_networking_topology_isolated()}
-              </p>
-            ) : null}
-            <TopologyLinkGroup
-              label={m.admin_networking_topology_outgoing()}
-              links={server.outgoing}
-              renderLink={(link) => (
-                <button
+        <TableBody
+          ref={bodyRef}
+          aria-describedby={hintId}
+          onKeyDown={handleKeyDown}
+        >
+          {list.servers.map((server) => (
+            <Fragment key={server.id}>
+              <TableRow {...itemProps({ kind: "server", id: server.id })}>
+                <TableCell className="max-w-64 truncate font-medium">
+                  {server.name}
+                </TableCell>
+                <TableCell>
+                  {server.enabled
+                    ? m.admin_networking_topology_enabled()
+                    : m.admin_networking_topology_server_disabled()}
+                </TableCell>
+                <TableCell className="text-end tabular-nums">
+                  {server.outgoing.length}
+                </TableCell>
+                <TableCell className="text-end tabular-nums">
+                  {server.incoming.length}
+                </TableCell>
+                <TableCell>
+                  {summarize(
+                    [...server.outgoing, ...server.incoming].map(
+                      (link) => link.phase,
+                    ),
+                    PHASE_LABEL,
+                  )}
+                </TableCell>
+                <TableCell>
+                  {summarize(
+                    [...server.outgoing, ...server.incoming].map(
+                      (link) => link.health,
+                    ),
+                    HEALTH_LABEL,
+                  )}
+                </TableCell>
+              </TableRow>
+
+              {server.outgoing.map((link) => (
+                <TableRow
+                  key={link.id}
                   {...itemProps({ kind: "link", id: link.id })}
-                  className={topologyItemVariants({ className: "flex-wrap" })}
                 >
-                  <TopologyLinkSummary link={link} />
-                </button>
-              )}
-            />
-            <TopologyLinkGroup
-              label={m.admin_networking_topology_incoming()}
-              links={server.incoming}
-              renderLink={(link) => (
-                <div className="flex flex-wrap items-center gap-2 px-2 py-1 text-sm">
-                  <TopologyLinkSummary link={link} />
-                </div>
-              )}
-            />
-          </li>
-        ))}
-      </ul>
+                  <TableCell className="ps-6">
+                    <span aria-hidden className="me-1.5">
+                      →
+                    </span>
+                    <span className="font-mono text-xs">
+                      {link.peerServerName}
+                    </span>
+                    <span className="ms-1.5 text-xs">· {link.inboundName}</span>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">
+                    {link.protocol}
+                  </TableCell>
+                  <TableCell className="text-end tabular-nums">—</TableCell>
+                  <TableCell className="text-end tabular-nums">—</TableCell>
+                  <TableCell>{PHASE_LABEL[link.phase]()}</TableCell>
+                  <TableCell>{HEALTH_LABEL[link.health]()}</TableCell>
+                </TableRow>
+              ))}
+            </Fragment>
+          ))}
+        </TableBody>
+      </Table>
     </div>
-  );
-}
-
-const topologyItemVariants = cva([
-  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm",
-  "outline-none hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/24",
-  "aria-[current=true]:bg-accent aria-[current=true]:text-accent-foreground",
-]);
-
-function TopologyLinkGroup({
-  label,
-  links,
-  renderLink,
-}: {
-  label: string;
-  links: TopologyListLink[];
-  renderLink: (link: TopologyListLink) => React.ReactNode;
-}): React.ReactElement | null {
-  if (links.length === 0) return null;
-  return (
-    <section aria-label={label} className="flex flex-col">
-      <h3 className="px-2 text-xs text-muted-foreground">{label}</h3>
-      <ul className="flex flex-col">
-        {links.map((link) => (
-          <li key={link.id}>{renderLink(link)}</li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-function TopologyLinkSummary({
-  link,
-}: {
-  link: TopologyListLink;
-}): React.ReactElement {
-  const Icon =
-    link.direction === "outgoing" ? ArrowUpRightIcon : ArrowDownLeftIcon;
-  const label =
-    link.direction === "outgoing"
-      ? m.admin_networking_topology_link_to({
-          server: link.peerServerName,
-          inbound: link.inboundName,
-        })
-      : m.admin_networking_topology_link_from({
-          server: link.peerServerName,
-          inbound: link.inboundName,
-        });
-
-  return (
-    <>
-      <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1 break-words">{label}</span>
-      <span className="flex shrink-0 gap-1">
-        <Badge variant={linkPhaseTone(link.phase)}>
-          {PHASE_LABEL[link.phase]()}
-        </Badge>
-        <Badge variant={linkHealthTone(link.health)}>
-          {HEALTH_LABEL[link.health]()}
-        </Badge>
-      </span>
-    </>
   );
 }

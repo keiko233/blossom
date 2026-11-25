@@ -262,3 +262,275 @@ export function moveTopologySelection(
   const nextIndex = move === "next" ? index + 1 : index - 1;
   return order[Math.min(Math.max(nextIndex, 0), order.length - 1)];
 }
+
+/* ------------------------------------------------------------------------- */
+/* Interactive graph model                                                    */
+/* ------------------------------------------------------------------------- */
+
+export type EdgeTone = "success" | "info" | "warning" | "danger" | "muted";
+export type EdgeDash = "solid" | "dashed" | "dotted";
+export type TopologyNodeTone = "success" | "warning" | "danger" | "muted";
+
+export interface LinkEdgeStyle {
+  tone: EdgeTone;
+  dash: EdgeDash;
+  width: 1.5 | 2;
+  /** In-flight work only: applying and removing. */
+  animated: boolean;
+}
+
+/**
+ * Single source of truth for edge appearance, shared by the edge component,
+ * the legend and the tests. Phase wins over health: health only refines a
+ * settled (`applied`) link.
+ */
+export function linkEdgeStyle(
+  phase: TopologyLinkPhase,
+  health: TopologyLinkHealth,
+): LinkEdgeStyle {
+  switch (phase) {
+    case "failed":
+      return { tone: "danger", dash: "solid", width: 2, animated: false };
+    case "stalled":
+      return { tone: "warning", dash: "dashed", width: 1.5, animated: false };
+    case "applied":
+      if (health === "degraded") {
+        return { tone: "warning", dash: "solid", width: 2, animated: false };
+      }
+      if (health === "healthy") {
+        return { tone: "success", dash: "solid", width: 1.5, animated: false };
+      }
+      return { tone: "muted", dash: "solid", width: 1.5, animated: false };
+    case "pending":
+      return { tone: "info", dash: "dashed", width: 1.5, animated: false };
+    case "applying":
+      return { tone: "info", dash: "dashed", width: 1.5, animated: true };
+    case "removing":
+      return { tone: "muted", dash: "dashed", width: 1.5, animated: true };
+    case "draft":
+      return { tone: "muted", dash: "dotted", width: 1.5, animated: false };
+  }
+}
+
+export interface TopologyEdgeLegendEntry {
+  key: string;
+  style: LinkEdgeStyle;
+}
+
+/** Every distinct edge style the graph can render, in legend order. */
+export const TOPOLOGY_EDGE_LEGEND: readonly TopologyEdgeLegendEntry[] = [
+  { key: "applied_healthy", style: linkEdgeStyle("applied", "healthy") },
+  { key: "applied_unknown", style: linkEdgeStyle("applied", "unknown") },
+  { key: "degraded", style: linkEdgeStyle("applied", "degraded") },
+  { key: "pending", style: linkEdgeStyle("pending", "unknown") },
+  { key: "applying", style: linkEdgeStyle("applying", "unknown") },
+  { key: "stalled", style: linkEdgeStyle("stalled", "unknown") },
+  { key: "failed", style: linkEdgeStyle("failed", "unknown") },
+  { key: "draft", style: linkEdgeStyle("draft", "unknown") },
+  { key: "removing", style: linkEdgeStyle("removing", "unknown") },
+];
+
+export type TopologyGraphNodeData = {
+  serverId: string;
+  name: string;
+  enabled: boolean;
+  tone: TopologyNodeTone;
+  incoming: number;
+  outgoing: number;
+  selected: boolean;
+  dimmed: boolean;
+};
+
+export type TopologyGraphEdgeData = {
+  linkId: string;
+  protocol: PeerProtocol;
+  style: LinkEdgeStyle;
+  phase: TopologyLinkPhase;
+  health: TopologyLinkHealth;
+  sourceServerName: string;
+  destinationServerName: string;
+  destinationInboundName: string;
+  selected: boolean;
+  dimmed: boolean;
+  parallelIndex: number;
+  parallelCount: number;
+};
+
+export interface TopologyGraphNode {
+  id: string;
+  data: TopologyGraphNodeData;
+}
+
+export interface TopologyGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  data: TopologyGraphEdgeData;
+}
+
+export interface TopologyGraph {
+  nodes: TopologyGraphNode[];
+  edges: TopologyGraphEdge[];
+}
+
+export interface TopologyRuntimeState {
+  runtimeState: string;
+  configState: string;
+}
+
+/**
+ * Server ids a search query keeps. `null` means "no query": nothing is
+ * dimmed. A server matches by its own name, or because one of its links
+ * matches by peer server or inbound name, so both ends of a matching link stay
+ * lit.
+ */
+export function matchedServerIds(
+  list: TopologyList,
+  query: string,
+): ReadonlySet<string> | null {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return null;
+
+  const matched = new Set<string>();
+  for (const server of list.servers) {
+    if (server.name.toLocaleLowerCase().includes(needle)) {
+      matched.add(server.id);
+      continue;
+    }
+    const linkMatches = (link: TopologyListLink) =>
+      link.peerServerName.toLocaleLowerCase().includes(needle) ||
+      link.inboundName.toLocaleLowerCase().includes(needle);
+    if (
+      server.outgoing.some(linkMatches) ||
+      server.incoming.some(linkMatches)
+    ) {
+      matched.add(server.id);
+    }
+  }
+  return matched;
+}
+
+function nodeTone(
+  enabled: boolean,
+  runtime: TopologyRuntimeState | undefined,
+): TopologyNodeTone {
+  if (!enabled) return "muted";
+  if (!runtime) return "success";
+  if (RUNTIME_ERROR_STATES.has(runtime.runtimeState)) return "danger";
+  if (CONFIG_ERROR_STATES.has(runtime.configState)) return "danger";
+  if (
+    runtime.runtimeState === "unknown" ||
+    runtime.runtimeState === "starting" ||
+    runtime.configState === "unknown"
+  ) {
+    return "warning";
+  }
+  // Values from a newer agent are unknown, not healthy.
+  return RUNTIME_OK_STATES.has(runtime.runtimeState) &&
+    CONFIG_OK_STATES.has(runtime.configState)
+    ? "success"
+    : "muted";
+}
+
+const RUNTIME_ERROR_STATES: ReadonlySet<string> = new Set([
+  "stopped",
+  "crash_loop",
+]);
+const CONFIG_ERROR_STATES: ReadonlySet<string> = new Set([
+  "rejected",
+  "apply_failed",
+]);
+const RUNTIME_OK_STATES: ReadonlySet<string> = new Set(["running"]);
+const CONFIG_OK_STATES: ReadonlySet<string> = new Set(["applied"]);
+
+/**
+ * Turns the list model into a node/edge graph. Only resolved links become
+ * edges (`list` already contains them); links that share an ordered server
+ * pair get `parallelIndex`/`parallelCount` so the edge component can fan them
+ * out.
+ */
+export function buildTopologyGraph(
+  input: TopologyInput,
+  list: TopologyList,
+  selection: TopologySelection | null,
+  matched: ReadonlySet<string> | null,
+  runtime?: ReadonlyMap<string, TopologyRuntimeState>,
+): TopologyGraph {
+  const isSelected = (kind: "server" | "link", id: string) =>
+    selection?.kind === kind && selection.id === id;
+  const isDimmed = (id: string) => matched !== null && !matched.has(id);
+
+  const nodes: TopologyGraphNode[] = list.servers.map((server) => ({
+    id: server.id,
+    data: {
+      serverId: server.id,
+      name: server.name,
+      enabled: server.enabled,
+      tone: nodeTone(server.enabled, runtime?.get(server.id)),
+      incoming: server.incoming.length,
+      outgoing: server.outgoing.length,
+      selected: isSelected("server", server.id),
+      dimmed: isDimmed(server.id),
+    },
+  }));
+
+  const inboundById = new Map(
+    input.peerInbounds.map((inbound) => [inbound.id, inbound]),
+  );
+  const serverNameById = new Map(
+    input.servers.map((server) => [server.id, server.name]),
+  );
+
+  const pairCounts = new Map<string, number>();
+  for (const link of input.links) {
+    const inbound = inboundById.get(link.destinationInboundId);
+    const destinationServerId = inbound?.serverId;
+    if (!destinationServerId) continue;
+    if (!serverNameById.has(link.sourceServerId)) continue;
+    const key = `${link.sourceServerId}\u0000${destinationServerId}`;
+    pairCounts.set(key, (pairCounts.get(key) ?? 0) + 1);
+  }
+
+  const pairSeen = new Map<string, number>();
+  const orderedLinks = [...input.links].sort((a, b) =>
+    a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+  );
+  const edges: TopologyGraphEdge[] = [];
+  for (const link of orderedLinks) {
+    const inbound = inboundById.get(link.destinationInboundId);
+    if (!inbound) continue;
+    const destinationServerId = inbound.serverId;
+    const sourceName = serverNameById.get(link.sourceServerId);
+    const destinationName = serverNameById.get(destinationServerId);
+    if (!sourceName || !destinationName) continue;
+
+    const key = `${link.sourceServerId}\u0000${destinationServerId}`;
+    const parallelIndex = pairSeen.get(key) ?? 0;
+    pairSeen.set(key, parallelIndex + 1);
+    const sourceMatches = matched === null || matched.has(link.sourceServerId);
+    const destinationMatches =
+      matched === null || matched.has(destinationServerId);
+
+    edges.push({
+      id: link.id,
+      source: link.sourceServerId,
+      target: destinationServerId,
+      data: {
+        linkId: link.id,
+        protocol: inbound.protocol,
+        style: linkEdgeStyle(link.phase, link.health),
+        phase: link.phase,
+        health: link.health,
+        sourceServerName: sourceName,
+        destinationServerName: destinationName,
+        destinationInboundName: inbound.name,
+        selected: isSelected("link", link.id),
+        dimmed: !sourceMatches && !destinationMatches,
+        parallelIndex,
+        parallelCount: pairCounts.get(key) ?? 1,
+      },
+    });
+  }
+
+  return { nodes, edges };
+}
