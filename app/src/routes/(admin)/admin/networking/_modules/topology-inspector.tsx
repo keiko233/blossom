@@ -1,6 +1,10 @@
 import { Link } from "@tanstack/react-router";
 import type React from "react";
 
+import {
+  SectionHeader,
+  SectionTitle,
+} from "@/components/app-shell/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatDateTime } from "@/lib/format";
@@ -13,13 +17,27 @@ import type { NetworkingWorkspaceData } from "@/query/networking-read";
 
 import { LinkHealthBadge, LinkPhaseBadge } from "./networking-badges";
 
-function detailRow(label: string, value: React.ReactNode): React.ReactElement {
+function DetailRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}): React.ReactElement {
   return (
-    <div className="grid grid-cols-[8rem_minmax(0,1fr)] gap-2 text-sm">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="min-w-0 break-words">{value}</span>
+    <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-2 text-sm">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 break-words">{children}</dd>
     </div>
   );
+}
+
+function DetailList({
+  children,
+}: {
+  children: React.ReactNode;
+}): React.ReactElement {
+  return <dl className="flex flex-col gap-2">{children}</dl>;
 }
 
 export function TopologyInspector({
@@ -53,45 +71,55 @@ export function TopologyInspector({
       (row) => row.serverId === server.id,
     );
     return (
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <h2 className="min-w-0 flex-1 truncate font-medium">{server.name}</h2>
-          {server.enabled ? (
-            <Badge variant="success">
-              {m.admin_networking_topology_enabled()}
-            </Badge>
-          ) : (
-            <Badge variant="warning">
-              {m.admin_networking_topology_server_disabled()}
-            </Badge>
-          )}
-        </div>
-        {detailRow(m.admin_networking_topology_address(), server.address)}
-        {detailRow(
-          m.admin_networking_topology_agent_state(),
-          `${server.runtimeState} / ${server.configState}`,
-        )}
-        {detailRow(
-          m.admin_networking_topology_sequence(),
-          `${server.appliedRevisionSeq} / ${server.desiredRevisionSeq}`,
-        )}
-        {detailRow(
-          m.admin_networking_topology_links_count(),
-          m.admin_networking_topology_summary({
-            outgoing: summary.outgoing.length,
-            incoming: summary.incoming.length,
-          }),
-        )}
-        {detailRow(
-          m.admin_networking_topology_route_draft(),
-          draft
-            ? m.admin_networking_topology_route_draft_version({
-                version: draft.version,
-                rules: draft.rules.length,
-              })
-            : m.admin_networking_topology_route_draft_none(),
-        )}
-        <div className="flex flex-wrap gap-2 pt-1">
+      <div className="flex flex-col gap-4">
+        <SectionHeader>
+          <div className="flex min-w-0 items-center gap-2">
+            <SectionTitle>{server.name}</SectionTitle>
+            {server.enabled ? (
+              <Badge variant="success">
+                {m.admin_networking_topology_enabled()}
+              </Badge>
+            ) : (
+              <Badge variant="warning">
+                {m.admin_networking_topology_server_disabled()}
+              </Badge>
+            )}
+          </div>
+        </SectionHeader>
+
+        <DetailList>
+          <DetailRow label={m.admin_networking_topology_address()}>
+            <span className="font-mono text-xs">{server.address}</span>
+          </DetailRow>
+          <DetailRow label={m.admin_networking_topology_agent_state()}>
+            <span className="font-mono text-xs">
+              {server.runtimeState} / {server.configState}
+            </span>
+          </DetailRow>
+          <DetailRow label={m.admin_networking_topology_sequence()}>
+            <span className="tabular-nums">
+              {server.appliedRevisionSeq} / {server.desiredRevisionSeq}
+            </span>
+          </DetailRow>
+          <DetailRow label={m.admin_networking_topology_links_count()}>
+            <span className="tabular-nums">
+              {m.admin_networking_topology_summary({
+                outgoing: summary.outgoing.length,
+                incoming: summary.incoming.length,
+              })}
+            </span>
+          </DetailRow>
+          <DetailRow label={m.admin_networking_topology_route_draft()}>
+            {draft
+              ? m.admin_networking_topology_route_draft_version({
+                  version: draft.version,
+                  rules: draft.rules.length,
+                })
+              : m.admin_networking_topology_route_draft_none()}
+          </DetailRow>
+        </DetailList>
+
+        <div className="flex flex-wrap gap-2 border-t pt-3">
           <Button
             size="sm"
             variant="outline"
@@ -134,71 +162,86 @@ export function TopologyInspector({
     ) ?? [];
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <h2 className="min-w-0 flex-1 font-medium">
-          {m.admin_networking_topology_link_details()}
-        </h2>
-        <LinkPhaseBadge phase={link.phase} />
-        <LinkHealthBadge health={link.health} />
-      </div>
-      {detailRow(
-        m.admin_networking_topology_source(),
-        `${link.sourceServerName} · ${link.sourceServerId}`,
-      )}
-      {detailRow(
-        m.admin_networking_topology_destination(),
-        `${link.destinationServerName} · ${link.destinationInboundName}`,
-      )}
-      {detailRow(m.admin_networking_topology_protocol(), link.protocol)}
-      {detailRow(
-        m.admin_networking_topology_outbound(),
-        `${link.outboundName} · ${link.outboundTag}`,
-      )}
-      {detailRow(
-        m.admin_networking_topology_credential_generation(),
-        m.admin_networking_topology_credential_value({
-          generation: link.credentialGeneration ?? 0,
-          revisions: link.credentialRevision,
-        }),
-      )}
-      {detailRow(m.admin_networking_topology_revision(), String(link.revision))}
-      {detailRow(
-        m.admin_networking_topology_probe(),
-        link.probeAt
-          ? m.admin_networking_topology_probe_value({
-              outcome: link.probeOutcome ?? "unknown",
-              time: formatDateTime(link.probeAt),
-            })
-          : m.admin_networking_topology_probe_none(),
-      )}
-      {detailRow(
-        m.admin_networking_topology_route_refs_count(),
-        String(link.routeRuleIds.length),
-      )}
+    <div className="flex flex-col gap-4">
+      <SectionHeader>
+        <div className="flex min-w-0 items-center gap-2">
+          <SectionTitle>
+            {m.admin_networking_topology_link_details()}
+          </SectionTitle>
+          <LinkPhaseBadge phase={link.phase} />
+          <LinkHealthBadge health={link.health} />
+        </div>
+      </SectionHeader>
+
+      <DetailList>
+        <DetailRow label={m.admin_networking_topology_source()}>
+          <span className="font-mono text-xs">{link.sourceServerName}</span>
+        </DetailRow>
+        <DetailRow label={m.admin_networking_topology_destination()}>
+          <span className="font-mono text-xs">
+            {link.destinationServerName} · {link.destinationInboundName}
+          </span>
+        </DetailRow>
+        <DetailRow label={m.admin_networking_topology_protocol()}>
+          <span className="font-mono text-xs">{link.protocol}</span>
+        </DetailRow>
+        <DetailRow label={m.admin_networking_topology_outbound()}>
+          <span className="font-mono text-xs">
+            {link.outboundName} · {link.outboundTag}
+          </span>
+        </DetailRow>
+        <DetailRow label={m.admin_networking_topology_credential_generation()}>
+          <span className="tabular-nums">
+            {m.admin_networking_topology_credential_value({
+              generation: link.credentialGeneration ?? 0,
+              revisions: link.credentialRevision,
+            })}
+          </span>
+        </DetailRow>
+        <DetailRow label={m.admin_networking_topology_revision()}>
+          <span className="tabular-nums">{link.revision}</span>
+        </DetailRow>
+        <DetailRow label={m.admin_networking_topology_probe()}>
+          {link.probeAt
+            ? m.admin_networking_topology_probe_value({
+                outcome: link.probeOutcome ?? "unknown",
+                time: formatDateTime(link.probeAt),
+              })
+            : m.admin_networking_topology_probe_none()}
+        </DetailRow>
+        <DetailRow label={m.admin_networking_topology_route_refs_count()}>
+          <span className="tabular-nums">{link.routeRuleIds.length}</span>
+        </DetailRow>
+      </DetailList>
+
       {referencingRules.length > 0 ? (
-        <ul className="flex flex-col gap-1">
+        <ul className="flex flex-col gap-1 border-t pt-3">
           {referencingRules.map((rule) => (
             <li
               key={rule.ruleId}
-              className="rounded-md border bg-background px-2 py-1 font-mono text-xs"
+              className="font-mono text-xs text-muted-foreground"
             >
               {rule.ruleId} · {rule.inboundTags.join(", ")}
             </li>
           ))}
         </ul>
       ) : (
-        <p className="text-xs text-muted-foreground">
+        <p className="border-t pt-3 text-xs text-muted-foreground">
           {m.admin_networking_topology_no_route_refs()}
         </p>
       )}
-      <Button
-        size="sm"
-        variant="outline"
-        render={<Link to="/admin/networking/links" />}
-      >
-        {m.admin_networking_action_edit_link()}
-      </Button>
+
+      <div className="border-t pt-3">
+        <Button
+          size="sm"
+          variant="outline"
+          render={
+            <Link to="/admin/networking/links" search={{ link: link.id }} />
+          }
+        >
+          {m.admin_networking_action_edit_link()}
+        </Button>
+      </div>
     </div>
   );
 }

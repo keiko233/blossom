@@ -12,16 +12,16 @@ import {
 } from "@/query/managed-rollout";
 import type { NetworkingRolloutView } from "@/query/networking-read";
 
-import {
-  NetworkingSection,
-  RolloutStatusBadge,
-  StageStatusBadge,
-} from "./networking-badges";
+import { RolloutStatusBadge, StageStatusBadge } from "./networking-badges";
 import { networkingRolloutReasonMessage } from "./networking-write-message";
 import { useInvalidateNetworking } from "./use-networking-workspace";
 
 type RolloutAction = "retry" | "abort";
 
+/**
+ * Rollout journal as a flat list. Used in the topology rail and on the Links
+ * and Routing pages; it is never wrapped in a card, so it composes anywhere.
+ */
 export function NetworkingRollouts({
   rollouts,
   activationEnabled,
@@ -80,34 +80,33 @@ export function NetworkingRollouts({
         actionMutation.mutateAsync({ rolloutId, action: "abort" }),
     });
   };
+
   return (
-    <NetworkingSection
-      title={m.admin_networking_rollout_title()}
-      description={m.admin_networking_rollout_description()}
-    >
+    <section data-slot="networking-rollouts" className="flex flex-col gap-3">
+      <p className="text-xs text-muted-foreground">
+        {m.admin_networking_rollout_description()}
+      </p>
       {rollouts.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           {m.admin_networking_rollout_empty()}
         </p>
       ) : (
-        <ul className="flex flex-col gap-3">
+        <ul className="flex flex-col divide-y border-y">
           {rollouts.map((rollout) => (
             <li
               key={rollout.rolloutId}
               data-slot="networking-rollout"
-              className="flex flex-col gap-2 rounded-lg border bg-background p-3"
+              className="flex flex-col gap-2 py-3 first:pt-2 last:pb-2"
             >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <BadgeId id={rollout.rolloutId} />
-                  <RolloutStatusBadge status={rollout.status} />
-                  {rollout.paused ? (
-                    <span className="text-xs text-warning-foreground">
-                      {m.admin_networking_rollout_paused()}
-                    </span>
-                  ) : null}
-                </div>
-                <span className="text-xs text-muted-foreground">
+              <div className="flex flex-wrap items-center gap-2">
+                <BadgeId id={rollout.rolloutId} />
+                <RolloutStatusBadge status={rollout.status} />
+                {rollout.paused ? (
+                  <span className="text-xs text-warning-foreground">
+                    {m.admin_networking_rollout_paused()}
+                  </span>
+                ) : null}
+                <span className="ms-auto text-xs text-muted-foreground tabular-nums">
                   {m.admin_networking_rollout_updated({
                     time: formatDateTime(rollout.updatedAt),
                   })}
@@ -120,7 +119,7 @@ export function NetworkingRollouts({
                     key={`${rollout.rolloutId}-${stage.ordinal}`}
                     className="flex flex-wrap items-center gap-2 text-sm"
                   >
-                    <span className="font-mono text-xs text-muted-foreground">
+                    <span className="font-mono text-xs text-muted-foreground tabular-nums">
                       {stage.ordinal}
                     </span>
                     <span className="min-w-0 flex-1 truncate">
@@ -128,7 +127,7 @@ export function NetworkingRollouts({
                     </span>
                     <StageStatusBadge status={stage.status} />
                     {stage.deadlineAt ? (
-                      <span className="text-xs text-muted-foreground">
+                      <span className="text-xs text-muted-foreground tabular-nums">
                         {m.admin_networking_rollout_stage_deadline({
                           time: formatDateTime(stage.deadlineAt),
                         })}
@@ -144,7 +143,7 @@ export function NetworkingRollouts({
               </ul>
 
               <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-                <span>
+                <span className="tabular-nums">
                   {rollout.claimsHeld
                     ? m.admin_networking_rollout_claims_held({
                         count: rollout.claimedServerIds.length,
@@ -164,9 +163,15 @@ export function NetworkingRollouts({
                 <div className="flex flex-wrap gap-2">
                   {rollout.actions.retry ? (
                     <Button
-                      size="sm"
+                      size="xs"
                       variant="outline"
-                      disabled={!activationEnabled || actionMutation.isPending}
+                      disabled={!activationEnabled}
+                      loading={
+                        actionMutation.isPending &&
+                        actionMutation.variables?.rolloutId ===
+                          rollout.rolloutId &&
+                        actionMutation.variables.action === "retry"
+                      }
                       title={
                         activationEnabled
                           ? undefined
@@ -184,9 +189,15 @@ export function NetworkingRollouts({
                   ) : null}
                   {rollout.actions.abort ? (
                     <Button
-                      size="sm"
+                      size="xs"
                       variant="destructive-outline"
-                      disabled={!activationEnabled || actionMutation.isPending}
+                      disabled={!activationEnabled}
+                      loading={
+                        actionMutation.isPending &&
+                        actionMutation.variables?.rolloutId ===
+                          rollout.rolloutId &&
+                        actionMutation.variables.action === "abort"
+                      }
                       title={
                         activationEnabled
                           ? undefined
@@ -203,7 +214,7 @@ export function NetworkingRollouts({
           ))}
         </ul>
       )}
-    </NetworkingSection>
+    </section>
   );
 }
 
