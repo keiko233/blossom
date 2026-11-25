@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import type React from "react";
 
+import { WorkbenchViewport } from "@/components/app-shell/workspace";
 import { m } from "@/paraglide/messages";
 
 import { AgentTerminalPanel } from "../_modules/agent-terminal-panel";
@@ -17,5 +18,9 @@ export const Route = createFileRoute(
 
 function RouteComponent(): React.ReactElement {
   const server = useWorkspaceServer();
-  return <AgentTerminalPanel server={server} />;
+  return (
+    <WorkbenchViewport data-slot="terminal-workbench">
+      <AgentTerminalPanel server={server} />
+    </WorkbenchViewport>
+  );
 }
