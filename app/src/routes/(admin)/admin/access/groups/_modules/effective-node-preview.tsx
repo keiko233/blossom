@@ -2,10 +2,14 @@ import { Link } from "@tanstack/react-router";
 import { AlertTriangleIcon } from "lucide-react";
 import type React from "react";
 
+import {
+  SectionHeader,
+  SectionTitle,
+} from "@/components/app-shell/page-header";
+import { KeyValueGridSkeleton } from "@/components/app-shell/skeletons";
 import { NodeHealthBadge } from "@/components/node-health-badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Spinner } from "@/components/ui/spinner";
 import type { EffectiveNodePreview } from "@/lib/access-impact";
 import { m } from "@/paraglide/messages";
 
@@ -39,25 +43,23 @@ export function EffectiveNodePreviewPanel({
   return (
     <section
       aria-label={m.admin_access_preview_title()}
-      className="flex flex-col gap-3 rounded-xl border bg-card p-4 shadow-xs"
+      className="flex flex-col gap-3"
     >
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="font-medium">{m.admin_access_preview_title()}</h2>
+      <SectionHeader>
+        <SectionTitle>{m.admin_access_preview_title()}</SectionTitle>
         {preview ? (
           <span className="text-xs text-muted-foreground">
             {m.admin_access_preview_count({ count: preview.nodes.length })}
           </span>
         ) : null}
-      </div>
+      </SectionHeader>
 
       {isError ? (
         <p className="text-sm text-destructive">
           {m.admin_access_preview_error()}
         </p>
       ) : !preview ? (
-        <div className="flex justify-center py-4">
-          <Spinner />
-        </div>
+        <KeyValueGridSkeleton items={4} />
       ) : (
         <>
           {preview.nodes.length === 0 ? (

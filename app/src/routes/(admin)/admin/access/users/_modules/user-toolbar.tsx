@@ -73,7 +73,7 @@ export function UserToolbar({
   ];
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
       <DebouncedSearchInput
         key={searchResetToken}
         defaultValue={search.q ?? ""}
@@ -90,7 +90,7 @@ export function UserToolbar({
           })
         }
       >
-        <SelectTrigger className="w-40">
+        <SelectTrigger className="w-40 shrink-0">
           <SelectValue />
         </SelectTrigger>
         <SelectPopup>
@@ -111,7 +111,7 @@ export function UserToolbar({
           })
         }
       >
-        <SelectTrigger className="w-40">
+        <SelectTrigger className="w-40 shrink-0">
           <SelectValue />
         </SelectTrigger>
         <SelectPopup>
@@ -133,7 +133,7 @@ export function UserToolbar({
           })
         }
       >
-        <SelectTrigger className="w-56">
+        <SelectTrigger className="w-56 shrink-0">
           <SelectValue />
         </SelectTrigger>
         <SelectPopup>
@@ -146,7 +146,12 @@ export function UserToolbar({
       </Select>
 
       {hasFilters ? (
-        <Button size="sm" variant="ghost" onClick={onClear}>
+        <Button
+          className="shrink-0"
+          size="sm"
+          variant="ghost"
+          onClick={onClear}
+        >
           <XIcon />
           {m.admin_users_filter_clear()}
         </Button>

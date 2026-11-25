@@ -59,7 +59,7 @@ export function BatchToolbar({
   ];
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
       <DebouncedSearchInput
         key={searchResetToken}
         defaultValue={search.q ?? ""}
@@ -74,7 +74,7 @@ export function BatchToolbar({
           onChange({ plan: next === ALL ? undefined : (next as string) })
         }
       >
-        <SelectTrigger className="w-48">
+        <SelectTrigger className="w-48 shrink-0">
           <SelectValue />
         </SelectTrigger>
         <SelectPopup>
@@ -95,7 +95,7 @@ export function BatchToolbar({
           })
         }
       >
-        <SelectTrigger className="w-40">
+        <SelectTrigger className="w-40 shrink-0">
           <SelectValue />
         </SelectTrigger>
         <SelectPopup>
@@ -116,7 +116,7 @@ export function BatchToolbar({
           })
         }
       >
-        <SelectTrigger className="w-40">
+        <SelectTrigger className="w-40 shrink-0">
           <SelectValue />
         </SelectTrigger>
         <SelectPopup>
@@ -129,7 +129,12 @@ export function BatchToolbar({
       </Select>
 
       {hasFilters ? (
-        <Button size="sm" variant="ghost" onClick={onClear}>
+        <Button
+          className="shrink-0"
+          size="sm"
+          variant="ghost"
+          onClick={onClear}
+        >
           <XIcon />
           {m.admin_redeem_filter_clear()}
         </Button>

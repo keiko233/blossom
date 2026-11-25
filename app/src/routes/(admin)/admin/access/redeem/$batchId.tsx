@@ -5,13 +5,16 @@ import type React from "react";
 import { useState } from "react";
 
 import {
+  PageContent,
   PageHeader,
+  PageHeaderActions,
   PageHeaderTitle,
 } from "@/components/app-shell/page-header";
+import { TableSkeleton } from "@/components/app-shell/skeletons";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Confirm } from "@/components/ui/confirm";
-import { Spinner } from "@/components/ui/spinner";
+import { Skeleton } from "@/components/ui/skeleton";
 import { toastManager } from "@/components/ui/toast";
 import { totalRedeemUses } from "@/lib/redeem-batch";
 import { redeemDetailSearchSchema } from "@/lib/redeem-search";
@@ -73,26 +76,40 @@ function RouteComponent(): React.ReactElement {
 
   if (isPending) {
     return (
-      <div className="flex justify-center py-16">
-        <Spinner />
+      <div className="flex min-w-0 flex-col [--page-toolbar-h:0rem]">
+        <PageHeader>
+          <Skeleton className="h-5 w-40" />
+        </PageHeader>
+        <PageContent>
+          <Skeleton className="h-4 w-72" />
+          <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
+            <TableSkeleton columns={5} rows={8} />
+            <TableSkeleton columns={3} rows={6} />
+          </div>
+        </PageContent>
       </div>
     );
   }
 
   if (error || !batch) {
     return (
-      <div className="flex flex-col gap-4 p-4">
-        <Alert variant="error">
-          <AlertDescription>{m.admin_redeem_detail_error()}</AlertDescription>
-        </Alert>
-        <Button
-          className="w-fit"
-          render={<Link to="/admin/access/redeem" />}
-          variant="outline"
-        >
-          <ArrowLeftIcon />
-          {m.admin_redeem_back()}
-        </Button>
+      <div className="flex min-w-0 flex-col [--page-toolbar-h:0rem]">
+        <PageHeader>
+          <PageHeaderTitle>{m.admin_redeem_detail_crumb()}</PageHeaderTitle>
+        </PageHeader>
+        <PageContent>
+          <Alert variant="error">
+            <AlertDescription>{m.admin_redeem_detail_error()}</AlertDescription>
+          </Alert>
+          <Button
+            className="w-fit"
+            render={<Link to="/admin/access/redeem" />}
+            variant="outline"
+          >
+            <ArrowLeftIcon />
+            {m.admin_redeem_back()}
+          </Button>
+        </PageContent>
       </div>
     );
   }
@@ -125,8 +142,8 @@ function RouteComponent(): React.ReactElement {
   };
 
   return (
-    <div className="flex flex-col gap-4 p-4">
-      <PageHeader className="flex-wrap gap-2">
+    <div className="flex min-w-0 flex-col [--page-toolbar-h:0rem]">
+      <PageHeader>
         <div className="flex items-center gap-3">
           <Button
             aria-label={m.admin_redeem_back()}
@@ -139,13 +156,14 @@ function RouteComponent(): React.ReactElement {
           <PageHeaderTitle>{batch.name}</PageHeaderTitle>
           <RedeemStatusBadge status={batch.status} />
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" onClick={() => setAddOpen(true)}>
+        <PageHeaderActions>
+          <Button size="sm" variant="outline" onClick={() => setAddOpen(true)}>
             <PlusIcon />
             {m.admin_redeem_add_codes()}
           </Button>
           <Button
             loading={toggleMutation.isPending}
+            size="sm"
             variant="outline"
             onClick={() => toggleMutation.mutate(!batch.disabled)}
           >
@@ -155,36 +173,46 @@ function RouteComponent(): React.ReactElement {
           </Button>
           {batch.redemptionCount === 0 ? (
             <Button
+              size="sm"
               variant="destructive-outline"
               onClick={() => void requestDelete()}
             >
               {m.admin_redeem_action_delete()}
             </Button>
           ) : null}
-        </div>
+        </PageHeaderActions>
       </PageHeader>
 
-      <p className="text-sm text-muted-foreground">
-        {m.admin_redeem_detail_summary({
-          codes: batch.codeCount,
-          redeemed: batch.redeemed,
-          total: totalRedeemUses(batch.codeCount, batch.maxRedemptionsPerCode),
-        })}
-        {batch.redemptionCount > 0
-          ? ` ${m.admin_redeem_detail_delete_hint()}`
-          : ""}
-      </p>
+      <PageContent>
+        <p className="text-sm text-muted-foreground">
+          {m.admin_redeem_detail_summary({
+            codes: batch.codeCount,
+            redeemed: batch.redeemed,
+            total: totalRedeemUses(
+              batch.codeCount,
+              batch.maxRedemptionsPerCode,
+            ),
+          })}
+          {batch.redemptionCount > 0
+            ? ` ${m.admin_redeem_detail_delete_hint()}`
+            : ""}
+        </p>
 
-      <BatchSettingsCard
-        key={`${batch.id}-${batch.updatedAt.getTime()}`}
-        batch={batch}
-      />
-      <BatchCodesTable
-        batchId={batch.id}
-        maxRedemptionsPerCode={batch.maxRedemptionsPerCode}
-        search={search}
-      />
-      <BatchRedemptionsTable batchId={batch.id} search={search} />
+        <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
+          <div className="flex min-w-0 flex-col gap-6">
+            <BatchCodesTable
+              batchId={batch.id}
+              maxRedemptionsPerCode={batch.maxRedemptionsPerCode}
+              search={search}
+            />
+            <BatchRedemptionsTable batchId={batch.id} search={search} />
+          </div>
+          <BatchSettingsCard
+            key={`${batch.id}-${batch.updatedAt.getTime()}`}
+            batch={batch}
+          />
+        </div>
+      </PageContent>
 
       <AddCodesDialog
         batchId={batch.id}

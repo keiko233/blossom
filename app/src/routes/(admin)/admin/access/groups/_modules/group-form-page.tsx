@@ -5,8 +5,10 @@ import * as React from "react";
 
 import {
   PageHeader,
+  PageHeaderActions,
   PageHeaderTitle,
 } from "@/components/app-shell/page-header";
+import { WorkbenchViewport } from "@/components/app-shell/workspace";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field, FieldLabel } from "@/components/ui/field";
@@ -68,11 +70,11 @@ export function GroupFormPage({
   const nodeNames = new Map(nodeOptions.map((node) => [node.id, node.name]));
 
   return (
-    <div
+    <WorkbenchViewport
       data-slot="group-editor-page"
-      className="flex min-h-0 flex-1 flex-col md:h-full md:overflow-hidden"
+      className="max-md:h-auto max-md:max-h-none max-md:overflow-visible md:h-full"
     >
-      <PageHeader className="sticky top-0 z-20 shrink-0 gap-3 border-b bg-background/95 px-4 py-3 backdrop-blur">
+      <PageHeader>
         <div className="flex min-w-0 items-center gap-3">
           <Button
             variant="ghost"
@@ -94,34 +96,51 @@ export function GroupFormPage({
               })}
             </Badge>
           ) : null}
+          <form.Subscribe
+            selector={(state) => ({
+              nodeIds: state.values.nodeIds,
+              isSubmitting: state.isSubmitting,
+            })}
+          >
+            {({ nodeIds, isSubmitting }) => {
+              const dirty = isMembershipDraftDirty(baseline.nodeIds, nodeIds);
+              return (
+                <span
+                  aria-live="polite"
+                  className="truncate text-xs text-muted-foreground"
+                >
+                  {conflict
+                    ? m.admin_proxies_groups_form_status_conflict()
+                    : dirty
+                      ? m.admin_proxies_groups_form_status_unsaved()
+                      : isEdit
+                        ? m.admin_proxies_groups_form_status_saved()
+                        : m.admin_proxies_groups_form_status_new()}
+                  {isSubmitting
+                    ? ` · ${m.admin_proxies_groups_form_saving()}`
+                    : ""}
+                </span>
+              );
+            }}
+          </form.Subscribe>
         </div>
-        <form.Subscribe
-          selector={(state) => ({
-            nodeIds: state.values.nodeIds,
-            isSubmitting: state.isSubmitting,
-          })}
-        >
-          {({ nodeIds, isSubmitting }) => {
-            const dirty = isMembershipDraftDirty(baseline.nodeIds, nodeIds);
-            return (
-              <span
-                aria-live="polite"
-                className="text-xs text-muted-foreground"
+        <PageHeaderActions>
+          <Button variant="ghost" size="sm" render={<Link to={GROUPS_LIST} />}>
+            {m.admin_proxies_groups_form_cancel()}
+          </Button>
+          <form.Subscribe selector={(state) => state.isSubmitting}>
+            {(isSubmitting) => (
+              <Button
+                type="submit"
+                form="group-form"
+                size="sm"
+                loading={isSubmitting}
               >
-                {conflict
-                  ? m.admin_proxies_groups_form_status_conflict()
-                  : dirty
-                    ? m.admin_proxies_groups_form_status_unsaved()
-                    : isEdit
-                      ? m.admin_proxies_groups_form_status_saved()
-                      : m.admin_proxies_groups_form_status_new()}
-                {isSubmitting
-                  ? ` · ${m.admin_proxies_groups_form_saving()}`
-                  : ""}
-              </span>
-            );
-          }}
-        </form.Subscribe>
+                {m.admin_proxies_groups_form_save()}
+              </Button>
+            )}
+          </form.Subscribe>
+        </PageHeaderActions>
       </PageHeader>
 
       <form
@@ -133,8 +152,8 @@ export function GroupFormPage({
           void form.handleSubmit();
         }}
       >
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 p-4">
+        <div className="grid min-h-0 flex-1 max-xl:overflow-y-auto xl:grid-cols-[minmax(0,1fr)_26rem]">
+          <div className="flex min-h-0 flex-col gap-4 p-4 lg:p-6 xl:overflow-y-auto">
             {conflict && group ? (
               <form.Subscribe selector={(state) => state.values.nodeIds}>
                 {(nodeIds) => (
@@ -150,10 +169,7 @@ export function GroupFormPage({
               </form.Subscribe>
             ) : null}
 
-            <div
-              data-slot="group-details"
-              className="flex flex-col gap-3 rounded-xl border bg-card p-4 shadow-xs"
-            >
+            <div data-slot="group-details" className="flex flex-col gap-3">
               <div className="grid gap-3 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,1.6fr)_9rem]">
                 <form.Field name="name">
                   {(field) => (
@@ -241,7 +257,9 @@ export function GroupFormPage({
                 </Field>
               )}
             </form.Field>
+          </div>
 
+          <aside className="flex min-h-0 flex-col gap-6 border-t p-4 lg:p-6 xl:overflow-y-auto xl:border-s xl:border-t-0">
             <form.Subscribe selector={(state) => state.values.nodeIds}>
               {(selectedNodeIds) => (
                 <>
@@ -269,12 +287,12 @@ export function GroupFormPage({
                 </>
               )}
             </form.Subscribe>
-          </div>
+          </aside>
         </div>
 
         <div
           data-slot="group-save-bar"
-          className="sticky bottom-0 z-20 shrink-0 border-t bg-background/95 px-4 py-3 backdrop-blur"
+          className="shrink-0 border-t bg-background px-4 py-3 lg:px-6"
         >
           <form.Subscribe
             selector={(state) => ({
@@ -288,8 +306,11 @@ export function GroupFormPage({
                 ? nodeIds.filter((id) => !nodeNames.has(id)).length
                 : 0;
               return (
-                <div className="mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-2">
-                  <span className="text-xs text-muted-foreground">
+                <div className="flex w-full flex-wrap items-center justify-between gap-2">
+                  <span
+                    aria-live="polite"
+                    className="text-xs text-muted-foreground"
+                  >
                     {conflict
                       ? m.admin_proxies_groups_form_status_conflict()
                       : missing > 0
@@ -321,6 +342,6 @@ export function GroupFormPage({
           </form.Subscribe>
         </div>
       </form>
-    </div>
+    </WorkbenchViewport>
   );
 }

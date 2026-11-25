@@ -80,7 +80,7 @@ export function SubscriptionToolbar({
   ];
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
       <DebouncedSearchInput
         key={searchResetToken}
         defaultValue={search.q ?? ""}
@@ -97,7 +97,7 @@ export function SubscriptionToolbar({
           })
         }
       >
-        <SelectTrigger className="w-40">
+        <SelectTrigger className="w-40 shrink-0">
           <SelectValue />
         </SelectTrigger>
         <SelectPopup>
@@ -116,7 +116,7 @@ export function SubscriptionToolbar({
           onChange({ plan: next === ALL ? undefined : (next as string) })
         }
       >
-        <SelectTrigger className="w-44">
+        <SelectTrigger className="w-44 shrink-0">
           <SelectValue />
         </SelectTrigger>
         <SelectPopup>
@@ -135,7 +135,7 @@ export function SubscriptionToolbar({
           onChange({ expiring: next === ALL ? undefined : Number(next) })
         }
       >
-        <SelectTrigger className="w-44">
+        <SelectTrigger className="w-44 shrink-0">
           <SelectValue />
         </SelectTrigger>
         <SelectPopup>
@@ -156,7 +156,7 @@ export function SubscriptionToolbar({
           })
         }
       >
-        <SelectTrigger className="w-40">
+        <SelectTrigger className="w-40 shrink-0">
           <SelectValue />
         </SelectTrigger>
         <SelectPopup>
@@ -168,7 +168,7 @@ export function SubscriptionToolbar({
         </SelectPopup>
       </Select>
 
-      <label className="flex items-center gap-2 text-sm text-muted-foreground">
+      <label className="flex shrink-0 items-center gap-2 text-sm text-muted-foreground">
         <Checkbox
           checked={search.stored === true}
           disabled={search.status === undefined}
@@ -180,7 +180,12 @@ export function SubscriptionToolbar({
       </label>
 
       {hasFilters ? (
-        <Button size="sm" variant="ghost" onClick={onClear}>
+        <Button
+          className="shrink-0"
+          size="sm"
+          variant="ghost"
+          onClick={onClear}
+        >
           <XIcon />
           {m.admin_subscriptions_filter_clear()}
         </Button>

@@ -12,9 +12,18 @@ import type React from "react";
 import { useState } from "react";
 
 import {
+  PageContent,
   PageHeader,
+  PageHeaderActions,
   PageHeaderTitle,
+  SectionActions,
+  SectionHeader,
+  SectionTitle,
 } from "@/components/app-shell/page-header";
+import {
+  KeyValueGridSkeleton,
+  TableSkeleton,
+} from "@/components/app-shell/skeletons";
 import {
   SubscriptionQuotaUsage,
   SubscriptionStatusBadge,
@@ -32,7 +41,7 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "@/components/ui/menu";
-import { Spinner } from "@/components/ui/spinner";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
@@ -271,8 +280,23 @@ function RouteComponent(): React.ReactElement {
 
   if (isPending || !detail) {
     return (
-      <div className="flex justify-center py-16">
-        <Spinner />
+      <div className="flex min-w-0 flex-col [--page-toolbar-h:0rem]">
+        <PageHeader>
+          <Skeleton className="h-5 w-48" />
+        </PageHeader>
+        <PageContent>
+          <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_24rem]">
+            <div className="flex flex-col gap-6">
+              <TableSkeleton columns={5} rows={3} />
+              <KeyValueGridSkeleton items={6} columns={3} />
+              <TableSkeleton columns={4} rows={6} />
+            </div>
+            <div className="flex flex-col gap-6">
+              <KeyValueGridSkeleton items={4} />
+              <TableSkeleton columns={3} rows={4} />
+            </div>
+          </div>
+        </PageContent>
       </div>
     );
   }
@@ -281,69 +305,45 @@ function RouteComponent(): React.ReactElement {
   const isSelf = user.id === currentUser.id;
 
   return (
-    <div className="flex flex-col gap-6 p-4">
-      {/* User header card */}
-      <div className="flex flex-col gap-4 rounded-xl border bg-card p-4 shadow-xs">
-        <PageHeader className="items-start gap-3">
-          <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={m.admin_users_action_view()}
-              render={<Link to="/admin/access/users" />}
-            >
-              <ArrowLeftIcon />
-            </Button>
-            <Avatar className="size-12">
-              {user.image ? <AvatarImage src={user.image} /> : null}
-              <AvatarFallback>
-                {user.name.slice(0, 2).toUpperCase()}
-              </AvatarFallback>
-            </Avatar>
-            <div className="flex flex-col gap-1">
-              <div className="flex items-center gap-2">
-                <PageHeaderTitle>{user.name}</PageHeaderTitle>
-                {user.role === "admin" ? (
-                  <Badge>{m.admin_users_role_admin()}</Badge>
-                ) : null}
-                {user.banned ? (
-                  <Badge variant="outline">
-                    <span
-                      aria-hidden="true"
-                      className="size-1.5 rounded-full bg-destructive"
-                    />
-                    {m.admin_users_status_banned()}
-                  </Badge>
-                ) : null}
-              </div>
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <span>{user.email}</span>
-                <Badge variant="outline">
-                  {user.emailVerified
-                    ? m.admin_users_detail_email_verified()
-                    : m.admin_users_detail_email_unverified()}
-                </Badge>
-              </div>
+    <div className="flex min-w-0 flex-col [--page-toolbar-h:0rem]">
+      <PageHeader>
+        <div className="flex min-w-0 items-center gap-3">
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={m.admin_users_action_view()}
+            render={<Link to="/admin/access/users" />}
+          >
+            <ArrowLeftIcon />
+          </Button>
+          <Avatar className="size-8">
+            {user.image ? <AvatarImage src={user.image} /> : null}
+            <AvatarFallback>
+              {user.name.slice(0, 2).toUpperCase()}
+            </AvatarFallback>
+          </Avatar>
+          <div className="flex min-w-0 flex-col">
+            <div className="flex min-w-0 items-center gap-2">
+              <PageHeaderTitle>{user.name}</PageHeaderTitle>
+              {user.role === "admin" ? (
+                <Badge>{m.admin_users_role_admin()}</Badge>
+              ) : null}
               {user.banned ? (
-                <div className="flex flex-col gap-0.5 text-xs text-destructive">
-                  {user.banReason ? (
-                    <span>
-                      {m.admin_users_detail_ban_reason({
-                        reason: user.banReason,
-                      })}
-                    </span>
-                  ) : null}
-                  {user.banExpires ? (
-                    <span>
-                      {m.admin_users_detail_ban_expires({
-                        date: new Date(user.banExpires).toLocaleString(),
-                      })}
-                    </span>
-                  ) : null}
-                </div>
+                <Badge variant="outline">
+                  <span
+                    aria-hidden="true"
+                    className="size-1.5 rounded-full bg-destructive"
+                  />
+                  {m.admin_users_status_banned()}
+                </Badge>
               ) : null}
             </div>
+            <span className="truncate text-xs text-muted-foreground">
+              {user.email}
+            </span>
           </div>
+        </div>
+        <PageHeaderActions>
           <Menu>
             <MenuTrigger
               render={
@@ -404,167 +404,234 @@ function RouteComponent(): React.ReactElement {
               )}
             </MenuPopup>
           </Menu>
-        </PageHeader>
-      </div>
+        </PageHeaderActions>
+      </PageHeader>
 
-      {/* Subscriptions */}
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <h2 className="font-heading text-base font-semibold">
-            {m.admin_users_subs_title()}
-          </h2>
-          <Button
-            loading={assignMutation.isPending}
-            onClick={() => void requestAssign()}
-          >
-            <PlusIcon />
-            {m.admin_users_subs_assign()}
-          </Button>
-        </div>
-        {subscriptions.length > 0 ? (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{m.admin_users_subs_col_plan()}</TableHead>
-                <TableHead>{m.admin_users_subs_col_status()}</TableHead>
-                <TableHead>{m.admin_users_subs_col_period()}</TableHead>
-                <TableHead>{m.admin_users_subs_col_traffic()}</TableHead>
-                <TableHead>
-                  <span className="sr-only">Actions</span>
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {subscriptions.map(({ subscription: sub, planName }) => (
-                <TableRow key={sub.id}>
-                  <TableCell className="font-medium">{planName}</TableCell>
-                  <TableCell>
-                    <SubscriptionStatusBadge status={sub.status} />
-                  </TableCell>
-                  <TableCell>
-                    <span className="text-xs text-muted-foreground">
-                      {new Date(sub.startedAt).toLocaleDateString()} –{" "}
-                      {new Date(sub.expiresAt).toLocaleDateString()}
-                    </span>
-                  </TableCell>
-                  <TableCell>
-                    <SubscriptionQuotaUsage
-                      trafficQuotaBytes={sub.trafficQuotaBytes}
-                      trafficUsedBytes={sub.trafficUsedBytes}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex justify-end">
-                      <Menu>
-                        <MenuTrigger
-                          render={
-                            <Button
-                              loading={
-                                (updateMutation.isPending &&
-                                  updateMutation.variables?.id === sub.id) ||
-                                (deleteMutation.isPending &&
-                                  deleteMutation.variables === sub.id) ||
-                                (resetMutation.isPending &&
-                                  resetMutation.variables === sub.id) ||
-                                (refreshLinkMutation.isPending &&
-                                  refreshLinkMutation.variables === sub.id) ||
-                                copyingSubscriptionId === sub.id
-                              }
-                              size="icon"
-                              variant="ghost"
-                            />
-                          }
-                          aria-label="Actions"
-                        >
-                          <EllipsisIcon />
-                        </MenuTrigger>
-                        <MenuPopup align="end">
-                          <MenuItem
-                            onClick={() =>
-                              void CredentialDialog.call({
-                                uuid: sub.credentialUuid,
-                                password: sub.credentialPassword,
-                              })
-                            }
-                          >
-                            {m.admin_users_subs_action_credentials()}
-                          </MenuItem>
-                          <MenuItem onClick={() => void requestReset(sub.id)}>
-                            {m.admin_users_subs_action_reset_credentials()}
-                          </MenuItem>
-                          <MenuSeparator />
-                          <MenuItem onClick={() => void requestCopyLink(sub)}>
-                            <span className="flex items-center gap-2">
-                              <CopyIcon className="size-4" />
-                              {m.admin_users_subs_action_copy_link()}
-                            </span>
-                          </MenuItem>
-                          <MenuItem
-                            onClick={() => void requestRefreshLink(sub.id)}
-                          >
-                            <span className="flex items-center gap-2">
-                              <RefreshCwIcon className="size-4" />
-                              {m.admin_users_subs_action_refresh_link()}
-                            </span>
-                          </MenuItem>
-                          <MenuItem onClick={() => void viewAccessLogs(sub.id)}>
-                            <span className="flex items-center gap-2">
-                              <ScrollTextIcon className="size-4" />
-                              {m.admin_users_subs_action_access_logs()}
-                            </span>
-                          </MenuItem>
-                          <MenuSeparator />
-                          <MenuItem onClick={() => void requestEdit(sub)}>
-                            {m.admin_users_subs_action_edit()}
-                          </MenuItem>
-                          <MenuSeparator />
-                          <MenuItem
-                            variant="destructive"
-                            onClick={() => void requestDelete(sub.id)}
-                          >
-                            {m.admin_users_subs_action_delete()}
-                          </MenuItem>
-                        </MenuPopup>
-                      </Menu>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        ) : (
-          <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
-            {m.admin_users_subs_empty()}
+      <PageContent>
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_24rem]">
+          <div className="flex min-w-0 flex-col gap-8">
+            {/* Subscriptions */}
+            <section className="flex flex-col gap-3">
+              <SectionHeader>
+                <SectionTitle>{m.admin_users_subs_title()}</SectionTitle>
+                <SectionActions>
+                  <Button
+                    loading={assignMutation.isPending}
+                    size="sm"
+                    onClick={() => void requestAssign()}
+                  >
+                    <PlusIcon />
+                    {m.admin_users_subs_assign()}
+                  </Button>
+                </SectionActions>
+              </SectionHeader>
+              {subscriptions.length > 0 ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>{m.admin_users_subs_col_plan()}</TableHead>
+                      <TableHead>{m.admin_users_subs_col_status()}</TableHead>
+                      <TableHead>{m.admin_users_subs_col_period()}</TableHead>
+                      <TableHead>{m.admin_users_subs_col_traffic()}</TableHead>
+                      <TableHead>
+                        <span className="sr-only">Actions</span>
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {subscriptions.map(({ subscription: sub, planName }) => (
+                      <TableRow key={sub.id}>
+                        <TableCell className="font-medium">
+                          {planName}
+                        </TableCell>
+                        <TableCell>
+                          <SubscriptionStatusBadge status={sub.status} />
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-xs text-muted-foreground">
+                            {new Date(sub.startedAt).toLocaleDateString()} –{" "}
+                            {new Date(sub.expiresAt).toLocaleDateString()}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <SubscriptionQuotaUsage
+                            trafficQuotaBytes={sub.trafficQuotaBytes}
+                            trafficUsedBytes={sub.trafficUsedBytes}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex justify-end">
+                            <Menu>
+                              <MenuTrigger
+                                render={
+                                  <Button
+                                    loading={
+                                      (updateMutation.isPending &&
+                                        updateMutation.variables?.id ===
+                                          sub.id) ||
+                                      (deleteMutation.isPending &&
+                                        deleteMutation.variables === sub.id) ||
+                                      (resetMutation.isPending &&
+                                        resetMutation.variables === sub.id) ||
+                                      (refreshLinkMutation.isPending &&
+                                        refreshLinkMutation.variables ===
+                                          sub.id) ||
+                                      copyingSubscriptionId === sub.id
+                                    }
+                                    size="icon"
+                                    variant="ghost"
+                                  />
+                                }
+                                aria-label="Actions"
+                              >
+                                <EllipsisIcon />
+                              </MenuTrigger>
+                              <MenuPopup align="end">
+                                <MenuItem
+                                  onClick={() =>
+                                    void CredentialDialog.call({
+                                      uuid: sub.credentialUuid,
+                                      password: sub.credentialPassword,
+                                    })
+                                  }
+                                >
+                                  {m.admin_users_subs_action_credentials()}
+                                </MenuItem>
+                                <MenuItem
+                                  onClick={() => void requestReset(sub.id)}
+                                >
+                                  {m.admin_users_subs_action_reset_credentials()}
+                                </MenuItem>
+                                <MenuSeparator />
+                                <MenuItem
+                                  onClick={() => void requestCopyLink(sub)}
+                                >
+                                  <span className="flex items-center gap-2">
+                                    <CopyIcon className="size-4" />
+                                    {m.admin_users_subs_action_copy_link()}
+                                  </span>
+                                </MenuItem>
+                                <MenuItem
+                                  onClick={() =>
+                                    void requestRefreshLink(sub.id)
+                                  }
+                                >
+                                  <span className="flex items-center gap-2">
+                                    <RefreshCwIcon className="size-4" />
+                                    {m.admin_users_subs_action_refresh_link()}
+                                  </span>
+                                </MenuItem>
+                                <MenuItem
+                                  onClick={() => void viewAccessLogs(sub.id)}
+                                >
+                                  <span className="flex items-center gap-2">
+                                    <ScrollTextIcon className="size-4" />
+                                    {m.admin_users_subs_action_access_logs()}
+                                  </span>
+                                </MenuItem>
+                                <MenuSeparator />
+                                <MenuItem onClick={() => void requestEdit(sub)}>
+                                  {m.admin_users_subs_action_edit()}
+                                </MenuItem>
+                                <MenuSeparator />
+                                <MenuItem
+                                  variant="destructive"
+                                  onClick={() => void requestDelete(sub.id)}
+                                >
+                                  {m.admin_users_subs_action_delete()}
+                                </MenuItem>
+                              </MenuPopup>
+                            </Menu>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : (
+                <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
+                  {m.admin_users_subs_empty()}
+                </div>
+              )}
+            </section>
+
+            <TrafficTrend userId={userId} />
+
+            {/* Recent traffic */}
+            <section className="flex flex-col gap-3">
+              <SectionHeader>
+                <SectionTitle>{m.admin_users_traffic_title()}</SectionTitle>
+              </SectionHeader>
+              <SubscriptionTrafficTable
+                records={traffic.map(({ record, nodeName, serverName }) => ({
+                  id: record.id,
+                  createdAt: record.createdAt,
+                  sourceName: nodeName ?? serverName,
+                  isServer: nodeName === null && serverName !== null,
+                  uplinkBytes: record.uplinkBytes,
+                  downlinkBytes: record.downlinkBytes,
+                }))}
+              />
+            </section>
           </div>
-        )}
-      </div>
 
-      <TrafficTrend userId={userId} />
+          <aside className="flex min-w-0 flex-col gap-8 xl:border-s xl:ps-6">
+            <section className="flex flex-col gap-3">
+              <SectionHeader>
+                <SectionTitle>
+                  {m.admin_page_users_profile_title()}
+                </SectionTitle>
+              </SectionHeader>
+              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
+                <dt className="text-xs text-muted-foreground">
+                  {m.admin_page_users_field_email()}
+                </dt>
+                <dd className="truncate">{user.email}</dd>
+                <dt className="text-xs text-muted-foreground">
+                  {m.admin_page_users_field_verified()}
+                </dt>
+                <dd>
+                  {user.emailVerified
+                    ? m.admin_users_detail_email_verified()
+                    : m.admin_users_detail_email_unverified()}
+                </dd>
+                <dt className="text-xs text-muted-foreground">
+                  {m.admin_page_users_field_created()}
+                </dt>
+                <dd className="tabular-nums">
+                  {new Date(user.createdAt).toLocaleDateString()}
+                </dd>
+              </dl>
+              {user.banned ? (
+                <div className="flex flex-col gap-0.5 text-xs text-destructive">
+                  {user.banReason ? (
+                    <span>
+                      {m.admin_users_detail_ban_reason({
+                        reason: user.banReason,
+                      })}
+                    </span>
+                  ) : null}
+                  {user.banExpires ? (
+                    <span>
+                      {m.admin_users_detail_ban_expires({
+                        date: new Date(user.banExpires).toLocaleString(),
+                      })}
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
+            </section>
 
-      {/* Recent traffic */}
-      <div className="flex flex-col gap-3">
-        <h2 className="font-heading text-base font-semibold">
-          {m.admin_users_traffic_title()}
-        </h2>
-        <SubscriptionTrafficTable
-          records={traffic.map(({ record, nodeName, serverName }) => ({
-            id: record.id,
-            createdAt: record.createdAt,
-            sourceName: nodeName ?? serverName,
-            isServer: nodeName === null && serverName !== null,
-            uplinkBytes: record.uplinkBytes,
-            downlinkBytes: record.downlinkBytes,
-          }))}
-        />
-      </div>
+            <UserAccounts accounts={accounts} />
 
-      <UserAccounts accounts={accounts} />
+            <UserSessions userId={userId} />
 
-      <UserSessions userId={userId} />
+            <UserNotes userId={userId} />
 
-      <UserNotes userId={userId} />
-
-      <UserActivity userId={userId} />
+            <UserActivity userId={userId} />
+          </aside>
+        </div>
+      </PageContent>
     </div>
   );
 }

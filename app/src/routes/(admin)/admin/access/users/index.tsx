@@ -29,9 +29,13 @@ import { useEffect, useState } from "react";
 import type { z } from "zod";
 
 import {
+  PageContent,
   PageHeader,
+  PageHeaderActions,
   PageHeaderTitle,
+  PageToolbar,
 } from "@/components/app-shell/page-header";
+import { TableSkeleton } from "@/components/app-shell/skeletons";
 import { ListPagination } from "@/components/list-pagination";
 import { SortHeader } from "@/components/sort-header";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -52,7 +56,6 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "@/components/ui/menu";
-import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -471,12 +474,13 @@ function RouteComponent(): React.ReactElement {
   });
 
   return (
-    <div className="flex flex-col gap-4 p-4">
+    <div className="flex min-w-0 flex-col">
       <PageHeader>
         <PageHeaderTitle>{m.admin_nav_users()}</PageHeaderTitle>
-        <div className="flex items-center gap-2">
+        <PageHeaderActions>
           <Button
             loading={isExporting}
+            size="sm"
             variant="outline"
             onClick={() => void exportCsv()}
           >
@@ -484,6 +488,7 @@ function RouteComponent(): React.ReactElement {
             {m.admin_users_export()}
           </Button>
           <Button
+            size="sm"
             onClick={() =>
               void CreateUserDialog.call({
                 onCreate: (input) => createMutation.mutateAsync(input),
@@ -493,198 +498,207 @@ function RouteComponent(): React.ReactElement {
             <PlusIcon />
             {m.admin_users_create()}
           </Button>
-        </div>
+        </PageHeaderActions>
       </PageHeader>
 
-      <UserToolbar
-        hasFilters={hasFilters}
-        search={search}
-        searchResetToken={searchResetToken}
-        onChange={updateSearch}
-        onClear={clearFilters}
-      />
-
-      {selectedCount > 0 ? (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/32 px-3 py-2">
-          <span className="text-sm font-medium">
-            {m.admin_users_bulk_selected({ count: selectedCount })}
-          </span>
-          <Menu>
-            <MenuTrigger
-              render={
-                <Button
-                  loading={bulkMutation.isPending}
-                  size="sm"
-                  variant="outline"
-                />
-              }
-            >
-              <ListChecksIcon />
-              {m.admin_users_bulk_actions()}
-            </MenuTrigger>
-            <MenuPopup align="start">
-              <MenuItem
-                onClick={() =>
-                  void requestBulkConfirm(
-                    { type: "setRole", role: "admin" },
-                    {
-                      title: m.admin_users_bulk_role_admin_title(),
-                      description: m.admin_users_bulk_role_admin_description({
-                        count: selectedCount,
-                      }),
-                      confirm: m.admin_users_bulk_confirm(),
-                    },
-                  )
+      <PageToolbar>
+        {selectedCount > 0 ? (
+          <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
+            <span className="shrink-0 text-sm font-medium">
+              {m.admin_users_bulk_selected({ count: selectedCount })}
+            </span>
+            <Menu>
+              <MenuTrigger
+                render={
+                  <Button
+                    loading={bulkMutation.isPending}
+                    size="sm"
+                    variant="outline"
+                  />
                 }
               >
-                {m.admin_users_bulk_role_admin()}
-              </MenuItem>
-              <MenuItem
-                onClick={() =>
-                  void requestBulkConfirm(
-                    { type: "setRole", role: "user" },
-                    {
-                      title: m.admin_users_bulk_role_user_title(),
-                      description: m.admin_users_bulk_role_user_description({
-                        count: selectedCount,
-                      }),
-                      confirm: m.admin_users_bulk_confirm(),
-                    },
-                  )
-                }
-              >
-                {m.admin_users_bulk_role_user()}
-              </MenuItem>
-              <MenuSeparator />
-              <MenuItem
-                onClick={() =>
-                  void requestBulkConfirm(
-                    { type: "unban" },
-                    {
-                      title: m.admin_users_bulk_unban_title(),
-                      description: m.admin_users_bulk_unban_description({
-                        count: selectedCount,
-                      }),
-                      confirm: m.admin_users_bulk_confirm(),
-                    },
-                  )
-                }
-              >
-                {m.admin_users_bulk_unban()}
-              </MenuItem>
-              <MenuItem
-                variant="destructive"
-                onClick={() => void requestBulkBan()}
-              >
-                {m.admin_users_bulk_ban()}
-              </MenuItem>
-              <MenuSeparator />
-              <MenuItem
-                variant="destructive"
-                onClick={() =>
-                  void requestBulkConfirm(
-                    { type: "delete" },
-                    {
-                      title: m.admin_users_bulk_delete_title(),
-                      description: m.admin_users_bulk_delete_description({
-                        count: selectedCount,
-                      }),
-                      confirm: m.admin_users_bulk_delete_confirm(),
-                    },
-                  )
-                }
-              >
-                {m.admin_users_bulk_delete()}
-              </MenuItem>
-            </MenuPopup>
-          </Menu>
-          <Button size="sm" variant="ghost" onClick={() => setRowSelection({})}>
-            {m.admin_users_bulk_clear()}
-          </Button>
-        </div>
-      ) : null}
-
-      {isPending ? (
-        <div className="flex justify-center py-16">
-          <Spinner />
-        </div>
-      ) : rows.length > 0 ? (
-        <div
-          className={isPlaceholderData ? "opacity-60 transition-opacity" : ""}
-        >
-          <Table>
-            <TableHeader>
-              {table.getHeaderGroups().map((headerGroup) => (
-                <TableRow key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => (
-                    <TableHead key={header.id}>
-                      {header.isPlaceholder
-                        ? null
-                        : flexRender(
-                            header.column.columnDef.header,
-                            header.getContext(),
-                          )}
-                    </TableHead>
-                  ))}
-                </TableRow>
-              ))}
-            </TableHeader>
-            <TableBody>
-              {table.getRowModel().rows.map((row) => (
-                <TableRow
-                  data-state={row.getIsSelected() ? "selected" : undefined}
-                  key={row.id}
+                <ListChecksIcon />
+                {m.admin_users_bulk_actions()}
+              </MenuTrigger>
+              <MenuPopup align="start">
+                <MenuItem
+                  onClick={() =>
+                    void requestBulkConfirm(
+                      { type: "setRole", role: "admin" },
+                      {
+                        title: m.admin_users_bulk_role_admin_title(),
+                        description: m.admin_users_bulk_role_admin_description({
+                          count: selectedCount,
+                        }),
+                        confirm: m.admin_users_bulk_confirm(),
+                      },
+                    )
+                  }
                 >
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>
-                      {flexRender(
-                        cell.column.columnDef.cell,
-                        cell.getContext(),
-                      )}
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-
-          <ListPagination
-            link={(target) => (
-              <Link
-                from="/admin/access/users/"
-                to="/admin/access/users"
-                search={(prev) => ({
-                  ...prev,
-                  page: target === 1 ? undefined : target,
-                })}
-              />
-            )}
-            page={page}
-            pageCount={pageCount}
-            pageSize={pageSize}
-            pageSizes={USER_PAGE_SIZES}
-            total={total}
-            onPageSizeChange={(size) =>
-              updateSearch({
-                pageSize: size === DEFAULT_PAGE_SIZE ? undefined : size,
-              })
-            }
+                  {m.admin_users_bulk_role_admin()}
+                </MenuItem>
+                <MenuItem
+                  onClick={() =>
+                    void requestBulkConfirm(
+                      { type: "setRole", role: "user" },
+                      {
+                        title: m.admin_users_bulk_role_user_title(),
+                        description: m.admin_users_bulk_role_user_description({
+                          count: selectedCount,
+                        }),
+                        confirm: m.admin_users_bulk_confirm(),
+                      },
+                    )
+                  }
+                >
+                  {m.admin_users_bulk_role_user()}
+                </MenuItem>
+                <MenuSeparator />
+                <MenuItem
+                  onClick={() =>
+                    void requestBulkConfirm(
+                      { type: "unban" },
+                      {
+                        title: m.admin_users_bulk_unban_title(),
+                        description: m.admin_users_bulk_unban_description({
+                          count: selectedCount,
+                        }),
+                        confirm: m.admin_users_bulk_confirm(),
+                      },
+                    )
+                  }
+                >
+                  {m.admin_users_bulk_unban()}
+                </MenuItem>
+                <MenuItem
+                  variant="destructive"
+                  onClick={() => void requestBulkBan()}
+                >
+                  {m.admin_users_bulk_ban()}
+                </MenuItem>
+                <MenuSeparator />
+                <MenuItem
+                  variant="destructive"
+                  onClick={() =>
+                    void requestBulkConfirm(
+                      { type: "delete" },
+                      {
+                        title: m.admin_users_bulk_delete_title(),
+                        description: m.admin_users_bulk_delete_description({
+                          count: selectedCount,
+                        }),
+                        confirm: m.admin_users_bulk_delete_confirm(),
+                      },
+                    )
+                  }
+                >
+                  {m.admin_users_bulk_delete()}
+                </MenuItem>
+              </MenuPopup>
+            </Menu>
+            <Button
+              className="shrink-0"
+              size="sm"
+              variant="ghost"
+              onClick={() => setRowSelection({})}
+            >
+              {m.admin_users_bulk_clear()}
+            </Button>
+          </div>
+        ) : (
+          <UserToolbar
+            hasFilters={hasFilters}
+            search={search}
+            searchResetToken={searchResetToken}
+            onChange={updateSearch}
+            onClear={clearFilters}
           />
-        </div>
-      ) : (
-        <Empty>
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <UsersIcon />
-            </EmptyMedia>
-            <EmptyTitle>
-              {hasFilters
-                ? m.admin_users_empty_filtered()
-                : m.admin_users_empty_title()}
-            </EmptyTitle>
-          </EmptyHeader>
-        </Empty>
-      )}
+        )}
+      </PageToolbar>
+
+      <PageContent width="flush">
+        {isPending ? (
+          <TableSkeleton columns={7} rows={12} />
+        ) : rows.length > 0 ? (
+          <div
+            className={isPlaceholderData ? "opacity-60 transition-opacity" : ""}
+          >
+            <Table variant="pane">
+              <TableHeader>
+                {table.getHeaderGroups().map((headerGroup) => (
+                  <TableRow key={headerGroup.id}>
+                    {headerGroup.headers.map((header) => (
+                      <TableHead key={header.id}>
+                        {header.isPlaceholder
+                          ? null
+                          : flexRender(
+                              header.column.columnDef.header,
+                              header.getContext(),
+                            )}
+                      </TableHead>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableHeader>
+              <TableBody>
+                {table.getRowModel().rows.map((row) => (
+                  <TableRow
+                    data-state={row.getIsSelected() ? "selected" : undefined}
+                    key={row.id}
+                  >
+                    {row.getVisibleCells().map((cell) => (
+                      <TableCell key={cell.id}>
+                        {flexRender(
+                          cell.column.columnDef.cell,
+                          cell.getContext(),
+                        )}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+
+            <div className="border-t px-4 py-3 lg:px-6">
+              <ListPagination
+                link={(target) => (
+                  <Link
+                    from="/admin/access/users/"
+                    to="/admin/access/users"
+                    search={(prev) => ({
+                      ...prev,
+                      page: target === 1 ? undefined : target,
+                    })}
+                  />
+                )}
+                page={page}
+                pageCount={pageCount}
+                pageSize={pageSize}
+                pageSizes={USER_PAGE_SIZES}
+                total={total}
+                onPageSizeChange={(size) =>
+                  updateSearch({
+                    pageSize: size === DEFAULT_PAGE_SIZE ? undefined : size,
+                  })
+                }
+              />
+            </div>
+          </div>
+        ) : (
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <UsersIcon />
+              </EmptyMedia>
+              <EmptyTitle>
+                {hasFilters
+                  ? m.admin_users_empty_filtered()
+                  : m.admin_users_empty_title()}
+              </EmptyTitle>
+            </EmptyHeader>
+          </Empty>
+        )}
+      </PageContent>
     </div>
   );
 }

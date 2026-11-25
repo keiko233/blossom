@@ -28,9 +28,13 @@ import { useEffect, useState } from "react";
 import type { z } from "zod";
 
 import {
+  PageContent,
   PageHeader,
+  PageHeaderActions,
   PageHeaderTitle,
+  PageToolbar,
 } from "@/components/app-shell/page-header";
+import { TableSkeleton } from "@/components/app-shell/skeletons";
 import { ListPagination } from "@/components/list-pagination";
 import { SortHeader } from "@/components/sort-header";
 import {
@@ -53,7 +57,6 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "@/components/ui/menu";
-import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -488,182 +491,196 @@ function RouteComponent(): React.ReactElement {
   const selectedCount = Object.keys(rowSelection).length;
 
   return (
-    <div className="flex flex-col gap-4 p-4">
+    <div className="flex min-w-0 flex-col">
       <PageHeader>
         <PageHeaderTitle>{m.admin_nav_subscriptions()}</PageHeaderTitle>
-        <Button
-          loading={isExporting}
-          variant="outline"
-          onClick={() => void exportCsv()}
-        >
-          <DownloadIcon />
-          {m.admin_subscriptions_export()}
-        </Button>
+        <PageHeaderActions>
+          <Button
+            loading={isExporting}
+            size="sm"
+            variant="outline"
+            onClick={() => void exportCsv()}
+          >
+            <DownloadIcon />
+            {m.admin_subscriptions_export()}
+          </Button>
+        </PageHeaderActions>
       </PageHeader>
 
-      {filteredPlan ? (
-        <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          {m.admin_subscriptions_plan_filter_banner({
-            name: filteredPlan.name,
-          })}
-          <Link
-            className="underline underline-offset-4"
-            params={{ planId: filteredPlan.id }}
-            to="/admin/access/plans/$planId"
-          >
-            {m.admin_subscriptions_plan_filter_open()}
-          </Link>
-        </p>
-      ) : null}
-      <p className="text-xs text-muted-foreground">
-        {m.admin_access_snapshot_note()} {m.admin_access_device_not_enforced()}
-      </p>
-
-      <SubscriptionToolbar
-        hasFilters={hasFilters}
-        plans={plans ?? []}
-        search={search}
-        searchResetToken={searchResetToken}
-        onChange={updateSearch}
-        onClear={clearFilters}
-      />
-
-      {selectedCount > 0 ? (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/32 px-3 py-2">
-          <span className="text-sm font-medium">
-            {m.admin_subscriptions_bulk_selected({ count: selectedCount })}
-          </span>
-          <Menu>
-            <MenuTrigger
-              render={
-                <Button
-                  loading={bulkMutation.isPending}
-                  size="sm"
-                  variant="outline"
-                />
-              }
-            >
-              <ListChecksIcon />
-              {m.admin_subscriptions_bulk_actions()}
-            </MenuTrigger>
-            <MenuPopup align="start">
-              {BULK_KINDS.map(({ kind, label }) => (
-                <MenuItem key={kind} onClick={() => void requestBulk(kind)}>
-                  {label()}
-                </MenuItem>
-              ))}
-              <MenuSeparator />
-              <MenuItem
-                variant="destructive"
-                onClick={() => void requestBulk("delete")}
+      <PageToolbar>
+        {selectedCount > 0 ? (
+          <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
+            <span className="shrink-0 text-sm font-medium">
+              {m.admin_subscriptions_bulk_selected({ count: selectedCount })}
+            </span>
+            <Menu>
+              <MenuTrigger
+                render={
+                  <Button
+                    loading={bulkMutation.isPending}
+                    size="sm"
+                    variant="outline"
+                  />
+                }
               >
-                {m.admin_subscriptions_bulk_delete()}
-              </MenuItem>
-            </MenuPopup>
-          </Menu>
-          <Button size="sm" variant="ghost" onClick={() => setRowSelection({})}>
-            {m.admin_subscriptions_bulk_clear()}
-          </Button>
-        </div>
-      ) : null}
-
-      {isPending ? (
-        <div className="flex justify-center py-16">
-          <Spinner />
-        </div>
-      ) : rows.length > 0 ? (
-        <div
-          className={isPlaceholderData ? "opacity-60 transition-opacity" : ""}
-        >
-          <Table>
-            <TableHeader>
-              {table.getHeaderGroups().map((headerGroup) => (
-                <TableRow key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => (
-                    <TableHead key={header.id}>
-                      {header.isPlaceholder
-                        ? null
-                        : flexRender(
-                            header.column.columnDef.header,
-                            header.getContext(),
-                          )}
-                    </TableHead>
-                  ))}
-                </TableRow>
-              ))}
-            </TableHeader>
-            <TableBody>
-              {table.getRowModel().rows.map((row) => (
-                <TableRow
-                  data-state={row.getIsSelected() ? "selected" : undefined}
-                  key={row.id}
+                <ListChecksIcon />
+                {m.admin_subscriptions_bulk_actions()}
+              </MenuTrigger>
+              <MenuPopup align="start">
+                {BULK_KINDS.map(({ kind, label }) => (
+                  <MenuItem key={kind} onClick={() => void requestBulk(kind)}>
+                    {label()}
+                  </MenuItem>
+                ))}
+                <MenuSeparator />
+                <MenuItem
+                  variant="destructive"
+                  onClick={() => void requestBulk("delete")}
                 >
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>
-                      {flexRender(
-                        cell.column.columnDef.cell,
-                        cell.getContext(),
-                      )}
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-
-          <ListPagination
-            link={(target) => (
-              <Link
-                from="/admin/access/subscriptions/"
-                to="/admin/access/subscriptions"
-                search={(prev) => ({
-                  ...prev,
-                  page: target === 1 ? undefined : target,
-                })}
-              />
-            )}
-            page={page}
-            pageCount={pageCount}
-            pageSize={pageSize}
-            pageSizes={SUBSCRIPTION_PAGE_SIZES}
-            total={total}
-            onPageSizeChange={(size) =>
-              updateSearch({
-                pageSize: size === DEFAULT_PAGE_SIZE ? undefined : size,
-              })
-            }
+                  {m.admin_subscriptions_bulk_delete()}
+                </MenuItem>
+              </MenuPopup>
+            </Menu>
+            <Button
+              className="shrink-0"
+              size="sm"
+              variant="ghost"
+              onClick={() => setRowSelection({})}
+            >
+              {m.admin_subscriptions_bulk_clear()}
+            </Button>
+          </div>
+        ) : (
+          <SubscriptionToolbar
+            hasFilters={hasFilters}
+            plans={plans ?? []}
+            search={search}
+            searchResetToken={searchResetToken}
+            onChange={updateSearch}
+            onClear={clearFilters}
           />
-        </div>
-      ) : (
-        <Empty>
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <ReceiptTextIcon />
-            </EmptyMedia>
-            <EmptyTitle>
-              {hasFilters
-                ? m.admin_subscriptions_empty_filtered()
-                : m.admin_subscriptions_empty_title()}
-            </EmptyTitle>
-            {hasFilters ? null : (
-              <EmptyDescription>
-                {plans && plans.length === 0
-                  ? m.admin_subscriptions_empty_need_plans()
-                  : m.admin_subscriptions_empty_description()}
-              </EmptyDescription>
+        )}
+      </PageToolbar>
+
+      <PageContent width="flush">
+        <p className="px-4 text-xs text-muted-foreground lg:px-6">
+          {m.admin_access_snapshot_note()}{" "}
+          {m.admin_access_device_not_enforced()}
+        </p>
+
+        {filteredPlan ? (
+          <p className="flex flex-wrap items-center gap-2 border-b px-4 py-2 text-sm text-muted-foreground lg:px-6">
+            {m.admin_subscriptions_plan_filter_banner({
+              name: filteredPlan.name,
+            })}
+            <Link
+              className="underline underline-offset-4"
+              params={{ planId: filteredPlan.id }}
+              to="/admin/access/plans/$planId"
+            >
+              {m.admin_subscriptions_plan_filter_open()}
+            </Link>
+          </p>
+        ) : null}
+
+        {isPending ? (
+          <TableSkeleton columns={9} rows={8} />
+        ) : rows.length > 0 ? (
+          <div
+            className={isPlaceholderData ? "opacity-60 transition-opacity" : ""}
+          >
+            <Table variant="pane">
+              <TableHeader>
+                {table.getHeaderGroups().map((headerGroup) => (
+                  <TableRow key={headerGroup.id}>
+                    {headerGroup.headers.map((header) => (
+                      <TableHead key={header.id}>
+                        {header.isPlaceholder
+                          ? null
+                          : flexRender(
+                              header.column.columnDef.header,
+                              header.getContext(),
+                            )}
+                      </TableHead>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableHeader>
+              <TableBody>
+                {table.getRowModel().rows.map((row) => (
+                  <TableRow
+                    data-state={row.getIsSelected() ? "selected" : undefined}
+                    key={row.id}
+                  >
+                    {row.getVisibleCells().map((cell) => (
+                      <TableCell key={cell.id}>
+                        {flexRender(
+                          cell.column.columnDef.cell,
+                          cell.getContext(),
+                        )}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+
+            <div className="border-t px-4 py-3 lg:px-6">
+              <ListPagination
+                link={(target) => (
+                  <Link
+                    from="/admin/access/subscriptions/"
+                    to="/admin/access/subscriptions"
+                    search={(prev) => ({
+                      ...prev,
+                      page: target === 1 ? undefined : target,
+                    })}
+                  />
+                )}
+                page={page}
+                pageCount={pageCount}
+                pageSize={pageSize}
+                pageSizes={SUBSCRIPTION_PAGE_SIZES}
+                total={total}
+                onPageSizeChange={(size) =>
+                  updateSearch({
+                    pageSize: size === DEFAULT_PAGE_SIZE ? undefined : size,
+                  })
+                }
+              />
+            </div>
+          </div>
+        ) : (
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <ReceiptTextIcon />
+              </EmptyMedia>
+              <EmptyTitle>
+                {hasFilters
+                  ? m.admin_subscriptions_empty_filtered()
+                  : m.admin_subscriptions_empty_title()}
+              </EmptyTitle>
+              {hasFilters ? null : (
+                <EmptyDescription>
+                  {plans && plans.length === 0
+                    ? m.admin_subscriptions_empty_need_plans()
+                    : m.admin_subscriptions_empty_description()}
+                </EmptyDescription>
+              )}
+            </EmptyHeader>
+            {hasFilters ? null : plans && plans.length === 0 ? (
+              <Button render={<Link to="/admin/access/plans/new" />}>
+                {m.admin_subscriptions_empty_action_plans()}
+              </Button>
+            ) : (
+              <Button render={<Link to="/admin/access/users" />}>
+                {m.admin_subscriptions_empty_action_users()}
+              </Button>
             )}
-          </EmptyHeader>
-          {hasFilters ? null : plans && plans.length === 0 ? (
-            <Button render={<Link to="/admin/access/plans/new" />}>
-              {m.admin_subscriptions_empty_action_plans()}
-            </Button>
-          ) : (
-            <Button render={<Link to="/admin/access/users" />}>
-              {m.admin_subscriptions_empty_action_users()}
-            </Button>
-          )}
-        </Empty>
-      )}
+          </Empty>
+        )}
+      </PageContent>
     </div>
   );
 }

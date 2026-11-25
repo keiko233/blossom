@@ -7,18 +7,15 @@ import {
 import { Link, useNavigate } from "@tanstack/react-router";
 import type React from "react";
 
+import {
+  SectionHeader,
+  SectionTitle,
+} from "@/components/app-shell/page-header";
+import { TableSkeleton } from "@/components/app-shell/skeletons";
 import { DebouncedSearchInput } from "@/components/debounced-search-input";
 import { ListPagination } from "@/components/list-pagination";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -87,100 +84,102 @@ export function BatchCodesTable({
     });
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{m.admin_redeem_codes_title()}</CardTitle>
-        <CardDescription>{m.admin_redeem_codes_description()}</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+    <section className="flex min-w-0 flex-col gap-3">
+      <SectionHeader>
+        <SectionTitle>{m.admin_redeem_codes_title()}</SectionTitle>
+      </SectionHeader>
+      <p className="text-xs text-muted-foreground">
+        {m.admin_redeem_codes_description()}
+      </p>
+      <div className="flex min-w-0 items-center gap-2">
         <DebouncedSearchInput
           defaultValue={search.q ?? ""}
           placeholder={m.admin_redeem_codes_search_placeholder()}
           onSearch={(value) => updateSearch({ q: value || undefined })}
         />
-        {isPending ? (
-          <div className="flex justify-center py-8">
-            <Spinner />
-          </div>
-        ) : rows.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">
-            {search.q
-              ? m.admin_redeem_codes_empty_filtered()
-              : m.admin_redeem_codes_empty()}
-          </p>
-        ) : (
-          <div
-            className={isPlaceholderData ? "opacity-60 transition-opacity" : ""}
-          >
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{m.admin_redeem_codes_col_prefix()}</TableHead>
-                  <TableHead>{m.admin_redeem_codes_col_uses()}</TableHead>
-                  <TableHead>{m.admin_redeem_codes_col_status()}</TableHead>
-                  <TableHead>{m.admin_redeem_codes_col_created()}</TableHead>
-                  <TableHead>
-                    <span className="sr-only">Actions</span>
-                  </TableHead>
+      </div>
+      {isPending ? (
+        <TableSkeleton columns={5} rows={8} />
+      ) : rows.length === 0 ? (
+        <p className="py-6 text-center text-sm text-muted-foreground">
+          {search.q
+            ? m.admin_redeem_codes_empty_filtered()
+            : m.admin_redeem_codes_empty()}
+        </p>
+      ) : (
+        <div
+          className={isPlaceholderData ? "opacity-60 transition-opacity" : ""}
+        >
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{m.admin_redeem_codes_col_prefix()}</TableHead>
+                <TableHead>{m.admin_redeem_codes_col_uses()}</TableHead>
+                <TableHead>{m.admin_redeem_codes_col_status()}</TableHead>
+                <TableHead>{m.admin_redeem_codes_col_created()}</TableHead>
+                <TableHead>
+                  <span className="sr-only">Actions</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((code) => (
+                <TableRow key={code.id}>
+                  <TableCell className="font-mono text-xs">
+                    {code.prefix}-…
+                  </TableCell>
+                  <TableCell className="tabular-nums">
+                    {code.redemptionCount} / {maxRedemptionsPerCode}
+                  </TableCell>
+                  <TableCell>
+                    {code.disabled ? (
+                      <Badge variant="outline">
+                        <span
+                          aria-hidden="true"
+                          className="size-1.5 rounded-full bg-destructive"
+                        />
+                        {m.admin_redeem_code_disabled()}
+                      </Badge>
+                    ) : code.redemptionCount >= maxRedemptionsPerCode ? (
+                      <Badge variant="outline">
+                        <span
+                          aria-hidden="true"
+                          className="size-1.5 rounded-full bg-amber-500"
+                        />
+                        {m.admin_redeem_code_used()}
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline">
+                        <span
+                          aria-hidden="true"
+                          className="size-1.5 rounded-full bg-emerald-500"
+                        />
+                        {m.admin_redeem_code_available()}
+                      </Badge>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {formatDateTime(code.createdAt)}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      loading={
+                        toggle.isPending && toggle.variables?.id === code.id
+                      }
+                      size="xs"
+                      variant="outline"
+                      onClick={() => toggle.mutate(code)}
+                    >
+                      {code.disabled
+                        ? m.admin_redeem_action_enable()
+                        : m.admin_redeem_action_disable()}
+                    </Button>
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((code) => (
-                  <TableRow key={code.id}>
-                    <TableCell className="font-mono text-xs">
-                      {code.prefix}-…
-                    </TableCell>
-                    <TableCell className="tabular-nums">
-                      {code.redemptionCount} / {maxRedemptionsPerCode}
-                    </TableCell>
-                    <TableCell>
-                      {code.disabled ? (
-                        <Badge variant="outline">
-                          <span
-                            aria-hidden="true"
-                            className="size-1.5 rounded-full bg-destructive"
-                          />
-                          {m.admin_redeem_code_disabled()}
-                        </Badge>
-                      ) : code.redemptionCount >= maxRedemptionsPerCode ? (
-                        <Badge variant="outline">
-                          <span
-                            aria-hidden="true"
-                            className="size-1.5 rounded-full bg-amber-500"
-                          />
-                          {m.admin_redeem_code_used()}
-                        </Badge>
-                      ) : (
-                        <Badge variant="outline">
-                          <span
-                            aria-hidden="true"
-                            className="size-1.5 rounded-full bg-emerald-500"
-                          />
-                          {m.admin_redeem_code_available()}
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {formatDateTime(code.createdAt)}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        loading={
-                          toggle.isPending && toggle.variables?.id === code.id
-                        }
-                        size="xs"
-                        variant="outline"
-                        onClick={() => toggle.mutate(code)}
-                      >
-                        {code.disabled
-                          ? m.admin_redeem_action_enable()
-                          : m.admin_redeem_action_disable()}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+              ))}
+            </TableBody>
+          </Table>
+          <div className="border-t py-3">
             <ListPagination
               link={(target) => (
                 <Link
@@ -210,8 +209,8 @@ export function BatchCodesTable({
               }
             />
           </div>
-        )}
-      </CardContent>
-    </Card>
+        </div>
+      )}
+    </section>
   );
 }

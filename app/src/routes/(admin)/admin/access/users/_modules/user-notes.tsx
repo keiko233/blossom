@@ -3,9 +3,13 @@ import { Trash2Icon } from "lucide-react";
 import type React from "react";
 import { useState } from "react";
 
+import {
+  SectionHeader,
+  SectionTitle,
+} from "@/components/app-shell/page-header";
+import { TableSkeleton } from "@/components/app-shell/skeletons";
 import { Button } from "@/components/ui/button";
 import { Confirm } from "@/components/ui/confirm";
-import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { toastManager } from "@/components/ui/toast";
 import { formatDateTime } from "@/lib/format";
@@ -77,10 +81,10 @@ export function UserNotes({ userId }: UserNotesProps): React.ReactElement {
   const body = draft.trim();
 
   return (
-    <div className="flex flex-col gap-3">
-      <h2 className="font-heading text-base font-semibold">
-        {m.admin_users_notes_title()}
-      </h2>
+    <section className="flex flex-col gap-3">
+      <SectionHeader>
+        <SectionTitle>{m.admin_users_notes_title()}</SectionTitle>
+      </SectionHeader>
       <div className="flex flex-col items-end gap-2">
         <Textarea
           aria-label={m.admin_users_notes_placeholder()}
@@ -98,14 +102,12 @@ export function UserNotes({ userId }: UserNotesProps): React.ReactElement {
         </Button>
       </div>
       {isPending ? (
-        <div className="flex justify-center py-8">
-          <Spinner />
-        </div>
+        <TableSkeleton columns={2} rows={3} dense={false} />
       ) : notes && notes.length > 0 ? (
-        <ul className="flex flex-col gap-2">
+        <ul className="flex flex-col divide-y rounded-lg border">
           {notes.map((note) => (
             <li
-              className="flex items-start justify-between gap-3 rounded-xl border bg-card p-3 text-sm shadow-xs"
+              className="flex items-start justify-between gap-3 p-3 text-sm"
               key={note.id}
             >
               <div className="flex min-w-0 flex-col gap-1">
@@ -131,10 +133,10 @@ export function UserNotes({ userId }: UserNotesProps): React.ReactElement {
           ))}
         </ul>
       ) : (
-        <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+        <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
           {m.admin_users_notes_empty()}
         </div>
       )}
-    </div>
+    </section>
   );
 }

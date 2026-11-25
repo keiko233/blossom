@@ -4,16 +4,13 @@ import { DownloadIcon } from "lucide-react";
 import type React from "react";
 import { useState } from "react";
 
+import {
+  SectionHeader,
+  SectionTitle,
+} from "@/components/app-shell/page-header";
+import { TableSkeleton } from "@/components/app-shell/skeletons";
 import { ListPagination } from "@/components/list-pagination";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -87,13 +84,15 @@ export function BatchRedemptionsTable({
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{m.admin_redeem_redemptions_title()}</CardTitle>
-        <CardDescription>
-          {m.admin_redeem_redemptions_description()}
-        </CardDescription>
-        <div className="col-start-2 row-span-2 row-start-1 self-start justify-self-end">
+    <section className="flex min-w-0 flex-col gap-3">
+      <SectionHeader>
+        <div className="flex min-w-0 flex-col">
+          <SectionTitle>{m.admin_redeem_redemptions_title()}</SectionTitle>
+          <p className="text-xs text-muted-foreground">
+            {m.admin_redeem_redemptions_description()}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
           <Button
             disabled={total === 0}
             loading={isExporting}
@@ -105,77 +104,75 @@ export function BatchRedemptionsTable({
             {m.admin_redeem_export()}
           </Button>
         </div>
-      </CardHeader>
-      <CardContent>
-        {isPending ? (
-          <div className="flex justify-center py-8">
-            <Spinner />
-          </div>
-        ) : rows.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">
-            {m.admin_redeem_redemptions_empty()}
-          </p>
-        ) : (
-          <div
-            className={isPlaceholderData ? "opacity-60 transition-opacity" : ""}
-          >
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{m.admin_redeem_redemptions_col_user()}</TableHead>
-                  <TableHead>{m.admin_redeem_redemptions_col_code()}</TableHead>
-                  <TableHead>
-                    {m.admin_redeem_redemptions_col_subscription()}
-                  </TableHead>
-                  <TableHead>{m.admin_redeem_redemptions_col_time()}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((row) => (
-                  <TableRow key={row.id}>
-                    <TableCell>
+      </SectionHeader>
+      {isPending ? (
+        <TableSkeleton columns={4} rows={8} />
+      ) : rows.length === 0 ? (
+        <p className="py-6 text-center text-sm text-muted-foreground">
+          {m.admin_redeem_redemptions_empty()}
+        </p>
+      ) : (
+        <div
+          className={isPlaceholderData ? "opacity-60 transition-opacity" : ""}
+        >
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{m.admin_redeem_redemptions_col_user()}</TableHead>
+                <TableHead>{m.admin_redeem_redemptions_col_code()}</TableHead>
+                <TableHead>
+                  {m.admin_redeem_redemptions_col_subscription()}
+                </TableHead>
+                <TableHead>{m.admin_redeem_redemptions_col_time()}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row) => (
+                <TableRow key={row.id}>
+                  <TableCell>
+                    <Link
+                      className="flex flex-col"
+                      params={{ userId: row.userId }}
+                      to="/admin/access/users/$userId"
+                    >
+                      <span className="font-medium hover:underline">
+                        {row.userName}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {row.userEmail}
+                      </span>
+                    </Link>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">
+                    {row.codePrefix}-…
+                  </TableCell>
+                  <TableCell>
+                    {row.subscriptionId ? (
                       <Link
-                        className="flex flex-col"
+                        className="text-xs hover:underline"
+                        search={{ q: row.subscriptionId }}
+                        to="/admin/access/subscriptions"
+                      >
+                        {m.admin_redeem_redemptions_view_subscription()}
+                      </Link>
+                    ) : (
+                      <Link
+                        className="text-xs text-muted-foreground hover:underline"
                         params={{ userId: row.userId }}
                         to="/admin/access/users/$userId"
                       >
-                        <span className="font-medium hover:underline">
-                          {row.userName}
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          {row.userEmail}
-                        </span>
+                        {m.admin_redeem_redemptions_no_subscription()}
                       </Link>
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">
-                      {row.codePrefix}-…
-                    </TableCell>
-                    <TableCell>
-                      {row.subscriptionId ? (
-                        <Link
-                          className="text-xs hover:underline"
-                          search={{ q: row.subscriptionId }}
-                          to="/admin/access/subscriptions"
-                        >
-                          {m.admin_redeem_redemptions_view_subscription()}
-                        </Link>
-                      ) : (
-                        <Link
-                          className="text-xs text-muted-foreground hover:underline"
-                          params={{ userId: row.userId }}
-                          to="/admin/access/users/$userId"
-                        >
-                          {m.admin_redeem_redemptions_no_subscription()}
-                        </Link>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {formatDateTime(row.createdAt)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {formatDateTime(row.createdAt)}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          <div className="border-t py-3">
             <ListPagination
               link={(target) => (
                 <Link
@@ -205,8 +202,8 @@ export function BatchRedemptionsTable({
               }
             />
           </div>
-        )}
-      </CardContent>
-    </Card>
+        </div>
+      )}
+    </section>
   );
 }
