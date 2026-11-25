@@ -9,6 +9,7 @@ import { adminAudit } from "@/lib/admin-audit-middleware";
 import { ensureAdmin } from "@/lib/ensure-admin";
 import {
   applyNetworkingRolloutSchema,
+  autoBridgeSchema,
   createPeerLinkSchema,
   deleteManagedOutboundSchema,
   deletePeerInboundSchema,
@@ -17,12 +18,15 @@ import {
   networkingRoutingDraftSchema,
   planNetworkingRolloutSchema,
   rotatePeerLinkCredentialSchema,
+  saveCustomProxyOutboundSchema,
   saveManagedOutboundSchema,
+  saveOutboundGroupSchema,
   savePeerInboundSchema,
   updatePeerLinkSchema,
   type NetworkingIssue,
 } from "@/lib/networking-schema";
 import type { RolloutStagePlan } from "@/lib/networking-workspace";
+import { autoBridgeServersDraft } from "@/query/networking-auto-bridge";
 import {
   buildServerIntent,
   nextConfigVersion,
@@ -44,7 +48,9 @@ import {
   deletePeerLinkDraft,
   importRuleSetAssetDraft,
   rotatePeerLinkCredentialDraft,
+  saveCustomProxyOutboundDraft,
   saveManagedOutboundDraft,
+  saveOutboundGroupDraft,
   savePeerInboundDraft,
   saveRoutingDraft,
   updatePeerLinkDraft,
@@ -198,6 +204,51 @@ export const deleteManagedOutbound = createServerFn({ method: "POST" })
       data.expectedTopologyGeneration,
       db,
     );
+  });
+
+export const saveCustomProxyOutbound = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("networking.custom_outbound_save", {
+      targetType: "managed_outbound",
+      targetId: fromResult("outboundId"),
+    }),
+  ])
+  .validator(saveCustomProxyOutboundSchema)
+  .handler(async ({ data }) => {
+    await ensureAdmin();
+    return saveCustomProxyOutboundDraft(data, db);
+  });
+
+export const saveOutboundGroup = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("networking.outbound_group_save", {
+      targetType: "managed_outbound",
+      targetId: fromResult("outboundId"),
+    }),
+  ])
+  .validator(saveOutboundGroupSchema)
+  .handler(async ({ data }) => {
+    await ensureAdmin();
+    return saveOutboundGroupDraft(data, db);
+  });
+
+/**
+ * One-shot receiver + sender draft (or existing peer reuse). `fullForward`
+ * returns ready-to-save catch-all rules for the source subscriber inbounds;
+ * saving them still goes through the audited routing draft path.
+ */
+export const autoBridgeServers = createServerFn({ method: "POST" })
+  .middleware([
+    adminAudit("networking.auto_bridge", {
+      targetType: "managed_outbound",
+      targetId: fromResult("outboundId"),
+      metadata: fromInput("mode", "destinationServerId"),
+    }),
+  ])
+  .validator(autoBridgeSchema)
+  .handler(async ({ data }) => {
+    await ensureAdmin();
+    return autoBridgeServersDraft(data, db);
   });
 
 export const importRuleSetPreset = createServerFn({ method: "POST" })

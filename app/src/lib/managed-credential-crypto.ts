@@ -49,3 +49,47 @@ export function decryptManagedPeerCredential(
     key,
   );
 }
+
+/**
+ * Dedicated AES-GCM envelope context for a `custom_proxy` outbound's secret
+ * field map. The ciphertext is bound to the row id, so copying it to another
+ * outbound cannot decrypt. Secrets are a JSON object rather than a single
+ * credential string because sing-box outbounds carry different secret fields
+ * (`password`, `uuid`, `auth_str`, `private_key`, ...).
+ */
+export function managedCustomProxySecretAad(outboundId: string): string {
+  if (outboundId.length === 0) {
+    throw new Error("Custom proxy outbound id must not be empty");
+  }
+  return `managed-custom-proxy-secret:${outboundId}`;
+}
+
+export function encryptManagedCustomProxySecret(
+  outboundId: string,
+  secrets: Record<string, unknown>,
+  key = certificateMasterKey(),
+): string {
+  return encryptCertificateSecret(
+    JSON.stringify(secrets),
+    managedCustomProxySecretAad(outboundId),
+    key,
+  );
+}
+
+export function decryptManagedCustomProxySecret(
+  ciphertext: string,
+  outboundId: string,
+  key = certificateMasterKey(),
+): Record<string, unknown> {
+  const value: unknown = JSON.parse(
+    decryptCertificateSecret(
+      ciphertext,
+      managedCustomProxySecretAad(outboundId),
+      key,
+    ),
+  );
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Custom proxy secret payload must be a JSON object");
+  }
+  return value as Record<string, unknown>;
+}

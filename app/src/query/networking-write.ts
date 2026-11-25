@@ -22,14 +22,25 @@ import {
   peerLinkCredential,
 } from "@/db/managed-network-schema";
 import { managedCertificate, server } from "@/db/proxy-schema";
-import { encryptManagedPeerCredential } from "@/lib/managed-credential-crypto";
+import {
+  encryptManagedCustomProxySecret,
+  encryptManagedPeerCredential,
+} from "@/lib/managed-credential-crypto";
 import type {
   CreatePeerLinkInput,
   ImportRuleSetAssetInput,
+  SaveCustomProxyOutboundInput,
   SaveManagedOutboundInput,
+  SaveOutboundGroupInput,
   SavePeerInboundInput,
 } from "@/lib/networking-schema";
+import { validatePeerInboundSettings } from "@/lib/networking-schema";
 import type { JsonValue } from "@/orpc/proxy/schema";
+import {
+  outboundSettingsSchemaFor,
+  splitOutboundSecrets,
+  withoutNodeTlsMaterial,
+} from "@/orpc/proxy/sing-box-registry";
 
 /**
  * Durable draft writers for the Networking workspace (Task 09). They keep the
@@ -52,10 +63,13 @@ export const NETWORKING_WRITE_REASONS = [
   "credential_key_unavailable",
   "duplicate",
   "duplicate_rule_set",
-  "not_found",
   "invalid_asset",
   "invalid_link",
+  "invalid_settings",
+  "member_not_found",
+  "not_found",
   "peer_port_conflict",
+  "port_exhausted",
   "referenced",
   "stale_topology",
   "topology_conflict",
@@ -63,11 +77,11 @@ export const NETWORKING_WRITE_REASONS = [
 ] as const;
 export type NetworkingWriteReason = (typeof NETWORKING_WRITE_REASONS)[number];
 
-function jsonParam(value: unknown): SQL {
+export function jsonParam(value: unknown): SQL {
   return sql`${JSON.stringify(value ?? null)}::jsonb`;
 }
 
-async function executeRows<T extends Record<string, unknown>>(
+export async function executeRows<T extends Record<string, unknown>>(
   database: Database,
   statement: SQL,
 ): Promise<T[]> {
@@ -77,11 +91,11 @@ async function executeRows<T extends Record<string, unknown>>(
   return wrapped.rows ?? [];
 }
 
-function numeric(value: unknown): number {
+export function numeric(value: unknown): number {
   return typeof value === "number" ? value : Number(value);
 }
 
-function currentGenerationCte(expected: number): SQL {
+export function currentGenerationCte(expected: number): SQL {
   return sql`topology_cas AS (
     UPDATE ${managedTopology}
     SET generation = generation + 1,
@@ -92,7 +106,7 @@ function currentGenerationCte(expected: number): SQL {
   )`;
 }
 
-async function generationNow(database: Database): Promise<number> {
+export async function generationNow(database: Database): Promise<number> {
   const [row] = await database
     .select({ generation: managedTopology.generation })
     .from(managedTopology)
@@ -100,7 +114,7 @@ async function generationNow(database: Database): Promise<number> {
   return row?.generation ?? 0;
 }
 
-async function conflictReason(database: Database): Promise<{
+export async function conflictReason(database: Database): Promise<{
   ok: false;
   reason: NetworkingWriteReason;
   message: string;
@@ -150,7 +164,20 @@ export async function savePeerInboundDraft(
   input: SavePeerInboundInput,
   database: Database = db,
 ): Promise<NetworkingWriteResult<{ inboundId: string; runtimeTag: string }>> {
-  if (!(await certificateAvailable(database, input.certificateId))) {
+  const certificateId = input.certificateId ?? null;
+  const tlsServerName = input.tlsServerName ?? null;
+  const settings = validatePeerInboundSettings(
+    input.protocol,
+    withoutNodeTlsMaterial(input.settings) as Record<string, JsonValue>,
+  );
+  if (!settings.ok) {
+    return {
+      ok: false,
+      reason: "invalid_settings",
+      message: settings.message,
+    };
+  }
+  if (certificateId && !(await certificateAvailable(database, certificateId))) {
     return {
       ok: false,
       reason: "certificate_not_found",
@@ -182,8 +209,10 @@ export async function savePeerInboundDraft(
       existing.listenPort !== input.listenPort ||
       existing.advertisedAddress !== input.advertisedAddress ||
       existing.advertisedPort !== input.advertisedPort ||
-      existing.tlsServerName !== input.tlsServerName ||
-      existing.certificateId !== input.certificateId;
+      existing.tlsServerName !== tlsServerName ||
+      existing.certificateId !== certificateId ||
+      existing.network !== input.network ||
+      JSON.stringify(existing.settings) !== JSON.stringify(settings.settings);
     if (referencing && structural) {
       return {
         ok: false,
@@ -228,8 +257,10 @@ export async function savePeerInboundDraft(
               listen_port = ${input.listenPort},
               advertised_address = ${input.advertisedAddress},
               advertised_port = ${input.advertisedPort},
-              tls_server_name = ${input.tlsServerName},
-              certificate_id = ${input.certificateId},
+              network = ${input.network}::text,
+              settings = ${jsonParam(settings.settings)},
+              tls_server_name = ${tlsServerName}::text,
+              certificate_id = ${certificateId}::text,
               revision = revision + 1,
               updated_at = now()
           WHERE id = ${input.id}::text
@@ -294,6 +325,7 @@ export async function savePeerInboundDraft(
           id, server_id, name, runtime_tag, protocol,
           listen_address, listen_port,
           advertised_address, advertised_port,
+          network, settings,
           tls_server_name, certificate_id
         )
         SELECT ${id}::text,
@@ -305,8 +337,10 @@ export async function savePeerInboundDraft(
                ${input.listenPort}::integer,
                ${input.advertisedAddress}::text,
                ${input.advertisedPort}::integer,
-               ${input.tlsServerName}::text,
-               ${input.certificateId}::text
+               ${input.network}::text,
+               ${jsonParam(settings.settings)},
+               ${tlsServerName}::text,
+               ${certificateId}::text
         FROM topology_cas
         WHERE NOT EXISTS (
           SELECT 1 FROM ${peerInbound}
@@ -440,7 +474,7 @@ type NetworkingDeleteResult =
 
 // --- Links and peer outbounds ----------------------------------------------
 
-function peerSecret(protocol: PeerProtocol): string {
+export function peerSecret(protocol: PeerProtocol): string {
   if (protocol === "vless" || protocol === "vmess" || protocol === "tuic") {
     return randomUUID();
   }
@@ -942,6 +976,277 @@ export async function deleteManagedOutboundDraft(
   );
   if (!rows[0]) return conflictReason(database);
   return { ok: true, generation: numeric(rows[0].generation) };
+}
+
+// --- Custom proxy and outbound-group drafts ---------------------------------
+
+function customProxySettings(input: SaveCustomProxyOutboundInput): {
+  settings: Record<string, JsonValue>;
+  secrets: Record<string, unknown>;
+} {
+  const parsed = outboundSettingsSchemaFor(input.protocol).parse(
+    input.settings,
+  ) as Record<string, JsonValue>;
+  const { publicSettings, secrets } = splitOutboundSecrets(parsed);
+  return {
+    settings: publicSettings as Record<string, JsonValue>,
+    secrets,
+  };
+}
+
+function customProxySecretCiphertext(
+  outboundId: string,
+  secrets: Record<string, unknown>,
+): string | null {
+  if (Object.keys(secrets).length === 0) return null;
+  return encryptManagedCustomProxySecret(outboundId, secrets);
+}
+
+/**
+ * External sing-box proxy outbound on one server. Secret fields (`password`,
+ * `uuid`, `auth_str`, `private_key`, ...) are split out by the schema registry
+ * and encrypted with AES-256-GCM under the outbound id; the plaintext never
+ * reaches a DTO or the audit trail.
+ */
+export async function saveCustomProxyOutboundDraft(
+  input: SaveCustomProxyOutboundInput,
+  database: Database = db,
+): Promise<NetworkingWriteResult<{ outboundId: string }>> {
+  const normalized = customProxySettings(input);
+
+  if (input.id) {
+    const [existing] = await database
+      .select()
+      .from(managedOutbound)
+      .where(eq(managedOutbound.id, input.id));
+    if (!existing) {
+      return { ok: false, reason: "not_found", message: "Outbound not found" };
+    }
+    if (existing.kind !== "custom_proxy") {
+      return {
+        ok: false,
+        reason: "unsupported",
+        message: "This outbound is not a custom proxy",
+      };
+    }
+    let secretCiphertext: string | null;
+    try {
+      secretCiphertext = customProxySecretCiphertext(
+        input.id,
+        normalized.secrets,
+      );
+    } catch {
+      return {
+        ok: false,
+        reason: "credential_key_unavailable",
+        message:
+          "Custom proxy secrets cannot be encrypted until CERTIFICATE_MASTER_KEY is configured",
+      };
+    }
+    const rows = await executeRows(
+      database,
+      sql`
+        WITH ${currentGenerationCte(input.expectedTopologyGeneration)},
+        updated AS (
+          UPDATE ${managedOutbound}
+          SET name = ${input.name},
+              server_id = ${input.serverId}::text,
+              protocol = ${input.protocol}::text,
+              settings = ${jsonParam(normalized.settings)},
+              secret_ciphertext = ${secretCiphertext}::text,
+              revision = revision + 1,
+              updated_at = now()
+          WHERE id = ${input.id}::text
+            AND kind = 'custom_proxy'
+            AND EXISTS (SELECT 1 FROM topology_cas)
+          RETURNING id
+        )
+        SELECT updated.id, topology_cas.generation
+        FROM updated CROSS JOIN topology_cas
+      `,
+    );
+    if (!rows[0]) return conflictReason(database);
+    return {
+      ok: true,
+      generation: numeric(rows[0].generation),
+      outboundId: String(rows[0].id),
+    };
+  }
+
+  const id = randomUUID();
+  const runtimeTag = managedRuntimeTag("custom_proxy", id);
+  let secretCiphertext: string | null;
+  try {
+    secretCiphertext = customProxySecretCiphertext(id, normalized.secrets);
+  } catch {
+    return {
+      ok: false,
+      reason: "credential_key_unavailable",
+      message:
+        "Custom proxy secrets cannot be encrypted until CERTIFICATE_MASTER_KEY is configured",
+    };
+  }
+  const rows = await executeRows(
+    database,
+    sql`
+      WITH ${currentGenerationCte(input.expectedTopologyGeneration)},
+      inserted AS (
+        INSERT INTO ${managedOutbound} (
+          id, server_id, kind, name, runtime_tag, protocol,
+          settings, secret_ciphertext
+        )
+        SELECT ${id}::text,
+               ${input.serverId}::text,
+               'custom_proxy',
+               ${input.name}::text,
+               ${runtimeTag}::text,
+               ${input.protocol}::text,
+               ${jsonParam(normalized.settings)},
+               ${secretCiphertext}::text
+        FROM topology_cas
+        RETURNING id
+      )
+      SELECT inserted.id, topology_cas.generation
+      FROM inserted CROSS JOIN topology_cas
+    `,
+  );
+  if (!rows[0]) return conflictReason(database);
+  return {
+    ok: true,
+    generation: numeric(rows[0].generation),
+    outboundId: String(rows[0].id),
+  };
+}
+
+function outboundGroupSettings(
+  input: SaveOutboundGroupInput,
+): Record<string, JsonValue> {
+  return outboundSettingsSchemaFor(input.protocol)
+    .omit({ outbounds: true })
+    .parse(input.settings) as Record<string, JsonValue>;
+}
+
+/**
+ * `selector`/`urltest` outbound group. Every member tag must resolve on the
+ * same server (the built-in `direct` tag always does); `outbounds` is compiled
+ * from the member list, never from the free-form settings.
+ */
+export async function saveOutboundGroupDraft(
+  input: SaveOutboundGroupInput,
+  database: Database = db,
+): Promise<NetworkingWriteResult<{ outboundId: string }>> {
+  const settings = outboundGroupSettings(input);
+  const selfTag = input.id
+    ? managedRuntimeTag("outbound_group", input.id)
+    : null;
+  if (selfTag && input.memberOutboundTags.includes(selfTag)) {
+    return {
+      ok: false,
+      reason: "unsupported",
+      message: "An outbound group cannot include itself",
+    };
+  }
+  const managedTags = input.memberOutboundTags.filter(
+    (tag) => tag !== "direct",
+  );
+  if (managedTags.length > 0) {
+    const members = await database
+      .select({ runtimeTag: managedOutbound.runtimeTag })
+      .from(managedOutbound)
+      .where(
+        and(
+          eq(managedOutbound.serverId, input.serverId),
+          inArray(managedOutbound.runtimeTag, managedTags),
+        ),
+      );
+    const found = new Set(members.map((row) => row.runtimeTag));
+    const missing = managedTags.filter((tag) => !found.has(tag));
+    if (missing.length > 0) {
+      return {
+        ok: false,
+        reason: "member_not_found",
+        message: `Group members must exist on this server: ${missing.join(", ")}`,
+      };
+    }
+  }
+
+  if (input.id) {
+    const [existing] = await database
+      .select()
+      .from(managedOutbound)
+      .where(eq(managedOutbound.id, input.id));
+    if (!existing) {
+      return { ok: false, reason: "not_found", message: "Outbound not found" };
+    }
+    if (existing.kind !== "outbound_group") {
+      return {
+        ok: false,
+        reason: "unsupported",
+        message: "This outbound is not an outbound group",
+      };
+    }
+    const rows = await executeRows(
+      database,
+      sql`
+        WITH ${currentGenerationCte(input.expectedTopologyGeneration)},
+        updated AS (
+          UPDATE ${managedOutbound}
+          SET name = ${input.name},
+              server_id = ${input.serverId}::text,
+              protocol = ${input.protocol}::text,
+              settings = ${jsonParam(settings)},
+              member_outbound_tags = ${jsonParam(input.memberOutboundTags)},
+              revision = revision + 1,
+              updated_at = now()
+          WHERE id = ${input.id}::text
+            AND kind = 'outbound_group'
+            AND EXISTS (SELECT 1 FROM topology_cas)
+          RETURNING id
+        )
+        SELECT updated.id, topology_cas.generation
+        FROM updated CROSS JOIN topology_cas
+      `,
+    );
+    if (!rows[0]) return conflictReason(database);
+    return {
+      ok: true,
+      generation: numeric(rows[0].generation),
+      outboundId: String(rows[0].id),
+    };
+  }
+
+  const id = randomUUID();
+  const runtimeTag = managedRuntimeTag("outbound_group", id);
+  const rows = await executeRows(
+    database,
+    sql`
+      WITH ${currentGenerationCte(input.expectedTopologyGeneration)},
+      inserted AS (
+        INSERT INTO ${managedOutbound} (
+          id, server_id, kind, name, runtime_tag, protocol,
+          settings, member_outbound_tags
+        )
+        SELECT ${id}::text,
+               ${input.serverId}::text,
+               'outbound_group',
+               ${input.name}::text,
+               ${runtimeTag}::text,
+               ${input.protocol}::text,
+               ${jsonParam(settings)},
+               ${jsonParam(input.memberOutboundTags)}
+        FROM topology_cas
+        RETURNING id
+      )
+      SELECT inserted.id, topology_cas.generation
+      FROM inserted CROSS JOIN topology_cas
+    `,
+  );
+  if (!rows[0]) return conflictReason(database);
+  return {
+    ok: true,
+    generation: numeric(rows[0].generation),
+    outboundId: String(rows[0].id),
+  };
 }
 
 // --- Rule-set assets --------------------------------------------------------
