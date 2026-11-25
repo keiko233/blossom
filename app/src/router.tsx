@@ -33,6 +33,6 @@ declare module "@tanstack/react-router" {
      * Breadcrumb label for this route. Called during render so that
      * paraglide messages stay reactive to the current locale.
      */
-    crumb?: () => ReactNode;
+    crumb?: (match: { loaderData: unknown }) => ReactNode;
   }
 }

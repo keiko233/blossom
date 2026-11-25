@@ -5,9 +5,12 @@ import type React from "react";
 import { useState } from "react";
 
 import {
+  PageContent,
   PageHeader,
+  PageHeaderActions,
   PageHeaderTitle,
 } from "@/components/app-shell/page-header";
+import { WorkspaceViewport } from "@/components/app-shell/workspace";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,7 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Spinner } from "@/components/ui/spinner";
+import { Skeleton } from "@/components/ui/skeleton";
 import { toastManager } from "@/components/ui/toast";
 import { m } from "@/paraglide/messages";
 import {
@@ -154,9 +157,9 @@ export function ServerOnboardingPage(): React.ReactElement {
           });
 
   return (
-    <div className="flex flex-col">
-      <PageHeader className="sticky top-0 z-10 gap-3 border-b bg-background/80 px-4 py-3 backdrop-blur">
-        <div className="flex items-center gap-3">
+    <WorkspaceViewport scrollId="server-new">
+      <PageHeader>
+        <div className="flex min-w-0 items-center gap-2">
           <Button
             variant="ghost"
             size="icon"
@@ -169,9 +172,14 @@ export function ServerOnboardingPage(): React.ReactElement {
             {m.admin_proxies_servers_form_create_title()}
           </PageHeaderTitle>
         </div>
+        <PageHeaderActions>
+          <Button variant="ghost" render={<Link to={SERVERS_LIST} />}>
+            {m.admin_proxies_servers_form_cancel()}
+          </Button>
+        </PageHeaderActions>
       </PageHeader>
 
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4">
+      <PageContent width="form">
         <p className="text-sm text-muted-foreground">
           {m.admin_proxies_servers_onboarding_description()}
         </p>
@@ -205,9 +213,15 @@ export function ServerOnboardingPage(): React.ReactElement {
                 </SelectPopup>
               </Select>
               {versionsQuery.isPending ? (
-                <span className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Spinner />
-                  {m.admin_proxies_servers_onboarding_version_loading()}
+                <span
+                  className="flex flex-col gap-1.5"
+                  role="status"
+                  aria-busy="true"
+                >
+                  <span className="sr-only">
+                    {m.admin_proxies_servers_onboarding_version_loading()}
+                  </span>
+                  <Skeleton className="h-3 w-32" />
                 </span>
               ) : null}
             </div>
@@ -261,9 +275,16 @@ export function ServerOnboardingPage(): React.ReactElement {
                 {m.admin_proxies_servers_onboarding_status_title()}
               </h2>
               {statusQuery.isPending ? (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Spinner />
-                  {m.admin_proxies_servers_onboarding_status_loading()}
+                <div
+                  className="flex flex-col gap-2"
+                  role="status"
+                  aria-busy="true"
+                >
+                  <span className="sr-only">
+                    {m.admin_proxies_servers_onboarding_status_loading()}
+                  </span>
+                  <Skeleton className="h-4 w-56" />
+                  <Skeleton className="h-4 w-40" />
                 </div>
               ) : status ? (
                 <>
@@ -311,7 +332,7 @@ export function ServerOnboardingPage(): React.ReactElement {
             </section>
           </>
         ) : null}
-      </div>
-    </div>
+      </PageContent>
+    </WorkspaceViewport>
   );
 }

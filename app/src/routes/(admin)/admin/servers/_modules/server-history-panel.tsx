@@ -2,6 +2,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type React from "react";
 import { useMemo, useState } from "react";
 
+import { ChartSkeleton } from "@/components/app-shell/skeletons";
 import {
   MetricLineChart,
   type MetricLineAxis,
@@ -9,7 +10,6 @@ import {
   type MetricLineSeries,
 } from "@/components/charts/metric-line-chart";
 import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
 import { niceByteTicks } from "@/lib/chart-math";
 import { formatBytes } from "@/lib/format";
 import {
@@ -153,7 +153,7 @@ export function ServerHistoryPanel({
   return (
     <section
       data-slot="server-history-panel"
-      className="flex flex-col gap-4 rounded-xl border bg-card p-4 shadow-xs"
+      className="flex min-w-0 flex-col gap-4"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex flex-col gap-1">
@@ -184,8 +184,11 @@ export function ServerHistoryPanel({
           {m.server_history_load_error()}
         </p>
       ) : history.isPending ? (
-        <div className="flex h-40 items-center justify-center">
-          <Spinner />
+        <div className="grid gap-6 md:grid-cols-2">
+          <ChartSkeleton />
+          <ChartSkeleton />
+          <ChartSkeleton />
+          <ChartSkeleton />
         </div>
       ) : (
         <div

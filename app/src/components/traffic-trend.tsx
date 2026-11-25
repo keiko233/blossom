@@ -4,9 +4,9 @@ import { ChartColumnIcon } from "lucide-react";
 import type React from "react";
 import { useMemo } from "react";
 
+import { ChartSkeleton } from "@/components/app-shell/skeletons";
 import { TrafficChart } from "@/components/charts/traffic-chart";
 import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
 import { formatBytes } from "@/lib/format";
 import { presetToRange } from "@/lib/traffic-analytics";
 import { m } from "@/paraglide/messages";
@@ -74,11 +74,9 @@ export function TrafficTrend({
           {m.admin_traffic_view_in_analytics()}
         </Button>
       </div>
-      <div className="rounded-xl border bg-card p-4 shadow-xs">
+      <div>
         {isPending ? (
-          <div className="flex h-40 items-center justify-center">
-            <Spinner />
-          </div>
+          <ChartSkeleton />
         ) : isError || !data ? (
           <p className="py-10 text-center text-sm text-muted-foreground">
             {m.admin_traffic_load_error()}

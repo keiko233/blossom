@@ -25,7 +25,7 @@ function RouteComponent(): React.ReactElement {
   const noServers = servers?.length === 0;
 
   return (
-    <WorkspaceViewport scrollId="servers" className="p-4 md:p-6">
+    <WorkspaceViewport scrollId="servers">
       <Empty>
         <EmptyHeader>
           <EmptyMedia variant="icon">

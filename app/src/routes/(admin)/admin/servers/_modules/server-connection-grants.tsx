@@ -1,6 +1,10 @@
 import { DownloadIcon } from "lucide-react";
 import type React from "react";
 
+import {
+  SectionHeader,
+  SectionTitle,
+} from "@/components/app-shell/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -57,13 +61,14 @@ export function ServerConnectionGrants({
   return (
     <section
       data-slot="server-connection-grants"
-      className="flex flex-col gap-4 rounded-xl border bg-card p-4 shadow-xs"
+      className="flex min-w-0 flex-col gap-3"
+      aria-labelledby="connection-grants-title"
     >
-      <div>
-        <h2 className="font-medium">
+      <SectionHeader>
+        <SectionTitle id="connection-grants-title">
           {m.admin_proxies_servers_connection_grants_title()}
-        </h2>
-      </div>
+        </SectionTitle>
+      </SectionHeader>
 
       {grants.length === 0 ? (
         <p className="text-sm text-muted-foreground">

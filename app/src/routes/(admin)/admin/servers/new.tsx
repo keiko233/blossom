@@ -1,7 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import type React from "react";
 
-import { WorkspaceViewport } from "@/components/app-shell/workspace";
 import { m } from "@/paraglide/messages";
 
 import { ServerOnboardingPage } from "./_modules/server-onboarding-page";
@@ -14,9 +13,5 @@ export const Route = createFileRoute("/(admin)/admin/servers/new")({
 });
 
 function RouteComponent(): React.ReactElement {
-  return (
-    <WorkspaceViewport scrollId="server-new">
-      <ServerOnboardingPage />
-    </WorkspaceViewport>
-  );
+  return <ServerOnboardingPage />;
 }

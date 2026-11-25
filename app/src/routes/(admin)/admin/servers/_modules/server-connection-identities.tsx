@@ -1,5 +1,9 @@
 import type React from "react";
 
+import {
+  SectionHeader,
+  SectionTitle,
+} from "@/components/app-shell/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -41,16 +45,17 @@ export function ServerConnectionIdentities({
   return (
     <section
       data-slot="server-connection-identities"
-      className="flex flex-col gap-4 rounded-xl border bg-card p-4 shadow-xs"
+      className="flex min-w-0 flex-col gap-3"
+      aria-labelledby="connection-identities-title"
     >
-      <div>
-        <h2 className="font-medium">
+      <SectionHeader>
+        <SectionTitle id="connection-identities-title">
           {m.admin_proxies_servers_connection_oauth_title()}
-        </h2>
-        <p className="text-xs text-muted-foreground">
-          {m.admin_proxies_servers_connection_oauth_description()}
-        </p>
-      </div>
+        </SectionTitle>
+      </SectionHeader>
+      <p className="text-xs text-muted-foreground">
+        {m.admin_proxies_servers_connection_oauth_description()}
+      </p>
 
       {pending && active ? (
         <Alert variant="warning">

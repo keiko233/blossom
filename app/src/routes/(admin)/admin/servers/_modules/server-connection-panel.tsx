@@ -2,9 +2,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type React from "react";
 import { useState } from "react";
 
+import { PageContent, PageToolbar } from "@/components/app-shell/page-header";
+import {
+  FormSkeleton,
+  KeyValueGridSkeleton,
+} from "@/components/app-shell/skeletons";
+import { WorkspaceViewport } from "@/components/app-shell/workspace";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Confirm } from "@/components/ui/confirm";
-import { Spinner } from "@/components/ui/spinner";
+import { Skeleton } from "@/components/ui/skeleton";
 import { toastManager } from "@/components/ui/toast";
 import {
   currentIdentities,
@@ -342,71 +348,91 @@ export function ServerConnectionPanel({
         : null;
 
   return (
-    <div data-slot="server-connection" className="flex flex-col gap-4">
-      <div>
-        <h2 className="font-medium">
+    <WorkspaceViewport
+      scrollId={`server-${server.id}-connection`}
+      className="[--page-header-h:0px]"
+    >
+      <PageToolbar>
+        <span className="text-xs text-muted-foreground">
           {m.admin_proxies_servers_connection_title()}
-        </h2>
-        <p className="text-xs text-muted-foreground">
+        </span>
+        <span className="truncate text-xs text-muted-foreground max-md:hidden">
           {m.admin_proxies_servers_connection_description()}
-        </p>
-      </div>
+        </span>
+      </PageToolbar>
 
-      {identityQuery.isPending ? (
-        <section className="flex items-center gap-2 rounded-xl border bg-card p-4 text-sm text-muted-foreground shadow-xs">
-          <Spinner />
-          {m.admin_proxies_servers_connection_loading()}
-        </section>
-      ) : identityQuery.isError && !connection ? (
-        <Alert variant="error">
-          <AlertTitle>
-            {m.admin_proxies_servers_connection_error_title()}
-          </AlertTitle>
-          <AlertDescription>
-            {m.admin_proxies_servers_connection_error_description()}
-          </AlertDescription>
-        </Alert>
-      ) : connection && phase ? (
-        <>
-          <ServerConnectionSummary server={liveServer} phase={phase} />
-          <ServerConnectionIdentities
-            identities={connection.identities}
-            revoking={revokeIdentity.isPending}
-            onRevoke={(identity) => void requestRevokeIdentity(identity)}
-          />
-          <ServerConnectionInstaller
-            versions={versionsQuery.data?.versions}
-            versionsPending={versionsQuery.isPending}
-            versionsError={versionsQuery.isError && !versionsQuery.data}
-            block={block}
-            phase={phase}
-            mode={replacementMode}
-            activeGeneration={activeIdentity?.generation ?? null}
-            backupTokenEnabled={liveServer.backupTokenEnabled}
-            lifetimeMinutes={versionsQuery.data?.grantLifetimeMinutes ?? 15}
-            creating={creating}
-            command={command}
-            onCreate={(request) => void requestCreate(request)}
-            onClear={() => setCommand(null)}
-          />
-          <ServerConnectionGrants
-            grants={connection.grants}
-            activeGeneration={activeIdentity?.generation ?? null}
-            revoking={revokeGrant.isPending}
-            onRevoke={(grant) => void requestRevokeGrant(grant)}
-          />
-        </>
-      ) : null}
-
-      <ServerConnectionBackup
-        backupTokenEnabled={liveServer.backupTokenEnabled}
-        oauthActive={activeIdentity !== null}
-        tokenPrefix={liveServer.agentTokenPrefix}
-        busy={backupBusy}
-        onEnable={() => void requestEnableBackup()}
-        onReset={() => void requestResetBackup()}
-        onDisable={() => void requestDisableBackup()}
-      />
-    </div>
+      <PageContent>
+        {identityQuery.isPending ? (
+          <div className="flex flex-col gap-6">
+            <KeyValueGridSkeleton items={6} columns={2} />
+            <div className="flex flex-col gap-3">
+              <Skeleton className="h-4 w-40" />
+              <FormSkeleton fields={3} />
+            </div>
+          </div>
+        ) : identityQuery.isError && !connection ? (
+          <Alert variant="error">
+            <AlertTitle>
+              {m.admin_proxies_servers_connection_error_title()}
+            </AlertTitle>
+            <AlertDescription>
+              {m.admin_proxies_servers_connection_error_description()}
+            </AlertDescription>
+          </Alert>
+        ) : connection && phase ? (
+          <div
+            data-slot="server-connection"
+            className="grid min-w-0 gap-6 xl:grid-cols-[26rem_minmax(0,1fr)]"
+          >
+            <div className="flex min-w-0 flex-col gap-6">
+              <ServerConnectionSummary server={liveServer} phase={phase} />
+              <div className="border-t pt-6">
+                <ServerConnectionInstaller
+                  versions={versionsQuery.data?.versions}
+                  versionsPending={versionsQuery.isPending}
+                  versionsError={versionsQuery.isError && !versionsQuery.data}
+                  block={block}
+                  phase={phase}
+                  mode={replacementMode}
+                  activeGeneration={activeIdentity?.generation ?? null}
+                  backupTokenEnabled={liveServer.backupTokenEnabled}
+                  lifetimeMinutes={
+                    versionsQuery.data?.grantLifetimeMinutes ?? 15
+                  }
+                  creating={creating}
+                  command={command}
+                  onCreate={(request) => void requestCreate(request)}
+                  onClear={() => setCommand(null)}
+                />
+              </div>
+            </div>
+            <div className="flex min-w-0 flex-col gap-6">
+              <ServerConnectionIdentities
+                identities={connection.identities}
+                revoking={revokeIdentity.isPending}
+                onRevoke={(identity) => void requestRevokeIdentity(identity)}
+              />
+              <div className="border-t pt-6">
+                <ServerConnectionGrants
+                  grants={connection.grants}
+                  activeGeneration={activeIdentity?.generation ?? null}
+                  revoking={revokeGrant.isPending}
+                  onRevoke={(grant) => void requestRevokeGrant(grant)}
+                />
+              </div>
+              <ServerConnectionBackup
+                backupTokenEnabled={liveServer.backupTokenEnabled}
+                oauthActive={activeIdentity !== null}
+                tokenPrefix={liveServer.agentTokenPrefix}
+                busy={backupBusy}
+                onEnable={() => void requestEnableBackup()}
+                onReset={() => void requestResetBackup()}
+                onDisable={() => void requestDisableBackup()}
+              />
+            </div>
+          </div>
+        ) : null}
+      </PageContent>
+    </WorkspaceViewport>
   );
 }

@@ -1,18 +1,24 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { PencilIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import { EllipsisIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import type React from "react";
 import { useState } from "react";
 
-import {
-  PageHeader,
-  PageHeaderTitle,
-} from "@/components/app-shell/page-header";
+import { PageContent, PageToolbar } from "@/components/app-shell/page-header";
+import { TableSkeleton } from "@/components/app-shell/skeletons";
+import { WorkspaceViewport } from "@/components/app-shell/workspace";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Confirm } from "@/components/ui/confirm";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "@/components/ui/menu";
-import { Spinner } from "@/components/ui/spinner";
+import { StatusDot } from "@/components/ui/status-dot";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { toastManager } from "@/components/ui/toast";
 import { m } from "@/paraglide/messages";
 import { deleteManagedOutbound } from "@/query/networking";
@@ -33,6 +39,22 @@ export const Route = createFileRoute(
   component: RouteComponent,
 });
 
+const phaseLabel = {
+  draft: m.admin_networking_link_phase_draft,
+  pending: m.admin_networking_link_phase_pending,
+  applying: m.admin_networking_link_phase_applying,
+  stalled: m.admin_networking_link_phase_stalled,
+  failed: m.admin_networking_link_phase_failed,
+  applied: m.admin_networking_link_phase_applied,
+  removing: m.admin_networking_link_phase_removing,
+};
+
+const healthLabel = {
+  unknown: m.admin_networking_link_health_unknown,
+  healthy: m.admin_networking_link_health_healthy,
+  degraded: m.admin_networking_link_health_degraded,
+};
+
 function RouteComponent(): React.ReactElement {
   const server = useWorkspaceServer();
   const {
@@ -49,21 +71,34 @@ function RouteComponent(): React.ReactElement {
 
   if (isPending) {
     return (
-      <div className="flex justify-center py-8">
-        <Spinner />
-      </div>
+      <WorkspaceViewport
+        scrollId={`server-${server.id}-outbounds`}
+        className="[--page-header-h:0px]"
+      >
+        <PageToolbar>
+          <span className="text-xs text-muted-foreground">
+            {m.admin_servers_outbounds_title()}
+          </span>
+        </PageToolbar>
+        <TableSkeleton rows={6} columns={6} />
+      </WorkspaceViewport>
     );
   }
   if (isError || !view) {
     return (
-      <div className="flex flex-col gap-3">
-        <p className="text-sm text-destructive">
-          {m.admin_networking_load_error()}
-        </p>
-        <Button size="sm" variant="outline" onClick={() => void refetch()}>
-          {m.admin_networking_action_retry()}
-        </Button>
-      </div>
+      <WorkspaceViewport
+        scrollId={`server-${server.id}-outbounds`}
+        className="[--page-header-h:0px]"
+      >
+        <PageContent>
+          <p role="alert" className="text-sm text-destructive">
+            {m.admin_networking_load_error()}
+          </p>
+          <Button size="sm" variant="outline" onClick={() => void refetch()}>
+            {m.admin_networking_action_retry()}
+          </Button>
+        </PageContent>
+      </WorkspaceViewport>
     );
   }
 
@@ -105,20 +140,17 @@ function RouteComponent(): React.ReactElement {
   };
 
   return (
-    <div className="flex flex-col gap-4">
-      <PageHeader>
-        <div className="flex min-w-0 flex-col gap-1">
-          <PageHeaderTitle>{m.admin_servers_outbounds_title()}</PageHeaderTitle>
-          <p className="text-sm text-muted-foreground">
-            {m.admin_servers_outbounds_description()}
-          </p>
-        </div>
+    <WorkspaceViewport
+      scrollId={`server-${server.id}-outbounds`}
+      className="[--page-header-h:0px]"
+    >
+      <PageToolbar>
         <Menu>
           <MenuTrigger render={<Button size="sm" />}>
             <PlusIcon />
             {m.admin_servers_outbounds_add()}
           </MenuTrigger>
-          <MenuPopup align="end">
+          <MenuPopup align="start">
             <MenuItem
               onClick={() => {
                 setEditingId(null);
@@ -158,186 +190,6 @@ function RouteComponent(): React.ReactElement {
             </MenuItem>
           </MenuPopup>
         </Menu>
-      </PageHeader>
-
-      {view.activationEnabled ? null : (
-        <Alert variant="info">
-          <AlertTitle>
-            {m.admin_networking_activation_disabled_title()}
-          </AlertTitle>
-          <AlertDescription>
-            {m.admin_networking_activation_disabled_description()}
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {error ? (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      ) : null}
-
-      <ul className="flex flex-col gap-2">
-        {view.outbounds.map((outbound) => {
-          const link = outbound.linkId
-            ? view.links.find((row) => row.id === outbound.linkId)
-            : null;
-          return (
-            <li
-              key={outbound.id ?? "direct"}
-              data-slot="server-outbound-row"
-              className="flex flex-col gap-2 rounded-xl border bg-card p-3 shadow-xs"
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="min-w-0 flex-1 truncate font-medium">
-                  {outbound.name}
-                </span>
-                <Badge variant="outline">
-                  {outbound.kind === "builtin_direct"
-                    ? m.admin_servers_outbounds_kind_direct()
-                    : outbound.kind === "direct_profile"
-                      ? m.admin_servers_outbounds_kind_profile()
-                      : outbound.kind === "custom_proxy"
-                        ? m.admin_servers_outbounds_kind_custom()
-                        : outbound.kind === "outbound_group"
-                          ? m.admin_servers_outbounds_kind_group()
-                          : m.admin_servers_outbounds_kind_peer()}
-                </Badge>
-                {outbound.protocol ? (
-                  <Badge variant="outline">{outbound.protocol}</Badge>
-                ) : null}
-                {link ? (
-                  <>
-                    <Badge
-                      variant={link.phase === "applied" ? "success" : "outline"}
-                    >
-                      {link.phase}
-                    </Badge>
-                    <Badge variant="outline">{link.health}</Badge>
-                  </>
-                ) : null}
-                {outbound.id ? (
-                  <span className="flex gap-1">
-                    {outbound.kind !== "peer_link" ? (
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        aria-label={m.admin_networking_action_edit()}
-                        onClick={() => {
-                          setEditingId(outbound.id);
-                          setEditorKind(
-                            outbound.kind === "custom_proxy"
-                              ? "custom_proxy"
-                              : outbound.kind === "outbound_group"
-                                ? "outbound_group"
-                                : "direct_profile",
-                          );
-                          setEditorOpen(true);
-                        }}
-                      >
-                        <PencilIcon />
-                      </Button>
-                    ) : null}
-                    {outbound.kind === "direct_profile" ? (
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        aria-label={m.admin_networking_action_delete()}
-                        onClick={() => void remove(outbound.id!)}
-                      >
-                        <Trash2Icon />
-                      </Button>
-                    ) : null}
-                  </span>
-                ) : null}
-              </div>
-
-              <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                <span className="font-mono">{outbound.runtimeTag}</span>
-                {outbound.kind === "direct_profile" ? (
-                  <>
-                    {outbound.bindInterface ? (
-                      <span>
-                        {m.admin_servers_outbounds_interface({
-                          name: outbound.bindInterface,
-                        })}
-                      </span>
-                    ) : null}
-                    <span>
-                      {m.admin_servers_outbounds_ip({
-                        family: outbound.ipFamily ?? "any",
-                      })}
-                    </span>
-                  </>
-                ) : null}
-                {link ? (
-                  <span>
-                    {m.admin_servers_outbounds_link_to({
-                      server: link.destinationServerName,
-                      inbound: link.destinationInboundName,
-                    })}
-                  </span>
-                ) : null}
-                {outbound.kind === "outbound_group" ? (
-                  <span>
-                    {m.admin_servers_outbounds_group_member_count({
-                      count: outbound.memberOutboundTags?.length ?? 0,
-                    })}
-                  </span>
-                ) : null}
-                <span>
-                  {m.admin_servers_outbounds_route_refs({
-                    count: outbound.routeRuleIds.length,
-                  })}
-                </span>
-                <span>
-                  {m.admin_servers_outbounds_revision({
-                    revision: outbound.revision,
-                  })}
-                </span>
-              </div>
-
-              {outbound.kind === "outbound_group" &&
-              (outbound.memberOutboundTags?.length ?? 0) > 0 ? (
-                <div className="flex flex-wrap gap-1">
-                  {(outbound.memberOutboundTags ?? []).map((tag) => (
-                    <Badge key={tag} variant="outline">
-                      {tag}
-                    </Badge>
-                  ))}
-                </div>
-              ) : null}
-
-              {outbound.routeRuleIds.length > 0 ? (
-                <div className="flex flex-wrap gap-1">
-                  {outbound.routeRuleIds.map((ruleId) => (
-                    <Badge key={ruleId} variant="outline">
-                      {ruleId}
-                    </Badge>
-                  ))}
-                </div>
-              ) : null}
-
-              {link ? (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  render={
-                    <Link
-                      to="/admin/networking/links"
-                      search={{ link: link.id }}
-                    />
-                  }
-                >
-                  {m.admin_networking_action_edit_link()}
-                </Button>
-              ) : null}
-            </li>
-          );
-        })}
-      </ul>
-
-      <div className="flex flex-wrap gap-2">
         <Button
           size="sm"
           variant="outline"
@@ -352,12 +204,230 @@ function RouteComponent(): React.ReactElement {
         </Button>
         <Button
           size="sm"
-          variant="outline"
+          variant="ghost"
           render={<Link to="/admin/networking/topology" />}
         >
           {m.admin_networking_action_view_topology()}
         </Button>
-      </div>
+      </PageToolbar>
+
+      <PageContent width="flush">
+        {view.activationEnabled ? null : (
+          <Alert variant="info" className="mx-4 mt-4 lg:mx-6">
+            <AlertTitle>
+              {m.admin_networking_activation_disabled_title()}
+            </AlertTitle>
+            <AlertDescription>
+              {m.admin_networking_activation_disabled_description()}
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {error ? (
+          <p
+            role="alert"
+            className="px-4 pt-4 text-sm text-destructive lg:px-6"
+          >
+            {error}
+          </p>
+        ) : null}
+
+        {view.outbounds.length === 0 ? (
+          <p className="p-4 text-sm text-muted-foreground lg:p-6">
+            {m.admin_servers_outbounds_empty_title()}
+          </p>
+        ) : (
+          <Table variant="pane">
+            <TableHeader>
+              <TableRow>
+                <TableHead>{m.admin_server_ws_name()}</TableHead>
+                <TableHead>{m.admin_server_ws_kind()}</TableHead>
+                <TableHead>{m.admin_server_ws_tag()}</TableHead>
+                <TableHead>{m.admin_server_ws_destination()}</TableHead>
+                <TableHead>{m.admin_server_ws_phase_health()}</TableHead>
+                <TableHead>{m.admin_server_ws_routes()}</TableHead>
+                <TableHead>{m.admin_server_ws_revision()}</TableHead>
+                <TableHead className="w-px">
+                  <span className="sr-only">{m.admin_server_ws_actions()}</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {view.outbounds.map((outbound) => {
+                const link = outbound.linkId
+                  ? (view.links.find((row) => row.id === outbound.linkId) ??
+                    null)
+                  : null;
+                const statusTone =
+                  link?.phase === "applied"
+                    ? link.health === "healthy"
+                      ? "success"
+                      : link.health === "degraded"
+                        ? "warning"
+                        : "muted"
+                    : link?.phase === "failed"
+                      ? "danger"
+                      : link
+                        ? "info"
+                        : "muted";
+                return (
+                  <TableRow
+                    key={outbound.id ?? "direct"}
+                    data-slot="server-outbound-row"
+                  >
+                    <TableCell className="font-medium">
+                      {outbound.name}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      <span className="flex items-center gap-1.5">
+                        <span>
+                          {outbound.kind === "builtin_direct"
+                            ? m.admin_servers_outbounds_kind_direct()
+                            : outbound.kind === "direct_profile"
+                              ? m.admin_servers_outbounds_kind_profile()
+                              : outbound.kind === "custom_proxy"
+                                ? m.admin_servers_outbounds_kind_custom()
+                                : outbound.kind === "outbound_group"
+                                  ? m.admin_servers_outbounds_kind_group()
+                                  : m.admin_servers_outbounds_kind_peer()}
+                        </span>
+                        {outbound.protocol ? (
+                          <span className="font-mono text-xs text-muted-foreground">
+                            · {outbound.protocol}
+                          </span>
+                        ) : null}
+                      </span>
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {outbound.runtimeTag}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {link ? (
+                        m.admin_servers_outbounds_link_to({
+                          server: link.destinationServerName,
+                          inbound: link.destinationInboundName,
+                        })
+                      ) : outbound.kind === "direct_profile" ? (
+                        <span className="flex gap-2">
+                          {outbound.bindInterface ? (
+                            <span>
+                              {m.admin_servers_outbounds_interface({
+                                name: outbound.bindInterface,
+                              })}
+                            </span>
+                          ) : null}
+                          <span>
+                            {m.admin_servers_outbounds_ip({
+                              family: outbound.ipFamily ?? "any",
+                            })}
+                          </span>
+                        </span>
+                      ) : outbound.kind === "outbound_group" ? (
+                        <span className="flex flex-wrap items-center gap-1.5">
+                          <span>
+                            {m.admin_servers_outbounds_group_member_count({
+                              count: outbound.memberOutboundTags?.length ?? 0,
+                            })}
+                          </span>
+                          {(outbound.memberOutboundTags ?? []).length > 0 ? (
+                            <span className="font-mono text-xs">
+                              ({(outbound.memberOutboundTags ?? []).join(", ")})
+                            </span>
+                          ) : null}
+                        </span>
+                      ) : (
+                        "—"
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {link ? (
+                        <span className="flex items-center gap-1.5">
+                          <StatusDot
+                            label={healthLabel[link.health]()}
+                            tone={statusTone}
+                          />
+                          <span className="text-xs">
+                            {phaseLabel[link.phase]()} ·{" "}
+                            {healthLabel[link.health]()}
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">
+                          {m.admin_server_ws_direct_egress()}
+                        </span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-xs tabular-nums">
+                      {outbound.routeRuleIds.length}
+                    </TableCell>
+                    <TableCell className="text-xs tabular-nums">
+                      {outbound.revision}
+                    </TableCell>
+                    <TableCell>
+                      {outbound.id ? (
+                        <Menu>
+                          <MenuTrigger
+                            render={
+                              <Button
+                                size="icon-xs"
+                                variant="ghost"
+                                aria-label={m.admin_server_ws_actions()}
+                              />
+                            }
+                          >
+                            <EllipsisIcon />
+                          </MenuTrigger>
+                          <MenuPopup align="end">
+                            {outbound.kind !== "peer_link" ? (
+                              <MenuItem
+                                onClick={() => {
+                                  setEditingId(outbound.id!);
+                                  setEditorKind(
+                                    outbound.kind === "custom_proxy"
+                                      ? "custom_proxy"
+                                      : outbound.kind === "outbound_group"
+                                        ? "outbound_group"
+                                        : "direct_profile",
+                                  );
+                                  setEditorOpen(true);
+                                }}
+                              >
+                                <PencilIcon />
+                                {m.admin_networking_action_edit()}
+                              </MenuItem>
+                            ) : null}
+                            {link ? (
+                              <MenuItem
+                                render={
+                                  <Link
+                                    to="/admin/networking/links"
+                                    search={{ link: link.id }}
+                                  />
+                                }
+                              >
+                                {m.admin_networking_action_edit_link()}
+                              </MenuItem>
+                            ) : null}
+                            {outbound.kind === "direct_profile" ? (
+                              <MenuItem
+                                variant="destructive"
+                                onClick={() => void remove(outbound.id!)}
+                              >
+                                <Trash2Icon />
+                                {m.admin_networking_action_delete()}
+                              </MenuItem>
+                            ) : null}
+                          </MenuPopup>
+                        </Menu>
+                      ) : null}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+      </PageContent>
 
       <OutboundEditorDialog
         open={editorOpen}
@@ -369,6 +439,6 @@ function RouteComponent(): React.ReactElement {
         outbound={editing}
         initialKind={editorKind}
       />
-    </div>
+    </WorkspaceViewport>
   );
 }

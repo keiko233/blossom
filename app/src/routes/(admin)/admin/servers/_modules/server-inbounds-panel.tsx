@@ -3,13 +3,23 @@ import { Link } from "@tanstack/react-router";
 import { PencilIcon, PlusIcon } from "lucide-react";
 import type React from "react";
 
+import { PageContent, PageToolbar } from "@/components/app-shell/page-header";
+import { TableSkeleton } from "@/components/app-shell/skeletons";
+import { WorkspaceViewport } from "@/components/app-shell/workspace";
 import {
   EntrancePublicationBadge,
   NodeHealthBadge,
 } from "@/components/node-health-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { deriveEntranceStatus } from "@/lib/group-entrance-filter";
 import { filterNodesByServer } from "@/lib/server-node-context";
 import {
@@ -48,10 +58,8 @@ function tlsBindingLabel(
 }
 
 /**
- * Server-scoped subscriber inbounds. It reads the existing node rows without
- * changing their settings, TLS binding, tags or generated credentials, and
- * deliberately omits managed peer/outbound details that do not have a data
- * contract yet.
+ * Server-scoped subscriber inbounds as a dense table. Nodes and certificates
+ * load behind one gate; neither query blocks the other.
  */
 export function ServerInboundsPanel({
   serverId,
@@ -60,7 +68,7 @@ export function ServerInboundsPanel({
     queryKey: NODES_QUERY_KEY,
     queryFn: () => listNodes(),
   });
-  const { data: certificates } = useQuery({
+  const { data: certificates, isPending: certificatesPending } = useQuery({
     queryKey: CERTIFICATES_QUERY_KEY,
     queryFn: () => listCertificates(),
   });
@@ -72,30 +80,24 @@ export function ServerInboundsPanel({
       certificate.name,
     ]),
   );
+  const loading = isPending || certificatesPending;
 
   return (
-    <section
-      data-slot="server-inbounds-panel"
-      className="flex flex-col gap-3 rounded-xl border bg-card p-4 shadow-xs"
+    <WorkspaceViewport
+      scrollId={`server-${serverId}-inbounds`}
+      className="[--page-header-h:0px]"
     >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="font-medium">{m.admin_servers_inbounds_title()}</h2>
-            {nodes ? (
-              <Badge variant="outline">
-                {m.admin_servers_inbounds_count({ count: nodes.length })}
-              </Badge>
-            ) : null}
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {m.admin_servers_inbounds_description()}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
+      <PageToolbar>
+        <span className="text-xs text-muted-foreground">
+          {m.admin_servers_inbounds_title()}
+          {nodes
+            ? ` · ${m.admin_servers_inbounds_count({ count: nodes.length })}`
+            : ""}
+        </span>
+        <div className="ms-auto flex shrink-0 items-center gap-2">
           <Button
             size="sm"
-            variant="outline"
+            variant="ghost"
             render={<Link to="/admin/networking/topology" />}
           >
             {m.admin_servers_inbounds_view_topology()}
@@ -113,94 +115,96 @@ export function ServerInboundsPanel({
             {m.admin_proxies_servers_action_add_node()}
           </Button>
         </div>
-      </div>
+      </PageToolbar>
 
-      {isPending ? (
-        <div className="flex justify-center py-6">
-          <Spinner />
-        </div>
-      ) : isError ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <p className="text-sm text-destructive">
-            {m.admin_proxies_servers_nodes_error()}
+      {loading ? (
+        <TableSkeleton rows={6} columns={7} />
+      ) : isError || !nodes ? (
+        <PageContent>
+          <div className="flex flex-wrap items-center gap-2">
+            <p role="alert" className="text-sm text-destructive">
+              {m.admin_proxies_servers_nodes_error()}
+            </p>
+            <Button size="sm" variant="outline" onClick={() => void refetch()}>
+              {m.admin_servers_inbounds_retry()}
+            </Button>
+          </div>
+        </PageContent>
+      ) : nodes.length === 0 ? (
+        <PageContent>
+          <p className="text-sm text-muted-foreground">
+            {m.admin_proxies_servers_nodes_empty()}
           </p>
-          <Button size="sm" variant="outline" onClick={() => void refetch()}>
-            {m.admin_servers_inbounds_retry()}
-          </Button>
-        </div>
-      ) : nodes && nodes.length > 0 ? (
-        <ul
-          aria-label={m.admin_servers_inbounds_title()}
-          className="flex flex-col divide-y rounded-lg border bg-background"
-        >
-          {nodes.map((node) => {
-            const status = deriveEntranceStatus(node);
-            return (
-              <li
-                key={node.id}
-                data-slot="server-inbound-row"
-                className="flex flex-col gap-2 p-3"
-              >
-                <div className="flex flex-wrap items-start gap-2">
-                  <div className="flex min-w-0 flex-1 flex-col">
-                    <Link
-                      to="/admin/servers/$serverId/inbounds/$nodeId"
-                      params={{ serverId, nodeId: node.id }}
-                      className="min-w-0 truncate text-sm font-medium underline-offset-4 hover:underline"
-                    >
-                      {node.name}
-                    </Link>
-                    {node.remark ? (
-                      <span className="truncate text-xs text-muted-foreground">
-                        {node.remark}
-                      </span>
-                    ) : null}
-                  </div>
-                  <Badge variant="outline">{node.protocol}</Badge>
-                  <EntrancePublicationBadge publication={status.publication} />
-                  <NodeHealthBadge health={status.health} />
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    aria-label={m.admin_servers_inbounds_edit()}
-                    render={
+        </PageContent>
+      ) : (
+        <Table variant="pane">
+          <TableHeader>
+            <TableRow>
+              <TableHead>{m.admin_server_ws_name()}</TableHead>
+              <TableHead>{m.admin_server_ws_protocol()}</TableHead>
+              <TableHead>{m.admin_server_ws_endpoint()}</TableHead>
+              <TableHead>{m.admin_servers_inbounds_tls()}</TableHead>
+              <TableHead>{m.admin_server_ws_health()}</TableHead>
+              <TableHead>{m.admin_servers_inbounds_tags()}</TableHead>
+              <TableHead className="w-px">
+                <span className="sr-only">
+                  {m.admin_servers_inbounds_edit()}
+                </span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {nodes.map((node) => {
+              const status = deriveEntranceStatus(node);
+              return (
+                <TableRow
+                  key={node.id}
+                  data-slot="server-inbound-row"
+                  className="h-10"
+                >
+                  <TableCell>
+                    <div className="flex flex-col">
                       <Link
                         to="/admin/servers/$serverId/inbounds/$nodeId"
                         params={{ serverId, nodeId: node.id }}
-                      />
-                    }
-                  >
-                    <PencilIcon />
-                    <span className="max-sm:sr-only">
-                      {m.admin_servers_inbounds_edit()}
-                    </span>
-                  </Button>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                  <span>
-                    <span className="font-medium text-foreground">
-                      {m.admin_servers_inbounds_endpoint()}:
-                    </span>{" "}
-                    <span className="font-mono">
-                      {node.resolvedAddress}:{node.listenPort}
-                    </span>
-                  </span>
-                  <span>
-                    <span className="font-medium text-foreground">
-                      {m.admin_servers_inbounds_tls()}:
-                    </span>{" "}
+                        className="max-w-56 truncate underline-offset-4 hover:underline"
+                      >
+                        {node.name}
+                      </Link>
+                      {node.remark ? (
+                        <span className="max-w-56 truncate text-xs text-muted-foreground">
+                          {node.remark}
+                        </span>
+                      ) : null}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline">{node.protocol}</Badge>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">
+                    {node.resolvedAddress}:{node.listenPort}
+                  </TableCell>
+                  <TableCell className="text-xs">
                     {tlsBindingLabel(node, certificateNames)}
                     {node.tlsServerName ? (
-                      <span className="font-mono"> · {node.tlsServerName}</span>
+                      <span className="font-mono text-muted-foreground">
+                        {" "}
+                        · {node.tlsServerName}
+                      </span>
                     ) : null}
-                  </span>
-                  <span className="flex flex-wrap items-center gap-1">
-                    <span className="font-medium text-foreground">
-                      {m.admin_servers_inbounds_tags()}:
-                    </span>{" "}
-                    {node.tags.length > 0
-                      ? node.tags.map((tag, index) => (
+                  </TableCell>
+                  <TableCell>
+                    <span className="flex items-center gap-1.5">
+                      <EntrancePublicationBadge
+                        publication={status.publication}
+                      />
+                      <NodeHealthBadge health={status.health} />
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    {node.tags.length > 0 ? (
+                      <span className="flex flex-wrap gap-1">
+                        {node.tags.map((tag, index) => (
                           <Badge
                             key={`${tag}-${index}`}
                             size="sm"
@@ -208,26 +212,37 @@ export function ServerInboundsPanel({
                           >
                             {tag}
                           </Badge>
-                        ))
-                      : m.admin_servers_inbounds_no_tags()}
-                  </span>
-                  {!node.enabled ? (
-                    <span className="text-destructive">
-                      {m.admin_proxies_nodes_status_disabled()}
-                    </span>
-                  ) : null}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          {m.admin_proxies_servers_nodes_empty()}
-        </p>
+                        ))}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">
+                        {m.admin_servers_inbounds_no_tags()}
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-label={m.admin_servers_inbounds_edit()}
+                      render={
+                        <Link
+                          to="/admin/servers/$serverId/inbounds/$nodeId"
+                          params={{ serverId, nodeId: node.id }}
+                        />
+                      }
+                    >
+                      <PencilIcon />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
       )}
 
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t px-4 py-3 text-xs text-muted-foreground lg:px-6">
         <span>{m.admin_servers_inbounds_credentials_note()}</span>
         <Link
           className="underline underline-offset-4"
@@ -236,6 +251,6 @@ export function ServerInboundsPanel({
           {m.admin_servers_inbounds_manage_certificates()}
         </Link>
       </div>
-    </section>
+    </WorkspaceViewport>
   );
 }
