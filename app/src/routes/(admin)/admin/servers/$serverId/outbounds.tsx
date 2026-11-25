@@ -18,7 +18,10 @@ import { m } from "@/paraglide/messages";
 import { deleteManagedOutbound } from "@/query/networking";
 
 import { useServerRouting } from "../../networking/_modules/use-networking-workspace";
-import { OutboundEditorDialog } from "../_modules/outbound-editor-dialog";
+import {
+  OutboundEditorDialog,
+  type OutboundEditorKind,
+} from "../_modules/outbound-editor-dialog";
 import { useWorkspaceServer } from "../_modules/use-workspace-server";
 
 export const Route = createFileRoute(
@@ -39,6 +42,8 @@ function RouteComponent(): React.ReactElement {
     refetch,
   } = useServerRouting(server.id);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [editorKind, setEditorKind] =
+    useState<OutboundEditorKind>("direct_profile");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -117,10 +122,29 @@ function RouteComponent(): React.ReactElement {
             <MenuItem
               onClick={() => {
                 setEditingId(null);
+                setEditorKind("direct_profile");
                 setEditorOpen(true);
               }}
             >
               {m.admin_servers_outbounds_add_direct()}
+            </MenuItem>
+            <MenuItem
+              onClick={() => {
+                setEditingId(null);
+                setEditorKind("custom_proxy");
+                setEditorOpen(true);
+              }}
+            >
+              {m.admin_servers_outbounds_add_custom()}
+            </MenuItem>
+            <MenuItem
+              onClick={() => {
+                setEditingId(null);
+                setEditorKind("outbound_group");
+                setEditorOpen(true);
+              }}
+            >
+              {m.admin_servers_outbounds_add_group()}
             </MenuItem>
             <MenuItem
               render={
@@ -173,8 +197,15 @@ function RouteComponent(): React.ReactElement {
                     ? m.admin_servers_outbounds_kind_direct()
                     : outbound.kind === "direct_profile"
                       ? m.admin_servers_outbounds_kind_profile()
-                      : m.admin_servers_outbounds_kind_peer()}
+                      : outbound.kind === "custom_proxy"
+                        ? m.admin_servers_outbounds_kind_custom()
+                        : outbound.kind === "outbound_group"
+                          ? m.admin_servers_outbounds_kind_group()
+                          : m.admin_servers_outbounds_kind_peer()}
                 </Badge>
+                {outbound.protocol ? (
+                  <Badge variant="outline">{outbound.protocol}</Badge>
+                ) : null}
                 {link ? (
                   <>
                     <Badge
@@ -187,13 +218,20 @@ function RouteComponent(): React.ReactElement {
                 ) : null}
                 {outbound.id ? (
                   <span className="flex gap-1">
-                    {outbound.kind === "direct_profile" ? (
+                    {outbound.kind !== "peer_link" ? (
                       <Button
                         size="icon"
                         variant="ghost"
                         aria-label={m.admin_networking_action_edit()}
                         onClick={() => {
                           setEditingId(outbound.id);
+                          setEditorKind(
+                            outbound.kind === "custom_proxy"
+                              ? "custom_proxy"
+                              : outbound.kind === "outbound_group"
+                                ? "outbound_group"
+                                : "direct_profile",
+                          );
                           setEditorOpen(true);
                         }}
                       >
@@ -240,6 +278,13 @@ function RouteComponent(): React.ReactElement {
                     })}
                   </span>
                 ) : null}
+                {outbound.kind === "outbound_group" ? (
+                  <span>
+                    {m.admin_servers_outbounds_group_member_count({
+                      count: outbound.memberOutboundTags?.length ?? 0,
+                    })}
+                  </span>
+                ) : null}
                 <span>
                   {m.admin_servers_outbounds_route_refs({
                     count: outbound.routeRuleIds.length,
@@ -251,6 +296,17 @@ function RouteComponent(): React.ReactElement {
                   })}
                 </span>
               </div>
+
+              {outbound.kind === "outbound_group" &&
+              (outbound.memberOutboundTags?.length ?? 0) > 0 ? (
+                <div className="flex flex-wrap gap-1">
+                  {(outbound.memberOutboundTags ?? []).map((tag) => (
+                    <Badge key={tag} variant="outline">
+                      {tag}
+                    </Badge>
+                  ))}
+                </div>
+              ) : null}
 
               {outbound.routeRuleIds.length > 0 ? (
                 <div className="flex flex-wrap gap-1">
@@ -311,6 +367,7 @@ function RouteComponent(): React.ReactElement {
         }}
         view={view}
         outbound={editing}
+        initialKind={editorKind}
       />
     </div>
   );
