@@ -1,6 +1,41 @@
 # Changelog
 
 All notable changes to Blossom.
+## v1.8.0 - 2026-11-25
+
+### Added
+
+- Add authenticated GitHub release proxy fallback (#240)
+
+- Add authenticated GHCR OCI proxy fallback (#241)
+
+- Add Phase 0 contracts, schema registry and migration (#248)
+
+- Support multi-protocol peers and relay tags (#249)
+
+- Add multi-protocol and auto-bridge draft writers (#250)
+
+- Add L4 port forwarding CRUD and relay gate (#251)
+
+- Compile multi-protocol peers, outbounds and port forwards (#252)
+
+- Add curated rule-set catalog and routing templates (#253)
+
+- Add admin UI for flexible relay topology (#254)
+
+
+### Maintenance
+
+- Update tanstack-query monorepo to v5.108.4 (#225)
+
+- Update alpine docker tag to v3.24 (#238)
+
+- Update dependency oxfmt to ^0.80.0 (#242)
+
+- Update dependency lucide-react to v1.79.0 (#222)
+
+- Update better-auth monorepo to v1.7.28 (#245)
+
 ## v1.7.0 - 2026-11-23
 
 ### Added
