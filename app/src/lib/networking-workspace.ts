@@ -6,9 +6,11 @@
  * ordering the compiler would not emit.
  */
 import type { ManagedIntentRouteRule } from "@blossom/contracts/agent-config-v3";
-import type {
-  ManageableOutboundIpFamily,
-  PeerProtocol,
+import {
+  isPeerProtocol,
+  peerProtocolCapability,
+  type ManageableOutboundIpFamily,
+  type PeerProtocol,
 } from "@blossom/domain/managed-networking";
 
 import type { NetworkingIssue } from "./networking-schema";
@@ -18,7 +20,9 @@ export type RoutingAction = "route" | "reject";
 export type RoutingOutboundKind =
   | "builtin_direct"
   | "direct_profile"
-  | "peer_link";
+  | "peer_link"
+  | "custom_proxy"
+  | "outbound_group";
 
 export interface RoutingInboundOption {
   tag: string;
@@ -36,8 +40,10 @@ export interface RoutingOutboundOption {
   linkId: string | null;
   destinationServerId: string | null;
   destinationServerName: string | null;
-  protocol: PeerProtocol | null;
+  protocol: PeerProtocol | string | null;
   ipFamily: ManageableOutboundIpFamily | null;
+  /** Frozen intent value when known; otherwise derived from the protocol. */
+  supportsUdp?: boolean;
 }
 
 export interface RoutingRuleSetOption {
@@ -54,6 +60,9 @@ export interface RoutingMatchSummary {
   domainKeywords: string[];
   ipCidrs: string[];
   ports: number[];
+  portRanges: string[];
+  protocols: string[];
+  invert: boolean;
   ruleSetTags: string[];
 }
 
@@ -89,6 +98,9 @@ function emptyMatch(): RoutingMatchSummary {
     domainKeywords: [],
     ipCidrs: [],
     ports: [],
+    portRanges: [],
+    protocols: [],
+    invert: false,
     ruleSetTags: [],
   };
 }
@@ -100,6 +112,9 @@ function matchSummary(rule: ManagedIntentRouteRule): RoutingMatchSummary {
     domainKeywords: [...rule.domainKeywords],
     ipCidrs: [...rule.ipCidrs],
     ports: [...rule.ports],
+    portRanges: [...(rule.portRanges ?? [])],
+    protocols: [...(rule.protocols ?? [])],
+    invert: rule.invert === true,
     ruleSetTags: [...rule.ruleSetTags],
   };
 }
@@ -111,6 +126,8 @@ function hasMatch(match: RoutingMatchSummary): boolean {
     match.domainKeywords.length > 0 ||
     match.ipCidrs.length > 0 ||
     match.ports.length > 0 ||
+    match.portRanges.length > 0 ||
+    match.protocols.length > 0 ||
     match.ruleSetTags.length > 0
   );
 }
@@ -139,9 +156,36 @@ function ruleSignature(rule: ManagedIntentRouteRule): string {
     domainKeywords: [...rule.domainKeywords].sort(),
     ipCidrs: [...rule.ipCidrs].sort(),
     ports: [...rule.ports].sort((a, b) => a - b),
+    portRanges: [...(rule.portRanges ?? [])].sort(),
+    protocols: [...(rule.protocols ?? [])].sort(),
+    invert: rule.invert === true,
     ruleSetTags: [...rule.ruleSetTags].sort(),
     outboundTag: rule.outboundTag,
   });
+}
+
+function routingOutboundSupportsUdp(
+  option: RoutingOutboundOption | undefined,
+): boolean {
+  if (!option) {
+    return true;
+  }
+  if (option.supportsUdp !== undefined) {
+    return option.supportsUdp;
+  }
+  if (option.kind === "builtin_direct" || option.kind === "direct_profile") {
+    return true;
+  }
+  if (option.kind === "outbound_group") {
+    return true;
+  }
+  if (option.protocol === "naive" || option.protocol === "shadowtls") {
+    return false;
+  }
+  if (option.protocol !== null && isPeerProtocol(option.protocol)) {
+    return peerProtocolCapability(option.protocol).supportsUdp;
+  }
+  return true;
 }
 
 /**
@@ -159,6 +203,9 @@ export function buildRoutingPreview(input: {
 }): RoutingPreview {
   const inboundTags = new Set(input.inbounds.map((inbound) => inbound.tag));
   const outboundTags = new Set(input.outbounds.map((outbound) => outbound.tag));
+  const outboundByTag = new Map(
+    input.outbounds.map((outbound) => [outbound.tag, outbound]),
+  );
   const ruleSetTags = new Set(
     input.ruleSets.map((ruleSet) => ruleSet.runtimeTag),
   );
@@ -258,16 +305,21 @@ export function buildRoutingPreview(input: {
 
     const outboundTag = rule.outboundTag;
     if (outboundTag === null || !outboundTags.has(outboundTag)) continue;
-
     if (outboundTag.startsWith("peer-out-")) {
       peerTags.add(outboundTag);
-      if (rule.network === "udp") {
-        addIssue({ code: "udp_peer_route", subjectId: rule.ruleId });
-        continue;
-      }
+    }
+
+    if (
+      rule.network !== null &&
+      !routingOutboundSupportsUdp(outboundByTag.get(outboundTag))
+    ) {
+      addIssue({ code: "udp_peer_route", subjectId: rule.ruleId });
+      continue;
+    }
+    if (!routingOutboundSupportsUdp(outboundByTag.get(outboundTag))) {
       actions.push({
         ...base,
-        key: nextKey("peer-tcp"),
+        key: nextKey("tcp-only-route"),
         action: "route",
         network: "tcp",
         outboundTag,
@@ -276,7 +328,7 @@ export function buildRoutingPreview(input: {
       if (rule.network === null) {
         actions.push({
           ...base,
-          key: nextKey("peer-udp-reject"),
+          key: nextKey("tcp-only-udp-reject"),
           action: "reject",
           network: "udp",
           outboundTag: null,
@@ -316,7 +368,9 @@ export function buildRoutingPreview(input: {
       code: "unknown_final_outbound",
       params: { tag: input.finalOutboundTag },
     });
-  } else if (input.finalOutboundTag.startsWith("peer-out-")) {
+  } else if (
+    !routingOutboundSupportsUdp(outboundByTag.get(input.finalOutboundTag))
+  ) {
     addIssue({ code: "final_outbound_is_peer" });
   }
   actions.push({

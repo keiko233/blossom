@@ -23,6 +23,9 @@ function rule(
     domainKeywords: partial.domainKeywords ?? [],
     ipCidrs: partial.ipCidrs ?? [],
     ports: partial.ports ?? [],
+    portRanges: partial.portRanges ?? [],
+    protocols: partial.protocols ?? [],
+    invert: partial.invert ?? false,
     ruleSetTags: partial.ruleSetTags ?? [],
     action: partial.action ?? "route",
     outboundTag: partial.outboundTag ?? "direct",
@@ -67,6 +70,16 @@ const outbounds = [
     ipFamily: null,
   },
 ];
+const tcpOnlyOutbound = {
+  tag: "peer-out-tcp",
+  name: "To TCP-only",
+  kind: "peer_link" as const,
+  linkId: "tcp",
+  destinationServerId: "srv-tcp",
+  destinationServerName: "TCP-only",
+  protocol: "naive" as const,
+  ipFamily: null,
+};
 const ruleSets = [
   {
     runtimeTag: "rule-set-geoip-cn",
@@ -108,8 +121,7 @@ describe("buildRoutingPreview", () => {
       ]),
     ).toEqual([
       ["sniff", null, null, null],
-      ["route", "tcp", "peer-out-ab", null],
-      ["reject", "udp", null, "peer_udp_reject"],
+      ["route", null, "peer-out-ab", null],
       ["route", null, "direct", null],
       ["reject", null, null, "peer_default_reject"],
       ["route", null, "direct", "final_fallback"],
@@ -134,12 +146,12 @@ describe("buildRoutingPreview", () => {
         rule({
           ruleId: "udp-peer",
           network: "udp",
-          outboundTag: "peer-out-ab",
+          outboundTag: "peer-out-tcp",
         }),
       ],
       finalOutboundTag: "direct",
       inbounds,
-      outbounds,
+      outbounds: [...outbounds, tcpOnlyOutbound],
       ruleSets,
     });
 
@@ -178,13 +190,104 @@ describe("buildRoutingPreview", () => {
     expect(preview.issues.map((issue) => issue.code).sort()).toEqual(
       [
         "empty_rule_scope",
-        "final_outbound_is_peer",
         "inbound_not_found",
         "outbound_not_found",
         "unknown_rule_set",
         "unresolved_destination_ip",
       ].sort(),
     );
+  });
+
+  it("allows UDP routes and a peer fallback when the outbound carries UDP", () => {
+    const preview = buildRoutingPreview({
+      rules: [
+        rule({
+          ruleId: "udp-peer",
+          network: "udp",
+          portRanges: ["1000-2000"],
+          protocols: ["quic"],
+          invert: true,
+          outboundTag: "peer-out-ab",
+        }),
+        rule({
+          ruleId: "tcp-only",
+          network: "udp",
+          outboundTag: "peer-out-tcp",
+        }),
+      ],
+      finalOutboundTag: "peer-out-ab",
+      inbounds,
+      outbounds: [...outbounds, tcpOnlyOutbound],
+      ruleSets,
+    });
+
+    expect(
+      preview.actions.map((action) => [
+        action.action,
+        action.network,
+        action.outboundTag,
+        action.note,
+      ]),
+    ).toEqual([
+      ["route", "udp", "peer-out-ab", null],
+      ["reject", null, null, "peer_default_reject"],
+      ["route", null, "peer-out-ab", "final_fallback"],
+    ]);
+    expect(preview.issues.map((issue) => issue.code)).toEqual([
+      "udp_peer_route",
+    ]);
+    expect(preview.actions[0]?.match).toEqual({
+      domains: [],
+      domainSuffixes: [],
+      domainKeywords: [],
+      ipCidrs: [],
+      ports: [],
+      portRanges: ["1000-2000"],
+      protocols: ["quic"],
+      invert: true,
+      ruleSetTags: [],
+    });
+  });
+
+  it("rejects a TCP-only final outbound", () => {
+    const preview = buildRoutingPreview({
+      rules: [],
+      finalOutboundTag: "peer-out-tcp",
+      inbounds,
+      outbounds: [...outbounds, tcpOnlyOutbound],
+      ruleSets,
+    });
+    expect(preview.issues.map((issue) => issue.code)).toEqual([
+      "final_outbound_is_peer",
+    ]);
+  });
+
+  it("keeps a catch-all route to a TCP-only outbound TCP-only with a UDP reject", () => {
+    const preview = buildRoutingPreview({
+      rules: [
+        rule({
+          ruleId: "tcp-catch-all",
+          outboundTag: "peer-out-tcp",
+        }),
+      ],
+      finalOutboundTag: "direct",
+      inbounds,
+      outbounds: [...outbounds, tcpOnlyOutbound],
+      ruleSets,
+    });
+    expect(
+      preview.actions.map((action) => [
+        action.action,
+        action.network,
+        action.outboundTag,
+        action.note,
+      ]),
+    ).toEqual([
+      ["route", "tcp", "peer-out-tcp", null],
+      ["reject", "udp", null, "peer_udp_reject"],
+      ["reject", null, null, "peer_default_reject"],
+      ["route", null, "direct", "final_fallback"],
+    ]);
   });
 });
 

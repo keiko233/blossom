@@ -334,13 +334,6 @@ describe("managed snapshot compiler", () => {
         outbound: "peer-out-pout1",
         rule_set: ["rule-set-geoip-cn"],
         inbound: ["node-n1"],
-        network: "tcp",
-      },
-      {
-        action: "reject",
-        rule_set: ["rule-set-geoip-cn"],
-        inbound: ["node-n1"],
-        network: "udp",
       },
       { action: "reject", inbound: ["peer-in-pin1"] },
     ]);
@@ -559,8 +552,9 @@ describe("managed snapshot compiler", () => {
     ).toThrowError(ManagedCompileError);
   });
 
-  it("rejects UDP routing through a TCP-only peer outbound", () => {
+  it("rejects UDP routing through an explicitly TCP-only peer outbound", () => {
     const intent = stageIntent();
+    intent.outbounds[1]!.supportsUdp = false;
     intent.routingPolicy.rules[0]!.network = "udp";
     expect(() =>
       compileManagedServerConfig({
@@ -570,7 +564,7 @@ describe("managed snapshot compiler", () => {
         tlsMaterial: tlsMaterial(intent),
         peerCredentials: credentials(),
       }),
-    ).toThrowError(/TCP-only peer outbound/);
+    ).toThrowError(/TCP-only outbound/);
   });
 
   it("drops a peer listener with no admission and ships no receiver private key", () => {
@@ -589,3 +583,565 @@ describe("managed snapshot compiler", () => {
     expect(result.extension.tlsBindings[0]?.direction).toBe("outbound");
   });
 });
+
+describe("managed snapshot compiler: multi-protocol peers and outbounds", () => {
+  const SS_KEY = Buffer.alloc(32, 7).toString("base64");
+
+  function peerIntent(input: {
+    peerInbounds: unknown[];
+    outbounds: unknown[];
+    portForwards?: unknown[];
+    rules?: unknown[];
+    finalOutboundTag?: string;
+  }): ManagedStageIntent {
+    return managedStageIntentSchema.parse({
+      schemaVersion: 1,
+      configVersionId: "mcv-mp",
+      serverId: "srv-mp",
+      version: 1,
+      topologyGeneration: 1,
+      subscriberInbounds: [],
+      peerInbounds: input.peerInbounds,
+      ...(input.portForwards ? { portForwards: input.portForwards } : {}),
+      outbounds: input.outbounds,
+      routingPolicy: {
+        finalOutboundTag: input.finalOutboundTag ?? "direct",
+        rules: input.rules ?? [],
+      },
+      ruleSets: [],
+      stageExpectations: { requiredRuntimeTags: [], removedRuntimeTags: [] },
+    });
+  }
+
+  function compile(
+    intent: ManagedStageIntent,
+    peerCredentials: ReadonlyMap<string, string>,
+    customOutboundSecrets?: ReadonlyMap<string, Record<string, unknown>>,
+  ) {
+    return compileManagedServerConfig({
+      intent,
+      subscriberConfig: subscriberConfig(),
+      ruleSetArtifacts: [],
+      tlsMaterial: { inbound: [], outboundTrust: [] },
+      peerCredentials,
+      customOutboundSecrets,
+    });
+  }
+
+  it("compiles Shadowsocks-2022, SOCKS5, custom proxy and urltest outbounds", () => {
+    const ssPeerInbound = {
+      inboundId: "ss",
+      runtimeTag: "peer-in-ss",
+      protocol: "shadowsocks",
+      listenAddress: "::",
+      listenPort: 9101,
+      advertisedAddress: "198.51.100.10",
+      advertisedPort: 9101,
+      network: "udp",
+      tlsServerName: null,
+      certificateId: null,
+      settings: { method: "2022-blake3-aes-128-gcm" },
+      admissions: [
+        {
+          linkId: "link-ss-in",
+          sourceServerId: "srv-x",
+          credentialGeneration: 1,
+        },
+      ],
+    };
+    const socksPeerInbound = {
+      inboundId: "socks",
+      runtimeTag: "peer-in-socks",
+      protocol: "socks",
+      listenAddress: "::",
+      listenPort: 9102,
+      advertisedAddress: "198.51.100.11",
+      advertisedPort: 9102,
+      network: "tcp",
+      tlsServerName: null,
+      certificateId: null,
+      settings: {},
+      admissions: [
+        {
+          linkId: "link-socks-in",
+          sourceServerId: "srv-y",
+          credentialGeneration: 1,
+        },
+      ],
+    };
+    const peerOutbounds = [
+      {
+        outboundId: "ss",
+        runtimeTag: "peer-out-ss",
+        kind: "peer_link",
+        dialOptions: {},
+        settings: { method: "2022-blake3-aes-128-gcm" },
+        linkId: "link-ss-out",
+        destinationServerId: "srv-x",
+        destinationInboundId: "pin-ss",
+        protocol: "shadowsocks",
+        serverAddress: "203.0.113.20",
+        serverPort: 9101,
+        tlsServerName: null,
+        credentialGeneration: 1,
+        trustMode: null,
+        trustedCertificates: [],
+      },
+      {
+        outboundId: "socks",
+        runtimeTag: "peer-out-socks",
+        kind: "peer_link",
+        dialOptions: {},
+        settings: {},
+        linkId: "link-socks-out",
+        destinationServerId: "srv-y",
+        destinationInboundId: "pin-socks",
+        protocol: "socks",
+        serverAddress: "203.0.113.21",
+        serverPort: 9102,
+        tlsServerName: null,
+        credentialGeneration: 1,
+        trustMode: null,
+        trustedCertificates: [],
+      },
+    ];
+    const intent = peerIntent({
+      peerInbounds: [ssPeerInbound, socksPeerInbound],
+      outbounds: [
+        ...peerOutbounds,
+        {
+          outboundId: "cmix",
+          runtimeTag: "custom-out-cmix",
+          kind: "custom_proxy",
+          dialOptions: {},
+          protocol: "socks",
+          settings: {
+            server: "proxy.example.com",
+            server_port: 1080,
+            username: "proxy-user",
+          },
+        },
+        {
+          outboundId: "fast",
+          runtimeTag: "group-out-fast",
+          kind: "outbound_group",
+          dialOptions: {},
+          protocol: "urltest",
+          settings: { interval: "3m", tolerance: 50 },
+          memberOutboundTags: ["custom-out-cmix", "peer-out-ss"],
+        },
+      ],
+    });
+    const peerCredentials = new Map([
+      [managedPeerCredentialKey("link-ss-in", 1), SS_KEY],
+      [managedPeerCredentialKey("link-socks-in", 1), "socks-in-secret"],
+      [managedPeerCredentialKey("link-ss-out", 1), SS_KEY],
+      [managedPeerCredentialKey("link-socks-out", 1), "socks-out-secret"],
+    ]);
+    const result = compile(
+      intent,
+      peerCredentials,
+      new Map([["cmix", { password: "custom-secret" }]]),
+    );
+
+    const inbounds = result.config.inbounds as unknown as {
+      tag: string;
+      type: string;
+      method?: string;
+      network?: string;
+      users?: { username?: string; name?: string; password?: string }[];
+    }[];
+    const ssInbound = inbounds.find((inbound) => inbound.tag === "peer-in-ss")!;
+    expect(ssInbound.type).toBe("shadowsocks");
+    expect(ssInbound.method).toBe("2022-blake3-aes-128-gcm");
+    expect(ssInbound.network).toBe("udp");
+    expect(Buffer.from(ssInbound.users![0]!.password!, "base64")).toHaveLength(
+      16,
+    );
+
+    const socksInbound = inbounds.find(
+      (inbound) => inbound.tag === "peer-in-socks",
+    )!;
+    expect(socksInbound.type).toBe("socks");
+    // The SOCKS inbound schema has no network field; only protocols that
+    // expose it receive a managed network override.
+    expect(socksInbound.network).toBeUndefined();
+    expect(socksInbound.users![0]).toMatchObject({
+      username: encodePeerLinkIdentity("link-socks-in", 1),
+      password: "socks-in-secret",
+    });
+
+    const outbounds = result.config.outbounds as unknown as {
+      tag: string;
+      type: string;
+      method?: string;
+      password?: string;
+      username?: string;
+      version?: string;
+      domain_resolver?: string;
+      outbounds?: string[];
+    }[];
+    const ssOutbound = outbounds.find(
+      (outbound) => outbound.tag === "peer-out-ss",
+    )!;
+    expect(ssOutbound).toMatchObject({
+      type: "shadowsocks",
+      method: "2022-blake3-aes-128-gcm",
+      password: peerPasswordForTest(SS_KEY),
+    });
+    const socksOutbound = outbounds.find(
+      (outbound) => outbound.tag === "peer-out-socks",
+    )!;
+    expect(socksOutbound).toMatchObject({
+      type: "socks",
+      version: "5",
+      username: encodePeerLinkIdentity("link-socks-out", 1),
+      password: "socks-out-secret",
+    });
+    const customOutbound = outbounds.find(
+      (outbound) => outbound.tag === "custom-out-cmix",
+    )!;
+    expect(customOutbound).toMatchObject({
+      type: "socks",
+      server: "proxy.example.com",
+      server_port: 1080,
+      username: "proxy-user",
+      password: "custom-secret",
+      domain_resolver: "bootstrap",
+    });
+    const groupOutbound = outbounds.find(
+      (outbound) => outbound.tag === "group-out-fast",
+    )!;
+    expect(groupOutbound).toMatchObject({
+      type: "urltest",
+      interval: "3m",
+      tolerance: 50,
+      outbounds: ["custom-out-cmix", "peer-out-ss"],
+    });
+    expect(result.materializedInboundTags).toEqual([
+      "node-n1",
+      "peer-in-socks",
+      "peer-in-ss",
+    ]);
+  });
+
+  it("compiles Hysteria2 and VLESS Reality peer credentials and TLS", () => {
+    const realityPrivateKey = Buffer.alloc(32, 5).toString("base64url");
+    const intent = peerIntent({
+      peerInbounds: [
+        {
+          inboundId: "hy2",
+          runtimeTag: "peer-in-hy2",
+          protocol: "hysteria2",
+          listenAddress: "::",
+          listenPort: 9201,
+          advertisedAddress: "198.51.100.30",
+          advertisedPort: 9201,
+          network: "both",
+          tlsServerName: "hy.example.com",
+          certificateId: null,
+          settings: {
+            obfs: { type: "salamander", password: "obfs-test-value" },
+            up_mbps: 100,
+            down_mbps: 100,
+          },
+          admissions: [
+            {
+              linkId: "link-hy2-in",
+              sourceServerId: "srv-hy",
+              credentialGeneration: 1,
+            },
+          ],
+        },
+      ],
+      outbounds: [
+        {
+          outboundId: "hy2",
+          runtimeTag: "peer-out-hy2",
+          kind: "peer_link",
+          dialOptions: {},
+          settings: {
+            obfs: { type: "salamander", password: "obfs-test-value" },
+            up_mbps: 100,
+            down_mbps: 100,
+          },
+          linkId: "link-hy2-out",
+          destinationServerId: "srv-hy",
+          destinationInboundId: "pin-hy2",
+          protocol: "hysteria2",
+          serverAddress: "203.0.113.30",
+          serverPort: 9201,
+          tlsServerName: "hy.example.com",
+          credentialGeneration: 1,
+          trustMode: "system",
+          trustedCertificates: [],
+        },
+        {
+          outboundId: "reality",
+          runtimeTag: "peer-out-reality",
+          kind: "peer_link",
+          dialOptions: {},
+          settings: {
+            tls: {
+              enabled: true,
+              reality: { enabled: true, private_key: realityPrivateKey },
+            },
+          },
+          linkId: "link-reality",
+          destinationServerId: "srv-reality",
+          destinationInboundId: "pin-reality",
+          protocol: "vless",
+          serverAddress: "203.0.113.31",
+          serverPort: 443,
+          tlsServerName: "reality.example.com",
+          credentialGeneration: 1,
+          trustMode: null,
+          trustedCertificates: [],
+        },
+      ],
+    });
+    const hy2InCredential = Buffer.alloc(32, 9).toString("base64");
+    const hy2OutCredential = Buffer.alloc(32, 10).toString("base64");
+    const uuid = "550e8400-e29b-41d4-a716-446655440010";
+    const result = compile(
+      intent,
+      new Map([
+        [managedPeerCredentialKey("link-hy2-in", 1), hy2InCredential],
+        [managedPeerCredentialKey("link-hy2-out", 1), hy2OutCredential],
+        [managedPeerCredentialKey("link-reality", 1), uuid],
+      ]),
+    );
+
+    const inbounds = result.config.inbounds as unknown as {
+      tag: string;
+      type: string;
+      tls?: { enabled?: boolean; server_name?: string };
+      obfs?: Record<string, unknown>;
+      up_mbps?: number;
+      down_mbps?: number;
+      users?: { name?: string; password?: string }[];
+    }[];
+    const hy2Inbound = inbounds.find(
+      (inbound) => inbound.tag === "peer-in-hy2",
+    )!;
+    expect(hy2Inbound).toMatchObject({
+      type: "hysteria2",
+      obfs: { type: "salamander", password: "obfs-test-value" },
+      up_mbps: 100,
+      down_mbps: 100,
+      tls: { enabled: true, server_name: "hy.example.com" },
+    });
+    expect(hy2Inbound.users![0]).toMatchObject({
+      name: encodePeerLinkIdentity("link-hy2-in", 1),
+      password: hy2InCredential,
+    });
+
+    const outbounds = result.config.outbounds as unknown as {
+      tag: string;
+      type: string;
+      uuid?: string;
+      obfs?: Record<string, unknown>;
+      up_mbps?: number;
+      down_mbps?: number;
+      tls?: {
+        enabled?: boolean;
+        server_name?: string;
+        reality?: { enabled?: boolean; public_key?: string };
+      };
+    }[];
+    const hy2Outbound = outbounds.find(
+      (outbound) => outbound.tag === "peer-out-hy2",
+    )!;
+    expect(hy2Outbound).toMatchObject({
+      type: "hysteria2",
+      obfs: { type: "salamander", password: "obfs-test-value" },
+      up_mbps: 100,
+      down_mbps: 100,
+      tls: { enabled: true, server_name: "hy.example.com" },
+    });
+    const realityOutbound = outbounds.find(
+      (outbound) => outbound.tag === "peer-out-reality",
+    )!;
+    expect(realityOutbound).toMatchObject({
+      type: "vless",
+      uuid,
+      tls: {
+        enabled: true,
+        server_name: "reality.example.com",
+        reality: { enabled: true },
+      },
+    });
+    expect(realityOutbound.tls?.reality?.public_key).toMatch(
+      /^[A-Za-z0-9_-]{43}$/,
+    );
+    expect(
+      (realityOutbound.tls?.reality as Record<string, unknown> | undefined)
+        ?.private_key,
+    ).toBeUndefined();
+  });
+
+  it("compiles port forwards as direct inbounds and ingress-scoped route rules", () => {
+    const intent = peerIntent({
+      peerInbounds: [],
+      outbounds: [
+        {
+          outboundId: "egress",
+          runtimeTag: "direct-egress",
+          kind: "direct_profile",
+          dialOptions: { bind_interface: "eth0" },
+        },
+      ],
+      portForwards: [
+        {
+          forwardId: "pf-both",
+          runtimeTag: "relay-in-pf-both",
+          listenAddress: "::",
+          listenPort: 7000,
+          network: "both",
+          overrideAddress: "203.0.113.50",
+          overridePort: 443,
+          outboundTag: null,
+        },
+        {
+          forwardId: "pf-tcp",
+          runtimeTag: "relay-in-pf-tcp",
+          listenAddress: "::",
+          listenPort: 7001,
+          network: "tcp",
+          overrideAddress: "203.0.113.51",
+          overridePort: 8443,
+          outboundTag: "direct-egress",
+        },
+      ],
+    });
+    const result = compile(intent, new Map());
+
+    const inbounds = result.config.inbounds as unknown as {
+      tag: string;
+      type: string;
+      listen?: string;
+      listen_port?: number;
+      network?: string;
+      override_address?: string;
+      override_port?: number;
+    }[];
+    expect(
+      inbounds.find((inbound) => inbound.tag === "relay-in-pf-both"),
+    ).toMatchObject({
+      type: "direct",
+      listen: "::",
+      listen_port: 7000,
+      override_address: "203.0.113.50",
+      override_port: 443,
+    });
+    expect(
+      inbounds.find((inbound) => inbound.tag === "relay-in-pf-both"),
+    ).not.toHaveProperty("network");
+    expect(
+      inbounds.find((inbound) => inbound.tag === "relay-in-pf-tcp"),
+    ).toMatchObject({
+      type: "direct",
+      listen_port: 7001,
+      network: "tcp",
+      override_address: "203.0.113.51",
+      override_port: 8443,
+    });
+
+    const route = result.config.route as unknown as {
+      rules: {
+        action: string;
+        inbound?: string[];
+        outbound?: string;
+      }[];
+      final: string;
+    };
+    expect(route.final).toBe("direct");
+    expect(route.rules).toEqual([
+      {
+        inbound: ["relay-in-pf-tcp"],
+        outbound: "direct-egress",
+      },
+    ]);
+    expect(result.materializedInboundTags).toEqual([
+      "node-n1",
+      "relay-in-pf-both",
+      "relay-in-pf-tcp",
+    ]);
+  });
+
+  it("allows a UDP-capable peer outbound as the full-traffic final outbound", () => {
+    const intent = peerIntent({
+      peerInbounds: [],
+      outbounds: [
+        {
+          outboundId: "ss",
+          runtimeTag: "peer-out-ss",
+          kind: "peer_link",
+          dialOptions: {},
+          settings: { method: "2022-blake3-aes-128-gcm" },
+          linkId: "link-ss",
+          destinationServerId: "srv-x",
+          destinationInboundId: "pin-ss",
+          protocol: "shadowsocks",
+          serverAddress: "203.0.113.20",
+          serverPort: 9101,
+          tlsServerName: null,
+          credentialGeneration: 1,
+          trustMode: null,
+          trustedCertificates: [],
+        },
+      ],
+      finalOutboundTag: "peer-out-ss",
+    });
+    const result = compile(
+      intent,
+      new Map([[managedPeerCredentialKey("link-ss", 1), SS_KEY]]),
+    );
+    expect((result.config.route as unknown as { final: string }).final).toBe(
+      "peer-out-ss",
+    );
+    expect(result.prunedPeerInboundTags).toEqual([]);
+  });
+
+  it("emits port ranges, protocols and invert on route rules", () => {
+    const intent = peerIntent({
+      peerInbounds: [],
+      outbounds: [
+        {
+          outboundId: "egress",
+          runtimeTag: "direct-egress",
+          kind: "direct_profile",
+          dialOptions: {},
+        },
+      ],
+      rules: [
+        {
+          ruleId: "extended",
+          inboundTags: ["node-n1"],
+          portRanges: ["1000-2000", "3000-4000"],
+          protocols: ["tls", "http"],
+          invert: true,
+          action: "route",
+          outboundTag: "direct-egress",
+        },
+      ],
+    });
+    const result = compile(intent, new Map());
+    const route = result.config.route as unknown as {
+      rules: Record<string, unknown>[];
+    };
+    expect(route.rules).toEqual([
+      {
+        inbound: ["node-n1"],
+        port_range: ["1000-2000", "3000-4000"],
+        protocol: ["tls", "http"],
+        invert: true,
+        outbound: "direct-egress",
+      },
+    ]);
+  });
+});
+
+function peerPasswordForTest(credential: string): string {
+  return Buffer.from(credential, "base64").subarray(0, 16).toString("base64");
+}

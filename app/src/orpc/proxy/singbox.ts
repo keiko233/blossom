@@ -537,6 +537,16 @@ export function computeManagedStageIntentDigest(
         ),
       }))
       .sort((a, b) => a.inboundId.localeCompare(b.inboundId)),
+    ...(intent.portForwards === undefined
+      ? {}
+      : {
+          portForwards: [...intent.portForwards]
+            .map((forward) => ({
+              ...forward,
+              runtimeTag: forward.runtimeTag,
+            }))
+            .sort((a, b) => a.forwardId.localeCompare(b.forwardId)),
+        }),
     outbounds: [...intent.outbounds]
       .map((outbound) => ({
         ...outbound,
@@ -557,6 +567,13 @@ export function computeManagedStageIntentDigest(
         domainKeywords: [...rule.domainKeywords].sort(),
         ipCidrs: [...rule.ipCidrs].sort(),
         ports: [...rule.ports].sort((a, b) => a - b),
+        ...(rule.portRanges === undefined
+          ? {}
+          : { portRanges: [...rule.portRanges].sort() }),
+        ...(rule.protocols === undefined
+          ? {}
+          : { protocols: [...rule.protocols].sort() }),
+        ...(rule.invert === undefined ? {} : { invert: rule.invert }),
         ruleSetTags: [...rule.ruleSetTags].sort(),
       })),
     },
@@ -603,10 +620,12 @@ export function computeManagedStateFingerprint(
         listenPort: peer.listenPort,
         advertisedAddress: peer.advertisedAddress,
         advertisedPort: peer.advertisedPort,
+        ...(peer.network === undefined ? {} : { network: peer.network }),
         tlsServerName: peer.tlsServerName,
         certificateId: peer.certificateId,
         certificateGeneration: peer.certificateGeneration,
         certificateFingerprintSha256: peer.certificateFingerprintSha256,
+        ...(peer.settings === undefined ? {} : { settings: peer.settings }),
         admissions: [...peer.admissions].sort(
           (a, b) =>
             a.linkId.localeCompare(b.linkId) ||
@@ -614,12 +633,28 @@ export function computeManagedStateFingerprint(
         ),
       }))
       .sort((a, b) => a.inboundId.localeCompare(b.inboundId)),
+    ...(intent.portForwards === undefined
+      ? {}
+      : {
+          portForwards: [...intent.portForwards]
+            .map((forward) => ({ ...forward }))
+            .sort((a, b) => a.forwardId.localeCompare(b.forwardId)),
+        }),
     outbounds: [...intent.outbounds]
       .map((outbound) => ({
         outboundId: outbound.outboundId,
         runtimeTag: outbound.runtimeTag,
         kind: outbound.kind,
         dialOptions: outbound.dialOptions,
+        ...(outbound.settings === undefined
+          ? {}
+          : { settings: outbound.settings }),
+        ...(outbound.supportsUdp === undefined
+          ? {}
+          : { supportsUdp: outbound.supportsUdp }),
+        ...(outbound.memberOutboundTags === undefined
+          ? {}
+          : { memberOutboundTags: outbound.memberOutboundTags }),
         linkId: outbound.linkId,
         destinationServerId: outbound.destinationServerId,
         destinationInboundId: outbound.destinationInboundId,
@@ -649,6 +684,13 @@ export function computeManagedStateFingerprint(
         domainKeywords: [...rule.domainKeywords].sort(),
         ipCidrs: [...rule.ipCidrs].sort(),
         ports: [...rule.ports].sort((a, b) => a - b),
+        ...(rule.portRanges === undefined
+          ? {}
+          : { portRanges: [...rule.portRanges].sort() }),
+        ...(rule.protocols === undefined
+          ? {}
+          : { protocols: [...rule.protocols].sort() }),
+        ...(rule.invert === undefined ? {} : { invert: rule.invert }),
         ruleSetTags: [...rule.ruleSetTags].sort(),
         action: rule.action,
         outboundTag: rule.outboundTag,
@@ -884,6 +926,35 @@ export function validateMaterializedSnapshotAgainstIntent(
         code: "missing_required_runtime_tag",
         runtimeTag: requiredTag,
       });
+    }
+  }
+
+  // Port forwards are materialized by the compiler whenever they are in the
+  // frozen intent. A frozen forward without its `direct` listener means the
+  // snapshot was built from a different intent revision.
+  for (const forward of intent.portForwards ?? []) {
+    if (!inboundTags.has(forward.runtimeTag)) {
+      issues.push({
+        code: "missing_required_runtime_tag",
+        runtimeTag: forward.runtimeTag,
+      });
+    }
+  }
+
+  // A materialized group must only name outbounds the snapshot actually
+  // contains; sing-box would otherwise defer the failure to run time.
+  for (const outbound of intent.outbounds) {
+    if (outbound.kind !== "outbound_group") {
+      continue;
+    }
+    for (const member of outbound.memberOutboundTags ?? []) {
+      if (!outboundTags.has(member)) {
+        issues.push({
+          code: "unresolved_route_outbound",
+          ruleIndex: -1,
+          outboundTag: member,
+        });
+      }
     }
   }
 
