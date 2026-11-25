@@ -22,7 +22,11 @@ export function NetworkingIssues({
     ) : null;
   }
   return (
-    <Alert variant="warning" data-slot="networking-issues">
+    <Alert
+      className="rounded-lg border-x-0 border-t-0 bg-transparent px-0"
+      variant="warning"
+      data-slot="networking-issues"
+    >
       <CircleAlertIcon />
       <AlertTitle>{title}</AlertTitle>
       <AlertDescription>

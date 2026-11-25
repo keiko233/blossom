@@ -17,9 +17,12 @@ import {
 import * as React from "react";
 
 import {
+  PageContent,
   PageHeader,
+  PageHeaderActions,
   PageHeaderTitle,
 } from "@/components/app-shell/page-header";
+import { TableSkeleton } from "@/components/app-shell/skeletons";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,7 +40,6 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "@/components/ui/menu";
-import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import {
   Table,
@@ -323,87 +325,94 @@ function RouteComponent(): React.ReactElement {
   });
 
   return (
-    <div className="flex flex-col gap-4 p-4">
+    <div className="flex min-w-0 flex-col [--page-toolbar-h:0rem]">
       <PageHeader>
         <PageHeaderTitle>{m.admin_nav_proxies_item_rules()}</PageHeaderTitle>
-        <Button onClick={openCreate}>
-          <PlusIcon />
-          {m.admin_rules_add()}
-        </Button>
-      </PageHeader>
-
-      <Alert variant="info">
-        <InfoIcon />
-        <AlertTitle>{m.admin_rules_note_title()}</AlertTitle>
-        <AlertDescription>
-          <p>{m.admin_rules_note_client()}</p>
-          <p>{m.admin_rules_note_server()}</p>
-        </AlertDescription>
-      </Alert>
-
-      {isPending ? (
-        <div className="flex justify-center py-16">
-          <Spinner />
-        </div>
-      ) : isError ? (
-        <div className="flex flex-col items-center gap-4 py-16">
-          <Alert variant="error" className="max-w-md">
-            <AlertTitle>{m.admin_rules_error_title()}</AlertTitle>
-            <AlertDescription>
-              {m.admin_rules_error_description()}
-            </AlertDescription>
-          </Alert>
-          <Button loading={isFetching} onClick={() => void refetch()}>
-            {m.admin_rules_error_retry()}
-          </Button>
-        </div>
-      ) : rules.length > 0 ? (
-        <Table>
-          <TableHeader>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <TableHead key={header.id}>
-                    {header.isPlaceholder
-                      ? null
-                      : flexRender(
-                          header.column.columnDef.header,
-                          header.getContext(),
-                        )}
-                  </TableHead>
-                ))}
-              </TableRow>
-            ))}
-          </TableHeader>
-          <TableBody>
-            {table.getRowModel().rows.map((row) => (
-              <TableRow
-                key={row.id}
-                className={row.original.enabled ? undefined : "opacity-60"}
-              >
-                {row.getVisibleCells().map((cell) => (
-                  <TableCell key={cell.id}>
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </TableCell>
-                ))}
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      ) : (
-        <Empty>
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <RouteIcon />
-            </EmptyMedia>
-            <EmptyTitle>{m.admin_rules_empty_title()}</EmptyTitle>
-          </EmptyHeader>
-          <Button onClick={openCreate}>
+        <PageHeaderActions>
+          <Button size="sm" onClick={openCreate}>
             <PlusIcon />
             {m.admin_rules_add()}
           </Button>
-        </Empty>
-      )}
+        </PageHeaderActions>
+      </PageHeader>
+
+      <PageContent width="flush">
+        <div className="px-4 pt-4 lg:px-6">
+          <Alert variant="info">
+            <InfoIcon />
+            <AlertTitle>{m.admin_rules_note_title()}</AlertTitle>
+            <AlertDescription>
+              <p>{m.admin_rules_note_client()}</p>
+              <p>{m.admin_rules_note_server()}</p>
+            </AlertDescription>
+          </Alert>
+        </div>
+
+        {isPending ? (
+          <TableSkeleton columns={7} rows={8} />
+        ) : isError ? (
+          <div className="flex flex-col items-center gap-4 py-16">
+            <Alert variant="error" className="max-w-md">
+              <AlertTitle>{m.admin_rules_error_title()}</AlertTitle>
+              <AlertDescription>
+                {m.admin_rules_error_description()}
+              </AlertDescription>
+            </Alert>
+            <Button loading={isFetching} onClick={() => void refetch()}>
+              {m.admin_rules_error_retry()}
+            </Button>
+          </div>
+        ) : rules.length > 0 ? (
+          <Table variant="pane">
+            <TableHeader>
+              {table.getHeaderGroups().map((headerGroup) => (
+                <TableRow key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => (
+                    <TableHead key={header.id}>
+                      {header.isPlaceholder
+                        ? null
+                        : flexRender(
+                            header.column.columnDef.header,
+                            header.getContext(),
+                          )}
+                    </TableHead>
+                  ))}
+                </TableRow>
+              ))}
+            </TableHeader>
+            <TableBody>
+              {table.getRowModel().rows.map((row) => (
+                <TableRow
+                  key={row.id}
+                  className={row.original.enabled ? undefined : "opacity-60"}
+                >
+                  {row.getVisibleCells().map((cell) => (
+                    <TableCell key={cell.id}>
+                      {flexRender(
+                        cell.column.columnDef.cell,
+                        cell.getContext(),
+                      )}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        ) : (
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <RouteIcon />
+              </EmptyMedia>
+              <EmptyTitle>{m.admin_rules_empty_title()}</EmptyTitle>
+            </EmptyHeader>
+            <Button onClick={openCreate}>
+              <PlusIcon />
+              {m.admin_rules_add()}
+            </Button>
+          </Empty>
+        )}
+      </PageContent>
 
       <RuleDialog
         open={dialogOpen}

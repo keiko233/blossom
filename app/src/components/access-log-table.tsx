@@ -3,8 +3,8 @@ import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import { useState } from "react";
 import type React from "react";
 
+import { TableSkeleton } from "@/components/app-shell/skeletons";
 import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -67,11 +67,7 @@ export function AccessLogTable({
   });
 
   if (isPending || !data) {
-    return (
-      <div className="flex justify-center py-8">
-        <Spinner />
-      </div>
-    );
+    return <TableSkeleton columns={3} rows={6} />;
   }
 
   const { rows, total } = data;
@@ -81,7 +77,7 @@ export function AccessLogTable({
     <div className="flex flex-col gap-3">
       {rows.length > 0 ? (
         <>
-          <Table>
+          <Table variant="pane">
             <TableHeader>
               <TableRow>
                 <TableHead>{m.access_log_col_time()}</TableHead>
@@ -93,7 +89,7 @@ export function AccessLogTable({
               {rows.map((row) => (
                 <TableRow key={row.id}>
                   <TableCell>
-                    <span className="text-xs text-muted-foreground">
+                    <span className="text-xs text-muted-foreground tabular-nums">
                       {new Date(row.createdAt).toLocaleString()}
                     </span>
                   </TableCell>
@@ -112,7 +108,7 @@ export function AccessLogTable({
               ))}
             </TableBody>
           </Table>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between border-t py-2">
             <span className="text-xs text-muted-foreground">
               {cursor + 1}–{cursor + rows.length} / {total}
             </span>
@@ -139,7 +135,7 @@ export function AccessLogTable({
           </div>
         </>
       ) : (
-        <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+        <div className="border-y py-8 text-center text-sm text-muted-foreground">
           {m.access_log_empty()}
         </div>
       )}

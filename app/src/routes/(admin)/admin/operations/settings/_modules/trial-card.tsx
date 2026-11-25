@@ -65,6 +65,7 @@ export function TrialCard({
   return (
     <SettingsCard
       formId="settings-trial"
+      sectionId="settings-trial"
       title={m.admin_settings_trial_title()}
       description={m.admin_settings_trial_description()}
       isDirty={isDirty}

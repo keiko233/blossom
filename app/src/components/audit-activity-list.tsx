@@ -14,7 +14,7 @@ export function AuditActivityList({ entries }: AuditActivityListProps) {
     <ul className="flex flex-col divide-y">
       {entries.map((entry) => (
         <li
-          className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2.5"
+          className="flex min-h-9 flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2"
           key={entry.id}
         >
           <div className="flex min-w-0 flex-col gap-0.5">
@@ -36,7 +36,7 @@ export function AuditActivityList({ entries }: AuditActivityListProps) {
             </span>
           </div>
           <time
-            className="text-xs text-muted-foreground"
+            className="text-xs text-muted-foreground tabular-nums"
             dateTime={new Date(entry.createdAt).toISOString()}
           >
             {formatDateTime(entry.createdAt)}

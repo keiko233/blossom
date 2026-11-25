@@ -17,9 +17,13 @@ import { useEffect, useState } from "react";
 import type { z } from "zod";
 
 import {
+  PageContent,
   PageHeader,
+  PageHeaderActions,
   PageHeaderTitle,
+  PageToolbar,
 } from "@/components/app-shell/page-header";
+import { TableSkeleton } from "@/components/app-shell/skeletons";
 import { ListPagination } from "@/components/list-pagination";
 import { SortHeader } from "@/components/sort-header";
 import { Badge } from "@/components/ui/badge";
@@ -38,7 +42,6 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "@/components/ui/menu";
-import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -356,101 +359,107 @@ function RouteComponent(): React.ReactElement {
   });
 
   return (
-    <div className="flex flex-col gap-4 p-4">
+    <div className="flex min-w-0 flex-col">
       <PageHeader>
         <PageHeaderTitle>{m.admin_nav_redeem()}</PageHeaderTitle>
-        <Button onClick={() => setCreateOpen(true)}>
-          <PlusIcon />
-          {m.admin_redeem_create()}
-        </Button>
+        <PageHeaderActions>
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <PlusIcon />
+            {m.admin_redeem_create()}
+          </Button>
+        </PageHeaderActions>
       </PageHeader>
 
-      <BatchToolbar
-        hasFilters={hasFilters}
-        search={search}
-        searchResetToken={searchResetToken}
-        onChange={updateSearch}
-        onClear={clearFilters}
-      />
+      <PageToolbar>
+        <BatchToolbar
+          hasFilters={hasFilters}
+          search={search}
+          searchResetToken={searchResetToken}
+          onChange={updateSearch}
+          onClear={clearFilters}
+        />
+      </PageToolbar>
 
-      {isPending ? (
-        <div className="flex justify-center py-16">
-          <Spinner />
-        </div>
-      ) : rows.length > 0 ? (
-        <div
-          className={isPlaceholderData ? "opacity-60 transition-opacity" : ""}
-        >
-          <Table>
-            <TableHeader>
-              {table.getHeaderGroups().map((headerGroup) => (
-                <TableRow key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => (
-                    <TableHead key={header.id}>
-                      {header.isPlaceholder
-                        ? null
-                        : flexRender(
-                            header.column.columnDef.header,
-                            header.getContext(),
-                          )}
-                    </TableHead>
-                  ))}
-                </TableRow>
-              ))}
-            </TableHeader>
-            <TableBody>
-              {table.getRowModel().rows.map((row) => (
-                <TableRow key={row.id}>
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>
-                      {flexRender(
-                        cell.column.columnDef.cell,
-                        cell.getContext(),
-                      )}
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+      <PageContent width="flush">
+        {isPending ? (
+          <TableSkeleton columns={9} rows={8} />
+        ) : rows.length > 0 ? (
+          <div
+            className={isPlaceholderData ? "opacity-60 transition-opacity" : ""}
+          >
+            <Table variant="pane">
+              <TableHeader>
+                {table.getHeaderGroups().map((headerGroup) => (
+                  <TableRow key={headerGroup.id}>
+                    {headerGroup.headers.map((header) => (
+                      <TableHead key={header.id}>
+                        {header.isPlaceholder
+                          ? null
+                          : flexRender(
+                              header.column.columnDef.header,
+                              header.getContext(),
+                            )}
+                      </TableHead>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableHeader>
+              <TableBody>
+                {table.getRowModel().rows.map((row) => (
+                  <TableRow key={row.id}>
+                    {row.getVisibleCells().map((cell) => (
+                      <TableCell key={cell.id}>
+                        {flexRender(
+                          cell.column.columnDef.cell,
+                          cell.getContext(),
+                        )}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
 
-          <ListPagination
-            link={(target) => (
-              <Link
-                from="/admin/access/redeem/"
-                to="/admin/access/redeem"
-                search={(prev) => ({
-                  ...prev,
-                  page: target === 1 ? undefined : target,
-                })}
+            <div className="border-t px-4 py-3 lg:px-6">
+              <ListPagination
+                link={(target) => (
+                  <Link
+                    from="/admin/access/redeem/"
+                    to="/admin/access/redeem"
+                    search={(prev) => ({
+                      ...prev,
+                      page: target === 1 ? undefined : target,
+                    })}
+                  />
+                )}
+                page={page}
+                pageCount={pageCount}
+                pageSize={pageSize}
+                pageSizes={REDEEM_PAGE_SIZES}
+                total={total}
+                onPageSizeChange={(size) =>
+                  updateSearch({
+                    pageSize: size === DEFAULT_PAGE_SIZE ? undefined : size,
+                  })
+                }
               />
-            )}
-            page={page}
-            pageCount={pageCount}
-            pageSize={pageSize}
-            pageSizes={REDEEM_PAGE_SIZES}
-            total={total}
-            onPageSizeChange={(size) =>
-              updateSearch({
-                pageSize: size === DEFAULT_PAGE_SIZE ? undefined : size,
-              })
-            }
-          />
-        </div>
-      ) : (
-        <Empty>
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <TicketIcon />
-            </EmptyMedia>
-            <EmptyTitle>
-              {hasFilters
-                ? m.admin_redeem_empty_filtered()
-                : m.admin_redeem_empty_title()}
-            </EmptyTitle>
-          </EmptyHeader>
-        </Empty>
-      )}
+            </div>
+          </div>
+        ) : (
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <TicketIcon />
+              </EmptyMedia>
+              <EmptyTitle>
+                {hasFilters
+                  ? m.admin_redeem_empty_filtered()
+                  : m.admin_redeem_empty_title()}
+              </EmptyTitle>
+            </EmptyHeader>
+          </Empty>
+        )}
+      </PageContent>
 
       <CreateBatchDialog open={createOpen} onOpenChange={setCreateOpen} />
     </div>

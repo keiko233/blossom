@@ -1,34 +1,26 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import {
-  ActivityIcon,
-  CheckCircle2Icon,
-  CreditCardIcon,
-  HourglassIcon,
-  NetworkIcon,
-  ScrollTextIcon,
-  ServerIcon,
-  UsersIcon,
-} from "lucide-react";
-import type { ReactNode } from "react";
+import { CheckCircle2Icon, RefreshCwIcon, ScrollTextIcon } from "lucide-react";
 
 import {
+  PageContent,
   PageHeader,
+  PageHeaderActions,
   PageHeaderTitle,
+  SectionActions,
+  SectionHeader,
+  SectionTitle,
 } from "@/components/app-shell/page-header";
+import {
+  StatStripSkeleton,
+  TableSkeleton,
+} from "@/components/app-shell/skeletons";
+import { StatStrip, StatStripItem } from "@/components/app-shell/stat-strip";
 import { AuditActivityList } from "@/components/audit-activity-list";
 import { SubscriptionQuotaUsage } from "@/components/subscriptions";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import {
   Empty,
   EmptyDescription,
@@ -36,11 +28,18 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { Spinner } from "@/components/ui/spinner";
+import { Skeleton } from "@/components/ui/skeleton";
+import { StatusDot } from "@/components/ui/status-dot";
 import {
-  EXPIRING_SOON_DAYS,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
   OVERVIEW_LIST_LIMIT,
-  QUOTA_WARNING_PERCENT,
   type ServerAttentionItem,
 } from "@/lib/admin-overview";
 import { formatBytes, formatDate } from "@/lib/format";
@@ -56,6 +55,10 @@ export const Route = createFileRoute("/(admin)/admin/")({
   component: RouteComponent,
 });
 
+const RECENT_ACTIVITY_LIMIT = 8;
+const dashboardGridClassName =
+  "grid gap-6 xl:grid-cols-[minmax(0,1fr)_24rem] 3xl:grid-cols-[minmax(0,1fr)_28rem]";
+
 function RouteComponent() {
   const { data, isFetching, isPending, error, refetch } = useQuery({
     queryKey: ADMIN_OVERVIEW_QUERY_KEY,
@@ -63,31 +66,51 @@ function RouteComponent() {
     refetchInterval: 30_000,
   });
 
-  if (isPending) {
-    return (
-      <div className="flex justify-center py-16">
-        <Spinner />
-        <span className="sr-only">{m.admin_overview_loading()}</span>
-      </div>
-    );
-  }
+  return (
+    <>
+      <PageHeader>
+        <PageHeaderTitle>{m.admin_nav_dashboard()}</PageHeaderTitle>
+        <PageHeaderActions>
+          <Button
+            loading={isFetching && !isPending}
+            size="sm"
+            variant="ghost"
+            onClick={() => void refetch()}
+          >
+            <RefreshCwIcon />
+            {m.admin_page_dashboard_refresh()}
+          </Button>
+        </PageHeaderActions>
+      </PageHeader>
 
-  if (error || !data) {
-    return (
-      <div className="flex flex-col items-center gap-4 py-16">
-        <Alert variant="error" className="max-w-md">
-          <AlertTitle>{m.admin_overview_error_title()}</AlertTitle>
-          <AlertDescription>
-            {m.admin_overview_error_description()}
-          </AlertDescription>
-        </Alert>
-        <Button loading={isFetching} onClick={() => void refetch()}>
-          {m.admin_overview_error_retry()}
-        </Button>
-      </div>
-    );
-  }
+      {isPending ? (
+        <DashboardSkeleton />
+      ) : error || !data ? (
+        <PageContent>
+          <Alert variant="error">
+            <AlertTitle>{m.admin_overview_error_title()}</AlertTitle>
+            <AlertDescription>
+              {m.admin_overview_error_description()}
+            </AlertDescription>
+          </Alert>
+          <div>
+            <Button loading={isFetching} onClick={() => void refetch()}>
+              {m.admin_overview_error_retry()}
+            </Button>
+          </div>
+        </PageContent>
+      ) : (
+        <DashboardContent data={data} />
+      )}
+    </>
+  );
+}
 
+function DashboardContent({
+  data,
+}: {
+  data: Awaited<ReturnType<typeof getAdminOverview>>;
+}) {
   const {
     users,
     subscriptions,
@@ -100,207 +123,128 @@ function RouteComponent() {
   } = data;
 
   return (
-    <div className="flex flex-col gap-6 p-4">
-      <PageHeader>
-        <PageHeaderTitle className="text-2xl">
-          {m.admin_nav_dashboard()}
-        </PageHeaderTitle>
-      </PageHeader>
-
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <StatTile
-          icon={<UsersIcon />}
+    <PageContent>
+      <StatStrip columns={5}>
+        <StatStripItem
           label={m.admin_overview_stat_users()}
           value={users.total}
-          description={
+          detail={
             users.banned > 0
               ? m.admin_overview_stat_users_banned({ count: users.banned })
               : undefined
           }
         />
-        <StatTile
-          icon={<CreditCardIcon />}
+        <StatStripItem
           label={m.admin_overview_stat_subscriptions()}
           value={subscriptions.active}
-          description={m.admin_overview_stat_subscriptions_total({
+          detail={m.admin_overview_stat_subscriptions_total({
             count: subscriptions.total,
           })}
         />
-        <StatTile
-          icon={<ServerIcon />}
+        <StatStripItem
+          href="/admin/servers"
           label={m.admin_overview_stat_servers()}
           value={`${servers.online} / ${servers.total}`}
-          description={
+          detail={
             servers.attention > 0
               ? m.admin_overview_stat_servers_attention({
                   count: servers.attention,
                 })
-              : m.admin_overview_stat_servers_total({ count: servers.total })
+              : m.admin_overview_stat_servers_total({
+                  count: servers.total,
+                })
           }
-          warning={servers.attention > 0}
+          tone={servers.attention > 0 ? "warning" : undefined}
         />
-        <StatTile
-          icon={<NetworkIcon />}
+        <StatStripItem
           label={m.admin_overview_stat_nodes()}
           value={nodes.enabled}
-          description={m.admin_overview_stat_nodes_total({
+          detail={m.admin_overview_stat_nodes_total({
             count: nodes.total,
           })}
         />
-        <StatTile
-          icon={<ActivityIcon />}
+        <StatStripItem
           label={m.admin_overview_stat_traffic()}
           value={formatBytes(traffic.last24hBytes)}
-          description={m.admin_overview_stat_traffic_30d({
+          detail={m.admin_overview_stat_traffic_30d({
             bytes: formatBytes(traffic.last30dBytes),
           })}
         />
+      </StatStrip>
+
+      <div className={dashboardGridClassName}>
+        <div className="flex min-w-0 flex-col gap-6">
+          <ServersAttentionSection
+            hasServers={servers.total > 0}
+            items={attentionServers}
+            total={servers.attention}
+          />
+          <div className="grid gap-6 2xl:grid-cols-2">
+            <SubscriptionSection
+              title={m.admin_overview_expiring_title()}
+              emptyLabel={m.admin_overview_expiring_empty()}
+              items={expiringSubscriptions}
+              total={subscriptions.expiringSoon}
+            />
+            <SubscriptionSection
+              title={m.admin_overview_quota_title()}
+              emptyLabel={m.admin_overview_quota_empty()}
+              items={nearQuotaSubscriptions}
+              total={subscriptions.nearQuota}
+            />
+          </div>
+        </div>
+
+        <RecentActivityPanel />
       </div>
+    </PageContent>
+  );
+}
 
-      <ServersAttentionCard
-        hasServers={servers.total > 0}
-        items={attentionServers}
-        total={servers.attention}
-      />
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <SubscriptionListCard
-          title={m.admin_overview_expiring_title()}
-          description={m.admin_overview_expiring_description({
-            days: EXPIRING_SOON_DAYS,
-          })}
-          emptyLabel={m.admin_overview_expiring_empty()}
-          icon={<HourglassIcon />}
-          items={expiringSubscriptions}
-          total={subscriptions.expiringSoon}
-        />
-        <SubscriptionListCard
-          title={m.admin_overview_quota_title()}
-          description={m.admin_overview_quota_description({
-            percent: QUOTA_WARNING_PERCENT,
-          })}
-          emptyLabel={m.admin_overview_quota_empty()}
-          icon={<ActivityIcon />}
-          items={nearQuotaSubscriptions}
-          total={subscriptions.nearQuota}
-        />
+function DashboardSkeleton() {
+  return (
+    <PageContent>
+      <StatStripSkeleton items={5} />
+      <div className={dashboardGridClassName}>
+        <div className="flex min-w-0 flex-col gap-6">
+          <div className="flex flex-col gap-2">
+            <Skeleton className="h-5 w-48" />
+            <TableSkeleton columns={4} rows={5} />
+          </div>
+          <div className="grid gap-6 2xl:grid-cols-2">
+            <div className="flex flex-col gap-2">
+              <Skeleton className="h-5 w-40" />
+              <TableSkeleton columns={3} rows={4} />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Skeleton className="h-5 w-40" />
+              <TableSkeleton columns={3} rows={4} />
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-col gap-3">
+          <Skeleton className="h-5 w-40" />
+          <SidebarActivitySkeleton />
+        </div>
       </div>
+    </PageContent>
+  );
+}
 
-      <RecentActivityCard />
+function SidebarActivitySkeleton() {
+  return (
+    <div className="flex flex-col divide-y" aria-busy="true">
+      {Array.from({ length: 8 }, (_, row) => (
+        <div key={row} className="flex flex-col gap-2 py-2.5">
+          <Skeleton className="h-4 w-2/3" />
+          <Skeleton className="h-3 w-full" />
+        </div>
+      ))}
     </div>
   );
 }
 
-const RECENT_ACTIVITY_LIMIT = 8;
-
-/** The latest admin actions, fetched on its own so the overview stays fast. */
-function RecentActivityCard() {
-  const { data, isPending } = useQuery({
-    queryKey: [...ADMIN_AUDIT_QUERY_KEY, "recent"],
-    queryFn: () =>
-      listAdminAudit({ data: { page: 1, pageSize: RECENT_ACTIVITY_LIMIT } }),
-    refetchInterval: 30_000,
-  });
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{m.admin_audit_recent_title()}</CardTitle>
-        <CardDescription>{m.admin_audit_recent_description()}</CardDescription>
-        <CardAction>
-          <Button
-            size="sm"
-            variant="outline"
-            render={<Link to="/admin/operations/audit" />}
-          >
-            {m.admin_audit_recent_view_all()}
-          </Button>
-        </CardAction>
-      </CardHeader>
-      <CardContent>
-        {isPending ? (
-          <div className="flex justify-center py-6">
-            <Spinner />
-          </div>
-        ) : data && data.rows.length > 0 ? (
-          <AuditActivityList entries={data.rows} />
-        ) : (
-          <Empty>
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <ScrollTextIcon />
-              </EmptyMedia>
-              <EmptyTitle>{m.admin_audit_recent_empty()}</EmptyTitle>
-            </EmptyHeader>
-          </Empty>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function StatTile({
-  icon,
-  label,
-  value,
-  description,
-  warning = false,
-}: {
-  icon: ReactNode;
-  label: string;
-  value: ReactNode;
-  description?: string;
-  warning?: boolean;
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardDescription className="flex items-center gap-1.5 [&_svg]:size-4">
-          {icon}
-          {label}
-        </CardDescription>
-        <CardTitle className="text-2xl tabular-nums">{value}</CardTitle>
-        {description ? (
-          <CardDescription
-            className={warning ? "text-warning-foreground" : undefined}
-          >
-            {description}
-          </CardDescription>
-        ) : null}
-      </CardHeader>
-    </Card>
-  );
-}
-
-function ServerHealthBadge({ item }: { item: ServerAttentionItem }) {
-  const label = {
-    agent_offline: m.admin_proxies_servers_status_offline(),
-    runtime_error: m.admin_proxies_servers_status_runtime_error(),
-    config_error: m.admin_proxies_servers_status_config_error(),
-    degraded: m.admin_proxies_servers_status_degraded(),
-    online: m.admin_proxies_servers_status_online(),
-    unknown: m.admin_proxies_servers_status_unknown(),
-    disabled: m.admin_proxies_servers_status_disabled(),
-  }[item.health];
-  const dotClass =
-    item.health === "online"
-      ? "bg-emerald-500"
-      : item.health === "degraded" || item.health === "unknown"
-        ? "bg-amber-500"
-        : "bg-red-500";
-
-  return (
-    <Badge variant="outline" title={item.lastErrorMessage ?? undefined}>
-      <span
-        aria-hidden="true"
-        className={`size-1.5 rounded-full ${dotClass}`}
-      />
-      {label}
-    </Badge>
-  );
-}
-
-function ServersAttentionCard({
+function ServersAttentionSection({
   hasServers,
   items,
   total,
@@ -310,28 +254,26 @@ function ServersAttentionCard({
   total: number;
 }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{m.admin_overview_servers_title()}</CardTitle>
-        <CardDescription>
-          {m.admin_overview_servers_description()}
-        </CardDescription>
-        <CardAction>
+    <section className="flex min-w-0 flex-col">
+      <SectionHeader className="border-b pb-2">
+        <SectionTitle>{m.admin_overview_servers_title()}</SectionTitle>
+        <SectionActions>
           <Button
             size="sm"
-            variant="outline"
+            variant="ghost"
             render={<Link to="/admin/servers" />}
           >
             {m.admin_overview_servers_view_all()}
           </Button>
-        </CardAction>
-      </CardHeader>
-      <CardContent>
-        {items.length === 0 ? (
+        </SectionActions>
+      </SectionHeader>
+
+      {items.length === 0 ? (
+        <div className="border-b py-8">
           <Empty>
             <EmptyHeader>
               <EmptyMedia variant="icon">
-                {hasServers ? <CheckCircle2Icon /> : <ServerIcon />}
+                {hasServers ? <CheckCircle2Icon /> : null}
               </EmptyMedia>
               <EmptyTitle>
                 {hasServers
@@ -345,119 +287,225 @@ function ServersAttentionCard({
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
-        ) : (
-          <div className="flex flex-col gap-3">
-            <ul className="flex flex-col divide-y">
+        </div>
+      ) : (
+        <>
+          <Table variant="pane">
+            <TableHeader className="top-(--page-header-h)!">
+              <TableRow>
+                <TableHead>{m.admin_page_dashboard_col_server()}</TableHead>
+                <TableHead>{m.admin_page_dashboard_col_status()}</TableHead>
+                <TableHead>{m.admin_page_dashboard_col_last_error()}</TableHead>
+                <TableHead className="w-12">
+                  <span className="sr-only">
+                    {m.admin_page_dashboard_open()}
+                  </span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {items.map((item) => (
-                <li key={item.id}>
-                  <Link
-                    to="/admin/servers/$serverId/overview"
-                    params={{ serverId: item.id }}
-                    className="flex flex-wrap items-center justify-between gap-3 rounded-md py-3 outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <div className="flex min-w-0 flex-col gap-0.5">
-                      <span className="truncate font-medium">{item.name}</span>
-                      <span className="truncate font-mono text-xs text-muted-foreground">
-                        {item.address}
+                <TableRow key={item.id}>
+                  <TableCell>
+                    <Link
+                      className="font-medium hover:underline"
+                      params={{ serverId: item.id }}
+                      to="/admin/servers/$serverId/overview"
+                    >
+                      {item.name}
+                    </Link>
+                  </TableCell>
+                  <TableCell>
+                    <ServerHealth item={item} />
+                  </TableCell>
+                  <TableCell className="max-w-72">
+                    {item.lastErrorMessage ? (
+                      <span
+                        className="block truncate text-xs text-destructive"
+                        title={item.lastErrorMessage}
+                      >
+                        {item.lastErrorMessage}
                       </span>
-                      {item.lastErrorMessage &&
-                      ["degraded", "config_error", "runtime_error"].includes(
-                        item.health,
-                      ) ? (
-                        <span className="line-clamp-1 text-xs text-destructive">
-                          {item.lastErrorMessage}
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {item.pendingConfigChanges > 0 ? (
-                        <Badge variant="warning">
-                          {m.admin_overview_servers_pending({
-                            count: item.pendingConfigChanges,
-                          })}
-                        </Badge>
-                      ) : null}
-                      <ServerHealthBadge item={item} />
-                    </div>
-                  </Link>
-                </li>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-end">
+                    <Button
+                      aria-label={m.admin_page_dashboard_open()}
+                      size="icon-xs"
+                      variant="ghost"
+                      render={
+                        <Link
+                          params={{ serverId: item.id }}
+                          to="/admin/servers/$serverId/overview"
+                        />
+                      }
+                    >
+                      <span aria-hidden="true">→</span>
+                    </Button>
+                  </TableCell>
+                </TableRow>
               ))}
-            </ul>
-            <TruncationNote shown={items.length} total={total} />
-          </div>
-        )}
-      </CardContent>
-    </Card>
+            </TableBody>
+          </Table>
+          <TruncationNote shown={items.length} total={total} />
+        </>
+      )}
+    </section>
   );
 }
 
-function SubscriptionListCard({
+function ServerHealth({ item }: { item: ServerAttentionItem }) {
+  const label = {
+    agent_offline: m.admin_proxies_servers_status_offline(),
+    runtime_error: m.admin_proxies_servers_status_runtime_error(),
+    config_error: m.admin_proxies_servers_status_config_error(),
+    degraded: m.admin_proxies_servers_status_degraded(),
+    online: m.admin_proxies_servers_status_online(),
+    unknown: m.admin_proxies_servers_status_unknown(),
+    disabled: m.admin_proxies_servers_status_disabled(),
+  }[item.health];
+  const tone =
+    item.health === "online"
+      ? "success"
+      : item.health === "degraded" || item.health === "unknown"
+        ? "warning"
+        : item.health === "disabled"
+          ? "muted"
+          : "danger";
+
+  return (
+    <div className="flex items-center gap-2">
+      <StatusDot tone={tone} />
+      <span className="text-sm">{label}</span>
+      {item.pendingConfigChanges > 0 ? (
+        <Badge variant="warning">
+          {m.admin_overview_servers_pending({
+            count: item.pendingConfigChanges,
+          })}
+        </Badge>
+      ) : null}
+    </div>
+  );
+}
+
+function SubscriptionSection({
   title,
-  description,
   emptyLabel,
-  icon,
   items,
   total,
 }: {
   title: string;
-  description: string;
   emptyLabel: string;
-  icon: ReactNode;
   items: OverviewSubscriptionItem[];
   total: number;
 }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        {items.length === 0 ? (
+    <section className="flex min-w-0 flex-col">
+      <SectionHeader className="border-b pb-2">
+        <SectionTitle>{title}</SectionTitle>
+      </SectionHeader>
+
+      {items.length === 0 ? (
+        <div className="border-b py-8">
           <Empty>
             <EmptyHeader>
-              <EmptyMedia variant="icon">{icon}</EmptyMedia>
               <EmptyTitle>{emptyLabel}</EmptyTitle>
             </EmptyHeader>
           </Empty>
-        ) : (
-          <div className="flex flex-col gap-3">
-            <ul className="flex flex-col divide-y">
+        </div>
+      ) : (
+        <>
+          <Table variant="pane">
+            <TableHeader className="top-(--page-header-h)!">
+              <TableRow>
+                <TableHead>{m.admin_page_dashboard_col_user()}</TableHead>
+                <TableHead>{m.admin_page_dashboard_col_plan()}</TableHead>
+                <TableHead>{m.admin_page_dashboard_col_quota()}</TableHead>
+                <TableHead>{m.admin_page_dashboard_col_expires()}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {items.map((item) => (
-                <li key={item.id}>
-                  <Link
-                    to="/admin/access/users/$userId"
-                    params={{ userId: item.userId }}
-                    className="flex flex-wrap items-center justify-between gap-3 rounded-md py-3 outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <div className="flex min-w-0 flex-col gap-0.5">
+                <TableRow key={item.id}>
+                  <TableCell>
+                    <Link
+                      className="flex min-w-0 flex-col hover:underline"
+                      params={{ userId: item.userId }}
+                      to="/admin/access/users/$userId"
+                    >
                       <span className="truncate font-medium">
                         {item.userName}
                       </span>
                       <span className="truncate text-xs text-muted-foreground">
                         {item.userEmail}
                       </span>
-                      <span className="text-xs text-muted-foreground">
-                        {item.planName} ·{" "}
-                        {m.admin_overview_subscription_expires({
-                          date: formatDate(item.expiresAt),
-                        })}
-                      </span>
-                    </div>
+                    </Link>
+                  </TableCell>
+                  <TableCell>{item.planName}</TableCell>
+                  <TableCell>
                     <SubscriptionQuotaUsage
                       trafficQuotaBytes={item.trafficQuotaBytes}
                       trafficUsedBytes={item.trafficUsedBytes}
                       size="sm"
                     />
-                  </Link>
-                </li>
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground tabular-nums">
+                    {formatDate(item.expiresAt)}
+                  </TableCell>
+                </TableRow>
               ))}
-            </ul>
-            <TruncationNote shown={items.length} total={total} />
-          </div>
-        )}
-      </CardContent>
-    </Card>
+            </TableBody>
+          </Table>
+          <TruncationNote shown={items.length} total={total} />
+        </>
+      )}
+    </section>
+  );
+}
+
+/** The latest admin actions, fetched on its own so the overview stays fast. */
+function RecentActivityPanel() {
+  const { data, isPending } = useQuery({
+    queryKey: [...ADMIN_AUDIT_QUERY_KEY, "recent"],
+    queryFn: () =>
+      listAdminAudit({ data: { page: 1, pageSize: RECENT_ACTIVITY_LIMIT } }),
+    refetchInterval: 30_000,
+  });
+
+  return (
+    <section className="flex min-w-0 flex-col">
+      <SectionHeader className="border-b pb-2">
+        <SectionTitle>{m.admin_audit_recent_title()}</SectionTitle>
+        <SectionActions>
+          <Button
+            size="sm"
+            variant="ghost"
+            render={<Link to="/admin/operations/audit" />}
+          >
+            {m.admin_audit_recent_view_all()}
+          </Button>
+        </SectionActions>
+      </SectionHeader>
+
+      {isPending ? (
+        <SidebarActivitySkeleton />
+      ) : data && data.rows.length > 0 ? (
+        <AuditActivityList entries={data.rows} />
+      ) : (
+        <div className="border-b py-8">
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <ScrollTextIcon />
+              </EmptyMedia>
+              <EmptyTitle>{m.admin_audit_recent_empty()}</EmptyTitle>
+            </EmptyHeader>
+          </Empty>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -465,7 +513,7 @@ function SubscriptionListCard({
 function TruncationNote({ shown, total }: { shown: number; total: number }) {
   if (total <= shown || shown < OVERVIEW_LIST_LIMIT) return null;
   return (
-    <p className="text-xs text-muted-foreground">
+    <p className="border-b px-4 py-2 text-xs text-muted-foreground lg:px-6">
       {m.admin_overview_list_truncated({ shown, total })}
     </p>
   );

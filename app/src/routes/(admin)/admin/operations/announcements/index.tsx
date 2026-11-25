@@ -10,9 +10,12 @@ import { EllipsisIcon, InfoIcon, MegaphoneIcon, PlusIcon } from "lucide-react";
 import * as React from "react";
 
 import {
+  PageContent,
   PageHeader,
+  PageHeaderActions,
   PageHeaderTitle,
 } from "@/components/app-shell/page-header";
+import { TableSkeleton } from "@/components/app-shell/skeletons";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,7 +33,6 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "@/components/ui/menu";
-import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import {
   Table,
@@ -69,6 +71,8 @@ export const Route = createFileRoute(
 });
 
 const columnHelper = createColumnHelper<AnnouncementListItem>();
+const hidden = (breakpoint: "md" | "lg" | "xl" | "2xl") =>
+  `hidden ${breakpoint}:table-cell`;
 
 /** "Start – end", "From …", "Until …" or "Always" for the schedule column. */
 function scheduleText(row: AnnouncementListItem): string {
@@ -198,6 +202,7 @@ function RouteComponent(): React.ReactElement {
       ),
     }),
     columnHelper.accessor("audience", {
+      meta: { className: hidden("md") },
       header: () => m.admin_announcements_col_audience(),
       cell: (info) => {
         const row = info.row.original;
@@ -219,12 +224,14 @@ function RouteComponent(): React.ReactElement {
     }),
     columnHelper.display({
       id: "schedule",
+      meta: { className: hidden("lg") },
       header: () => m.admin_announcements_col_schedule(),
       cell: (info) => (
         <span className="text-sm">{scheduleText(info.row.original)}</span>
       ),
     }),
     columnHelper.accessor("pinned", {
+      meta: { className: hidden("xl") },
       header: () => m.admin_announcements_col_pinned(),
       cell: (info) =>
         info.getValue() ? (
@@ -308,91 +315,110 @@ function RouteComponent(): React.ReactElement {
   });
 
   return (
-    <div className="flex flex-col gap-4 p-4">
+    <>
       <PageHeader>
         <PageHeaderTitle>{m.admin_nav_announcements()}</PageHeaderTitle>
-        <Button onClick={openCreate}>
-          <PlusIcon />
-          {m.admin_announcements_add()}
-        </Button>
-      </PageHeader>
-
-      <Alert variant="info">
-        <InfoIcon />
-        <AlertDescription>
-          <p>{m.admin_announcements_note()}</p>
-        </AlertDescription>
-      </Alert>
-
-      {isPending ? (
-        <div className="flex justify-center py-16">
-          <Spinner />
-        </div>
-      ) : isError ? (
-        <div className="flex flex-col items-center gap-4 py-16">
-          <Alert variant="error" className="max-w-md">
-            <AlertTitle>{m.admin_announcements_error_title()}</AlertTitle>
-            <AlertDescription>
-              {m.admin_announcements_error_description()}
-            </AlertDescription>
-          </Alert>
-          <Button loading={isFetching} onClick={() => void refetch()}>
-            {m.admin_announcements_error_retry()}
-          </Button>
-        </div>
-      ) : announcements.length > 0 ? (
-        <Table>
-          <TableHeader>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <TableHead key={header.id}>
-                    {header.isPlaceholder
-                      ? null
-                      : flexRender(
-                          header.column.columnDef.header,
-                          header.getContext(),
-                        )}
-                  </TableHead>
-                ))}
-              </TableRow>
-            ))}
-          </TableHeader>
-          <TableBody>
-            {table.getRowModel().rows.map((row) => (
-              <TableRow
-                key={row.id}
-                className={row.original.published ? undefined : "opacity-60"}
-              >
-                {row.getVisibleCells().map((cell) => (
-                  <TableCell key={cell.id}>
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </TableCell>
-                ))}
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      ) : (
-        <Empty>
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <MegaphoneIcon />
-            </EmptyMedia>
-            <EmptyTitle>{m.admin_announcements_empty_title()}</EmptyTitle>
-          </EmptyHeader>
-          <Button onClick={openCreate}>
+        <PageHeaderActions>
+          <Button size="sm" onClick={openCreate}>
             <PlusIcon />
             {m.admin_announcements_add()}
           </Button>
-        </Empty>
-      )}
+        </PageHeaderActions>
+      </PageHeader>
+
+      <PageContent>
+        <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+          <InfoIcon aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
+          {m.admin_announcements_note()}
+        </p>
+
+        {isPending ? (
+          <TableSkeleton columns={6} rows={8} />
+        ) : isError ? (
+          <div className="flex flex-col items-start gap-4 py-12">
+            <Alert variant="error" className="max-w-md">
+              <AlertTitle>{m.admin_announcements_error_title()}</AlertTitle>
+              <AlertDescription>
+                {m.admin_announcements_error_description()}
+              </AlertDescription>
+            </Alert>
+            <Button
+              loading={isFetching}
+              size="sm"
+              onClick={() => void refetch()}
+            >
+              {m.admin_announcements_error_retry()}
+            </Button>
+          </div>
+        ) : announcements.length > 0 ? (
+          <Table variant="pane">
+            <TableHeader>
+              {table.getHeaderGroups().map((headerGroup) => (
+                <TableRow key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => (
+                    <TableHead
+                      className={
+                        (header.column.columnDef.meta as { className?: string })
+                          ?.className
+                      }
+                      key={header.id}
+                    >
+                      {header.isPlaceholder
+                        ? null
+                        : flexRender(
+                            header.column.columnDef.header,
+                            header.getContext(),
+                          )}
+                    </TableHead>
+                  ))}
+                </TableRow>
+              ))}
+            </TableHeader>
+            <TableBody>
+              {table.getRowModel().rows.map((row) => (
+                <TableRow
+                  key={row.id}
+                  className={row.original.published ? undefined : "opacity-60"}
+                >
+                  {row.getVisibleCells().map((cell) => (
+                    <TableCell
+                      className={
+                        (cell.column.columnDef.meta as { className?: string })
+                          ?.className
+                      }
+                      key={cell.id}
+                    >
+                      {flexRender(
+                        cell.column.columnDef.cell,
+                        cell.getContext(),
+                      )}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        ) : (
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <MegaphoneIcon />
+              </EmptyMedia>
+              <EmptyTitle>{m.admin_announcements_empty_title()}</EmptyTitle>
+            </EmptyHeader>
+            <Button size="sm" onClick={openCreate}>
+              <PlusIcon />
+              {m.admin_announcements_add()}
+            </Button>
+          </Empty>
+        )}
+      </PageContent>
 
       <AnnouncementDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         announcement={editing}
       />
-    </div>
+    </>
   );
 }

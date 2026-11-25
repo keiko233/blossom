@@ -94,7 +94,7 @@ export function RoutingPlanPanel({
               <li
                 key={`${stage.ordinal}-${stage.serverId}`}
                 data-slot="routing-plan-stage"
-                className="flex flex-col gap-1.5 rounded-md border bg-background p-2"
+                className="flex flex-col gap-1.5 border-b py-2 last:border-b-0"
               >
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-mono text-xs text-muted-foreground">
@@ -138,7 +138,7 @@ export function RoutingPlanPanel({
               {plan.servers.map((server) => (
                 <li
                   key={server.serverId}
-                  className="flex flex-wrap gap-x-3 gap-y-1 rounded-md border px-2 py-1"
+                  className="flex flex-wrap gap-x-3 gap-y-1 border-b py-1 last:border-b-0"
                 >
                   <span className="font-medium">{server.serverName}</span>
                   <span>

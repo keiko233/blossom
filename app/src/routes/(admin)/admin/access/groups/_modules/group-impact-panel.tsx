@@ -3,8 +3,12 @@ import { Link } from "@tanstack/react-router";
 import { InfoIcon } from "lucide-react";
 import type React from "react";
 
+import {
+  SectionHeader,
+  SectionTitle,
+} from "@/components/app-shell/page-header";
+import { KeyValueGridSkeleton } from "@/components/app-shell/skeletons";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Spinner } from "@/components/ui/spinner";
 import { diffSelection, isGroupUnused } from "@/lib/access-impact";
 import { isMembershipDraftDirty } from "@/lib/group-membership-draft";
 import { m } from "@/paraglide/messages";
@@ -51,14 +55,14 @@ export function GroupImpactPanel({
   return (
     <section
       aria-label={m.admin_access_group_used_title()}
-      className="flex flex-col gap-3 rounded-xl border bg-card p-4 shadow-xs"
+      className="flex flex-col gap-3"
     >
-      <h2 className="font-medium">{m.admin_access_group_used_title()}</h2>
+      <SectionHeader>
+        <SectionTitle>{m.admin_access_group_used_title()}</SectionTitle>
+      </SectionHeader>
 
       {isPending ? (
-        <div className="flex justify-center py-2">
-          <Spinner />
-        </div>
+        <KeyValueGridSkeleton items={2} />
       ) : isError ? (
         <p className="text-sm text-destructive">
           {m.admin_access_impact_error()}

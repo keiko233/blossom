@@ -1,10 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type React from "react";
 
+import {
+  SectionHeader,
+  SectionTitle,
+} from "@/components/app-shell/page-header";
+import { TableSkeleton } from "@/components/app-shell/skeletons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Confirm } from "@/components/ui/confirm";
-import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -95,24 +99,21 @@ export function UserSessions({
   const hasRevocable = (sessions ?? []).some((session) => !session.isCurrent);
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between">
-        <h2 className="font-heading text-base font-semibold">
-          {m.admin_users_sessions_title()}
-        </h2>
+    <section className="flex flex-col gap-3">
+      <SectionHeader>
+        <SectionTitle>{m.admin_users_sessions_title()}</SectionTitle>
         <Button
           disabled={!hasRevocable}
           loading={revokeAllMutation.isPending}
+          size="sm"
           variant="outline"
           onClick={() => void requestRevokeAll()}
         >
           {m.admin_users_sessions_revoke_all()}
         </Button>
-      </div>
+      </SectionHeader>
       {isPending ? (
-        <div className="flex justify-center py-8">
-          <Spinner />
-        </div>
+        <TableSkeleton columns={4} rows={4} dense={false} />
       ) : sessions && sessions.length > 0 ? (
         <Table>
           <TableHeader>
@@ -183,10 +184,10 @@ export function UserSessions({
           </TableBody>
         </Table>
       ) : (
-        <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+        <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
           {m.admin_users_sessions_empty()}
         </div>
       )}
-    </div>
+    </section>
   );
 }

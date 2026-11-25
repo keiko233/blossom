@@ -3,12 +3,14 @@ import { createFileRoute } from "@tanstack/react-router";
 import type React from "react";
 
 import {
+  PageContent,
   PageHeader,
+  PageHeaderDescription,
   PageHeaderTitle,
 } from "@/components/app-shell/page-header";
+import { FormSkeleton } from "@/components/app-shell/skeletons";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { m } from "@/paraglide/messages";
 import { ADMIN_SETTINGS_QUERY_KEY, getAdminSettings } from "@/query/settings";
 
@@ -32,49 +34,79 @@ function RouteComponent(): React.ReactElement {
   });
 
   return (
-    <div className="flex flex-col">
-      <PageHeader className="gap-3 border-b px-4 py-3">
-        <div className="flex flex-col gap-0.5">
+    <>
+      <PageHeader>
+        <div className="flex min-w-0 items-baseline gap-3">
           <PageHeaderTitle>{m.admin_settings_title()}</PageHeaderTitle>
-          <p className="text-sm text-muted-foreground">
+          <PageHeaderDescription className="hidden lg:block">
             {m.admin_settings_description()}
-          </p>
+          </PageHeaderDescription>
         </div>
       </PageHeader>
 
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4">
-        {isError ? (
-          <Alert variant="error">
-            <AlertDescription className="flex items-center justify-between gap-3">
-              {m.admin_settings_load_error()}
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => void refetch()}
-              >
-                {m.admin_settings_load_retry()}
-              </Button>
-            </AlertDescription>
-          </Alert>
-        ) : null}
+      <PageContent>
+        <div className="grid gap-8 xl:grid-cols-[12rem_minmax(0,44rem)] xl:items-start">
+          <nav
+            aria-label={m.admin_page_settings_sections()}
+            className="hidden xl:block"
+          >
+            <ul className="sticky top-(--page-header-h) flex flex-col gap-1 pt-1">
+              {SETTINGS_SECTIONS.map((section) => (
+                <li key={section.id}>
+                  <a
+                    className="block rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/24 focus-visible:outline-none"
+                    href={`#${section.id}`}
+                  >
+                    {section.label()}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </nav>
 
-        {isPending ? (
-          <>
-            <Skeleton className="h-64 w-full rounded-2xl" />
-            <Skeleton className="h-64 w-full rounded-2xl" />
-          </>
-        ) : null}
+          <div className="flex min-w-0 flex-col gap-6">
+            {isError ? (
+              <Alert variant="error">
+                <AlertDescription className="flex items-center justify-between gap-3">
+                  {m.admin_settings_load_error()}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void refetch()}
+                  >
+                    {m.admin_settings_load_retry()}
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            ) : null}
 
-        {data ? (
-          <>
-            <RegistrationCard saved={data.settings.registration} />
-            <TrialCard saved={data.settings.trial} />
-            <SubscriptionOutputCard saved={data.settings.subscription_output} />
-            <SiteCard saved={data.settings.site} />
-            <SystemStatusCard status={data.status} />
-          </>
-        ) : null}
-      </div>
-    </div>
+            {isPending ? <FormSkeleton fields={8} /> : null}
+
+            {data ? (
+              <>
+                <SiteCard saved={data.settings.site} />
+                <RegistrationCard saved={data.settings.registration} />
+                <TrialCard saved={data.settings.trial} />
+                <SubscriptionOutputCard
+                  saved={data.settings.subscription_output}
+                />
+                <SystemStatusCard status={data.status} />
+              </>
+            ) : null}
+          </div>
+        </div>
+      </PageContent>
+    </>
   );
 }
+
+const SETTINGS_SECTIONS = [
+  { id: "settings-site", label: m.admin_settings_site_title },
+  { id: "settings-registration", label: m.admin_settings_registration_title },
+  { id: "settings-trial", label: m.admin_settings_trial_title },
+  {
+    id: "settings-subscription-output",
+    label: m.admin_settings_output_title,
+  },
+  { id: "settings-status", label: m.admin_settings_status_title },
+] as const;

@@ -1,30 +1,22 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import {
-  CopyIcon,
-  KeyRoundIcon,
-  PlugIcon,
-  ScrollTextIcon,
-  UsersIcon,
-} from "lucide-react";
+import { CopyIcon, PlugIcon } from "lucide-react";
 import type React from "react";
 import { useState } from "react";
 
 import {
+  PageContent,
   PageHeader,
+  PageHeaderActions,
   PageHeaderTitle,
+  SectionHeader,
+  SectionTitle,
 } from "@/components/app-shell/page-header";
+import { FormSkeleton } from "@/components/app-shell/skeletons";
+import { StatStrip, StatStripItem } from "@/components/app-shell/stat-strip";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardAction,
-  CardDescription,
-  CardHeader,
-  CardPanel,
-  CardTitle,
-} from "@/components/ui/card";
-import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -105,14 +97,20 @@ function ClientsTable({ clients }: { clients: Client[] }) {
   }
 
   return (
-    <Table>
+    <Table variant="pane">
       <TableHeader>
         <TableRow>
           <TableHead>{m.admin_mcp_col_client()}</TableHead>
-          <TableHead>{m.admin_mcp_col_auth()}</TableHead>
-          <TableHead>{m.admin_mcp_col_scopes()}</TableHead>
+          <TableHead className="hidden md:table-cell">
+            {m.admin_mcp_col_auth()}
+          </TableHead>
+          <TableHead className="hidden lg:table-cell">
+            {m.admin_mcp_col_scopes()}
+          </TableHead>
           <TableHead>{m.admin_mcp_col_status()}</TableHead>
-          <TableHead>{m.admin_mcp_col_created()}</TableHead>
+          <TableHead className="hidden md:table-cell">
+            {m.admin_mcp_col_created()}
+          </TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -128,7 +126,7 @@ function ClientsTable({ clients }: { clients: Client[] }) {
                 </code>
               </div>
             </TableCell>
-            <TableCell>
+            <TableCell className="hidden md:table-cell">
               <div className="flex flex-col gap-0.5 text-xs">
                 <span>
                   {client.isPublic
@@ -142,7 +140,7 @@ function ClientsTable({ clients }: { clients: Client[] }) {
                 </span>
               </div>
             </TableCell>
-            <TableCell>
+            <TableCell className="hidden lg:table-cell">
               <ScopeList scopes={client.scopes} />
             </TableCell>
             <TableCell>
@@ -152,7 +150,7 @@ function ClientsTable({ clients }: { clients: Client[] }) {
                   : m.admin_mcp_enabled()}
               </Badge>
             </TableCell>
-            <TableCell className="whitespace-nowrap text-muted-foreground">
+            <TableCell className="hidden whitespace-nowrap text-muted-foreground md:table-cell">
               {client.createdAt ? formatDateTime(client.createdAt) : "—"}
             </TableCell>
           </TableRow>
@@ -168,12 +166,16 @@ function ConsentsTable({ consents }: { consents: Consent[] }) {
   }
 
   return (
-    <Table>
+    <Table variant="pane">
       <TableHeader>
         <TableRow>
           <TableHead>{m.admin_mcp_col_user()}</TableHead>
-          <TableHead>{m.admin_mcp_col_client()}</TableHead>
-          <TableHead>{m.admin_mcp_col_scopes()}</TableHead>
+          <TableHead className="hidden md:table-cell">
+            {m.admin_mcp_col_client()}
+          </TableHead>
+          <TableHead className="hidden lg:table-cell">
+            {m.admin_mcp_col_scopes()}
+          </TableHead>
           <TableHead>{m.admin_mcp_col_created()}</TableHead>
         </TableRow>
       </TableHeader>
@@ -190,7 +192,7 @@ function ConsentsTable({ consents }: { consents: Consent[] }) {
                 </span>
               </div>
             </TableCell>
-            <TableCell>
+            <TableCell className="hidden md:table-cell">
               <div className="flex max-w-72 flex-col gap-0.5">
                 <span>
                   {consent.clientName || m.admin_mcp_unnamed_client()}
@@ -200,10 +202,10 @@ function ConsentsTable({ consents }: { consents: Consent[] }) {
                 </code>
               </div>
             </TableCell>
-            <TableCell>
+            <TableCell className="hidden lg:table-cell">
               <ScopeList scopes={consent.scopes} />
             </TableCell>
-            <TableCell className="whitespace-nowrap text-muted-foreground">
+            <TableCell className="whitespace-nowrap text-muted-foreground tabular-nums">
               {consent.createdAt ? formatDateTime(consent.createdAt) : "—"}
             </TableCell>
           </TableRow>
@@ -219,13 +221,17 @@ function AuditsTable({ audits }: { audits: Audit[] }) {
   }
 
   return (
-    <Table>
+    <Table variant="pane">
       <TableHeader>
         <TableRow>
           <TableHead>{m.admin_mcp_col_time()}</TableHead>
-          <TableHead>{m.admin_mcp_col_tool()}</TableHead>
+          <TableHead className="hidden md:table-cell">
+            {m.admin_mcp_col_tool()}
+          </TableHead>
           <TableHead>{m.admin_mcp_col_actor()}</TableHead>
-          <TableHead>{m.admin_mcp_col_source()}</TableHead>
+          <TableHead className="hidden lg:table-cell">
+            {m.admin_mcp_col_source()}
+          </TableHead>
           <TableHead>{m.admin_mcp_col_result()}</TableHead>
         </TableRow>
       </TableHeader>
@@ -235,7 +241,7 @@ function AuditsTable({ audits }: { audits: Audit[] }) {
             <TableCell className="whitespace-nowrap text-muted-foreground">
               {formatDateTime(audit.createdAt)}
             </TableCell>
-            <TableCell>
+            <TableCell className="hidden md:table-cell">
               <code className="text-xs">{audit.tool}</code>
             </TableCell>
             <TableCell>
@@ -248,7 +254,9 @@ function AuditsTable({ audits }: { audits: Audit[] }) {
                 ) : null}
               </div>
             </TableCell>
-            <TableCell>{audit.source}</TableCell>
+            <TableCell className="hidden lg:table-cell">
+              {audit.source}
+            </TableCell>
             <TableCell>
               <div className="flex max-w-80 flex-col gap-1">
                 <div className="flex items-center gap-2">
@@ -279,7 +287,7 @@ function AuditsTable({ audits }: { audits: Audit[] }) {
 
 function EmptyPanel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex min-h-40 items-center justify-center text-sm text-muted-foreground">
+    <div className="flex min-h-40 items-center justify-center border-y text-sm text-muted-foreground">
       {children}
     </div>
   );
@@ -292,110 +300,92 @@ function RouteComponent(): React.ReactElement {
     refetchInterval: 30_000,
   });
 
-  if (isPending) {
-    return (
-      <div className="flex justify-center py-24">
-        <Spinner />
-      </div>
-    );
-  }
-
-  if (isError || !data) {
-    return <EmptyPanel>{m.admin_mcp_load_error()}</EmptyPanel>;
-  }
-
-  const stats = [
-    {
-      icon: KeyRoundIcon,
-      label: m.admin_mcp_clients(),
-      value: data.stats.clientCount,
-    },
-    {
-      icon: UsersIcon,
-      label: m.admin_mcp_consents(),
-      value: data.stats.consentCount,
-    },
-    {
-      icon: ScrollTextIcon,
-      label: m.admin_mcp_audits(),
-      value: data.stats.auditCount,
-    },
-  ];
-
   return (
-    <div className="flex flex-col gap-4 p-4">
-      <PageHeader className="gap-4">
+    <>
+      <PageHeader>
         <PageHeaderTitle>{m.admin_mcp_title()}</PageHeaderTitle>
-        <Badge variant="success">
-          <span className="size-1.5 rounded-full bg-emerald-500" />
-          {m.admin_mcp_enabled()}
-        </Badge>
+        <PageHeaderActions>
+          <Badge variant="success">
+            <span className="size-1.5 rounded-full bg-success" />
+            {m.admin_mcp_enabled()}
+          </Badge>
+        </PageHeaderActions>
       </PageHeader>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>{m.admin_mcp_connection_title()}</CardTitle>
-          <CardDescription>
-            {m.admin_mcp_connection_description()}
-          </CardDescription>
-          <CardAction>
-            <PlugIcon className="text-muted-foreground" />
-          </CardAction>
-        </CardHeader>
-        <CardPanel>
-          <ConnectionRow
-            label={m.admin_mcp_endpoint()}
-            value={data.connection.endpoint}
-          />
-          <ConnectionRow
-            label={m.admin_mcp_authorization_metadata()}
-            value={data.connection.authorizationServerMetadata}
-          />
-          <ConnectionRow
-            label={m.admin_mcp_resource_metadata()}
-            value={data.connection.protectedResourceMetadata}
-          />
-        </CardPanel>
-      </Card>
-
-      <div className="grid gap-4 sm:grid-cols-3">
-        {stats.map(({ icon: Icon, label, value }) => (
-          <Card key={label}>
-            <CardPanel className="flex items-center justify-between gap-4 pt-6">
-              <div>
-                <p className="text-sm text-muted-foreground">{label}</p>
-                <p className="mt-1 text-2xl font-semibold tabular-nums">
-                  {value}
-                </p>
+      {isPending ? (
+        <PageContent width="form">
+          <FormSkeleton fields={4} />
+        </PageContent>
+      ) : isError || !data ? (
+        <PageContent width="form">
+          <Alert variant="error">
+            <AlertDescription>{m.admin_mcp_load_error()}</AlertDescription>
+          </Alert>
+        </PageContent>
+      ) : (
+        <PageContent width="form">
+          <section className="flex min-w-0 flex-col gap-3">
+            <SectionHeader>
+              <div className="flex min-w-0 flex-col gap-0.5">
+                <SectionTitle>{m.admin_mcp_connection_title()}</SectionTitle>
+                <span className="text-xs text-muted-foreground">
+                  {m.admin_mcp_connection_description()}
+                </span>
               </div>
-              <Icon className="size-5 text-muted-foreground" />
-            </CardPanel>
-          </Card>
-        ))}
-      </div>
+              <PlugIcon
+                aria-hidden="true"
+                className="size-4 text-muted-foreground"
+              />
+            </SectionHeader>
+            <div>
+              <ConnectionRow
+                label={m.admin_mcp_endpoint()}
+                value={data.connection.endpoint}
+              />
+              <ConnectionRow
+                label={m.admin_mcp_authorization_metadata()}
+                value={data.connection.authorizationServerMetadata}
+              />
+              <ConnectionRow
+                label={m.admin_mcp_resource_metadata()}
+                value={data.connection.protectedResourceMetadata}
+              />
+            </div>
+          </section>
 
-      <Tabs defaultValue="clients">
-        <TabsList variant="underline">
-          <TabsTab value="clients">{m.admin_mcp_clients()}</TabsTab>
-          <TabsTab value="consents">{m.admin_mcp_consents()}</TabsTab>
-          <TabsTab value="audits">{m.admin_mcp_audits()}</TabsTab>
-        </TabsList>
-        <TabsPanel
-          className="overflow-hidden rounded-xl border"
-          value="clients"
-        >
-          <ClientsTable clients={data.clients} />
-        </TabsPanel>
-        <TabsPanel
-          className="overflow-hidden rounded-xl border"
-          value="consents"
-        >
-          <ConsentsTable consents={data.consents} />
-        </TabsPanel>
-        <TabsPanel className="overflow-hidden rounded-xl border" value="audits">
-          <AuditsTable audits={data.audits} />
-        </TabsPanel>
-      </Tabs>
-    </div>
+          <StatStrip columns={3}>
+            <StatStripItem
+              label={m.admin_mcp_clients()}
+              value={data.stats.clientCount}
+            />
+            <StatStripItem
+              label={m.admin_mcp_consents()}
+              value={data.stats.consentCount}
+            />
+            <StatStripItem
+              label={m.admin_mcp_audits()}
+              value={data.stats.auditCount}
+            />
+          </StatStrip>
+
+          <Tabs className="border-t pt-3" defaultValue="clients">
+            <TabsList variant="underline">
+              <TabsTab value="clients">{m.admin_mcp_clients()}</TabsTab>
+              <TabsTab value="consents">{m.admin_mcp_consents()}</TabsTab>
+              <TabsTab value="audits">{m.admin_mcp_audits()}</TabsTab>
+            </TabsList>
+            <TabsPanel value="clients">
+              <ClientsTable clients={data.clients} />
+            </TabsPanel>
+            <TabsPanel value="consents">
+              <ConsentsTable consents={data.consents} />
+            </TabsPanel>
+            <TabsPanel value="audits">
+              <AuditsTable audits={data.audits} />
+            </TabsPanel>
+          </Tabs>
+        </PageContent>
+      )}
+    </>
   );
 }

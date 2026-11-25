@@ -4,7 +4,7 @@ import type React from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
+import { Skeleton } from "@/components/ui/skeleton";
 import { diffMembershipOrder } from "@/lib/group-membership-draft";
 import { m } from "@/paraglide/messages";
 import type { NodeListItem } from "@/query/nodes";
@@ -63,9 +63,12 @@ export function GroupConflictPanel({
         </p>
 
         {conflict.isPending ? (
-          <div className="flex items-center gap-2">
-            <Spinner />
-            <span>{m.admin_proxies_groups_conflict_loading()}</span>
+          <div className="flex flex-col gap-2" role="status" aria-busy="true">
+            <span className="sr-only">
+              {m.admin_proxies_groups_conflict_loading()}
+            </span>
+            <Skeleton className="h-3 w-3/4" />
+            <Skeleton className="h-3 w-1/2" />
           </div>
         ) : conflict.loadFailed || !latest ? (
           <div className="flex flex-wrap items-center gap-2">

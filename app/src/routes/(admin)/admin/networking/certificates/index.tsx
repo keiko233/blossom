@@ -5,10 +5,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import {
   CopyIcon,
   FileKeyIcon,
-  LinkIcon,
   PlusIcon,
-  RefreshCwIcon,
-  ShieldCheckIcon,
   Trash2Icon,
   UploadIcon,
 } from "lucide-react";
@@ -16,11 +13,26 @@ import { useState } from "react";
 import { z } from "zod";
 
 import {
+  PageContent,
   PageHeader,
+  PageHeaderActions,
   PageHeaderTitle,
+  SectionHeader,
+  SectionTitle,
 } from "@/components/app-shell/page-header";
+import {
+  InspectorSkeleton,
+  TableSkeleton,
+} from "@/components/app-shell/skeletons";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -40,7 +52,17 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { toastManager } from "@/components/ui/toast";
+import { useMediaQuery } from "@/hooks/use-media-query";
+import { formatDate } from "@/lib/format";
 import {
   type CertificateNodeUsage,
   nodesUsingCertificate,
@@ -63,6 +85,8 @@ import {
 } from "@/query/certificates";
 import { listNodes, NODES_QUERY_KEY } from "@/query/nodes";
 import { listServers, SERVERS_QUERY_KEY } from "@/query/servers";
+
+type CertificateRecord = Awaited<ReturnType<typeof listCertificates>>[number];
 
 export const Route = createFileRoute("/(admin)/admin/networking/certificates/")(
   {
@@ -155,6 +179,8 @@ function CertificatesPage() {
   const [challengeType, setChallengeType] = useState<"dns-01" | "http-01">(
     "dns-01",
   );
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const isWide = useMediaQuery("xl");
 
   const issueFormSchema = z.object({
     name: z.string().trim().min(1, m.admin_certificates_validation_required()),
@@ -211,7 +237,7 @@ function CertificatesPage() {
     privateKeyFile: null,
   };
 
-  const { data: certificates = [] } = useQuery({
+  const { data: certificates = [], isPending: certificatesPending } = useQuery({
     queryKey: CERTIFICATES_QUERY_KEY,
     queryFn: async () => {
       await reconcileCertificates();
@@ -429,14 +455,14 @@ function CertificatesPage() {
     in_use: m.admin_certificates_deploy_in_use(),
     error: m.admin_certificates_deploy_error(),
   };
+  const selected =
+    certificates.find((certificate) => certificate.id === selectedId) ?? null;
 
   return (
-    <div className="space-y-6 p-4">
-      <PageHeader className="flex-wrap items-start gap-3">
-        <PageHeaderTitle className="text-2xl">
-          {m.admin_certificates_title()}
-        </PageHeaderTitle>
-        <div className="flex gap-2">
+    <>
+      <PageHeader>
+        <PageHeaderTitle>{m.admin_certificates_title()}</PageHeaderTitle>
+        <PageHeaderActions>
           <Sheet
             open={issueSheetOpen}
             onOpenChange={(open) => {
@@ -449,7 +475,7 @@ function CertificatesPage() {
               if (!open) issueForm.reset();
             }}
           >
-            <SheetTrigger render={<Button variant="outline" />}>
+            <SheetTrigger render={<Button size="sm" variant="outline" />}>
               <PlusIcon />
               {m.admin_certificates_create_title()}
             </SheetTrigger>
@@ -561,7 +587,7 @@ function CertificatesPage() {
                                   className={
                                     capability?.acmeProviders.zerossl.available
                                       ? "rounded-lg border bg-muted/32 p-3 text-xs text-muted-foreground"
-                                      : "rounded-lg border border-amber-500/32 bg-amber-500/8 p-3 text-xs"
+                                      : "rounded-lg border border-warning/32 bg-warning/8 p-3 text-xs"
                                   }
                                 >
                                   {capability?.acmeProviders.zerossl.available
@@ -708,7 +734,7 @@ function CertificatesPage() {
               if (!open) importForm.reset();
             }}
           >
-            <SheetTrigger render={<Button />}>
+            <SheetTrigger render={<Button size="sm" />}>
               <UploadIcon />
               {m.admin_certificates_import_title()}
             </SheetTrigger>
@@ -783,7 +809,7 @@ function CertificatesPage() {
                       </div>
                     )}
                   </importForm.Field>
-                  <p className="rounded-lg border border-amber-500/32 bg-amber-500/8 p-3 text-xs">
+                  <p className="rounded-lg border border-warning/32 bg-warning/8 p-3 text-xs">
                     {m.admin_certificates_import_warning()}
                   </p>
                 </SheetPanel>
@@ -821,337 +847,252 @@ function CertificatesPage() {
               </form>
             </SheetContent>
           </Sheet>
-        </div>
+        </PageHeaderActions>
       </PageHeader>
 
-      {capability?.incomplete ? (
-        <p className="rounded-lg border border-amber-500/32 bg-amber-500/8 p-3 text-sm">
-          {m.admin_certificates_dns_incomplete_notice()}
-        </p>
-      ) : null}
+      <PageContent>
+        {capability?.incomplete ? (
+          <Alert variant="warning">
+            <AlertDescription>
+              {m.admin_certificates_dns_incomplete_notice()}
+            </AlertDescription>
+          </Alert>
+        ) : null}
 
-      <section className="space-y-3">
-        {certificates.map((certificate) => (
-          <article
-            key={certificate.id}
-            className="rounded-xl border bg-card p-4"
-          >
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-2">
-                  <ShieldCheckIcon className="size-4" />
-                  <h2 className="font-medium">{certificate.name}</h2>
-                  <Badge variant="outline">
-                    {certificate.kind === "acme"
-                      ? acmeProviderLabels[certificate.acmeProvider]
-                      : kindLabels[certificate.kind]}
-                  </Badge>
-                  <Badge variant="outline">
-                    {stateLabels[certificate.state]}
-                  </Badge>
-                  {certificate.kind === "acme" ? (
-                    <>
-                      <Badge variant="outline">
-                        {certificate.challengeType === "http-01"
-                          ? m.admin_certificates_challenge_http()
-                          : m.admin_certificates_challenge_dns()}
-                      </Badge>
-                      <Badge variant="outline">
-                        {certificate.issuerServerId
-                          ? m.admin_certificates_issuer_value({
-                              server:
-                                issuerNameById.get(
-                                  certificate.issuerServerId,
-                                ) ?? certificate.issuerServerId,
-                            })
-                          : m.admin_certificates_issuer_auto()}
-                      </Badge>
-                    </>
-                  ) : null}
-                </div>
-                <p className="mt-1 font-mono text-xs text-muted-foreground">
-                  {certificate.domains.join(", ")}
-                </p>
-                {certificate.fingerprintSha256 ? (
-                  <p className="mt-0.5 font-mono text-xs text-muted-foreground">
-                    {certificate.fingerprintSha256}
-                  </p>
-                ) : null}
-              </div>
-              <div className="flex flex-wrap gap-1">
-                {certificate.activeMaterialVersion !== null ? (
-                  <>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      render={
-                        <a
-                          href={exportUrl(certificate.id, "fullchain")}
-                          download
-                        />
-                      }
-                    >
-                      <LinkIcon />
-                      {m.admin_certificates_download_fullchain()}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      render={
-                        <a
-                          href={exportUrl(certificate.id, "private-key")}
-                          download
-                        />
-                      }
-                    >
-                      <FileKeyIcon />
-                      {m.admin_certificates_download_private_key()}
-                    </Button>
-                    {certificate.kind !== "imported" ? (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={pendingOperation !== null}
-                        loading={pendingOperation === `renew:${certificate.id}`}
-                        onClick={() =>
-                          void runOperation(`renew:${certificate.id}`, () =>
-                            renewCertificate({
-                              data: { id: certificate.id },
-                            }),
-                          )
-                        }
-                      >
-                        <RefreshCwIcon />
-                        {m.admin_certificates_renew()}
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          replaceForm.reset();
-                          setReplaceTarget(certificate.id);
-                        }}
-                      >
-                        <UploadIcon />
-                        {m.admin_certificates_replace()}
-                      </Button>
-                    )}
-                  </>
-                ) : null}
-                {certificate.kind === "imported" &&
-                certificate.activeMaterialVersion === null ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      replaceForm.reset();
-                      setReplaceTarget(certificate.id);
-                    }}
-                  >
-                    <UploadIcon />
-                    {m.admin_certificates_replace()}
-                  </Button>
-                ) : null}
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  aria-label={m.admin_certificates_delete()}
-                  disabled={pendingOperation !== null}
-                  loading={pendingOperation === `delete:${certificate.id}`}
-                  onClick={() =>
-                    void runOperation(`delete:${certificate.id}`, () =>
-                      deleteCertificate({ data: { id: certificate.id } }),
-                    )
-                  }
-                >
-                  <Trash2Icon />
-                </Button>
-              </div>
-            </div>
-
-            {certificate.pendingMaterial ? (
-              <div className="mt-3 rounded-lg border border-amber-500/32 bg-amber-500/8 p-3">
-                <p className="mb-2 text-sm font-medium">
-                  {m.admin_certificates_pending_title()}
-                </p>
-                <p className="font-mono text-xs text-muted-foreground">
-                  {certificate.pendingMaterial.domains.join(", ")}
-                </p>
-                <p className="font-mono text-xs text-muted-foreground">
-                  {certificate.pendingMaterial.fingerprintSha256}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {m.admin_certificates_pending_validity({
-                    notBefore:
-                      certificate.pendingMaterial.notBefore.toISOString(),
-                    notAfter:
-                      certificate.pendingMaterial.notAfter.toISOString(),
-                  })}
-                </p>
-                <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">
-                  {certificate.pendingMaterial.notBefore.getTime() > Date.now()
-                    ? m.admin_certificates_pending_reason_not_yet_valid()
-                    : m.admin_certificates_pending_reason_expired()}
-                </p>
-                <p className="mt-2 text-xs text-destructive">
-                  {m.admin_certificates_pending_risk_warning()}
-                </p>
-                <div className="mt-2 flex gap-2">
-                  <Button
-                    size="sm"
-                    disabled={pendingOperation !== null}
-                    loading={pendingOperation === `activate:${certificate.id}`}
-                    onClick={() => {
-                      if (
-                        !window.confirm(
-                          m.admin_certificates_pending_activation_confirm(),
-                        )
-                      ) {
-                        return;
-                      }
-                      void runOperation(`activate:${certificate.id}`, () =>
-                        activatePendingImportedCertificate({
-                          data: { certificateId: certificate.id },
-                        }),
-                      );
-                    }}
-                  >
-                    {m.admin_certificates_activate()}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={pendingOperation !== null}
-                    loading={pendingOperation === `discard:${certificate.id}`}
-                    onClick={() =>
-                      void runOperation(`discard:${certificate.id}`, () =>
-                        discardPendingImportedCertificate({
-                          data: { certificateId: certificate.id },
-                        }),
-                      )
+        {certificatesPending ? (
+          <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_24rem]">
+            <TableSkeleton columns={5} rows={8} />
+            <InspectorSkeleton className="hidden xl:flex" />
+          </div>
+        ) : certificates.length === 0 ? (
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <FileKeyIcon />
+              </EmptyMedia>
+              <EmptyTitle>{m.admin_page_certificates_empty()}</EmptyTitle>
+            </EmptyHeader>
+          </Empty>
+        ) : (
+          <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_24rem]">
+            <Table variant="pane">
+              <TableHeader className="top-(--page-header-h)!">
+                <TableRow>
+                  <TableHead>{m.admin_page_certificates_col_name()}</TableHead>
+                  <TableHead className="hidden lg:table-cell">
+                    {m.admin_page_certificates_col_domains()}
+                  </TableHead>
+                  <TableHead>{m.admin_page_certificates_col_state()}</TableHead>
+                  <TableHead className="hidden lg:table-cell">
+                    {m.admin_page_certificates_col_validity()}
+                  </TableHead>
+                  <TableHead className="hidden 2xl:table-cell">
+                    {m.admin_page_certificates_col_issuer()}
+                  </TableHead>
+                  <TableHead className="hidden xl:table-cell">
+                    {m.admin_page_certificates_col_deployment()}
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {certificates.map((certificate) => (
+                  <TableRow
+                    key={certificate.id}
+                    data-state={
+                      selectedId === certificate.id ? "selected" : undefined
                     }
                   >
-                    {m.admin_certificates_discard()}
-                  </Button>
-                </div>
-              </div>
-            ) : null}
-
-            {certificate.challenge?.length ? (
-              <div className="mt-3 rounded-lg border p-3">
-                <p className="mb-2 text-sm font-medium">
-                  {m.admin_certificates_dns_records_title()}
-                </p>
-                {certificate.challenge.map((record) => {
-                  const copyKey = `${certificate.id}:${record.name}:${record.value}`;
-                  return (
-                    <div
-                      key={`${record.name}:${record.value}`}
-                      className="mt-2 flex items-start gap-2 rounded-md bg-muted/32 p-2 font-mono text-xs"
-                    >
-                      <span className="min-w-0 flex-1 break-all">
-                        TXT {record.name} {record.value}
+                    <TableCell>
+                      <button
+                        aria-pressed={selectedId === certificate.id}
+                        className="flex min-w-0 flex-col gap-0.5 text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/24"
+                        onClick={() => setSelectedId(certificate.id)}
+                        type="button"
+                      >
+                        <span className="truncate font-medium">
+                          {certificate.name}
+                        </span>
+                        <span className="truncate text-xs text-muted-foreground">
+                          {certificate.kind === "acme"
+                            ? acmeProviderLabels[certificate.acmeProvider]
+                            : kindLabels[certificate.kind]}
+                        </span>
+                      </button>
+                    </TableCell>
+                    <TableCell className="hidden lg:table-cell">
+                      <span className="block max-w-64 truncate font-mono text-xs text-muted-foreground">
+                        {certificate.domains.join(", ")}
                       </span>
-                      <Button
-                        size="icon-sm"
-                        variant="ghost"
-                        disabled={copyingRecord !== null}
-                        loading={copyingRecord === copyKey}
-                        onClick={() =>
-                          void copyRecord(
-                            copyKey,
-                            `TXT\t${record.name}\t${record.value}`,
-                          )
-                        }
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={certificateStateVariant(certificate.state)}
                       >
-                        <CopyIcon />
-                      </Button>
-                    </div>
-                  );
-                })}
-                {certificate.state === "waiting_dns" ? (
-                  <Button
-                    className="mt-3"
-                    size="sm"
-                    disabled={pendingOperation !== null}
-                    loading={
-                      pendingOperation === `continue-dns:${certificate.id}`
-                    }
-                    onClick={() =>
-                      void runOperation(`continue-dns:${certificate.id}`, () =>
-                        continueCertificateDnsChallenge({
-                          data: { id: certificate.id },
-                        }),
-                      )
-                    }
-                  >
-                    {m.admin_certificates_continue_dns()}
-                  </Button>
-                ) : null}
-              </div>
-            ) : null}
-
-            {certificate.lastError ? (
-              <p className="mt-3 text-xs text-destructive">
-                {certificate.lastError}
-              </p>
-            ) : null}
-            <CertificateUsage
-              usages={nodesUsingCertificate(certificate.id, nodes)}
-            />
-            {certificate.servers.length > 0 ? (
-              <div className="mt-3 space-y-2">
-                <p className="text-sm font-medium">
-                  {m.admin_certificates_deployment_title()}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {m.admin_certificates_deployment_help()}
-                </p>
-                {certificate.servers.map((binding) => {
-                  const deployment = binding.deploymentStatus;
-                  const variant =
-                    deployment.status === "error"
-                      ? "destructive"
-                      : deployment.status === "in_use"
-                        ? "default"
-                        : "outline";
-                  return (
-                    <div
-                      key={binding.serverId}
-                      className="flex items-center gap-2 rounded-lg border bg-muted/20 p-2"
-                    >
-                      <Link
-                        to="/admin/servers/$serverId/overview"
-                        params={{ serverId: binding.serverId }}
-                        className="min-w-0 flex-1 truncate text-sm underline-offset-4 hover:underline"
-                      >
-                        {binding.server.name}
-                      </Link>
-                      {deployment.status !== "in_use" &&
-                      isAgentStale(binding.serverId) ? (
-                        <span className="text-xs text-muted-foreground">
-                          {m.admin_certificates_deploy_agent_stale()}
-                        </span>
-                      ) : null}
-                      <Badge variant={variant}>
-                        {deployLabels[deployment.status]}
+                        {stateLabels[certificate.state]}
                       </Badge>
-                      {deployment.status === "error" &&
-                      (deployment.phase || deployment.message) ? (
-                        <span className="min-w-0 flex-1 truncate text-xs text-destructive">
-                          {deployment.phase ? `${deployment.phase}: ` : ""}
-                          {deployment.message}
-                        </span>
-                      ) : null}
-                    </div>
+                    </TableCell>
+                    <TableCell className="hidden lg:table-cell">
+                      <span className="text-xs text-muted-foreground tabular-nums">
+                        {certificate.notAfter
+                          ? formatDate(certificate.notAfter)
+                          : "–"}
+                      </span>
+                    </TableCell>
+                    <TableCell className="hidden 2xl:table-cell">
+                      <span className="text-xs text-muted-foreground">
+                        {certificate.kind === "acme"
+                          ? certificate.issuerServerId
+                            ? (issuerNameById.get(certificate.issuerServerId) ??
+                              certificate.issuerServerId)
+                            : m.admin_certificates_issuer_auto()
+                          : "–"}
+                      </span>
+                    </TableCell>
+                    <TableCell className="hidden xl:table-cell">
+                      <span className="text-xs text-muted-foreground tabular-nums">
+                        {certificate.servers.length > 0
+                          ? m.admin_page_certificates_server_count({
+                              count: certificate.servers.length,
+                            })
+                          : "–"}
+                      </span>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+
+            <aside className="hidden min-w-0 xl:block">
+              <CertificateInspector
+                certificate={selected}
+                nodes={nodes}
+                copyingRecord={copyingRecord}
+                pendingOperation={pendingOperation}
+                stateLabels={stateLabels}
+                deployLabels={deployLabels}
+                issuerNameById={issuerNameById}
+                isAgentStale={isAgentStale}
+                onCopyRecord={copyRecord}
+                onDelete={(certificateId) =>
+                  void runOperation(`delete:${certificateId}`, () =>
+                    deleteCertificate({ data: { id: certificateId } }),
+                  )
+                }
+                onRenew={(certificateId) =>
+                  void runOperation(`renew:${certificateId}`, () =>
+                    renewCertificate({ data: { id: certificateId } }),
+                  )
+                }
+                onReplace={(certificateId) => {
+                  replaceForm.reset();
+                  setReplaceTarget(certificateId);
+                }}
+                onActivate={(certificateId) => {
+                  if (
+                    !window.confirm(
+                      m.admin_certificates_pending_activation_confirm(),
+                    )
+                  ) {
+                    return;
+                  }
+                  void runOperation(`activate:${certificateId}`, () =>
+                    activatePendingImportedCertificate({
+                      data: { certificateId },
+                    }),
                   );
-                })}
-              </div>
-            ) : null}
-          </article>
-        ))}
-      </section>
+                }}
+                onDiscard={(certificateId) =>
+                  void runOperation(`discard:${certificateId}`, () =>
+                    discardPendingImportedCertificate({
+                      data: { certificateId },
+                    }),
+                  )
+                }
+                onContinueDns={(certificateId) =>
+                  void runOperation(`continue-dns:${certificateId}`, () =>
+                    continueCertificateDnsChallenge({
+                      data: { id: certificateId },
+                    }),
+                  )
+                }
+              />
+            </aside>
+          </div>
+        )}
+      </PageContent>
+
+      <Sheet
+        open={!isWide && selected !== null}
+        onOpenChange={(open) => {
+          if (!open) setSelectedId(null);
+        }}
+      >
+        <SheetContent className="max-w-2xl">
+          <SheetHeader>
+            <SheetTitle>{m.admin_page_certificates_details()}</SheetTitle>
+            <SheetDescription>
+              {m.admin_page_certificates_select_prompt()}
+            </SheetDescription>
+          </SheetHeader>
+          <SheetPanel>
+            <CertificateInspector
+              embedded
+              certificate={selected}
+              nodes={nodes}
+              copyingRecord={copyingRecord}
+              pendingOperation={pendingOperation}
+              stateLabels={stateLabels}
+              deployLabels={deployLabels}
+              issuerNameById={issuerNameById}
+              isAgentStale={isAgentStale}
+              onCopyRecord={copyRecord}
+              onDelete={(certificateId) => {
+                setSelectedId(null);
+                void runOperation(`delete:${certificateId}`, () =>
+                  deleteCertificate({ data: { id: certificateId } }),
+                );
+              }}
+              onRenew={(certificateId) =>
+                void runOperation(`renew:${certificateId}`, () =>
+                  renewCertificate({ data: { id: certificateId } }),
+                )
+              }
+              onReplace={(certificateId) => {
+                replaceForm.reset();
+                setReplaceTarget(certificateId);
+              }}
+              onActivate={(certificateId) => {
+                if (
+                  !window.confirm(
+                    m.admin_certificates_pending_activation_confirm(),
+                  )
+                ) {
+                  return;
+                }
+                void runOperation(`activate:${certificateId}`, () =>
+                  activatePendingImportedCertificate({
+                    data: { certificateId },
+                  }),
+                );
+              }}
+              onDiscard={(certificateId) =>
+                void runOperation(`discard:${certificateId}`, () =>
+                  discardPendingImportedCertificate({
+                    data: { certificateId },
+                  }),
+                )
+              }
+              onContinueDns={(certificateId) =>
+                void runOperation(`continue-dns:${certificateId}`, () =>
+                  continueCertificateDnsChallenge({
+                    data: { id: certificateId },
+                  }),
+                )
+              }
+            />
+          </SheetPanel>
+        </SheetContent>
+      </Sheet>
 
       <Sheet
         open={replaceTarget !== null}
@@ -1221,7 +1162,7 @@ function CertificatesPage() {
                   </div>
                 )}
               </replaceForm.Field>
-              <p className="rounded-lg border border-amber-500/32 bg-amber-500/8 p-3 text-xs">
+              <p className="rounded-lg border border-warning/32 bg-warning/8 p-3 text-xs">
                 {m.admin_certificates_replace_warning()}
               </p>
             </SheetPanel>
@@ -1253,8 +1194,339 @@ function CertificatesPage() {
           </form>
         </SheetContent>
       </Sheet>
-    </div>
+    </>
   );
+}
+
+function CertificateInspector({
+  certificate,
+  nodes,
+  copyingRecord,
+  pendingOperation,
+  stateLabels,
+  deployLabels,
+  issuerNameById,
+  isAgentStale,
+  embedded = false,
+  onCopyRecord,
+  onDelete,
+  onRenew,
+  onReplace,
+  onActivate,
+  onDiscard,
+  onContinueDns,
+}: {
+  certificate: CertificateRecord | null;
+  nodes: Parameters<typeof nodesUsingCertificate>[1];
+  copyingRecord: string | null;
+  pendingOperation: string | null;
+  stateLabels: Record<string, string>;
+  deployLabels: Record<string, string>;
+  issuerNameById: ReadonlyMap<string, string>;
+  isAgentStale: (serverId: string) => boolean;
+  embedded?: boolean;
+  onCopyRecord: (key: string, text: string) => Promise<void>;
+  onDelete: (certificateId: string) => void;
+  onRenew: (certificateId: string) => void;
+  onReplace: (certificateId: string) => void;
+  onActivate: (certificateId: string) => void;
+  onDiscard: (certificateId: string) => void;
+  onContinueDns: (certificateId: string) => void;
+}) {
+  if (!certificate) {
+    return (
+      <section
+        className={
+          embedded
+            ? "flex min-w-0 flex-col gap-4"
+            : "sticky top-(--page-header-h) flex min-w-0 flex-col gap-4"
+        }
+        data-slot="certificate-inspector"
+      >
+        <SectionHeader className="border-b pb-2">
+          <SectionTitle>{m.admin_page_certificates_details()}</SectionTitle>
+        </SectionHeader>
+        <p className="px-4 py-3 text-sm text-muted-foreground">
+          {m.admin_page_certificates_select_prompt()}
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section
+      className={
+        embedded
+          ? "flex min-w-0 flex-col gap-4"
+          : "sticky top-(--page-header-h) flex min-w-0 flex-col gap-4"
+      }
+      data-slot="certificate-inspector"
+    >
+      <SectionHeader className="border-b pb-2">
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <SectionTitle>{certificate.name}</SectionTitle>
+          <span className="truncate font-mono text-xs text-muted-foreground">
+            {certificate.domains.join(", ")}
+          </span>
+        </div>
+      </SectionHeader>
+
+      <div className="flex flex-wrap gap-1">
+        <Badge variant="outline">
+          {certificate.kind === "acme"
+            ? m.admin_certificates_issuer_value({
+                server:
+                  issuerNameById.get(certificate.issuerServerId ?? "") ??
+                  m.admin_certificates_issuer_auto(),
+              })
+            : certificate.kind === "self_signed"
+              ? m.admin_certificates_kind_self_signed()
+              : m.admin_certificates_kind_imported()}
+        </Badge>
+        <Badge variant={certificateStateVariant(certificate.state)}>
+          {stateLabels[certificate.state]}
+        </Badge>
+        {certificate.kind === "acme" ? (
+          <Badge variant="outline">
+            {certificate.challengeType === "http-01"
+              ? m.admin_certificates_challenge_http()
+              : m.admin_certificates_challenge_dns()}
+          </Badge>
+        ) : null}
+      </div>
+
+      {certificate.fingerprintSha256 ? (
+        <p className="font-mono text-xs break-all text-muted-foreground">
+          {certificate.fingerprintSha256}
+        </p>
+      ) : null}
+
+      <div className="flex flex-wrap gap-1">
+        {certificate.activeMaterialVersion !== null ? (
+          <>
+            <Button
+              size="sm"
+              variant="outline"
+              render={
+                <a href={exportUrl(certificate.id, "fullchain")} download />
+              }
+            >
+              {m.admin_certificates_download_fullchain()}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              render={
+                <a href={exportUrl(certificate.id, "private-key")} download />
+              }
+            >
+              {m.admin_certificates_download_private_key()}
+            </Button>
+            {certificate.kind !== "imported" ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={pendingOperation !== null}
+                loading={pendingOperation === `renew:${certificate.id}`}
+                onClick={() => onRenew(certificate.id)}
+              >
+                {m.admin_certificates_renew()}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onReplace(certificate.id)}
+              >
+                {m.admin_certificates_replace()}
+              </Button>
+            )}
+          </>
+        ) : null}
+        {certificate.kind === "imported" &&
+        certificate.activeMaterialVersion === null ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onReplace(certificate.id)}
+          >
+            {m.admin_certificates_replace()}
+          </Button>
+        ) : null}
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          aria-label={m.admin_certificates_delete()}
+          disabled={pendingOperation !== null}
+          loading={pendingOperation === `delete:${certificate.id}`}
+          onClick={() => onDelete(certificate.id)}
+        >
+          <Trash2Icon />
+        </Button>
+      </div>
+
+      {certificate.pendingMaterial ? (
+        <Alert variant="warning">
+          <p className="mb-2 text-sm font-medium">
+            {m.admin_certificates_pending_title()}
+          </p>
+          <p className="font-mono text-xs text-muted-foreground">
+            {certificate.pendingMaterial.domains.join(", ")}
+          </p>
+          <p className="font-mono text-xs text-muted-foreground">
+            {certificate.pendingMaterial.fingerprintSha256}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {m.admin_certificates_pending_validity({
+              notBefore: certificate.pendingMaterial.notBefore.toISOString(),
+              notAfter: certificate.pendingMaterial.notAfter.toISOString(),
+            })}
+          </p>
+          <p className="mt-1 text-xs font-medium text-warning-foreground">
+            {certificate.pendingMaterial.notBefore.getTime() > Date.now()
+              ? m.admin_certificates_pending_reason_not_yet_valid()
+              : m.admin_certificates_pending_reason_expired()}
+          </p>
+          <p className="mt-2 text-xs text-destructive">
+            {m.admin_certificates_pending_risk_warning()}
+          </p>
+          <div className="mt-3 flex gap-2">
+            <Button
+              size="sm"
+              disabled={pendingOperation !== null}
+              loading={pendingOperation === `activate:${certificate.id}`}
+              onClick={() => onActivate(certificate.id)}
+            >
+              {m.admin_certificates_activate()}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={pendingOperation !== null}
+              loading={pendingOperation === `discard:${certificate.id}`}
+              onClick={() => onDiscard(certificate.id)}
+            >
+              {m.admin_certificates_discard()}
+            </Button>
+          </div>
+        </Alert>
+      ) : null}
+
+      {certificate.challenge?.length ? (
+        <div className="rounded-lg border p-3">
+          <p className="mb-2 text-sm font-medium">
+            {m.admin_certificates_dns_records_title()}
+          </p>
+          {certificate.challenge.map((record) => {
+            const copyKey = `${certificate.id}:${record.name}:${record.value}`;
+            return (
+              <div
+                key={`${record.name}:${record.value}`}
+                className="mt-2 flex items-start gap-2 rounded-md bg-muted/32 p-2 font-mono text-xs"
+              >
+                <span className="min-w-0 flex-1 break-all">
+                  TXT {record.name} {record.value}
+                </span>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  disabled={copyingRecord !== null}
+                  loading={copyingRecord === copyKey}
+                  onClick={() =>
+                    void onCopyRecord(
+                      copyKey,
+                      `TXT\t${record.name}\t${record.value}`,
+                    )
+                  }
+                >
+                  <CopyIcon />
+                </Button>
+              </div>
+            );
+          })}
+          {certificate.state === "waiting_dns" ? (
+            <Button
+              className="mt-3"
+              size="sm"
+              disabled={pendingOperation !== null}
+              loading={pendingOperation === `continue-dns:${certificate.id}`}
+              onClick={() => onContinueDns(certificate.id)}
+            >
+              {m.admin_certificates_continue_dns()}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {certificate.lastError ? (
+        <p className="text-xs text-destructive">{certificate.lastError}</p>
+      ) : null}
+      <CertificateUsage usages={nodesUsingCertificate(certificate.id, nodes)} />
+      {certificate.servers.length > 0 ? (
+        <div className="space-y-2">
+          <p className="text-sm font-medium">
+            {m.admin_certificates_deployment_title()}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {m.admin_certificates_deployment_help()}
+          </p>
+          {certificate.servers.map((binding) => {
+            const deployment = binding.deploymentStatus;
+            const variant =
+              deployment.status === "error"
+                ? "destructive"
+                : deployment.status === "in_use"
+                  ? "default"
+                  : "outline";
+            return (
+              <div
+                key={binding.serverId}
+                className="flex items-center gap-2 border-t py-1.5"
+              >
+                <Link
+                  to="/admin/servers/$serverId/overview"
+                  params={{ serverId: binding.serverId }}
+                  className="min-w-0 flex-1 truncate text-sm underline-offset-4 hover:underline"
+                >
+                  {binding.server.name}
+                </Link>
+                {deployment.status !== "in_use" &&
+                isAgentStale(binding.serverId) ? (
+                  <span className="text-xs text-muted-foreground">
+                    {m.admin_certificates_deploy_agent_stale()}
+                  </span>
+                ) : null}
+                <Badge variant={variant}>
+                  {deployLabels[deployment.status]}
+                </Badge>
+                {deployment.status === "error" &&
+                (deployment.phase || deployment.message) ? (
+                  <span className="min-w-0 flex-1 truncate text-xs text-destructive">
+                    {deployment.phase ? `${deployment.phase}: ` : ""}
+                    {deployment.message}
+                  </span>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function certificateStateVariant(
+  state: CertificateRecord["state"],
+): "default" | "warning" | "destructive" | "outline" | "success" {
+  return state === "error" || state === "expired"
+    ? "destructive"
+    : state === "active"
+      ? "success"
+      : state === "waiting_dns" ||
+          state === "pending" ||
+          state === "not_yet_valid"
+        ? "warning"
+        : "outline";
 }
 
 function isValidIssueDomain(value: string): boolean {

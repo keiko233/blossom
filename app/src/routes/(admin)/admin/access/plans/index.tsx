@@ -10,9 +10,12 @@ import { EllipsisIcon, PackageIcon, PlusIcon } from "lucide-react";
 import type React from "react";
 
 import {
+  PageContent,
   PageHeader,
+  PageHeaderActions,
   PageHeaderTitle,
 } from "@/components/app-shell/page-header";
+import { TableSkeleton } from "@/components/app-shell/skeletons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Confirm } from "@/components/ui/confirm";
@@ -30,7 +33,6 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "@/components/ui/menu";
-import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -295,78 +297,83 @@ function RouteComponent(): React.ReactElement {
   });
 
   return (
-    <div className="flex flex-col gap-4 p-4">
+    <div className="flex min-w-0 flex-col [--page-toolbar-h:0rem]">
       <PageHeader>
         <PageHeaderTitle>{m.admin_nav_plans()}</PageHeaderTitle>
-        <Button render={<Link to="/admin/access/plans/new" />}>
-          <PlusIcon />
-          {m.admin_plans_add()}
-        </Button>
+        <PageHeaderActions>
+          <Button size="sm" render={<Link to="/admin/access/plans/new" />}>
+            <PlusIcon />
+            {m.admin_plans_add()}
+          </Button>
+        </PageHeaderActions>
       </PageHeader>
 
-      {isPending ? (
-        <div className="flex justify-center py-16">
-          <Spinner />
-        </div>
-      ) : plans && plans.length > 0 ? (
-        <Table>
-          <TableHeader>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <TableHead key={header.id}>
-                    {header.isPlaceholder
-                      ? null
-                      : flexRender(
-                          header.column.columnDef.header,
-                          header.getContext(),
-                        )}
-                  </TableHead>
-                ))}
-              </TableRow>
-            ))}
-          </TableHeader>
-          <TableBody>
-            {table.getRowModel().rows.map((row) => (
-              <TableRow key={row.id}>
-                {row.getVisibleCells().map((cell) => (
-                  <TableCell key={cell.id}>
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </TableCell>
-                ))}
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      ) : (
-        <Empty>
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <PackageIcon />
-            </EmptyMedia>
-            <EmptyTitle>{m.admin_plans_empty_title()}</EmptyTitle>
-            <EmptyDescription>
-              {groups && groups.length === 0
-                ? m.admin_access_plans_empty_need_groups()
-                : m.admin_access_plans_empty_description()}
-            </EmptyDescription>
-          </EmptyHeader>
-          <div className="flex flex-wrap justify-center gap-2">
-            {groups && groups.length === 0 ? (
-              <Button
-                variant="outline"
-                render={<Link to="/admin/access/groups/new" />}
-              >
-                {m.admin_access_create_group()}
+      <PageContent width="flush">
+        {isPending ? (
+          <TableSkeleton columns={8} rows={8} />
+        ) : plans && plans.length > 0 ? (
+          <Table variant="pane">
+            <TableHeader>
+              {table.getHeaderGroups().map((headerGroup) => (
+                <TableRow key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => (
+                    <TableHead key={header.id}>
+                      {header.isPlaceholder
+                        ? null
+                        : flexRender(
+                            header.column.columnDef.header,
+                            header.getContext(),
+                          )}
+                    </TableHead>
+                  ))}
+                </TableRow>
+              ))}
+            </TableHeader>
+            <TableBody>
+              {table.getRowModel().rows.map((row) => (
+                <TableRow key={row.id}>
+                  {row.getVisibleCells().map((cell) => (
+                    <TableCell key={cell.id}>
+                      {flexRender(
+                        cell.column.columnDef.cell,
+                        cell.getContext(),
+                      )}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        ) : (
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <PackageIcon />
+              </EmptyMedia>
+              <EmptyTitle>{m.admin_plans_empty_title()}</EmptyTitle>
+              <EmptyDescription>
+                {groups && groups.length === 0
+                  ? m.admin_access_plans_empty_need_groups()
+                  : m.admin_access_plans_empty_description()}
+              </EmptyDescription>
+            </EmptyHeader>
+            <div className="flex flex-wrap justify-center gap-2">
+              {groups && groups.length === 0 ? (
+                <Button
+                  variant="outline"
+                  render={<Link to="/admin/access/groups/new" />}
+                >
+                  {m.admin_access_create_group()}
+                </Button>
+              ) : null}
+              <Button render={<Link to="/admin/access/plans/new" />}>
+                <PlusIcon />
+                {m.admin_plans_add()}
               </Button>
-            ) : null}
-            <Button render={<Link to="/admin/access/plans/new" />}>
-              <PlusIcon />
-              {m.admin_plans_add()}
-            </Button>
-          </div>
-        </Empty>
-      )}
+            </div>
+          </Empty>
+        )}
+      </PageContent>
     </div>
   );
 }

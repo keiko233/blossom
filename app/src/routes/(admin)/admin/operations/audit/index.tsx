@@ -10,14 +10,25 @@ import {
   DownloadIcon,
   ScrollTextIcon,
   Trash2Icon,
+  XIcon,
 } from "lucide-react";
 import type React from "react";
-import { Fragment, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
+  PageContent,
   PageHeader,
+  PageHeaderActions,
+  PageHeaderDescription,
   PageHeaderTitle,
+  PageToolbar,
+  SectionHeader,
+  SectionTitle,
 } from "@/components/app-shell/page-header";
+import {
+  InspectorSkeleton,
+  TableSkeleton,
+} from "@/components/app-shell/skeletons";
 import { targetTypeLabel } from "@/components/audit-labels";
 import { AuditStatusBadge } from "@/components/audit-status-badge";
 import { ListPagination } from "@/components/list-pagination";
@@ -31,7 +42,14 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { Spinner } from "@/components/ui/spinner";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetPanel,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import {
   Table,
   TableBody,
@@ -42,6 +60,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTab } from "@/components/ui/tabs";
 import { toastManager } from "@/components/ui/toast";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import {
   auditSearchSchema,
   type AuditSearch,
@@ -74,6 +93,10 @@ export const Route = createFileRoute("/(admin)/admin/operations/audit/")({
   component: RouteComponent,
 });
 
+type AuditSelection =
+  | { kind: "admin"; entry: AdminAuditEntry }
+  | { kind: "mcp"; entry: McpAuditEntry };
+
 function RouteComponent(): React.ReactElement {
   const search = Route.useSearch();
   const routeNavigate = Route.useNavigate();
@@ -81,6 +104,8 @@ function RouteComponent(): React.ReactElement {
 
   const [searchResetToken, setSearchResetToken] = useState(0);
   const [isExporting, setIsExporting] = useState(false);
+  const [selection, setSelection] = useState<AuditSelection | null>(null);
+  const isWide = useMediaQuery("xl");
 
   const tab: AuditSource = search.tab ?? "admin";
   const page = search.page ?? 1;
@@ -91,6 +116,7 @@ function RouteComponent(): React.ReactElement {
   const mcpFilter = searchToMcpFilter(search);
   const adminInput = { ...adminFilter, page, pageSize };
   const mcpInput = { ...mcpFilter, page, pageSize };
+  const viewKey = JSON.stringify([tab, adminInput, mcpInput]);
 
   const adminQuery = useQuery({
     queryKey: [...ADMIN_AUDIT_QUERY_KEY, "list", adminInput],
@@ -108,6 +134,10 @@ function RouteComponent(): React.ReactElement {
 
   const total = active.data?.total ?? 0;
   const pageCount = getPageCount(total, pageSize);
+
+  useEffect(() => {
+    setSelection(null);
+  }, [viewKey]);
 
   // A purge (or a hand-edited link) can leave the page past the end: step back.
   useEffect(() => {
@@ -222,17 +252,18 @@ function RouteComponent(): React.ReactElement {
   );
 
   return (
-    <div className="flex flex-col gap-4 p-4">
-      <PageHeader className="flex-wrap gap-2">
-        <div className="flex flex-col gap-0.5">
+    <>
+      <PageHeader>
+        <div className="flex min-w-0 items-baseline gap-3">
           <PageHeaderTitle>{m.admin_audit_title()}</PageHeaderTitle>
-          <p className="text-sm text-muted-foreground">
+          <PageHeaderDescription className="hidden lg:block">
             {m.admin_audit_description()}
-          </p>
+          </PageHeaderDescription>
         </div>
-        <div className="flex items-center gap-2">
+        <PageHeaderActions>
           {tab === "admin" ? (
             <Button
+              size="sm"
               variant="outline"
               onClick={() =>
                 void PurgeAuditDialog.call({
@@ -246,150 +277,248 @@ function RouteComponent(): React.ReactElement {
           ) : null}
           <Button
             loading={isExporting}
+            size="sm"
             variant="outline"
             onClick={() => void exportCsv()}
           >
             <DownloadIcon />
             {m.admin_audit_export()}
           </Button>
-        </div>
+        </PageHeaderActions>
       </PageHeader>
 
-      <Tabs
-        value={tab}
-        onValueChange={(next) => switchTab(next as AuditSource)}
-      >
-        <TabsList>
-          <TabsTab value="admin">{m.admin_audit_tab_admin()}</TabsTab>
-          <TabsTab value="mcp">{m.admin_audit_tab_mcp()}</TabsTab>
-        </TabsList>
-      </Tabs>
-
-      <AuditToolbar
-        hasFilters={hasFilters}
-        search={search}
-        searchResetToken={searchResetToken}
-        tab={tab}
-        onChange={updateSearch}
-        onClear={clearFilters}
-      />
-
-      {active.isPending ? (
-        <div className="flex justify-center py-16">
-          <Spinner />
-        </div>
-      ) : active.isError ? (
-        <div className="flex flex-col items-center gap-4 py-16">
-          <Alert variant="error" className="max-w-md">
-            <AlertTitle>{m.admin_audit_load_error()}</AlertTitle>
-            <AlertDescription>
-              {active.error instanceof Error ? active.error.message : null}
-            </AlertDescription>
-          </Alert>
-          <Button
-            loading={active.isFetching}
-            onClick={() => void active.refetch()}
+      <PageToolbar>
+        <div className="flex w-full items-center gap-2">
+          <Tabs
+            value={tab}
+            onValueChange={(next) => switchTab(next as AuditSource)}
           >
-            {m.admin_audit_load_retry()}
-          </Button>
-        </div>
-      ) : total > 0 ? (
-        <div
-          className={
-            active.isPlaceholderData ? "opacity-60 transition-opacity" : ""
-          }
-        >
-          {tab === "admin" ? (
-            <AdminAuditTable
-              // Expanded rows are per view: reset them with the page.
-              key={JSON.stringify(adminInput)}
-              rows={adminQuery.data?.rows ?? []}
-              timeHeader={timeHeader}
-              onFilterTarget={filterTarget}
-            />
-          ) : (
-            <McpAuditTable
-              key={JSON.stringify(mcpInput)}
-              rows={mcpQuery.data?.rows ?? []}
-              timeHeader={timeHeader}
-            />
-          )}
-
-          <ListPagination
-            link={(target) => (
-              <Link
-                from="/admin/operations/audit/"
-                to="/admin/operations/audit"
-                search={(prev) => ({
-                  ...prev,
-                  page: target === 1 ? undefined : target,
-                })}
-              />
-            )}
-            page={page}
-            pageCount={pageCount}
-            pageSize={pageSize}
-            pageSizes={AUDIT_PAGE_SIZES}
-            total={total}
-            onPageSizeChange={(size) =>
-              updateSearch({
-                pageSize: size === DEFAULT_AUDIT_PAGE_SIZE ? undefined : size,
-              })
-            }
+            <TabsList>
+              <TabsTab value="admin">{m.admin_audit_tab_admin()}</TabsTab>
+              <TabsTab value="mcp">{m.admin_audit_tab_mcp()}</TabsTab>
+            </TabsList>
+          </Tabs>
+          <AuditToolbar
+            hasFilters={hasFilters}
+            search={search}
+            searchResetToken={searchResetToken}
+            tab={tab}
+            onChange={updateSearch}
+            onClear={clearFilters}
           />
         </div>
-      ) : (
-        <Empty>
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <ScrollTextIcon />
-            </EmptyMedia>
-            <EmptyTitle>
-              {hasFilters
-                ? m.admin_audit_empty_filtered()
-                : m.admin_audit_empty()}
-            </EmptyTitle>
-          </EmptyHeader>
-        </Empty>
-      )}
-    </div>
+      </PageToolbar>
+
+      <PageContent>
+        {active.isPending ? (
+          <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_24rem]">
+            <TableSkeleton columns={6} rows={12} />
+            <InspectorSkeleton className="hidden xl:flex" />
+          </div>
+        ) : active.isError ? (
+          <div className="flex flex-col items-start gap-4 py-12">
+            <Alert variant="error" className="max-w-md">
+              <AlertTitle>{m.admin_audit_load_error()}</AlertTitle>
+              <AlertDescription>
+                {active.error instanceof Error ? active.error.message : null}
+              </AlertDescription>
+            </Alert>
+            <Button
+              loading={active.isFetching}
+              size="sm"
+              onClick={() => void active.refetch()}
+            >
+              {m.admin_audit_load_retry()}
+            </Button>
+          </div>
+        ) : total > 0 ? (
+          <div
+            className={
+              active.isPlaceholderData ? "opacity-60 transition-opacity" : ""
+            }
+          >
+            <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_24rem]">
+              <div className="min-w-0">
+                {tab === "admin" ? (
+                  <AdminAuditTable
+                    rows={adminQuery.data?.rows ?? []}
+                    selectedId={
+                      selection?.kind === "admin" ? selection.entry.id : null
+                    }
+                    timeHeader={timeHeader}
+                    onSelect={(entry) => setSelection({ kind: "admin", entry })}
+                  />
+                ) : (
+                  <McpAuditTable
+                    rows={mcpQuery.data?.rows ?? []}
+                    selectedId={
+                      selection?.kind === "mcp" ? selection.entry.id : null
+                    }
+                    timeHeader={timeHeader}
+                    onSelect={(entry) => setSelection({ kind: "mcp", entry })}
+                  />
+                )}
+              </div>
+
+              <aside className="hidden min-w-0 xl:block">
+                <AuditInspector
+                  selection={selection}
+                  onFilterTarget={filterTarget}
+                  onClear={() => setSelection(null)}
+                />
+              </aside>
+            </div>
+
+            <div className="border-t">
+              <ListPagination
+                link={(target) => (
+                  <Link
+                    from="/admin/operations/audit/"
+                    to="/admin/operations/audit"
+                    search={(prev) => ({
+                      ...prev,
+                      page: target === 1 ? undefined : target,
+                    })}
+                  />
+                )}
+                page={page}
+                pageCount={pageCount}
+                pageSize={pageSize}
+                pageSizes={AUDIT_PAGE_SIZES}
+                total={total}
+                onPageSizeChange={(size) =>
+                  updateSearch({
+                    pageSize:
+                      size === DEFAULT_AUDIT_PAGE_SIZE ? undefined : size,
+                  })
+                }
+              />
+            </div>
+          </div>
+        ) : (
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <ScrollTextIcon />
+              </EmptyMedia>
+              <EmptyTitle>
+                {hasFilters
+                  ? m.admin_audit_empty_filtered()
+                  : m.admin_audit_empty()}
+              </EmptyTitle>
+            </EmptyHeader>
+          </Empty>
+        )}
+      </PageContent>
+
+      <Sheet
+        open={!isWide && selection !== null}
+        onOpenChange={(open) => {
+          if (!open) setSelection(null);
+        }}
+      >
+        <SheetContent className="max-w-2xl" showCloseButton={false}>
+          <SheetHeader>
+            <div className="flex items-start justify-between gap-3">
+              <SheetTitle>{m.admin_page_audit_details()}</SheetTitle>
+              <Button
+                aria-label={m.admin_page_audit_close()}
+                size="icon-sm"
+                variant="ghost"
+                onClick={() => setSelection(null)}
+              >
+                <XIcon />
+              </Button>
+            </div>
+            <SheetDescription>
+              {m.admin_page_audit_select_prompt()}
+            </SheetDescription>
+          </SheetHeader>
+          <SheetPanel>
+            <AuditInspector
+              embedded
+              selection={selection}
+              onFilterTarget={(targetType, targetId) => {
+                setSelection(null);
+                filterTarget(targetType, targetId);
+              }}
+              onClear={() => setSelection(null)}
+            />
+          </SheetPanel>
+        </SheetContent>
+      </Sheet>
+    </>
   );
 }
 
-function ExpandButton({
-  expanded,
-  onToggle,
+function SelectEntryButton({
+  selected,
+  onSelect,
 }: {
-  expanded: boolean;
-  onToggle: () => void;
+  selected: boolean;
+  onSelect: () => void;
 }) {
   return (
     <Button
-      aria-expanded={expanded}
-      aria-label={expanded ? m.admin_audit_collapse() : m.admin_audit_expand()}
+      aria-label={selected ? m.admin_audit_collapse() : m.admin_audit_expand()}
       size="icon-xs"
       variant="ghost"
-      onClick={onToggle}
+      onClick={onSelect}
     >
       <ChevronRightIcon
-        className={
-          expanded ? "rotate-90 transition-transform" : "transition-transform"
-        }
+        className={selected ? "rotate-90 transition-transform" : undefined}
       />
     </Button>
   );
 }
 
-function useExpandedRows() {
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const toggle = (id: string) =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  return { expanded, toggle };
+function AuditInspector({
+  selection,
+  embedded = false,
+  onFilterTarget,
+  onClear,
+}: {
+  selection: AuditSelection | null;
+  embedded?: boolean;
+  onFilterTarget: (targetType: string, targetId: string) => void;
+  onClear: () => void;
+}) {
+  return (
+    <section
+      className={
+        embedded
+          ? "flex min-w-0 flex-col gap-4"
+          : "sticky top-[calc(var(--page-header-h)+var(--page-toolbar-h))] flex min-w-0 flex-col gap-4"
+      }
+      data-slot="audit-inspector"
+    >
+      <SectionHeader className="border-b pb-2">
+        <SectionTitle>{m.admin_page_audit_details()}</SectionTitle>
+        {selection ? (
+          <Button
+            aria-label={m.admin_page_audit_clear_selection()}
+            size="icon-xs"
+            variant="ghost"
+            onClick={onClear}
+          >
+            <XIcon />
+          </Button>
+        ) : null}
+      </SectionHeader>
+      {!selection ? (
+        <p className="px-4 py-3 text-sm text-muted-foreground">
+          {m.admin_page_audit_select_prompt()}
+        </p>
+      ) : selection.kind === "admin" ? (
+        <AdminAuditDetail
+          entry={selection.entry}
+          onFilterTarget={onFilterTarget}
+        />
+      ) : (
+        <McpAuditDetail entry={selection.entry} />
+      )}
+    </section>
+  );
 }
 
 /** The entity a target points at, linked to its admin page when it has one. */
@@ -501,82 +630,74 @@ function ActorCell({
 
 function AdminAuditTable({
   rows,
+  selectedId,
   timeHeader,
-  onFilterTarget,
+  onSelect,
 }: {
   rows: readonly AdminAuditEntry[];
+  selectedId: string | null;
   timeHeader: React.ReactNode;
-  onFilterTarget: (targetType: string, targetId: string) => void;
+  onSelect: (entry: AdminAuditEntry) => void;
 }) {
-  const { expanded, toggle } = useExpandedRows();
-
   return (
-    <Table>
+    <Table variant="pane">
       <TableHeader>
         <TableRow>
           <TableHead className="w-8">
             <span className="sr-only">{m.admin_audit_expand()}</span>
           </TableHead>
           <TableHead>{timeHeader}</TableHead>
-          <TableHead>{m.admin_audit_col_actor()}</TableHead>
+          <TableHead className="hidden md:table-cell">
+            {m.admin_audit_col_actor()}
+          </TableHead>
           <TableHead>{m.admin_audit_col_action()}</TableHead>
-          <TableHead>{m.admin_audit_col_target()}</TableHead>
+          <TableHead className="hidden lg:table-cell">
+            {m.admin_audit_col_target()}
+          </TableHead>
           <TableHead>{m.admin_audit_col_status()}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
-        {rows.map((entry) => {
-          const isOpen = expanded.has(entry.id);
-          return (
-            <Fragment key={entry.id}>
-              <TableRow>
-                <TableCell>
-                  <ExpandButton
-                    expanded={isOpen}
-                    onToggle={() => toggle(entry.id)}
-                  />
-                </TableCell>
-                <TableCell>
-                  <span className="text-xs whitespace-nowrap text-muted-foreground">
-                    {formatDateTime(entry.createdAt)}
-                  </span>
-                </TableCell>
-                <TableCell>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <ActorCell
-                      email={entry.actorEmail}
-                      userId={entry.actorUserId}
-                    />
-                    {entry.impersonatedBy ? (
-                      <Badge variant="warning">
-                        {m.admin_audit_impersonated()}
-                      </Badge>
-                    ) : null}
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <span className="font-mono text-xs">{entry.action}</span>
-                </TableCell>
-                <TableCell>
-                  <TargetCell entry={entry} />
-                </TableCell>
-                <TableCell>
-                  <AuditStatusBadge status={entry.status} />
-                </TableCell>
-              </TableRow>
-              {isOpen ? (
-                <TableRow>
-                  <TableCell className="bg-muted/16" colSpan={6}>
-                    <AdminAuditDetail
-                      entry={entry}
-                      onFilterTarget={onFilterTarget}
-                    />
-                  </TableCell>
-                </TableRow>
-              ) : null}
-            </Fragment>
-          );
-        })}
+        {rows.map((entry) => (
+          <TableRow
+            data-state={selectedId === entry.id ? "selected" : undefined}
+            key={entry.id}
+          >
+            <TableCell>
+              <SelectEntryButton
+                selected={selectedId === entry.id}
+                onSelect={() => onSelect(entry)}
+              />
+            </TableCell>
+            <TableCell>
+              <span className="text-xs whitespace-nowrap text-muted-foreground tabular-nums">
+                {formatDateTime(entry.createdAt)}
+              </span>
+            </TableCell>
+            <TableCell className="hidden md:table-cell">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <ActorCell
+                  email={entry.actorEmail}
+                  userId={entry.actorUserId}
+                />
+                {entry.impersonatedBy ? (
+                  <Badge variant="warning">
+                    {m.admin_audit_impersonated()}
+                  </Badge>
+                ) : null}
+              </div>
+            </TableCell>
+            <TableCell>
+              <span className="font-mono text-xs">{entry.action}</span>
+            </TableCell>
+            <TableCell className="hidden lg:table-cell">
+              <TargetCell entry={entry} />
+            </TableCell>
+            <TableCell>
+              <AuditStatusBadge status={entry.status} />
+            </TableCell>
+          </TableRow>
+        ))}
       </TableBody>
     </Table>
   );
@@ -584,74 +705,68 @@ function AdminAuditTable({
 
 function McpAuditTable({
   rows,
+  selectedId,
   timeHeader,
+  onSelect,
 }: {
   rows: readonly McpAuditEntry[];
+  selectedId: string | null;
   timeHeader: React.ReactNode;
+  onSelect: (entry: McpAuditEntry) => void;
 }) {
-  const { expanded, toggle } = useExpandedRows();
-
   return (
-    <Table>
+    <Table variant="pane">
       <TableHeader>
         <TableRow>
           <TableHead className="w-8">
             <span className="sr-only">{m.admin_audit_expand()}</span>
           </TableHead>
           <TableHead>{timeHeader}</TableHead>
-          <TableHead>{m.admin_audit_col_actor()}</TableHead>
-          <TableHead>{m.admin_audit_col_tool()}</TableHead>
+          <TableHead className="hidden md:table-cell">
+            {m.admin_audit_col_actor()}
+          </TableHead>
+          <TableHead className="hidden lg:table-cell">
+            {m.admin_audit_col_tool()}
+          </TableHead>
           <TableHead>{m.admin_audit_col_status()}</TableHead>
           <TableHead>{m.admin_audit_col_duration()}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
-        {rows.map((entry) => {
-          const isOpen = expanded.has(entry.id);
-          return (
-            <Fragment key={entry.id}>
-              <TableRow>
-                <TableCell>
-                  <ExpandButton
-                    expanded={isOpen}
-                    onToggle={() => toggle(entry.id)}
-                  />
-                </TableCell>
-                <TableCell>
-                  <span className="text-xs whitespace-nowrap text-muted-foreground">
-                    {formatDateTime(entry.createdAt)}
-                  </span>
-                </TableCell>
-                <TableCell>
-                  <ActorCell
-                    email={entry.actorEmail}
-                    userId={entry.actorUserId}
-                  />
-                </TableCell>
-                <TableCell>
-                  <span className="font-mono text-xs">{entry.tool}</span>
-                </TableCell>
-                <TableCell>
-                  <AuditStatusBadge status={entry.status} />
-                </TableCell>
-                <TableCell>
-                  <span className="text-xs text-muted-foreground">
-                    {entry.durationMs === null
-                      ? "–"
-                      : m.admin_audit_duration_ms({ ms: entry.durationMs })}
-                  </span>
-                </TableCell>
-              </TableRow>
-              {isOpen ? (
-                <TableRow>
-                  <TableCell className="bg-muted/16" colSpan={6}>
-                    <McpAuditDetail entry={entry} />
-                  </TableCell>
-                </TableRow>
-              ) : null}
-            </Fragment>
-          );
-        })}
+        {rows.map((entry) => (
+          <TableRow
+            data-state={selectedId === entry.id ? "selected" : undefined}
+            key={entry.id}
+          >
+            <TableCell>
+              <SelectEntryButton
+                selected={selectedId === entry.id}
+                onSelect={() => onSelect(entry)}
+              />
+            </TableCell>
+            <TableCell>
+              <span className="text-xs whitespace-nowrap text-muted-foreground tabular-nums">
+                {formatDateTime(entry.createdAt)}
+              </span>
+            </TableCell>
+            <TableCell className="hidden md:table-cell">
+              <ActorCell email={entry.actorEmail} userId={entry.actorUserId} />
+            </TableCell>
+            <TableCell className="hidden lg:table-cell">
+              <span className="font-mono text-xs">{entry.tool}</span>
+            </TableCell>
+            <TableCell>
+              <AuditStatusBadge status={entry.status} />
+            </TableCell>
+            <TableCell>
+              <span className="text-xs text-muted-foreground tabular-nums">
+                {entry.durationMs === null
+                  ? "–"
+                  : m.admin_audit_duration_ms({ ms: entry.durationMs })}
+              </span>
+            </TableCell>
+          </TableRow>
+        ))}
       </TableBody>
     </Table>
   );
