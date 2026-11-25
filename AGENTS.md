@@ -11,6 +11,7 @@ Before starting non-trivial repository work, read the [handbook index](docs/deve
 | System layout, request surfaces, deploy targets, publish gate, security      | [Architecture](docs/development/architecture.md)             |
 | React/TypeScript style, grouping, UI composition, `data-slot`, `cva`         | [TypeScript and React style](docs/development/typescript.md) |
 | App layout, TanStack Start/Router/Form, i18n, formatting, lint               | [App conventions](docs/development/app.md)                   |
+| Admin UI layout, scroll ownership, page chrome, loading, anti-slop rules     | [UI design standard](docs/development/ui-design.md)          |
 | Server functions, oRPC/agent API, MCP, Drizzle schema, migrations, env, auth | [API, data and auth](docs/development/api-data-auth.md)      |
 | Rust style, visibility, ports, error handling, async, testing (`server-agent`) | [Rust code guide](docs/development/rust.md)                |
 | `server-agent/` modules, OpenAPI client, sing-box supervision, updates       | [Server agent](docs/development/server-agent.md)             |
@@ -66,7 +67,7 @@ Non-negotiable rules restated because violations carry high risk:
 
 ## 7. Code Style & Conventions
 
-Follow [TypeScript and React style](docs/development/typescript.md), [App conventions](docs/development/app.md), and [Rust code guide](docs/development/rust.md). Apply these rules during planning as well as review: new code follows the guides even when adjacent legacy code predates them. Passing `oxfmt`/`oxlint` or `rustfmt`/`clippy` alone is not sufficient; logical grouping, narrow visibility, explicit error handling, and UI consistency are mandatory review checks.
+Follow [TypeScript and React style](docs/development/typescript.md), [App conventions](docs/development/app.md), [UI design standard](docs/development/ui-design.md) for admin UI work, and [Rust code guide](docs/development/rust.md). Apply these rules during planning as well as review: new code follows the guides even when adjacent legacy code predates them. Passing `oxfmt`/`oxlint` or `rustfmt`/`clippy` alone is not sufficient; logical grouping, narrow visibility, explicit error handling, and UI consistency are mandatory review checks.
 
 ## 8. Worktrees
 

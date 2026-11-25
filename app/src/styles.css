@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "@fontsource-variable/inter";
 @import "@fontsource-variable/geist-mono";
+@import "@xyflow/react/style.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -28,6 +29,7 @@
   --color-sidebar-accent: var(--sidebar-accent);
   --color-sidebar: var(--sidebar);
   --color-code-highlight: var(--code-highlight);
+  --color-terminal: var(--terminal-background);
   --code-foreground: var(--code-foreground);
   --color-code: var(--code);
   --color-chart-5: var(--chart-5);
@@ -67,6 +69,7 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+  --breakpoint-3xl: 120rem;
   @keyframes skeleton {
     to {
       background-position: -200% 0;
@@ -192,6 +195,11 @@
     }
   }
 }
+@keyframes blossom-edge-dash {
+  to {
+    stroke-dashoffset: -10;
+  }
+}
 
 :root {
   --destructive-foreground: var(--color-red-700);
@@ -247,6 +255,27 @@
   --sidebar-primary: var(--color-neutral-800);
   --sidebar-primary-foreground: var(--color-neutral-50);
   --sidebar-ring: var(--color-neutral-400);
+  --terminal-background: #0b0f14;
+  --terminal-foreground: #d7e0ea;
+  --terminal-cursor: #7dd3fc;
+  --terminal-selection: #1f3a52;
+  --terminal-black: #111820;
+  --terminal-red: #f87171;
+  --terminal-green: #86efac;
+  --terminal-yellow: #fde68a;
+  --terminal-blue: #93c5fd;
+  --terminal-magenta: #f0abfc;
+  --terminal-cyan: #67e8f9;
+  --terminal-white: #e5e7eb;
+  --terminal-bright-black: #64748b;
+  --terminal-bright-red: #fca5a5;
+  --terminal-bright-green: #bbf7d0;
+  --terminal-bright-yellow: #fef08a;
+  --terminal-bright-blue: #bfdbfe;
+  --terminal-bright-magenta: #f5d0fe;
+  --terminal-bright-cyan: #a5f3fc;
+  --terminal-bright-white: #f8fafc;
+  --workbench-mobile-h: calc(100dvh - 7rem);
 }
 
 .dark {
@@ -313,6 +342,85 @@
   --sidebar-primary: var(--color-neutral-100);
   --sidebar-primary-foreground: var(--color-neutral-800);
   --sidebar-ring: var(--color-neutral-400);
+  --terminal-background: #0b0f14;
+  --terminal-foreground: #d7e0ea;
+  --terminal-cursor: #7dd3fc;
+  --terminal-selection: #1f3a52;
+  --terminal-black: #111820;
+  --terminal-red: #f87171;
+  --terminal-green: #86efac;
+  --terminal-yellow: #fde68a;
+  --terminal-blue: #93c5fd;
+  --terminal-magenta: #f0abfc;
+  --terminal-cyan: #67e8f9;
+  --terminal-white: #e5e7eb;
+  --terminal-bright-black: #64748b;
+  --terminal-bright-red: #fca5a5;
+  --terminal-bright-green: #bbf7d0;
+  --terminal-bright-yellow: #fef08a;
+  --terminal-bright-blue: #bfdbfe;
+  --terminal-bright-magenta: #f5d0fe;
+  --terminal-bright-cyan: #a5f3fc;
+  --terminal-bright-white: #f8fafc;
+}
+
+.react-flow {
+  --xy-edge-stroke-default: var(--muted-foreground);
+  --xy-edge-stroke-width-default: 1;
+  --xy-edge-stroke-selected-default: var(--foreground);
+  --xy-connectionline-stroke-default: var(--muted-foreground);
+  --xy-connectionline-stroke-width-default: 1;
+  --xy-attribution-background-color-default: transparent;
+  --xy-minimap-background-color-default: var(--card);
+  --xy-minimap-mask-background-color-default: var(--muted);
+  --xy-minimap-mask-stroke-color-default: var(--border);
+  --xy-minimap-mask-stroke-width-default: 1;
+  --xy-minimap-node-background-color-default: var(--muted);
+  --xy-minimap-node-stroke-color-default: var(--border);
+  --xy-minimap-node-stroke-width-default: 2;
+  --xy-background-color-default: var(--background);
+  --xy-background-pattern-dots-color-default: var(--border);
+  --xy-background-pattern-lines-color-default: var(--border);
+  --xy-background-pattern-cross-color-default: var(--border);
+  --xy-node-color-default: var(--card-foreground);
+  --xy-node-border-default: 1px solid var(--border);
+  --xy-node-background-color-default: var(--card);
+  --xy-node-group-background-color-default: var(--muted);
+  --xy-node-boxshadow-hover-default: none;
+  --xy-node-boxshadow-selected-default: 0 0 0 1px var(--ring);
+  --xy-node-border-radius-default: var(--radius-lg);
+  --xy-handle-background-color-default: var(--background);
+  --xy-handle-border-color-default: var(--muted-foreground);
+  --xy-selection-background-color-default: color-mix(
+    in srgb,
+    var(--ring) 12%,
+    transparent
+  );
+  --xy-selection-border-default: 1px dotted var(--ring);
+  --xy-controls-button-background-color-default: var(--card);
+  --xy-controls-button-background-color-hover-default: var(--muted);
+  --xy-controls-button-color-default: var(--card-foreground);
+  --xy-controls-button-color-hover-default: var(--foreground);
+  --xy-controls-button-border-color-default: var(--border);
+  --xy-controls-box-shadow-default: none;
+  --xy-edge-label-background-color-default: var(--card);
+  --xy-edge-label-color-default: var(--card-foreground);
+  --xy-resize-background-color-default: var(--ring);
+}
+
+.react-flow__node {
+  transition: none;
+}
+
+.react-flow__edge.blossom-edge-active .react-flow__edge-path {
+  stroke-dasharray: 6 4;
+  animation: blossom-edge-dash 1s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .react-flow__edge-path {
+    animation: none !important;
+  }
 }
 
 @layer base {
