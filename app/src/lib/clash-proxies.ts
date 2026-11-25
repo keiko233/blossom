@@ -294,9 +294,9 @@ type ProxyBuilder = (
 
 function baseProxy(resolved: ResolvedNode): Record<string, JsonValue> {
   const proxy: Record<string, JsonValue> = {
-    name: resolved.node.name,
+    name: resolved.nameOverride ?? resolved.node.name,
     server: resolved.address,
-    port: resolved.node.listenPort,
+    port: resolved.portOverride ?? resolved.node.listenPort,
     udp: true,
   };
   if (resolved.node.settings.tcp_fast_open === true) {

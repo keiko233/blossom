@@ -18,12 +18,17 @@ import {
   server,
 } from "@/db/proxy-schema";
 import {
+  applyPortForwardOverlay,
+  type PortForwardRelay,
+} from "@/lib/port-forward-relay";
+import {
   applyPublishGate,
   type GateResult,
   type PlanAuthzPrevRow,
   type SubscriptionAuthzPrevRow,
 } from "@/lib/publish-gate";
 import { listPendingConfigChanges } from "@/query/config-change";
+import { listSubscriptionPortForwards } from "@/query/port-forwards";
 
 /**
  * Minimal, never-secret-bearing summary of the server a node lives on. Only
@@ -38,6 +43,11 @@ export interface ServerSummary {
   id: string;
   name: string;
   address: string;
+  /**
+   * Present when a caller already loaded the row. Subscription access queries
+   * filter disabled servers, so this is normally `true`.
+   */
+  enabled?: boolean;
 }
 
 /**
@@ -53,7 +63,16 @@ export interface ResolvedNode {
   /** Final client-facing address: per-node override or server fallback. */
   address: string;
   certificateKind: CertificateKind | null;
+  /** L4 port forward: client-facing port inherited from the transit server. */
+  portOverride?: number;
+  /** L4 port forward: display name emitted instead of the exit node's name. */
+  nameOverride?: string;
+  /** Set only when this entrance was produced by an L4 port forward relay. */
+  portForward?: PortForwardRelay;
 }
+
+export { applyPortForwardOverlay };
+export type { PortForwardRelay };
 
 function resolve(
   nodeRow: Node,
@@ -142,11 +161,24 @@ export async function getSubscriptionAccessibleNodes(
   for (const { node: n, server: s, certificateKind } of rows) {
     byId.set(n.id, resolve(n, s, certificateKind));
   }
-  return orderGatedEntrances(
+  const visible = orderGatedEntrances(
     [...byId.values()],
     ranks,
     (resolved) => resolved.node.id,
   );
+
+  // L4 port forwards on an enabled transit server expose the same exit-node
+  // protocol, TLS/Reality settings and credentials at the transit endpoint. The
+  // publish gate withholds them until both servers have applied their config.
+  const forwards = await listSubscriptionPortForwards([...byId.keys()]);
+  const relayed = forwards.flatMap(({ forward, transitServer }) => {
+    const exitNode = byId.get(forward.targetNodeId ?? "");
+    return exitNode
+      ? [applyPortForwardOverlay(exitNode, forward, transitServer)]
+      : [];
+  });
+
+  return [...visible, ...relayed];
 }
 
 /**

@@ -590,6 +590,7 @@ export const CONFIG_CHANGE_KINDS = [
   "certificate",
   "authorization",
   "server",
+  "port_forward",
 ] as const;
 
 export type ConfigChangeKind = (typeof CONFIG_CHANGE_KINDS)[number];

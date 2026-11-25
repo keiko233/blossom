@@ -134,7 +134,7 @@ export function buildClashConfig(
     if (proxy === null) {
       skipped.push({
         nodeId: resolved.node.id,
-        nodeName: resolved.node.name,
+        nodeName: resolved.nameOverride ?? resolved.node.name,
         protocol: resolved.node.protocol,
         reason: explainNodeSkip(resolved),
       });
