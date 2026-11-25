@@ -8,15 +8,13 @@ Statements are **Established** (the code does this today, checked against the so
 
 ## 1. Scroll ownership and viewport model
 
-### Established: today's shell
+### Established: shell and scroll ownership
 
-- `app/src/routes/(admin)/route.tsx` renders `SidebarProvider className="h-dvh"`, so the shell fills the dynamic viewport. `SidebarInset min-h-0` holds `AppShellHeader` (sticky, `h-16`, `h-12` when the sidebar is in icon mode) and then the `admin-viewport` div (`flex min-h-0 flex-1 flex-col overflow-y-auto`, `data-scroll-restoration-id="admin-viewport"`).
-- `app/src/components/app-shell/workspace.tsx` provides `Workspace` (from `md`: grid `18rem | minmax(0,1fr)`, one row), `WorkspaceSidebar` (own `overflow-y-auto` from `md`), `WorkspacePane`, `WorkspaceHeader` (`shrink-0 flex-col gap-4`, padding is left to the caller) and `WorkspaceViewport` (from `md`: `flex-1 overflow-y-auto`). Below `md` everything stacks and scrolls with `admin-viewport`.
+- `app/src/routes/(admin)/route.tsx` renders `SidebarProvider className="h-dvh"`, so the shell fills the dynamic viewport. `SidebarInset min-h-0` holds `AppShellHeader` (sticky, `h-16`, `h-12` when the sidebar is in icon mode) and then the `admin-viewport` div (`flex min-h-0 flex-1 flex-col overflow-y-auto md:has-[>[data-slot=workspace]]:overflow-hidden`, `data-scroll-restoration-id="admin-viewport"`).
+- `app/src/components/app-shell/workspace.tsx` provides `Workspace` (from `md`: grid `18rem | minmax(0,1fr)`, one row), `WorkspaceSidebar` (own `overflow-y-auto` from `md`), `WorkspacePane`, `WorkspaceTabBar` (`h-11`), `WorkspaceHeader`, `WorkspaceViewport` (from `md`: `flex-1 overflow-y-auto` with `--page-header-h` / `--page-toolbar-h`), and the full-bleed workbench primitives (`WorkbenchViewport`, `WorkbenchBar`, `WorkbenchBody`, `WorkbenchCanvas`, `WorkbenchRail`, `WorkbenchStatusBar`). Below `md` document workspaces stack and scroll with `admin-viewport`.
 - Each page renders at most one `WorkspaceViewport`, because the router resets scroll by selector (`WORKSPACE_SCROLL_TO_TOP_SELECTORS`) on new navigations.
-- `AdminWorkspaceFrame` (Networking, Access, Operations) wraps its children in a `WorkspaceViewport` and forces every descendant `[data-slot=page-header]` to be sticky through a CSS descendant selector. See [section 4](#4-page-chrome-padding-and-sticky-headers) for why that is a defect.
-- The Servers workspace (`routes/(admin)/admin/servers/route.tsx` and `$serverId/route.tsx`) composes the same primitives itself; the Dashboard (`/admin`) renders straight into `admin-viewport`.
-
-### Recommended: the scroll ownership contract
+- `AdminWorkspaceFrame` (Networking, Access, Operations) composes `Workspace`, `AdminWorkspaceSidebar`, `WorkspacePane`, and `WorkspaceViewport`; pages own their own `PageHeader` and `PageContent` chrome explicitly.
+- The Servers workspace (`routes/(admin)/admin/servers/route.tsx` and `$serverId/route.tsx`) mounts `ServerTabBar` at the top of the pane, and each child tab renders its own `WorkspaceViewport` or `WorkbenchViewport`; the Dashboard (`/admin`) renders straight into `admin-viewport`.
 
 Exactly one element owns vertical scrolling at any point on screen, and everything above it is fixed.
 
@@ -52,7 +50,7 @@ Rules:
 Overview, Inbounds, Outbounds, Settings, Users, Plans, Groups, Subscriptions, Redeem, Audit, Traffic, Announcements, MCP, Certificates, Links, Routing.
 
 - Root: `WorkspaceViewport` (single scroller) containing a sticky `PageHeader` (full-bleed) followed by `PageContent` (the only padded element). Details in section 4.
-- Tables are the primary content. Prefer a flat, full-width dense table directly on the page background over a table inside a card. **Recommended:** use `Table variant="pane"` (sticky header under the page header and toolbar, `h-9` rows, no inner horizontal scroller). The default `Table` wraps its `<table>` in an `overflow-x-auto` container, which would trap a sticky header, so do not make the header of a default `Table` sticky.
+- Tables are the primary content. Prefer a flat, full-width dense table directly on the page background over a table inside a card. **Established:** use `Table variant="pane"` (sticky header under the page header and toolbar, `h-9` rows, no inner horizontal scroller). The default `Table` wraps its `<table>` in an `overflow-x-auto` container, which would trap a sticky header, so do not make the header of a default `Table` sticky.
 - Do not center content in a narrow column on wide screens unless it is a form. Use the layout recipes below.
 
 ### B. Full-bleed workbench pane
@@ -66,7 +64,7 @@ Terminal, Logs, Topology (and any future canvas, editor or console).
 
 ### Widescreen layout recipes
 
-Breakpoints: Tailwind defaults (`md` 768, `lg` 1024, `xl` 1280, `2xl` 1536) plus **Recommended** `3xl` at `120rem` (1920) declared in `app/src/styles.css`. The shell consumes a 3rem icon rail and, in workspaces, an 18rem sidebar, so a 1920px screen leaves roughly 1650px for the pane.
+Breakpoints: Tailwind defaults (`md` 768, `lg` 1024, `xl` 1280, `2xl` 1536) plus **Established** `3xl` at `120rem` (1920) declared in `app/src/styles.css`. The shell consumes a 3rem icon rail and, in workspaces, an 18rem sidebar, so a 1920px screen leaves roughly 1650px for the pane.
 
 | Recipe                     | Use for                                       | Layout                                                                                                                                                                                                                    |
 | -------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -109,21 +107,9 @@ Below `md` every recipe collapses to one column inside the single `admin-viewpor
 
 ## 4. Page chrome, padding and sticky headers
 
-### Established defect: the sticky `PageHeader` side channel
+### Established: explicit page chrome components
 
-`AdminWorkspaceFrame` passes `[&_[data-slot=page-header]]:sticky … :top-0 … :z-10 … :bg-background` to its viewport, so **every** descendant `PageHeader` becomes sticky regardless of where it sits. Pages then wrap their content in `p-4` or `p-4 md:p-6` and render the header inside that padding. Observed consequences:
-
-1. The header is a child of the padded wrapper, so when stuck it has no horizontal padding of its own. Scrolled content shows through the 16-24px gutters on both sides, and the title is inset from the viewport edge by the wrapper padding instead of aligning with the content column.
-2. It has no bottom border or bottom padding, so rows scroll flush against the title and there is no visible edge.
-3. Title alignment differs per page (`p-4` on Users and the Dashboard, `p-4 md:p-6` on Rule sets, Topology, Routing and Links, none on Settings which pads inside).
-4. Four form pages (plan, group, node, server onboarding) re-declare their own `sticky top-0 z-10/z-20 border-b bg-background/80 backdrop-blur px-4 py-3`, which the frame rule duplicates. The blur and translucent background are glass and banned below.
-5. `users/$userId.tsx` renders a `PageHeader` inside a card; the frame rule makes that nested header stick to the top of the viewport and escape its card.
-6. The Servers workspace does not use the frame, so its pages' headers (for example Outbounds) are not sticky at all.
-7. A CSS descendant selector is an invisible contract: a page cannot opt out, and reading a page's markup does not tell you it is sticky.
-
-### Recommended: explicit page chrome components
-
-Replace the side channel with explicit components in `app/src/components/app-shell/page-header.tsx`:
+Document panes use explicit chrome components in `app/src/components/app-shell/page-header.tsx` (never a CSS descendant selector on a parent frame):
 
 ```tsx
 <WorkspaceViewport scrollId=…>            // single scroller, sets --page-header-h: 3rem
@@ -154,12 +140,9 @@ Rules:
 
 ## 5. Loading, empty and error states
 
-### Established
+### Established: skeleton-first loading
 
-- 45 `<Spinner />` call sites in 39 files under `routes/(admin)` and `components/` (excluding `components/ui/`) fill a pane, card or table body with a centered spinner. `<Skeleton />` is used only in `operations/settings/index.tsx` and the sidebar primitive.
-- Several screens load in cascades: the Routing editor shows a spinner for the workspace query, then another for its dependent routing query; the server Overview mounts a live WebSocket, a history query and a traffic query side by side, each with its own spinner or empty box; the Traffic page has four queries with spinners inside KPI cards and charts; the Dashboard replaces the whole page with a centered spinner.
-
-### Recommended: skeleton-first loading
+Admin routes under `app/src/routes/(admin)/` use layout-matched skeletons from `app/src/components/app-shell/skeletons.tsx` for initial loads and never render `<Spinner />` as the sole child of a page, pane, card, table body, or dialog body.
 
 | Situation                                                                    | Use                                                                                                                                                                                                                                          |
 | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
