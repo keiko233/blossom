@@ -254,6 +254,28 @@ export function applyPublishGate(input: GateInput): GateResult {
   for (const resolved of nodes) {
     const serverId = resolved.server.id;
 
+    // L4 port forward relays depend on BOTH servers: the transit listener and
+    // the exit node's protocol/credentials. Any unapplied change on either
+    // server withholds the relayed entrance instead of advertising an endpoint
+    // whose other half is still serving old config. A disabled server hides it
+    // immediately (the access query also filters disabled servers).
+    if (resolved.portForward) {
+      const relay = resolved.portForward;
+      if (!relay.transitServerEnabled || !relay.exitServerEnabled) {
+        continue;
+      }
+      const exitServerId = resolved.node.serverId;
+      const relayPending = pending.some(
+        (change) =>
+          change.kind !== "certificate" &&
+          (change.serverId === relay.transitServerId ||
+            change.serverId === exitServerId),
+      );
+      if (relayPending) {
+        continue;
+      }
+    }
+
     // Server freshly (re)enabled: the applied agent state still has it off.
     const serverChange = find("server", serverId, serverId);
     if (

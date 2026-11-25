@@ -284,9 +284,9 @@ type OutboundBuilder = (
 
 function baseOutbound(resolved: ResolvedNode): Record<string, JsonValue> {
   const outbound: Record<string, JsonValue> = {
-    tag: resolved.node.name,
+    tag: resolved.nameOverride ?? resolved.node.name,
     server: resolved.address,
-    server_port: resolved.node.listenPort,
+    server_port: resolved.portOverride ?? resolved.node.listenPort,
   };
   if (resolved.node.settings.tcp_fast_open === true) {
     outbound.tcp_fast_open = true;
@@ -687,7 +687,7 @@ export function buildSingboxClientConfig(
     if (outbound === null) {
       skipped.push({
         nodeId: resolved.node.id,
-        nodeName: resolved.node.name,
+        nodeName: resolved.nameOverride ?? resolved.node.name,
         protocol: resolved.node.protocol,
         reason: explainSingboxNodeSkip(resolved),
       });

@@ -64,6 +64,8 @@ export const ADMIN_AUDIT_ACTIONS = [
   "networking.routing_save",
   "networking.rollout_plan",
   "networking.rollout_apply",
+  "networking.port_forward_save",
+  "networking.port_forward_delete",
   "node.create",
   "node.update",
   "node.delete",
@@ -159,6 +161,7 @@ export const ADMIN_AUDIT_TARGET_TYPES = [
   "managed_config_version",
   "managed_rule_set_asset",
   "managed_rollout",
+  "port_forward",
 ] as const;
 
 export type AdminAuditTargetType = (typeof ADMIN_AUDIT_TARGET_TYPES)[number];

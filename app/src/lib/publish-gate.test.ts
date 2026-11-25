@@ -4,6 +4,10 @@ import type { Node } from "@/db/proxy-schema";
 import type { ResolvedNode } from "@/query/subscription-access";
 
 import {
+  applyPortForwardOverlay,
+  type PortForwardRelayInput,
+} from "./port-forward-relay";
+import {
   applyPublishGate,
   type GateInput,
   type NodeChangePrevRow,
@@ -422,5 +426,105 @@ describe("applyPublishGate", () => {
       }),
     );
     expect(result.nodes).toEqual([node]);
+  });
+
+  describe("L4 port forward relays", () => {
+    const forward: PortForwardRelayInput = {
+      id: "forward-1",
+      runtimeTag: "relay-in-forward-1",
+      name: "Relay A",
+      listenPort: 8443,
+      targetNodeId: "n1",
+      enabled: true,
+    };
+    const transit = {
+      id: "srv-transit",
+      name: "Transit srv-transit",
+      address: "transit.example",
+      enabled: true,
+    };
+
+    function makeRelay(
+      options: {
+        transitEnabled?: boolean;
+        exitEnabled?: boolean;
+      } = {},
+    ): ResolvedNode {
+      const exit = makeResolved(makeNode("n1", "srv-exit"));
+      return applyPortForwardOverlay(
+        options.exitEnabled === false
+          ? { ...exit, server: { ...exit.server, enabled: false } }
+          : exit,
+        forward,
+        {
+          ...transit,
+          enabled: options.transitEnabled ?? true,
+        },
+      );
+    }
+
+    it("emits the transit endpoint when neither half is pending", () => {
+      const relay = makeRelay();
+      const result = applyPublishGate(makeInput({ nodes: [relay] }));
+      expect(result.nodes).toHaveLength(1);
+      expect(result.nodes[0]!.address).toBe("transit.example");
+      expect(result.nodes[0]!.portOverride).toBe(8443);
+      expect(result.nodes[0]!.nameOverride).toBe("Relay A");
+    });
+
+    it("withholds the relay until the transit port forward is applied", () => {
+      const relay = makeRelay();
+      const result = applyPublishGate(
+        makeInput({
+          nodes: [relay],
+          pending: [
+            pending({
+              kind: "port_forward",
+              subjectId: "forward-1",
+              serverId: "srv-transit",
+            }),
+          ],
+        }),
+      );
+      expect(result.nodes).toHaveLength(0);
+    });
+
+    it("withholds the relay until the exit node is applied", () => {
+      const relay = makeRelay();
+      const result = applyPublishGate(
+        makeInput({
+          nodes: [relay],
+          pending: [
+            pending({
+              kind: "node",
+              subjectId: "n1",
+              serverId: "srv-exit",
+              prevRow: {
+                node: makeNode("n1", "srv-exit"),
+                server: {
+                  id: "srv-exit",
+                  name: "Server srv-exit",
+                  address: "exit.example",
+                },
+                certificateKind: null,
+              } satisfies NodeChangePrevRow,
+            }),
+          ],
+        }),
+      );
+      expect(result.nodes).toHaveLength(0);
+    });
+
+    it("hides the relay immediately when the transit server is disabled", () => {
+      const relay = makeRelay({ transitEnabled: false });
+      const result = applyPublishGate(makeInput({ nodes: [relay] }));
+      expect(result.nodes).toHaveLength(0);
+    });
+
+    it("hides the relay immediately when the exit server is disabled", () => {
+      const relay = makeRelay({ exitEnabled: false });
+      const result = applyPublishGate(makeInput({ nodes: [relay] }));
+      expect(result.nodes).toHaveLength(0);
+    });
   });
 });
