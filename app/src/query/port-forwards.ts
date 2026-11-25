@@ -272,7 +272,7 @@ async function diagnoseSaveFailure(
   };
 }
 
-export async function savePortForwardDraft(
+async function savePortForwardDraft(
   input: SavePortForwardInput,
   database: Database = db,
 ): Promise<PortForwardWriteResult> {
@@ -429,7 +429,7 @@ export async function savePortForwardDraft(
   return diagnoseSaveFailure(database, input, id);
 }
 
-export async function deletePortForwardDraft(
+async function deletePortForwardDraft(
   id: string,
   expectedTopologyGeneration: number,
   database: Database = db,
@@ -535,8 +535,4 @@ export const deletePortForward = createServerFn({ method: "POST" })
     return deletePortForwardDraft(data.id, data.expectedTopologyGeneration, db);
   });
 
-export {
-  listSubscriptionPortForwards,
-  loadServerPortForwards,
-  type SubscriptionPortForward,
-} from "@/query/port-forward-store";
+export type { SubscriptionPortForward } from "@/query/port-forward-store";

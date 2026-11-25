@@ -84,6 +84,9 @@ function defaultRule(
     domainKeywords: [],
     ipCidrs: [],
     ports: [],
+    portRanges: [],
+    protocols: [],
+    invert: false,
     ruleSetTags: [],
     action: "route",
     outboundTag: "direct",
@@ -117,6 +120,8 @@ export function RoutingRuleDialog({
   const [keywords, setKeywords] = useState("");
   const [ipCidrs, setIpCidrs] = useState("");
   const [ports, setPorts] = useState("");
+  const [portRanges, setPortRanges] = useState("");
+  const [protocols, setProtocols] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -129,6 +134,8 @@ export function RoutingRuleDialog({
       setKeywords(formatList(rule.domainKeywords));
       setIpCidrs(formatList(rule.ipCidrs));
       setPorts(formatList(rule.ports));
+      setPortRanges(formatList(rule.portRanges ?? []));
+      setProtocols(formatList(rule.protocols ?? []));
     } else {
       setDraft(defaultRule(inbounds));
       setDomains("");
@@ -136,6 +143,8 @@ export function RoutingRuleDialog({
       setKeywords("");
       setIpCidrs("");
       setPorts("");
+      setPortRanges("");
+      setProtocols("");
     }
   }, [open, rule?.ruleId]);
 
@@ -161,6 +170,9 @@ export function RoutingRuleDialog({
       domainKeywords: splitList(keywords),
       ipCidrs: splitList(ipCidrs),
       ports: parsePorts(ports),
+      portRanges: splitList(portRanges),
+      protocols: splitList(protocols),
+      invert: draft.invert ?? false,
       outboundTag: draft.action === "reject" ? null : draft.outboundTag,
     };
     const parsed = networkingRuleSchema.safeParse(candidate);
@@ -403,7 +415,44 @@ export function RoutingRuleDialog({
                   </span>
                 </div>
               </Field>
+              <Field>
+                <FieldLabel>
+                  {m.admin_networking_routing_rule_port_ranges()}
+                </FieldLabel>
+                <Input
+                  value={portRanges}
+                  onValueChange={setPortRanges}
+                  placeholder="1000:2000, 3000:4000"
+                />
+              </Field>
+              <Field>
+                <FieldLabel>
+                  {m.admin_networking_routing_rule_protocols()}
+                </FieldLabel>
+                <Input
+                  value={protocols}
+                  onValueChange={setProtocols}
+                  placeholder="tls, quic, http"
+                />
+              </Field>
             </div>
+
+            <Field>
+              <FieldLabel>
+                {m.admin_networking_routing_rule_invert()}
+              </FieldLabel>
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  checked={draft.invert ?? false}
+                  onCheckedChange={(checked) =>
+                    update("invert", checked === true)
+                  }
+                />
+                <span className="text-sm text-muted-foreground">
+                  {m.admin_networking_routing_rule_invert_hint()}
+                </span>
+              </div>
+            </Field>
 
             <Field>
               <FieldLabel>
