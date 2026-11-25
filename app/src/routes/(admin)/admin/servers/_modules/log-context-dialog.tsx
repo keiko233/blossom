@@ -11,7 +11,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Spinner } from "@/components/ui/spinner";
+import { Skeleton } from "@/components/ui/skeleton";
+import { formatLogTime, padLevel } from "@/lib/log-view-format";
 import { m } from "@/paraglide/messages";
 
 import { logErrorMessage } from "./log-error-message";
@@ -47,9 +48,9 @@ function ContextLine({
       data-tone={tone}
     >
       <span className="shrink-0 text-muted-foreground">
-        {record.time.slice(11, 23)}
+        {formatLogTime(record.time)}
       </span>
-      <span className="shrink-0 font-semibold">{record.level}</span>
+      <span className="shrink-0 font-semibold">{padLevel(record.level)}</span>
       <span className="shrink-0 text-muted-foreground">{record.source}</span>
       <span className="min-w-0 break-words whitespace-pre-wrap">
         <LogLineText text={record.text} query={query} />
@@ -82,8 +83,19 @@ export function LogContextDialog({
         </DialogHeader>
         <ScrollArea className="max-h-[60vh] px-6 pb-6" scrollFade>
           {state?.status === "loading" ? (
-            <div className="flex justify-center py-10">
-              <Spinner />
+            <div
+              role="status"
+              aria-busy="true"
+              className="flex flex-col gap-1 py-2"
+            >
+              <span className="sr-only">{m.admin_ui_loading()}</span>
+              {Array.from({ length: 8 }, (_, row) => (
+                <div key={row} className="flex items-center gap-2 px-2 py-1">
+                  <Skeleton className="h-2.5 w-20" />
+                  <Skeleton className="h-2.5 w-10" />
+                  <Skeleton className="h-2.5 flex-1" />
+                </div>
+              ))}
             </div>
           ) : state?.status === "error" ? (
             <p className="py-6 text-sm text-destructive">

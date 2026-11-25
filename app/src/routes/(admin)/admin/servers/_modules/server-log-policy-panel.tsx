@@ -7,10 +7,14 @@ import {
   type LogPolicyLevel,
   type LogPolicySource,
 } from "@blossom/contracts/log-policy";
-import { RefreshCwIcon } from "lucide-react";
 import type React from "react";
 import { useEffect, useState } from "react";
 
+import {
+  SectionHeader,
+  SectionTitle,
+} from "@/components/app-shell/page-header";
+import { FormSkeleton } from "@/components/app-shell/skeletons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,7 +25,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Spinner } from "@/components/ui/spinner";
 import { formatDateTime } from "@/lib/format";
 import {
   hasTemporaryLogPolicyRequest,
@@ -29,6 +32,7 @@ import {
   temporarySecondsFromMinutes,
   type LogPolicyCue,
 } from "@/lib/log-policy-view";
+import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 import type { ServerLogPolicySourceView } from "@/query/log-policy";
 import type { ServerDTO } from "@/query/servers";
@@ -43,6 +47,30 @@ const TEMPORARY_LEVELS = ["debug", "trace"] as const;
 const DEFAULT_DURATION_MINUTES = String(
   LOG_POLICY_DEFAULT_TEMPORARY_SECONDS / 60,
 );
+
+export type ServerLogPolicyController = ReturnType<typeof useServerLogPolicy>;
+
+/** Every source's cues, deduplicated, for the toolbar policy indicator. */
+export function serverLogPolicyCues(
+  server: ServerDTO,
+  controller: ServerLogPolicyController,
+): LogPolicyCue[] {
+  const policy = controller.policy;
+  if (!policy) {
+    return [];
+  }
+  const capability =
+    server.agentCapabilities?.includes(LOG_POLICY_CAPABILITY) ?? false;
+  const offline =
+    server.transportMode !== "ws" || server.wsConnectedAt === null;
+  return [
+    ...new Set(
+      Object.values(policy.sources).flatMap((view) =>
+        logPolicyCues({ view, capability, enabled: server.enabled, offline }),
+      ),
+    ),
+  ];
+}
 
 const cueVariants: Record<
   LogPolicyCue,
@@ -119,7 +147,21 @@ function temporaryText(view: ServerLogPolicySourceView): string {
   return levelLabel(view.desiredLevel);
 }
 
-function LogPolicySourceCard({
+function intentMatchesUpdate(
+  intent: LogPolicyIntent | undefined,
+  view: ServerLogPolicySourceView,
+  level: string | null,
+  temporarySeconds?: number,
+): boolean {
+  return (
+    intent?.kind === "update" &&
+    intent.source === view.source &&
+    intent.level === level &&
+    intent.temporarySeconds === temporarySeconds
+  );
+}
+
+function LogPolicySourceSection({
   view,
   capability,
   enabled,
@@ -161,41 +203,35 @@ function LogPolicySourceCard({
 
   const cues = logPolicyCues({ view, capability, enabled, offline });
   const canEdit = capability && enabled;
-  const cardId = `agent-logs-policy-${view.source}`;
+  const sectionId = `agent-logs-policy-${view.source}`;
   const canRestoreNow = hasTemporaryLogPolicyRequest(view);
   const temporarySeconds = temporarySecondsFromMinutes(durationMinutes);
   const durationInvalid = temporaryDraft !== null && temporarySeconds === null;
   const baselineUnchanged =
     baselineDraft === view.desiredBaseline && !canRestoreNow;
-  const activeForSource = busy && activeIntent?.source === view.source;
 
   return (
-    <article
-      aria-labelledby={`${cardId}-title`}
+    <section
+      aria-labelledby={`${sectionId}-title`}
       data-slot="server-log-policy-source"
-      className="flex min-w-0 flex-col gap-4 rounded-lg border bg-muted/20 p-3"
+      className="flex min-w-0 flex-col gap-3 border-b py-4 first:pt-0 last:border-b-0"
     >
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="flex min-w-0 flex-col gap-1">
-          <h3 id={`${cardId}-title`} className="font-medium">
-            {sourceLabel(view.source)}
-          </h3>
-          <div
-            role="status"
-            aria-live="polite"
-            className="flex flex-wrap gap-1.5"
-          >
-            {cues.map((cue) => (
-              <Badge key={cue} variant={cueVariants[cue]}>
-                {cueLabel(cue)}
-              </Badge>
-            ))}
-          </div>
+      <SectionHeader className="flex-wrap items-start gap-2">
+        <SectionTitle id={`${sectionId}-title`}>
+          {sourceLabel(view.source)}
+        </SectionTitle>
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex flex-wrap justify-end gap-1.5"
+        >
+          {cues.map((cue) => (
+            <Badge key={cue} variant={cueVariants[cue]}>
+              {cueLabel(cue)}
+            </Badge>
+          ))}
         </div>
-        {activeForSource ? (
-          <Spinner aria-label={m.agent_logs_policy_saving()} />
-        ) : null}
-      </div>
+      </SectionHeader>
 
       {!capability ? (
         <p className="text-xs text-muted-foreground">
@@ -283,7 +319,10 @@ function LogPolicySourceCard({
       ) : null}
 
       <div className="flex flex-col gap-2">
-        <span id={`${cardId}-baseline-label`} className="text-xs font-medium">
+        <span
+          id={`${sectionId}-baseline-label`}
+          className="text-xs font-medium"
+        >
           {m.agent_logs_policy_set_baseline()}
         </span>
         <div className="flex flex-wrap items-end gap-2">
@@ -299,7 +338,7 @@ function LogPolicySourceCard({
             <SelectTrigger
               size="sm"
               className="w-40"
-              aria-labelledby={`${cardId}-baseline-label`}
+              aria-labelledby={`${sectionId}-baseline-label`}
             >
               <SelectValue placeholder={m.agent_logs_policy_choose_level()} />
             </SelectTrigger>
@@ -314,6 +353,10 @@ function LogPolicySourceCard({
           <Button
             size="sm"
             variant="outline"
+            loading={
+              busy &&
+              intentMatchesUpdate(activeIntent, view, baselineDraft, undefined)
+            }
             disabled={
               !canEdit || busy || baselineDraft === null || baselineUnchanged
             }
@@ -332,7 +375,10 @@ function LogPolicySourceCard({
       </div>
 
       <div className="flex flex-col gap-2">
-        <span id={`${cardId}-temporary-label`} className="text-xs font-medium">
+        <span
+          id={`${sectionId}-temporary-label`}
+          className="text-xs font-medium"
+        >
           {m.agent_logs_policy_set_temporary()}
         </span>
         <div className="flex flex-wrap items-end gap-2">
@@ -348,7 +394,7 @@ function LogPolicySourceCard({
             <SelectTrigger
               size="sm"
               className="w-32"
-              aria-labelledby={`${cardId}-temporary-label`}
+              aria-labelledby={`${sectionId}-temporary-label`}
             >
               <SelectValue placeholder={m.agent_logs_policy_choose_level()} />
             </SelectTrigger>
@@ -361,12 +407,12 @@ function LogPolicySourceCard({
             </SelectPopup>
           </Select>
           <label
-            htmlFor={`${cardId}-duration`}
+            htmlFor={`${sectionId}-duration`}
             className="flex flex-col gap-1 text-xs text-muted-foreground"
           >
             {m.agent_logs_policy_duration_minutes()}
             <Input
-              id={`${cardId}-duration`}
+              id={`${sectionId}-duration`}
               type="number"
               inputMode="decimal"
               min={0.5}
@@ -375,13 +421,22 @@ function LogPolicySourceCard({
               value={durationMinutes}
               disabled={!canEdit}
               aria-invalid={durationInvalid}
-              aria-describedby={`${cardId}-duration-hint`}
+              aria-describedby={`${sectionId}-duration-hint`}
               onChange={(event) => setDurationMinutes(event.target.value)}
             />
           </label>
           <Button
             size="sm"
             variant="outline"
+            loading={
+              busy &&
+              intentMatchesUpdate(
+                activeIntent,
+                view,
+                temporaryDraft,
+                temporarySeconds ?? undefined,
+              )
+            }
             disabled={
               !canEdit ||
               busy ||
@@ -405,12 +460,13 @@ function LogPolicySourceCard({
           </Button>
         </div>
         <p
-          id={`${cardId}-duration-hint`}
-          className={
+          id={`${sectionId}-duration-hint`}
+          className={cn(
+            "text-xs",
             durationInvalid
-              ? "text-xs text-destructive-foreground"
-              : "text-xs text-muted-foreground"
-          }
+              ? "text-destructive-foreground"
+              : "text-muted-foreground",
+          )}
         >
           {durationInvalid
             ? m.agent_logs_policy_duration_invalid()
@@ -418,10 +474,16 @@ function LogPolicySourceCard({
         </p>
       </div>
 
-      <div className="flex flex-wrap gap-2 border-t pt-3">
+      <div className="flex flex-wrap gap-2">
         <Button
           size="sm"
           variant="outline"
+          loading={
+            busy &&
+            activeIntent?.kind === "reset" &&
+            activeIntent.source === view.source &&
+            activeIntent.mode === "restore-baseline"
+          }
           disabled={!canEdit || busy || !canRestoreNow}
           aria-label={m.agent_logs_policy_restore_now_for({
             source: sourceLabel(view.source),
@@ -433,6 +495,12 @@ function LogPolicySourceCard({
         <Button
           size="sm"
           variant="ghost"
+          loading={
+            busy &&
+            activeIntent?.kind === "reset" &&
+            activeIntent.source === view.source &&
+            activeIntent.mode === "restore-default"
+          }
           disabled={
             !canEdit ||
             busy ||
@@ -449,67 +517,38 @@ function LogPolicySourceCard({
       <p className="text-xs text-muted-foreground">
         {m.agent_logs_policy_restore_hint()}
       </p>
-    </article>
+    </section>
   );
 }
 
 /**
- * Per-source log level controls. Reads through the audited admin function and
- * writes only through its compare-and-swap update/reset functions. A conflict
- * reloads the returned policy and requires an explicit retry with that newer
- * revision; status refresh is a read and never touches the log subscription.
+ * Sheet body for the per-source log level controls. It reads and writes through
+ * the audited log-policy functions owned by `useServerLogPolicy`; a conflict
+ * reloads the newer revision and requires an explicit retry.
  */
 export function ServerLogPolicyPanel({
   server,
+  controller,
 }: {
   server: ServerDTO;
+  controller: ServerLogPolicyController;
 }): React.ReactElement {
   const capability =
     server.agentCapabilities?.includes(LOG_POLICY_CAPABILITY) ?? false;
   const offline =
     server.transportMode !== "ws" || server.wsConnectedAt === null;
-  const controller = useServerLogPolicy(server.id);
   const policy = controller.policy;
 
   return (
-    <section
-      aria-labelledby="agent-logs-policy-title"
-      data-slot="server-log-policy-panel"
-      className="flex min-w-0 flex-col gap-4 rounded-lg border bg-card p-3"
-    >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <h3 id="agent-logs-policy-title" className="font-medium">
-            {m.agent_logs_policy_title()}
-          </h3>
-          <p className="text-xs text-muted-foreground">
-            {m.agent_logs_policy_description()}
-          </p>
-        </div>
-        <Button
-          size="sm"
-          variant="outline"
-          loading={controller.refreshing}
-          onClick={() => void controller.refresh()}
-        >
-          <RefreshCwIcon />
-          {m.agent_logs_policy_refresh()}
-        </Button>
-      </div>
-
+    <div data-slot="server-log-policy-panel" className="flex min-w-0 flex-col">
       {controller.conflict ? (
-        <div
-          role="alert"
-          className="flex flex-col gap-2 rounded-lg border border-warning/24 bg-warning/8 p-3"
-        >
-          <div className="flex flex-col gap-1">
-            <p className="text-sm font-medium text-warning-foreground">
-              {m.agent_logs_policy_conflict_title()}
-            </p>
-            <p className="text-sm text-warning-foreground">
-              {m.agent_logs_policy_conflict_description()}
-            </p>
-          </div>
+        <div role="alert" className="mb-3 flex flex-col gap-2 border-b pb-4">
+          <p className="text-sm font-medium text-warning-foreground">
+            {m.agent_logs_policy_conflict_title()}
+          </p>
+          <p className="text-sm text-muted-foreground">
+            {m.agent_logs_policy_conflict_description()}
+          </p>
           <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
@@ -533,31 +572,26 @@ export function ServerLogPolicyPanel({
       ) : null}
 
       {controller.loading ? (
-        <div
-          role="status"
-          className="flex items-center gap-2 rounded-lg border border-dashed bg-muted/20 p-3 text-sm text-muted-foreground"
-        >
-          <Spinner />
-          {m.agent_logs_policy_loading()}
-        </div>
+        <FormSkeleton fields={4} />
       ) : controller.error ? (
         <div
           role="alert"
-          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/24 bg-destructive/8 p-3 text-sm text-destructive-foreground"
+          className="flex flex-col gap-3 rounded-md border border-destructive/24 bg-destructive/8 p-3 text-sm text-destructive-foreground"
         >
           <span>{m.agent_logs_policy_load_error()}</span>
           <Button
             size="sm"
             variant="outline"
+            className="self-start"
             onClick={() => void controller.refresh()}
           >
             {m.agent_logs_policy_load_retry()}
           </Button>
         </div>
       ) : policy ? (
-        <div className="grid gap-3 lg:grid-cols-2">
+        <div className="flex min-w-0 flex-col">
           {LOG_POLICY_SOURCES.map((source) => (
-            <LogPolicySourceCard
+            <LogPolicySourceSection
               key={source}
               view={policy.sources[source]}
               capability={capability}
@@ -571,6 +605,6 @@ export function ServerLogPolicyPanel({
           ))}
         </div>
       ) : null}
-    </section>
+    </div>
   );
 }
