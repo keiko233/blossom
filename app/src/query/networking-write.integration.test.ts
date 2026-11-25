@@ -113,6 +113,8 @@ describe.skipIf(!PG_URL)("Networking workspace drafts", () => {
         advertisedPort: 20001,
         tlsServerName: "b.example.test",
         certificateId: "cert-b",
+        network: "both",
+        settings: {},
       },
       database,
     );

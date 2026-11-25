@@ -4,7 +4,7 @@ export const REDACTED = "<redacted>";
 // certificate material (`privateKeyPem`, `fullchainPem`, ...), and session
 // cookies.
 const SENSITIVE_KEY_RE =
-  /token|password|passphrase|secret|authorization|api[_-]?key|credential|private[_-]?key|cookie|pem$/i;
+  /token|password|passphrase|secret|authorization|api[_-]?key|credential|private[_-]?key|cookie|pem$|uuid$|auth_str$|auth$|pre[_-]?shared[_-]?key/i;
 const SENSITIVE_VALUE_RE =
   /((?:token|password|passphrase|secret|authorization|api[_-]?key|credential)\s*[:=]\s*)[^\s,;}]+/gi;
 const BEARER_RE = /(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi;
