@@ -675,50 +675,51 @@ export interface ManagedRuleSetPreset {
   nameKey:
     | "admin_networking_preset_geoip_cn"
     | "admin_networking_preset_geosite_cn"
-    | "admin_networking_preset_geoip_private"
     | "admin_networking_preset_geosite_private";
+  /** Official repo and file stem; quick picks select these in the sheet. */
+  repo: "geosite" | "geoip";
+  name: string;
   suggestedVersion: string;
   source: string;
   descriptionKey:
     | "admin_networking_preset_geoip_cn_description"
     | "admin_networking_preset_geosite_cn_description"
-    | "admin_networking_preset_geoip_private_description"
     | "admin_networking_preset_geosite_private_description";
 }
 
 /**
- * Curated rule-set presets are metadata, not remote downloads. An operator
- * attaches the exact pinned binary asset; the server records its SHA-256 and
- * rejects URLs, paths and over-budget content.
+ * Curated quick picks for the official import sheet. Each entry maps to one
+ * file in an allowlisted SagerNet repository; the import pins a commit and
+ * records the exact SHA-256. `geoip-private` is absent because the upstream
+ * `sing-geoip` tree has no such file.
  */
 export const MANAGED_RULE_SET_PRESET_CATALOG: readonly ManagedRuleSetPreset[] =
   [
     {
       id: "geoip-cn",
       nameKey: "admin_networking_preset_geoip_cn",
+      repo: "geoip",
+      name: "cn",
       suggestedVersion: "2026.11.20",
-      source: "curated/geoip/cn",
+      source: "github:SagerNet/sing-geoip",
       descriptionKey: "admin_networking_preset_geoip_cn_description",
     },
     {
       id: "geosite-cn",
       nameKey: "admin_networking_preset_geosite_cn",
+      repo: "geosite",
+      name: "cn",
       suggestedVersion: "2026.11.20",
-      source: "curated/geosite/cn",
+      source: "github:SagerNet/sing-geosite",
       descriptionKey: "admin_networking_preset_geosite_cn_description",
-    },
-    {
-      id: "geoip-private",
-      nameKey: "admin_networking_preset_geoip_private",
-      suggestedVersion: "2026.11.20",
-      source: "curated/geoip/private",
-      descriptionKey: "admin_networking_preset_geoip_private_description",
     },
     {
       id: "geosite-private",
       nameKey: "admin_networking_preset_geosite_private",
-      suggestedVersion: "2026.11.20",
-      source: "curated/geosite/private",
+      repo: "geosite",
+      name: "private",
+      suggestedVersion: "2026.11.25",
+      source: "github:SagerNet/sing-geosite",
       descriptionKey: "admin_networking_preset_geosite_private_description",
     },
   ];

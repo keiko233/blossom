@@ -17,6 +17,14 @@ export function networkingWriteReasonMessage(reason: string): string {
       return m.admin_networking_write_duplicate();
     case "duplicate_rule_set":
       return m.admin_networking_write_duplicate_rule_set();
+    case "upstream_unavailable":
+      return m.admin_networking_write_upstream_unavailable();
+    case "upstream_not_found":
+      return m.admin_networking_write_upstream_not_found();
+    case "upstream_rate_limited":
+      return m.admin_networking_write_upstream_rate_limited();
+    case "upstream_invalid_asset":
+      return m.admin_networking_write_upstream_invalid_asset();
     case "invalid_link":
       return m.admin_networking_write_invalid_link();
     case "not_found":

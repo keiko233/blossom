@@ -62,6 +62,8 @@ export const ADMIN_AUDIT_ACTIONS = [
   "networking.auto_bridge",
   "networking.rule_set_import",
   "networking.rule_set_fetch",
+  "networking.rule_set_import_official",
+  "networking.rule_set_create_custom",
   "networking.routing_save",
   "networking.rollout_plan",
   "networking.rollout_apply",

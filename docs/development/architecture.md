@@ -199,6 +199,7 @@ Established.
 
 - Admin operations are never reachable through the agent API. The oRPC router is deliberately limited to `agent.*` (see the comment in `app/src/orpc/base.ts`).
 - A static backup token is optional and stored hashed (`server.agentTokenHash`); only a non-secret prefix and whether the backup is enabled are shown, and the plaintext is returned once on enable/reset. DTOs strip the hash (`ServerDTO`).
+- Rule-set import is the only admin operation that makes outbound requests to GitHub. It talks only to the allowlisted `api.github.com` and `raw.githubusercontent.com` hosts for `SagerNet/sing-geosite` and `SagerNet/sing-geoip`, never interpolates a user-supplied URL/host/path/ref, pins the content to a commit (or the content SHA-256 when the API is unavailable), rejects redirects, times out after 10 seconds, caps the stream at 512 KiB and validates the SRS container before storage.
 - Audit logs and MCP tool results run through a redactor (`app/src/orpc/mcp/redact.ts`) that masks sensitive keys, bearer tokens and PEM blocks.
 - Certificate private keys are encrypted at rest with an AES-256-GCM envelope keyed by `CERTIFICATE_MASTER_KEY` (`app/src/lib/certificate-crypto.ts`).
 - The agent never trusts inline certificate material or control-plane paths from the config; it injects only local paths it has validated.

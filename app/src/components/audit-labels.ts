@@ -23,6 +23,20 @@ export function targetTypeLabel(type: string): string {
   return TARGET_LABELS[type]?.() ?? type;
 }
 
+const ACTION_LABELS: Record<string, () => string> = {
+  "networking.rule_set_import": () =>
+    m.admin_audit_action_networking_rule_set_import(),
+  "networking.rule_set_import_official": () =>
+    m.admin_audit_action_networking_rule_set_import_official(),
+  "networking.rule_set_create_custom": () =>
+    m.admin_audit_action_networking_rule_set_create_custom(),
+};
+
+/** Display name of a stored action; unknown actions are shown as stored. */
+export function auditActionLabel(action: string): string {
+  return ACTION_LABELS[action]?.() ?? action;
+}
+
 const STATUS_LABELS: Record<string, () => string> = {
   success: () => m.admin_audit_status_success(),
   error: () => m.admin_audit_status_error(),
