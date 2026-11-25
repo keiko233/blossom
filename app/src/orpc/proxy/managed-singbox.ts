@@ -129,15 +129,15 @@ function peerCredential(
 }
 
 function peerUser(
-  protocol: "trojan" | "vless",
+  protocol: string,
   linkId: string,
   generation: number,
   credential: string,
 ): SingboxUser {
   const name = encodePeerLinkIdentity(linkId, generation);
-  return protocol === "trojan"
-    ? { name, ["password"]: credential }
-    : { name, uuid: credential };
+  return protocol === "vless" || protocol === "vmess"
+    ? { name, uuid: credential }
+    : { name, ["password"]: credential };
 }
 
 function buildPeerInbound(
@@ -467,7 +467,11 @@ function ensureManagedTlsBindings(
   for (const peer of [...intent.peerInbounds].sort((a, b) =>
     a.inboundId.localeCompare(b.inboundId),
   )) {
-    if (peer.admissions.length === 0) {
+    if (
+      peer.admissions.length === 0 ||
+      peer.certificateId === null ||
+      peer.certificateGeneration === null
+    ) {
       continue;
     }
     const matching = tlsMaterial.inbound.filter(

@@ -670,24 +670,70 @@ export const managedIntentPeerInboundSchema = z
   .object({
     inboundId: z.string().min(1).max(128),
     runtimeTag: z.string().min(1).max(128),
-    protocol: z.enum(["trojan", "vless"]),
+    protocol: z.string().min(1).max(64),
     listenAddress: z.string().min(1).max(253),
     listenPort: z.number().int().min(1).max(65535),
     advertisedAddress: z.string().min(1).max(253),
     advertisedPort: z.number().int().min(1).max(65535),
-    tlsServerName: z.string().min(1).max(253),
-    certificateId: z.string().min(1).max(128),
-    certificateGeneration: z.number().int().min(1),
-    certificateFingerprintSha256: z.string().min(1).max(256),
+    network: z.enum(["tcp", "udp", "both"]).optional(),
+    tlsServerName: z.string().min(1).max(253).nullable().default(null),
+    certificateId: z.string().min(1).max(128).nullable().default(null),
+    certificateGeneration: z.number().int().min(1).nullable().default(null),
+    certificateFingerprintSha256: z
+      .string()
+      .min(1)
+      .max(256)
+      .nullable()
+      .default(null),
+    settings: z.record(z.string(), z.unknown()).optional(),
     admissions: z.array(managedIntentPeerAdmissionSchema).max(1_000),
   })
-  .refine((value) => value.runtimeTag === `peer-in-${value.inboundId}`, {
-    message: "peer inbound runtimeTag must equal peer-in-<inboundId>",
-    path: ["runtimeTag"],
+  .superRefine((value, context) => {
+    if (value.runtimeTag !== `peer-in-${value.inboundId}`) {
+      context.addIssue({
+        code: "custom",
+        message: "peer inbound runtimeTag must equal peer-in-<inboundId>",
+        path: ["runtimeTag"],
+      });
+    }
+    if (value.certificateId !== null) {
+      if (
+        value.certificateGeneration === null ||
+        value.certificateFingerprintSha256 === null ||
+        value.tlsServerName === null
+      ) {
+        context.addIssue({
+          code: "custom",
+          message:
+            "peer inbound with a managed certificate requires certificateGeneration, certificateFingerprintSha256 and tlsServerName",
+          path: ["certificateId"],
+        });
+      }
+    }
   });
 
 export type ManagedIntentPeerInbound = z.infer<
   typeof managedIntentPeerInboundSchema
+>;
+
+export const managedIntentPortForwardSchema = z
+  .object({
+    forwardId: z.string().min(1).max(128),
+    runtimeTag: z.string().min(1).max(128),
+    listenAddress: z.string().min(1).max(253),
+    listenPort: z.number().int().min(1).max(65535),
+    network: z.enum(["tcp", "udp", "both"]).default("both"),
+    overrideAddress: z.string().min(1).max(253),
+    overridePort: z.number().int().min(1).max(65535),
+    outboundTag: z.string().min(1).max(128).nullable().default(null),
+  })
+  .refine((value) => value.runtimeTag === `relay-in-${value.forwardId}`, {
+    message: "port forward runtimeTag must equal relay-in-<forwardId>",
+    path: ["runtimeTag"],
+  });
+
+export type ManagedIntentPortForward = z.infer<
+  typeof managedIntentPortForwardSchema
 >;
 
 export const managedIntentPeerTrustRefSchema = z.object({
@@ -704,18 +750,26 @@ export const managedIntentOutboundSchema = z
   .object({
     outboundId: z.string().min(1).max(128),
     runtimeTag: z.string().min(1).max(128),
-    kind: z.enum(["direct_profile", "peer_link"]),
+    kind: z.enum([
+      "direct_profile",
+      "peer_link",
+      "custom_proxy",
+      "outbound_group",
+    ]),
     dialOptions: z.record(z.string(), z.unknown()).default({}),
+    settings: z.record(z.string(), z.unknown()).optional(),
+    supportsUdp: z.boolean().optional(),
+    memberOutboundTags: z.array(z.string().min(1).max(128)).max(128).optional(),
     linkId: z.string().min(1).max(128).nullable().default(null),
     destinationServerId: z.string().min(1).max(128).nullable().default(null),
     destinationInboundId: z.string().min(1).max(128).nullable().default(null),
-    protocol: z.enum(["trojan", "vless"]).nullable().default(null),
+    protocol: z.string().min(1).max(64).nullable().default(null),
     serverAddress: z.string().min(1).max(253).nullable().default(null),
     serverPort: z.number().int().min(1).max(65535).nullable().default(null),
     tlsServerName: z.string().min(1).max(253).nullable().default(null),
     credentialGeneration: z.number().int().min(1).nullable().default(null),
     trustMode: z
-      .enum(["system", "managed_certificate"])
+      .enum(["system", "managed_certificate", "none"])
       .nullable()
       .default(null),
     trustedCertificates: z
@@ -727,7 +781,11 @@ export const managedIntentOutboundSchema = z
     const expectedTag =
       value.kind === "direct_profile"
         ? `direct-${value.outboundId}`
-        : `peer-out-${value.outboundId}`;
+        : value.kind === "peer_link"
+          ? `peer-out-${value.outboundId}`
+          : value.kind === "custom_proxy"
+            ? `custom-out-${value.outboundId}`
+            : `group-out-${value.outboundId}`;
     if (value.runtimeTag !== expectedTag) {
       context.addIssue({
         code: "custom",
@@ -736,11 +794,41 @@ export const managedIntentOutboundSchema = z
       });
     }
     if (value.kind === "direct_profile") {
-      if (value.linkId !== null || value.trustedCertificates.length > 0) {
+      if (
+        value.linkId !== null ||
+        value.trustedCertificates.length > 0 ||
+        (value.memberOutboundTags?.length ?? 0) > 0
+      ) {
         context.addIssue({
           code: "custom",
-          message: "direct_profile outbounds cannot carry peer link fields",
+          message:
+            "direct_profile outbounds cannot carry peer link or group fields",
           path: ["kind"],
+        });
+      }
+      return;
+    }
+    if (value.kind === "custom_proxy") {
+      if (value.protocol === null || value.linkId !== null) {
+        context.addIssue({
+          code: "custom",
+          message: "custom_proxy outbound requires protocol and no linkId",
+          path: ["protocol"],
+        });
+      }
+      return;
+    }
+    if (value.kind === "outbound_group") {
+      if (
+        (value.protocol !== "selector" && value.protocol !== "urltest") ||
+        (value.memberOutboundTags?.length ?? 0) === 0 ||
+        value.linkId !== null
+      ) {
+        context.addIssue({
+          code: "custom",
+          message:
+            "outbound_group requires protocol selector|urltest and at least one memberOutboundTag",
+          path: ["memberOutboundTags"],
         });
       }
       return;
@@ -752,9 +840,7 @@ export const managedIntentOutboundSchema = z
       value.protocol === null ||
       value.serverAddress === null ||
       value.serverPort === null ||
-      value.tlsServerName === null ||
-      value.credentialGeneration === null ||
-      value.trustMode === null
+      value.credentialGeneration === null
     ) {
       context.addIssue({
         code: "custom",
@@ -765,19 +851,22 @@ export const managedIntentOutboundSchema = z
     }
     if (
       value.trustMode === "managed_certificate" &&
-      value.trustedCertificates.length === 0
+      (value.trustedCertificates.length === 0 || value.tlsServerName === null)
     ) {
       context.addIssue({
         code: "custom",
         message:
-          "managed_certificate trustMode requires at least one trusted certificate reference",
+          "managed_certificate trustMode requires tlsServerName and at least one trusted certificate reference",
         path: ["trustedCertificates"],
       });
     }
-    if (value.trustMode === "system" && value.trustedCertificates.length > 0) {
+    if (
+      (value.trustMode === "system" || value.trustMode === "none") &&
+      value.trustedCertificates.length > 0
+    ) {
       context.addIssue({
         code: "custom",
-        message: "system trustMode cannot carry pinned certificate references",
+        message: `${value.trustMode} trustMode cannot carry pinned certificate references`,
         path: ["trustedCertificates"],
       });
     }
@@ -800,7 +889,10 @@ export const managedIntentRouteRuleSchema = z
     domainKeywords: z.array(z.string().min(1)).max(1_000).default([]),
     ipCidrs: z.array(z.string().min(1)).max(1_000).default([]),
     ports: z.array(z.number().int().min(1).max(65535)).max(256).default([]),
+    portRanges: z.array(z.string().min(1).max(32)).max(256).optional(),
+    protocols: z.array(z.string().min(1).max(32)).max(64).optional(),
     ruleSetTags: z.array(z.string().min(1).max(128)).max(64).default([]),
+    invert: z.boolean().optional(),
     action: z.enum(["route", "reject"]),
     outboundTag: z.string().min(1).max(128).nullable().default(null),
   })
@@ -855,6 +947,7 @@ export const managedStageIntentSchema = z.object({
   topologyGeneration: z.number().int().min(0),
   subscriberInbounds: z.array(managedIntentSubscriberInboundSchema).max(1_000),
   peerInbounds: z.array(managedIntentPeerInboundSchema).max(1_000),
+  portForwards: z.array(managedIntentPortForwardSchema).max(1_000).optional(),
   outbounds: z.array(managedIntentOutboundSchema).max(1_000),
   routingPolicy: z.object({
     rules: z.array(managedIntentRouteRuleSchema).max(2_000),

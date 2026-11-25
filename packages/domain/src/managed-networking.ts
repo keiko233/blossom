@@ -143,20 +143,163 @@ export const MANAGED_SNAPSHOT_EXTENSION_VERSION = 1 as const;
 export const LISTENER_CLAIM_OWNER_KINDS = [
   "subscriber_inbound",
   "peer_inbound",
+  "port_forward",
 ] as const;
 export type ListenerClaimOwnerKind =
   (typeof LISTENER_CLAIM_OWNER_KINDS)[number];
 
-/** Launch protocols for peer links (TCP with conventional TLS). */
-export const PEER_PROTOCOLS = ["trojan", "vless"] as const;
+/** Supported protocols for inter-server peer links. */
+export const PEER_PROTOCOLS = [
+  "vless",
+  "trojan",
+  "shadowsocks",
+  "socks",
+  "vmess",
+  "hysteria2",
+  "tuic",
+  "anytls",
+  "naive",
+  "hysteria",
+  "shadowtls",
+] as const;
 export type PeerProtocol = (typeof PEER_PROTOCOLS)[number];
+
+export const PEER_NETWORKS = ["tcp", "udp", "both"] as const;
+export type PeerNetwork = (typeof PEER_NETWORKS)[number];
+
+export type PeerTlsMode = "required" | "optional" | "none";
+export type PeerCredentialKind =
+  | "uuid"
+  | "password"
+  | "username_password"
+  | "uuid_password";
+
+export interface PeerProtocolCapability {
+  protocol: PeerProtocol;
+  supportsUdp: boolean;
+  tlsMode: PeerTlsMode;
+  defaultNetwork: PeerNetwork;
+  credentialKind: PeerCredentialKind;
+  /** True when the protocol uses QUIC/UDP as its transport (e.g. hysteria2, tuic). */
+  quicTransport: boolean;
+}
+
+const PEER_PROTOCOL_CAPABILITIES: Record<PeerProtocol, PeerProtocolCapability> =
+  {
+    vless: {
+      protocol: "vless",
+      supportsUdp: true,
+      tlsMode: "optional",
+      defaultNetwork: "both",
+      credentialKind: "uuid",
+      quicTransport: false,
+    },
+    trojan: {
+      protocol: "trojan",
+      supportsUdp: true,
+      tlsMode: "required",
+      defaultNetwork: "both",
+      credentialKind: "password",
+      quicTransport: false,
+    },
+    shadowsocks: {
+      protocol: "shadowsocks",
+      supportsUdp: true,
+      tlsMode: "none",
+      defaultNetwork: "both",
+      credentialKind: "password",
+      quicTransport: false,
+    },
+    socks: {
+      protocol: "socks",
+      supportsUdp: true,
+      tlsMode: "none",
+      defaultNetwork: "both",
+      credentialKind: "username_password",
+      quicTransport: false,
+    },
+    vmess: {
+      protocol: "vmess",
+      supportsUdp: true,
+      tlsMode: "optional",
+      defaultNetwork: "both",
+      credentialKind: "uuid",
+      quicTransport: false,
+    },
+    hysteria2: {
+      protocol: "hysteria2",
+      supportsUdp: true,
+      tlsMode: "required",
+      defaultNetwork: "both",
+      credentialKind: "password",
+      quicTransport: true,
+    },
+    tuic: {
+      protocol: "tuic",
+      supportsUdp: true,
+      tlsMode: "required",
+      defaultNetwork: "both",
+      credentialKind: "uuid_password",
+      quicTransport: true,
+    },
+    anytls: {
+      protocol: "anytls",
+      supportsUdp: true,
+      tlsMode: "required",
+      defaultNetwork: "both",
+      credentialKind: "password",
+      quicTransport: false,
+    },
+    naive: {
+      protocol: "naive",
+      supportsUdp: false,
+      tlsMode: "required",
+      defaultNetwork: "tcp",
+      credentialKind: "username_password",
+      quicTransport: false,
+    },
+    hysteria: {
+      protocol: "hysteria",
+      supportsUdp: true,
+      tlsMode: "required",
+      defaultNetwork: "both",
+      credentialKind: "password",
+      quicTransport: true,
+    },
+    shadowtls: {
+      protocol: "shadowtls",
+      supportsUdp: false,
+      tlsMode: "none",
+      defaultNetwork: "tcp",
+      credentialKind: "password",
+      quicTransport: false,
+    },
+  };
+
+export function isPeerProtocol(value: string): value is PeerProtocol {
+  return (PEER_PROTOCOLS as readonly string[]).includes(value);
+}
+
+export function peerProtocolCapability(
+  protocol: PeerProtocol,
+): PeerProtocolCapability {
+  return PEER_PROTOCOL_CAPABILITIES[protocol];
+}
 
 /**
  * Named server outbounds. The built-in `direct` outbound has no row and stays
  * the legacy default.
  */
-export const MANAGED_OUTBOUND_KINDS = ["direct_profile", "peer_link"] as const;
+export const MANAGED_OUTBOUND_KINDS = [
+  "direct_profile",
+  "peer_link",
+  "custom_proxy",
+  "outbound_group",
+] as const;
 export type ManagedOutboundKind = (typeof MANAGED_OUTBOUND_KINDS)[number];
+
+export const OUTBOUND_GROUP_PROTOCOLS = ["selector", "urltest"] as const;
+export type OutboundGroupProtocol = (typeof OUTBOUND_GROUP_PROTOCOLS)[number];
 
 /**
  * IP-family choices a named direct profile may pin. `any` leaves the sing-box
@@ -226,6 +369,9 @@ export const MANAGED_RUNTIME_OBJECT_KINDS = [
   "peer_inbound",
   "peer_link",
   "direct_profile",
+  "port_forward",
+  "custom_proxy",
+  "outbound_group",
   "rule_set",
 ] as const;
 export type ManagedRuntimeObjectKind =
@@ -235,6 +381,9 @@ const RUNTIME_TAG_PREFIX: Record<ManagedRuntimeObjectKind, string> = {
   peer_inbound: "peer-in-",
   peer_link: "peer-out-",
   direct_profile: "direct-",
+  port_forward: "relay-in-",
+  custom_proxy: "custom-out-",
+  outbound_group: "group-out-",
   rule_set: "rule-set-",
 };
 
