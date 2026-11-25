@@ -163,10 +163,10 @@ function tlsMaterial(intent: ManagedStageIntent): ManagedPeerTlsMaterial {
   const outbound = intent.outbounds[1]!;
   const trust = outbound.trustedCertificates[0]!;
   const receiver: CertificateArtifact = {
-    certificateId: peer.certificateId,
-    generation: peer.certificateGeneration,
-    domains: [peer.tlsServerName],
-    fingerprintSha256: peer.certificateFingerprintSha256,
+    certificateId: peer.certificateId!,
+    generation: peer.certificateGeneration!,
+    domains: [peer.tlsServerName!],
+    fingerprintSha256: peer.certificateFingerprintSha256!,
     notBefore: "2026-01-01T00:00:00.000Z",
     notAfter: "2027-01-01T00:00:00.000Z",
     certificatePem: "PEER-A-CERT",
@@ -177,17 +177,17 @@ function tlsMaterial(intent: ManagedStageIntent): ManagedPeerTlsMaterial {
       direction: "inbound",
       ownerKind: "peer_inbound",
       ownerId: peer.inboundId,
-      certificateId: peer.certificateId,
-      generation: peer.certificateGeneration,
+      certificateId: peer.certificateId!,
+      generation: peer.certificateGeneration!,
     }),
     runtimeTag: peer.runtimeTag,
     direction: "inbound" as const,
     ownerKind: "peer_inbound" as const,
     ownerId: peer.inboundId,
-    certificateId: peer.certificateId,
-    generation: peer.certificateGeneration,
-    fingerprintSha256: peer.certificateFingerprintSha256,
-    serverName: peer.tlsServerName,
+    certificateId: peer.certificateId!,
+    generation: peer.certificateGeneration!,
+    fingerprintSha256: peer.certificateFingerprintSha256!,
+    serverName: peer.tlsServerName!,
     usage: "identity_fullchain_and_key" as const,
   };
   const trustBinding = {

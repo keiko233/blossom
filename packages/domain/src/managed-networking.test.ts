@@ -8,6 +8,7 @@ import {
   estimateBase64EncodedBytes,
   evaluateManagedNetworkingReadiness,
   evaluateManagedSnapshotByteBudget,
+  isPeerProtocol,
   isReservedRuntimeTag,
   MANAGED_NETWORKING_ACTIVATION_ENABLED,
   MANAGED_NETWORKING_AGENT_CAPABILITY,
@@ -15,6 +16,7 @@ import {
   MANAGED_SNAPSHOT_BYTE_BUDGETS,
   managedRuntimeTag,
   parseSingBoxVersion,
+  peerProtocolCapability,
   subscriberInboundTag,
 } from "./managed-networking";
 
@@ -236,5 +238,55 @@ describe("directProfileIpFamilyDialFields", () => {
     expect(directProfileIpFamilyDialFields("any")).toEqual({});
     expect(directProfileIpFamilyDialFields("ipv4")).toEqual({ inet6: false });
     expect(directProfileIpFamilyDialFields("ipv6")).toEqual({ inet4: false });
+  });
+});
+
+describe("extended managed runtime tags and peer protocol capabilities", () => {
+  it("classifies port_forward, custom_proxy, and outbound_group tags unambiguously", () => {
+    expect(
+      classifyManagedRuntimeTag(managedRuntimeTag("port_forward", "pf1")),
+    ).toEqual({
+      kind: "port_forward",
+      id: "pf1",
+      tag: "relay-in-pf1",
+    });
+    expect(
+      classifyManagedRuntimeTag(managedRuntimeTag("custom_proxy", "cp1")),
+    ).toEqual({
+      kind: "custom_proxy",
+      id: "cp1",
+      tag: "custom-out-cp1",
+    });
+    expect(
+      classifyManagedRuntimeTag(managedRuntimeTag("outbound_group", "g1")),
+    ).toEqual({
+      kind: "outbound_group",
+      id: "g1",
+      tag: "group-out-g1",
+    });
+    expect(isReservedRuntimeTag("relay-in-pf1")).toBe(true);
+    expect(isReservedRuntimeTag("custom-out-cp1")).toBe(true);
+    expect(isReservedRuntimeTag("group-out-g1")).toBe(true);
+  });
+
+  it("exposes capabilities for multi-protocol peering", () => {
+    expect(isPeerProtocol("shadowsocks")).toBe(true);
+    expect(isPeerProtocol("hysteria2")).toBe(true);
+    expect(isPeerProtocol("socks")).toBe(true);
+    expect(isPeerProtocol("unknown_proto")).toBe(false);
+    expect(peerProtocolCapability("shadowsocks")).toMatchObject({
+      supportsUdp: true,
+      tlsMode: "none",
+      quicTransport: false,
+    });
+    expect(peerProtocolCapability("hysteria2")).toMatchObject({
+      supportsUdp: true,
+      tlsMode: "required",
+      quicTransport: true,
+    });
+    expect(peerProtocolCapability("vless")).toMatchObject({
+      supportsUdp: true,
+      tlsMode: "optional",
+    });
   });
 });

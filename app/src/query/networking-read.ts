@@ -101,12 +101,15 @@ export interface NetworkingPeerInboundView {
   listenPort: number;
   advertisedAddress: string;
   advertisedPort: number;
-  tlsServerName: string;
-  certificateId: string;
-  certificateName: string;
-  certificateKind: string;
+  network: "tcp" | "udp" | "both";
+  tlsServerName: string | null;
+  certificateId: string | null;
+  certificateName: string | null;
+  certificateKind: string | null;
   certificateGeneration: number | null;
   certificateFingerprint: string | null;
+  settings: Record<string, JsonValue>;
+  sourceNodeId: string | null;
   revision: number;
   createdAt: Date;
   updatedAt: Date;
@@ -445,7 +448,7 @@ async function loadPeerInbounds(
       fingerprint: certificateMaterial.fingerprintSha256,
     })
     .from(peerInbound)
-    .innerJoin(
+    .leftJoin(
       managedCertificate,
       eq(managedCertificate.id, peerInbound.certificateId),
     )
@@ -471,13 +474,16 @@ async function loadPeerInbounds(
     listenPort: row.inbound.listenPort,
     advertisedAddress: row.inbound.advertisedAddress,
     advertisedPort: row.inbound.advertisedPort,
+    network: row.inbound.network,
     tlsServerName: row.inbound.tlsServerName,
     certificateId: row.inbound.certificateId,
-    certificateName: row.certificateName,
-    certificateKind: row.certificateKind,
+    certificateName: row.certificateName ?? null,
+    certificateKind: row.certificateKind ?? null,
     certificateGeneration:
       row.certificateGeneration ?? row.materialVersion ?? null,
     certificateFingerprint: row.fingerprint ?? null,
+    settings: row.inbound.settings,
+    sourceNodeId: row.inbound.sourceNodeId,
     revision: row.inbound.revision,
     createdAt: row.inbound.createdAt,
     updatedAt: row.inbound.updatedAt,
@@ -572,7 +578,9 @@ async function loadLinkSources(
   const destinationNames = new Map(
     destinationServers.map((row) => [row.id, row.name]),
   );
-  const certificateIds = rows.map((row) => row.inbound.certificateId);
+  const certificateIds = rows
+    .map((row) => row.inbound.certificateId)
+    .filter((id): id is string => id !== null);
   const [certificates, credentials] = await Promise.all([
     loadCertificates(database, certificateIds),
     loadCredentialSummaries(
@@ -588,7 +596,9 @@ async function loadLinkSources(
       sourceServerName: row.source.name,
       destinationServerName:
         destinationNames.get(row.inbound.serverId) ?? row.inbound.serverId,
-      certificate: certificates.get(row.inbound.certificateId) ?? null,
+      certificate: row.inbound.certificateId
+        ? (certificates.get(row.inbound.certificateId) ?? null)
+        : null,
       outbound: row.outbound,
       credentialGeneration: summary?.active ?? null,
       credentialRevision: summary?.revisions ?? 0,
@@ -1003,7 +1013,7 @@ async function loadServerRoutingContext(
       .filter((row) => row.serverId === serverId)
       .map((row) => row.certificateId),
     ...sourceLinks.map((row) => row.inbound.certificateId),
-  ];
+  ].filter((id): id is string => id !== null);
   const certificates = await loadCertificates(database, certificateIds);
   const assetsRows: RuleSetAssetMeta[] = await database
     .select({
@@ -1033,7 +1043,9 @@ async function loadServerRoutingContext(
       inbound: row.inbound,
       sourceServerName: row.source.name,
       destinationServerName: serverRow.name,
-      certificate: certificates.get(row.inbound.certificateId) ?? null,
+      certificate: row.inbound.certificateId
+        ? (certificates.get(row.inbound.certificateId) ?? null)
+        : null,
       outbound: row.outbound,
       credentialGeneration: summary?.active ?? null,
       credentialRevision: summary?.revisions ?? 0,
@@ -1353,20 +1365,24 @@ function peerInboundIntentFor(
   issues: NetworkingIssue[];
 } {
   const issues: NetworkingIssue[] = [];
-  const certificate = context.certificates.get(inbound.certificateId);
-  if (!certificate) {
-    issues.push({
-      code: "certificate_missing",
-      params: { certificate: inbound.certificateId },
-      subjectId: inbound.id,
-    });
-  }
-  if (!certificate?.activeGeneration || !certificate.fingerprint) {
-    issues.push({
-      code: "certificate_material_missing",
-      params: { certificate: inbound.certificateId },
-      subjectId: inbound.id,
-    });
+  const certificate = inbound.certificateId
+    ? context.certificates.get(inbound.certificateId)
+    : undefined;
+  if (inbound.certificateId !== null) {
+    if (!certificate) {
+      issues.push({
+        code: "certificate_missing",
+        params: { certificate: inbound.certificateId },
+        subjectId: inbound.id,
+      });
+    }
+    if (!certificate?.activeGeneration || !certificate.fingerprint) {
+      issues.push({
+        code: "certificate_material_missing",
+        params: { certificate: inbound.certificateId },
+        subjectId: inbound.id,
+      });
+    }
   }
   const admissions = context.routes.destinationLinks
     .filter((row) => row.inbound.id === inbound.id)
@@ -1396,9 +1412,14 @@ function peerInboundIntentFor(
       advertisedPort: inbound.advertisedPort,
       tlsServerName: inbound.tlsServerName,
       certificateId: inbound.certificateId,
-      certificateGeneration: certificate?.activeGeneration ?? 1,
+      certificateGeneration:
+        inbound.certificateId === null
+          ? null
+          : (certificate?.activeGeneration ?? 1),
       certificateFingerprintSha256:
-        certificate?.fingerprint ?? `sha256:${"0".repeat(64)}`,
+        inbound.certificateId === null
+          ? null
+          : (certificate?.fingerprint ?? `sha256:${"0".repeat(64)}`),
       admissions,
     },
     issues,
@@ -1469,8 +1490,9 @@ function outboundIntentFor(
       issues,
     };
   }
-  const destinationCertificate =
-    source.certificate ?? context.certificates.get(inbound.certificateId);
+  const destinationCertificate = inbound.certificateId
+    ? (source.certificate ?? context.certificates.get(inbound.certificateId))
+    : undefined;
   const credential = source.credentialGeneration;
   if (credential === null) {
     issues.push({
@@ -1479,7 +1501,7 @@ function outboundIntentFor(
       subjectId: link.id,
     });
   }
-  if (!destinationCertificate) {
+  if (inbound.certificateId !== null && !destinationCertificate) {
     issues.push({
       code: "certificate_missing",
       params: { certificate: inbound.certificateId },
@@ -1487,9 +1509,11 @@ function outboundIntentFor(
     });
   }
   const trustMode =
-    destinationCertificate?.kind === "self_signed"
-      ? "managed_certificate"
-      : "system";
+    inbound.certificateId === null
+      ? "none"
+      : destinationCertificate?.kind === "self_signed"
+        ? "managed_certificate"
+        : "system";
   const trustedCertificates =
     trustMode === "managed_certificate" &&
     destinationCertificate?.activeGeneration &&

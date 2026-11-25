@@ -403,10 +403,17 @@ async function loadPeerTlsMaterial(
   database: Database,
 ): Promise<ManagedPeerTlsMaterial> {
   const receiverRefs = intent.peerInbounds
-    .filter((peer) => peer.admissions.length > 0)
+    .filter(
+      (peer) =>
+        peer.admissions.length > 0 &&
+        peer.certificateId !== null &&
+        peer.certificateGeneration !== null &&
+        peer.tlsServerName !== null,
+    )
     .map((peer) => ({
-      certificateId: peer.certificateId,
-      generation: peer.certificateGeneration,
+      certificateId: peer.certificateId!,
+      generation: peer.certificateGeneration!,
+      tlsServerName: peer.tlsServerName!,
       peer,
     }));
   const trustRefs = intent.outbounds.flatMap((outbound) => {
@@ -471,7 +478,7 @@ async function loadPeerTlsMaterial(
       certificateId: ref.certificateId,
       generation: ref.generation,
       fingerprintSha256: row.fingerprintSha256,
-      serverName: ref.peer.tlsServerName,
+      serverName: ref.tlsServerName,
       usage: "identity_fullchain_and_key",
     };
     inbound.push({ binding, artifact });

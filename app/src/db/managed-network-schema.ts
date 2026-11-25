@@ -6,10 +6,12 @@ import type {
   ManagedRolloutState,
   ManagedStageState,
   PeerCredentialState,
+  PeerNetwork,
   PeerProtocol,
 } from "@blossom/domain/managed-networking";
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   check,
   foreignKey,
   index,
@@ -24,7 +26,7 @@ import {
 
 import type { JsonValue } from "@/orpc/proxy/schema";
 
-import { managedCertificate, server } from "./proxy-schema";
+import { managedCertificate, node, server } from "./proxy-schema";
 
 /**
  * Additive persistence for managed networking (Task 06). Nothing here is read
@@ -80,7 +82,7 @@ export const listenerClaim = pgTable(
     check("listener_claim_port_range", sql`${table.port} BETWEEN 1 AND 65535`),
     check(
       "listener_claim_owner_kind",
-      sql`${table.ownerKind} IN ('subscriber_inbound', 'peer_inbound')`,
+      sql`${table.ownerKind} IN ('subscriber_inbound', 'peer_inbound', 'port_forward')`,
     ),
   ],
 );
@@ -109,10 +111,22 @@ export const peerInbound = pgTable(
     // What senders dial, kept apart from listen and subscription addresses.
     advertisedAddress: text("advertised_address").notNull(),
     advertisedPort: integer("advertised_port").notNull(),
-    tlsServerName: text("tls_server_name").notNull(),
-    certificateId: text("certificate_id")
-      .notNull()
-      .references(() => managedCertificate.id, { onDelete: "restrict" }),
+    network: text("network").$type<PeerNetwork>().default("both").notNull(),
+    // Nullable for non-TLS protocols (shadowsocks, socks) and Reality.
+    tlsServerName: text("tls_server_name"),
+    certificateId: text("certificate_id").references(
+      () => managedCertificate.id,
+      { onDelete: "restrict" },
+    ),
+    // Validated sing-box inbound fragment (minus managed/TLS-material fields).
+    settings: jsonb("settings")
+      .$type<Record<string, JsonValue>>()
+      .default({})
+      .notNull(),
+    // Optional reference when auto-bridged from an existing exit subscriber node.
+    sourceNodeId: text("source_node_id").references(() => node.id, {
+      onDelete: "set null",
+    }),
     revision: integer("revision").default(1).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
@@ -120,7 +134,13 @@ export const peerInbound = pgTable(
       .$onUpdate(() => /* @__PURE__ */ new Date())
       .notNull(),
   },
-  (table) => [index("peer_inbound_server_idx").on(table.serverId)],
+  (table) => [
+    index("peer_inbound_server_idx").on(table.serverId),
+    check(
+      "peer_inbound_network",
+      sql`${table.network} IN ('tcp', 'udp', 'both')`,
+    ),
+  ],
 );
 
 /** Directed relation from a source server to a destination peer inbound. */
@@ -176,8 +196,8 @@ export const peerLinkCredential = pgTable(
 );
 
 /**
- * Named outbound on a server: a direct dial profile, or the one generated
- * outbound of a peer link on the link's source server.
+ * Named outbound on a server: a direct dial profile, a peer link outbound, a
+ * custom external sing-box proxy outbound, or an outbound group (selector/urltest).
  */
 export const managedOutbound = pgTable(
   "managed_outbound",
@@ -190,10 +210,25 @@ export const managedOutbound = pgTable(
     name: text("name").notNull(),
     runtimeTag: text("runtime_tag").notNull().unique(),
     linkId: text("link_id").unique(),
+    // Protocol for `custom_proxy` (any sing-box outbound protocol) or
+    // `outbound_group` (`selector` | `urltest`). Null for `direct_profile` / `peer_link`.
+    protocol: text("protocol"),
     // Validated sing-box dial fields for a direct profile; empty for links.
     dialOptions: jsonb("dial_options")
       .$type<Record<string, JsonValue>>()
       .default({})
+      .notNull(),
+    // Non-secret sing-box outbound settings for `custom_proxy` / `outbound_group`.
+    settings: jsonb("settings")
+      .$type<Record<string, JsonValue>>()
+      .default({})
+      .notNull(),
+    // AES-256-GCM encrypted JSON map of secret outbound fields for `custom_proxy`.
+    secretCiphertext: text("secret_ciphertext"),
+    // Member outbound runtime tags for `outbound_group` (`selector` / `urltest`).
+    memberOutboundTags: jsonb("member_outbound_tags")
+      .$type<string[]>()
+      .default([])
       .notNull(),
     revision: integer("revision").default(1).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -212,7 +247,65 @@ export const managedOutbound = pgTable(
     check(
       "managed_outbound_kind_link",
       sql`(${table.kind} = 'peer_link' AND ${table.linkId} IS NOT NULL)
-        OR (${table.kind} = 'direct_profile' AND ${table.linkId} IS NULL)`,
+        OR (${table.kind} = 'direct_profile' AND ${table.linkId} IS NULL)
+        OR (${table.kind} = 'custom_proxy' AND ${table.linkId} IS NULL AND ${table.protocol} IS NOT NULL)
+        OR (${table.kind} = 'outbound_group' AND ${table.linkId} IS NULL AND ${table.protocol} IN ('selector', 'urltest'))`,
+    ),
+  ],
+);
+
+// --- L4 Port Forwarding (sing-box direct inbound) ---------------------------
+
+/**
+ * Transparent TCP/UDP port forwarder on a transit server (`relay-in-<id>`).
+ * Relays raw traffic to either a managed exit subscriber `node` or an external
+ * host:port without tunnel encapsulation. When targeting a managed node,
+ * subscription exports may expose this server's address & port while keeping
+ * authentication and metering at the exit node.
+ */
+export const portForward = pgTable(
+  "port_forward",
+  {
+    id: text("id").primaryKey(),
+    serverId: text("server_id")
+      .notNull()
+      .references(() => server.id, { onDelete: "restrict" }),
+    name: text("name").notNull(),
+    runtimeTag: text("runtime_tag").notNull().unique(),
+    enabled: boolean("enabled").default(true).notNull(),
+    listenAddress: text("listen_address").default("::").notNull(),
+    listenPort: integer("listen_port").notNull(),
+    network: text("network").$type<PeerNetwork>().default("both").notNull(),
+    // Managed exit node target (mutually exclusive with external targetAddress/targetPort).
+    targetNodeId: text("target_node_id").references(() => node.id, {
+      onDelete: "restrict",
+    }),
+    targetAddress: text("target_address"),
+    targetPort: integer("target_port"),
+    // Optional egress outbound tag on the transit server (null uses default `direct`).
+    outboundTag: text("outbound_tag"),
+    revision: integer("revision").default(1).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("port_forward_server_idx").on(table.serverId),
+    index("port_forward_target_node_idx").on(table.targetNodeId),
+    check(
+      "port_forward_listen_port_range",
+      sql`${table.listenPort} BETWEEN 1 AND 65535`,
+    ),
+    check(
+      "port_forward_network",
+      sql`${table.network} IN ('tcp', 'udp', 'both')`,
+    ),
+    check(
+      "port_forward_target",
+      sql`(${table.targetNodeId} IS NOT NULL AND ${table.targetAddress} IS NULL AND ${table.targetPort} IS NULL)
+        OR (${table.targetNodeId} IS NULL AND ${table.targetAddress} IS NOT NULL AND ${table.targetPort} BETWEEN 1 AND 65535)`,
     ),
   ],
 );
@@ -535,6 +628,7 @@ export type PeerInbound = typeof peerInbound.$inferSelect;
 export type PeerLink = typeof peerLink.$inferSelect;
 export type PeerLinkCredential = typeof peerLinkCredential.$inferSelect;
 export type ManagedOutbound = typeof managedOutbound.$inferSelect;
+export type PortForward = typeof portForward.$inferSelect;
 export type ManagedConfigVersion = typeof managedConfigVersion.$inferSelect;
 export type ManagedRuleSetAsset = typeof managedRuleSetAsset.$inferSelect;
 export type ManagedRollout = typeof managedRollout.$inferSelect;

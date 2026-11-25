@@ -1,14 +1,13 @@
-import { Inbound } from "@black-duty/sing-box-schema";
+import { Inbound, Outbound } from "@black-duty/sing-box-schema";
 import type { z } from "zod";
 
 /**
  * Single source of truth for protocol handling, derived from the sing-box schema.
  *
- * `@black-duty/sing-box-schema` exports `Inbound` as a discriminated union over
- * `type`; we index its members by that literal so a protocol's full Zod schema is
- * available for validation and form generation. The list of node protocols is
- * derived from the schema itself — no hand-maintained whitelist, no per-protocol
- * code anywhere else.
+ * `@black-duty/sing-box-schema` exports `Inbound` and `Outbound` as discriminated
+ * unions over `type`; we index their members by that literal so every protocol's
+ * full Zod schema is available for validation and form generation. No hand-written
+ * sing-box protocol schemas are maintained anywhere else.
  */
 
 // The union members are ZodObjects; introspection needs the internal `def`, which
@@ -19,8 +18,8 @@ interface UnionDef {
   options: ZodObjectLike[];
 }
 
-function buildInboundByType(): Record<string, ZodObjectLike> {
-  const options = (Inbound.def as unknown as UnionDef).options;
+function buildByType(union: unknown): Record<string, ZodObjectLike> {
+  const options = (union as { def: UnionDef }).def.options;
   const byType: Record<string, ZodObjectLike> = {};
 
   for (const member of options) {
@@ -37,7 +36,85 @@ function buildInboundByType(): Record<string, ZodObjectLike> {
 }
 
 export const INBOUND_BY_TYPE: Record<string, ZodObjectLike> =
-  buildInboundByType();
+  buildByType(Inbound);
+
+export const OUTBOUND_BY_TYPE: Record<string, ZodObjectLike> =
+  buildByType(Outbound);
+
+/** Fields injected by the compiler on every outbound. */
+export const MANAGED_OUTBOUND_FIELDS = ["type", "tag"] as const;
+
+/** Outbound fields that carry sensitive credentials and must be encrypted at rest. */
+export const OUTBOUND_SECRET_FIELD_NAMES = [
+  "password",
+  "uuid",
+  "private_key",
+  "auth_str",
+  "auth",
+  "pre_shared_key",
+] as const;
+
+const NON_CUSTOM_PROXY_OUTBOUNDS = new Set([
+  "direct",
+  "block",
+  "selector",
+  "urltest",
+]);
+
+/** Every sing-box outbound type derived from the schema. */
+export const OUTBOUND_PROTOCOLS: readonly string[] =
+  Object.keys(OUTBOUND_BY_TYPE).sort();
+
+/**
+ * Editable Zod schema for an outbound protocol, derived from `@black-duty/sing-box-schema`
+ * minus compiler-injected `type` and `tag`.
+ */
+export function outboundSettingsSchemaFor(protocol: string): ZodObjectLike {
+  const schema = OUTBOUND_BY_TYPE[protocol];
+  if (!schema) {
+    throw new Error(`Unknown sing-box outbound protocol: ${protocol}`);
+  }
+  const shape = schema.def.shape;
+  const mask: Record<string, true> = {};
+  for (const key of MANAGED_OUTBOUND_FIELDS) {
+    if (key in shape) {
+      mask[key] = true;
+    }
+  }
+  return schema.omit(mask) as ZodObjectLike;
+}
+
+/**
+ * Splits a validated custom outbound settings object into non-secret settings and
+ * secret credential fields (for encrypted storage), based on `OUTBOUND_SECRET_FIELD_NAMES`.
+ */
+export function splitOutboundSecrets(settings: Record<string, unknown>): {
+  publicSettings: Record<string, unknown>;
+  secrets: Record<string, unknown>;
+} {
+  const publicSettings: Record<string, unknown> = {};
+  const secrets: Record<string, unknown> = {};
+  const secretSet = new Set<string>(OUTBOUND_SECRET_FIELD_NAMES);
+  for (const [key, value] of Object.entries(settings)) {
+    if (
+      secretSet.has(key) &&
+      value !== undefined &&
+      value !== null &&
+      value !== ""
+    ) {
+      secrets[key] = value;
+    } else {
+      publicSettings[key] = value;
+    }
+  }
+  return { publicSettings, secrets };
+}
+
+/** Whether an outbound protocol exposes a sing-box `tls` block. */
+export function outboundProtocolSupportsTls(protocol: string): boolean {
+  const schema = OUTBOUND_BY_TYPE[protocol];
+  return Boolean(schema && "tls" in schema.def.shape);
+}
 
 /**
  * Fields the compiler injects on every inbound; never shown in the form or stored
@@ -116,6 +193,16 @@ export const NODE_PROTOCOLS: readonly string[] = orderProtocols(
     .filter(([, member]) => isNodeInbound(member))
     .map(([type]) => type),
 );
+
+/** External proxy outbound protocols (all sing-box outbounds except direct/block/groups). */
+export const CUSTOM_PROXY_OUTBOUND_PROTOCOLS: readonly string[] =
+  orderProtocols(
+    OUTBOUND_PROTOCOLS.filter((type) => !NON_CUSTOM_PROXY_OUTBOUNDS.has(type)),
+  );
+
+export function isCustomProxyOutboundProtocol(value: string): boolean {
+  return CUSTOM_PROXY_OUTBOUND_PROTOCOLS.includes(value);
+}
 
 /** Protocol identifiers are dynamic (derived from the schema), hence a plain string. */
 export type NodeProtocol = string;

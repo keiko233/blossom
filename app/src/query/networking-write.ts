@@ -2,6 +2,7 @@ import {
   MANAGED_TOPOLOGY_ID,
   directProfileIpFamilyDialFields,
   managedRuntimeTag,
+  type PeerProtocol,
 } from "@blossom/domain/managed-networking";
 import type { SQL } from "drizzle-orm";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
@@ -439,10 +440,16 @@ type NetworkingDeleteResult =
 
 // --- Links and peer outbounds ----------------------------------------------
 
-function peerSecret(protocol: "trojan" | "vless"): string {
-  return protocol === "vless"
-    ? randomUUID()
-    : randomBytes(24).toString("base64url");
+function peerSecret(protocol: PeerProtocol): string {
+  if (protocol === "vless" || protocol === "vmess" || protocol === "tuic") {
+    return randomUUID();
+  }
+  if (protocol === "shadowsocks") {
+    // 32 random bytes base64-encoded: valid as a 256-bit SS2022 PSK and
+    // sliceable to 16 bytes for 128-bit SS2022 methods or usable as a classic password.
+    return randomBytes(32).toString("base64");
+  }
+  return randomBytes(24).toString("base64url");
 }
 
 export async function createPeerLinkDraft(

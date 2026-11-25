@@ -8,6 +8,9 @@ import {
   formatManagedPeerTlsBindingId,
   MANAGED_NETWORKING_V2_CAPABILITY,
   MANAGED_SNAPSHOT_LIMITS,
+  managedIntentOutboundSchema,
+  managedIntentPeerInboundSchema,
+  managedIntentPortForwardSchema,
   managedPeerCertificateDeploymentSchema,
   managedPeerTlsBindingSchema,
   managedProbeBindingSchema,
@@ -228,5 +231,60 @@ describe("agent config v3 shared contracts", () => {
         sizeBytes: 128,
       }).success,
     ).toBe(false);
+  });
+
+  it("accepts non-TLS peer inbounds, custom_proxy, outbound_group, and port forwards", () => {
+    expect(
+      managedIntentPeerInboundSchema.safeParse({
+        inboundId: "ss1",
+        runtimeTag: "peer-in-ss1",
+        protocol: "shadowsocks",
+        listenAddress: "::",
+        listenPort: 18388,
+        advertisedAddress: "203.0.113.10",
+        advertisedPort: 18388,
+        network: "both",
+        settings: { method: "2022-blake3-aes-128-gcm" },
+        admissions: [
+          {
+            linkId: "link-1",
+            sourceServerId: "srv-a",
+            credentialGeneration: 1,
+          },
+        ],
+      }).success,
+    ).toBe(true);
+
+    expect(
+      managedIntentOutboundSchema.safeParse({
+        outboundId: "cp1",
+        runtimeTag: "custom-out-cp1",
+        kind: "custom_proxy",
+        protocol: "socks",
+        settings: { server: "198.51.100.2", server_port: 1080 },
+      }).success,
+    ).toBe(true);
+
+    expect(
+      managedIntentOutboundSchema.safeParse({
+        outboundId: "grp1",
+        runtimeTag: "group-out-grp1",
+        kind: "outbound_group",
+        protocol: "urltest",
+        memberOutboundTags: ["peer-out-p1", "custom-out-cp1"],
+      }).success,
+    ).toBe(true);
+
+    expect(
+      managedIntentPortForwardSchema.safeParse({
+        forwardId: "pf1",
+        runtimeTag: "relay-in-pf1",
+        listenAddress: "::",
+        listenPort: 10443,
+        network: "both",
+        overrideAddress: "203.0.113.20",
+        overridePort: 443,
+      }).success,
+    ).toBe(true);
   });
 });
