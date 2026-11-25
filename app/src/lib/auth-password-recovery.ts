@@ -103,7 +103,7 @@ export function createPasswordRecovery(deps: PasswordRecoveryDeps) {
           handler: createAuthMiddleware(async (c) => {
             if (!deps.isEmailEnabled()) {
               console.warn(
-                "Password reset request refused: email is not configured (RESEND_API_KEY, RESEND_MAIL_FROM)",
+                "Password reset request refused: email is not configured for any provider",
               );
               throw new APIError("SERVICE_UNAVAILABLE", {
                 message: PASSWORD_RESET_UNAVAILABLE_MESSAGE,

@@ -51,7 +51,7 @@ const buildAuth = createServerOnlyFn(() => {
   });
 
   const passwordRecovery = createPasswordRecovery({
-    isEmailEnabled: () => isEmailEnabled,
+    isEmailEnabled: () => isEmailEnabled(),
     sendPasswordResetEmail,
   });
 

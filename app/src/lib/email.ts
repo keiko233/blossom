@@ -1,24 +1,42 @@
 import { APIError } from "better-auth/api";
 import { createElement } from "react";
+import type React from "react";
+import { render } from "react-email";
 import { Resend } from "resend";
 
+import {
+  hasCloudflareSendEmailBinding,
+  sendCloudflareEmail,
+  sendSmtpEmail,
+} from "@/lib/email-transport";
 import MagicLinkEmail from "@/templates/emails/magic-link";
 import PasswordResetEmail from "@/templates/emails/password-reset";
 
+import {
+  resolveEmailConfig,
+  type EmailConfig,
+  type EmailMessage,
+  type EmailProvider,
+} from "./email-config";
 import { getServerEnv } from "./env";
 
-const serverEnv = getServerEnv();
+/**
+ * Resolves the provider on every call, not at module load: Cloudflare reads the
+ * `SEND_EMAIL` binding from the request's `env`, which only exists at runtime.
+ */
+export function getConfiguredEmailConfig(): EmailConfig | null {
+  return resolveEmailConfig(getServerEnv(), {
+    hasCloudflareSendEmailBinding: hasCloudflareSendEmailBinding(),
+  });
+}
 
-export const isEmailEnabled =
-  Boolean(serverEnv.RESEND_API_KEY) && Boolean(serverEnv.RESEND_MAIL_FROM);
+export function isEmailEnabled(): boolean {
+  return getConfiguredEmailConfig() !== null;
+}
 
-export const getEmailClient = () => {
-  if (isEmailEnabled) {
-    return new Resend(serverEnv.RESEND_API_KEY!);
-  }
-
-  return null;
-};
+export function getConfiguredEmailProvider(): EmailProvider | null {
+  return getConfiguredEmailConfig()?.provider ?? null;
+}
 
 /** What a caller (and, over HTTP, the client) sees when no link could be sent. */
 export const MAGIC_LINK_UNAVAILABLE_MESSAGE =
@@ -29,6 +47,47 @@ const unavailable = () =>
     message: MAGIC_LINK_UNAVAILABLE_MESSAGE,
     code: "EMAIL_UNAVAILABLE",
   });
+
+async function renderMessage(
+  element: React.ReactElement,
+): Promise<{ html: string; text: string }> {
+  const [html, text] = await Promise.all([
+    render(element),
+    render(element, { plainText: true }),
+  ]);
+  return { html, text };
+}
+
+/**
+ * Delivers one already-rendered message. Failure reasons are not inspected or
+ * forwarded: providers can echo the address, the link or credentials in their
+ * errors, so the caller only ever sees a generic `APIError`.
+ */
+async function deliver(
+  config: EmailConfig,
+  message: EmailMessage,
+): Promise<void> {
+  switch (config.provider) {
+    case "resend": {
+      const client = new Resend(config.apiKey);
+      const { error } = await client.emails.send({
+        from: message.from,
+        to: message.to,
+        subject: message.subject,
+        html: message.html,
+        text: message.text,
+      });
+      if (error) throw new Error("Resend returned an error");
+      return;
+    }
+    case "smtp":
+      await sendSmtpEmail(config.smtp, message);
+      return;
+    case "cloudflare":
+      await sendCloudflareEmail(message);
+      return;
+  }
+}
 
 /**
  * Emails a sign-in link, or throws a generic `APIError` so the request fails
@@ -45,36 +104,29 @@ export async function sendMagicLinkEmail(data: {
   email: string;
   url: string;
 }): Promise<void> {
-  const emailClient = getEmailClient();
+  const config = getConfiguredEmailConfig();
 
-  if (!emailClient) {
-    console.warn(
-      "Magic-link email not sent: email is not configured (RESEND_API_KEY, RESEND_MAIL_FROM)",
-    );
+  if (!config) {
+    console.warn("Magic-link email not sent: email is not configured");
     throw unavailable();
   }
 
-  let failed: boolean;
+  const element = createElement(MagicLinkEmail, {
+    email: data.email,
+    link: data.url,
+  });
+
   try {
-    const { error } = await emailClient.emails.send({
-      from: serverEnv.RESEND_MAIL_FROM!,
+    const rendered = await renderMessage(element);
+    const subject = `Welcome to ${getServerEnv().APP_NAME}! Here's your link`;
+    await deliver(config, {
+      from: config.from,
       to: data.email,
-      subject: `Welcome to ${serverEnv.APP_NAME}! Here's your link`,
-      react: createElement(MagicLinkEmail, {
-        email: data.email,
-        link: data.url,
-      }),
+      subject,
+      ...rendered,
     });
-    failed = Boolean(error);
   } catch {
     console.error("Magic-link email delivery failed: the provider call threw");
-    throw unavailable();
-  }
-
-  if (failed) {
-    console.error(
-      "Magic-link email delivery failed: the provider returned an error",
-    );
     throw unavailable();
   }
 }
@@ -92,34 +144,27 @@ export async function sendPasswordResetEmail(data: {
   email: string;
   url: string;
 }): Promise<void> {
-  const emailClient = getEmailClient();
+  const config = getConfiguredEmailConfig();
 
-  if (!emailClient) {
-    console.warn(
-      "Password reset email not sent: email is not configured (RESEND_API_KEY, RESEND_MAIL_FROM)",
-    );
+  if (!config) {
+    console.warn("Password reset email not sent: email is not configured");
     throw unavailable();
   }
 
-  let failed: boolean;
+  const element = createElement(PasswordResetEmail, { link: data.url });
+
   try {
-    const { error } = await emailClient.emails.send({
-      from: serverEnv.RESEND_MAIL_FROM!,
+    const rendered = await renderMessage(element);
+    const subject = `Reset your ${getServerEnv().APP_NAME} password`;
+    await deliver(config, {
+      from: config.from,
       to: data.email,
-      subject: `Reset your ${serverEnv.APP_NAME} password`,
-      react: createElement(PasswordResetEmail, { link: data.url }),
+      subject,
+      ...rendered,
     });
-    failed = Boolean(error);
   } catch {
     console.error(
       "Password reset email delivery failed: the provider call threw",
-    );
-    throw unavailable();
-  }
-
-  if (failed) {
-    console.error(
-      "Password reset email delivery failed: the provider returned an error",
     );
     throw unavailable();
   }

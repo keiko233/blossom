@@ -395,12 +395,13 @@ export const bulkUpdateUsers = createServerFn({ method: "POST" })
 export type SignInLinkStatus = "sent" | "email_disabled";
 
 /**
- * Emails a magic sign-in link. Mail only goes out when RESEND is configured;
- * without it better-auth's `sendMagicLink` would merely log the link, so the
- * caller is told `email_disabled` instead of pretending it was sent.
+ * Emails a magic sign-in link. Mail only goes out when an email provider
+ * (Resend, SMTP or Cloudflare Workers Mail) is configured; without one
+ * better-auth's `sendMagicLink` would merely log the link, so the caller is
+ * told `email_disabled` instead of pretending it was sent.
  */
 async function sendSignInLink(email: string): Promise<SignInLinkStatus> {
-  if (!isEmailEnabled) {
+  if (!isEmailEnabled()) {
     return "email_disabled";
   }
   await getAuth().api.signInMagicLink({

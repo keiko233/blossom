@@ -7,6 +7,32 @@ interface CloudflareEnv {
   };
   DATABASE_URL?: string;
   AGENT_SESSION_DO?: DurableObjectNamespace;
+  SEND_EMAIL?: SendEmail;
+}
+
+interface EmailAddress {
+  email: string;
+  name?: string;
+}
+
+interface EmailSendResult {
+  messageId: string;
+}
+
+/** Structured message accepted by the Email Service `send()` binding. */
+interface EmailMessageBuilder {
+  to?: string | EmailAddress | (string | EmailAddress)[];
+  cc?: string | EmailAddress | (string | EmailAddress)[];
+  bcc?: string | EmailAddress | (string | EmailAddress)[];
+  from: string | EmailAddress;
+  subject: string;
+  html?: string;
+  text?: string;
+  replyTo?: string | EmailAddress;
+}
+
+interface SendEmail {
+  send(message: EmailMessageBuilder): Promise<EmailSendResult>;
 }
 
 interface DurableObjectId {}

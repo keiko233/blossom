@@ -57,8 +57,15 @@ Server env vars are validated at runtime on the first request, so production bui
 | `BETTER_AUTH_SECRET` | Yes | Runtime | Secret key for better-auth. Generate with `pnpm dlx @better-auth/cli secret`. |
 | `APP_NAME` | No | Runtime | Display name, defaults to `Blossom`. |
 | `VITE_APP_NAME` | No | Build-time | Display name baked into the client bundle, defaults to `Blossom`. |
+| `EMAIL_PROVIDER` | No | Runtime | `resend`, `smtp`, or `cloudflare`. Unset auto-detects in that order. |
+| `EMAIL_FROM` | No | Runtime | Shared sender, e.g. `Blossom <noreply@example.com>`. `RESEND_MAIL_FROM` is the legacy fallback. |
 | `RESEND_API_KEY` | No | Runtime | Resend API key for email sending. |
-| `RESEND_MAIL_FROM` | No | Runtime | Sender address used with Resend. |
+| `RESEND_MAIL_FROM` | No | Runtime | Sender address for Resend; used when `EMAIL_FROM` is unset. |
+| `SMTP_HOST` | No | Runtime | SMTP relay host, e.g. `smtp.example.com`. |
+| `SMTP_PORT` | No | Runtime | SMTP port. Defaults to `465` when `SMTP_SECURE` is true, otherwise `587`. |
+| `SMTP_SECURE` | No | Runtime | `true` for implicit TLS (port 465), `false` for STARTTLS (port 587). |
+| `SMTP_USER` | No | Runtime | SMTP username. Set together with `SMTP_PASSWORD`; leave both empty for an unauthenticated relay. |
+| `SMTP_PASSWORD` | No | Runtime | SMTP password. Set together with `SMTP_USER`. |
 | `GITHUB_CLIENT_ID` | No | Runtime | GitHub OAuth client ID. |
 | `GITHUB_CLIENT_SECRET` | No | Runtime | GitHub OAuth client secret. |
 | `GOOGLE_CLIENT_ID` | No | Runtime | Google OAuth client ID. |
@@ -74,6 +81,8 @@ Server env vars are validated at runtime on the first request, so production bui
 | `MAINTENANCE_TOKEN` | No | Runtime | Bearer token accepted by `/api/maintenance/server-metrics` for bounded retention cleanup and `/api/maintenance/managed-rollouts` for the bounded managed-rollout sweep. Unset disables both routes. |
 
 Copy `app/.env.example` to `app/.env.local` for local development.
+
+Email uses exactly one provider. Set `EMAIL_PROVIDER` to `resend`, `smtp`, or `cloudflare`, or leave it unset to auto-detect (Resend, then SMTP, then Cloudflare). SMTP works on Node and Vercel; Cloudflare Workers Mail uses `worker-mailer` over `cloudflare:sockets` and only runs on Cloudflare, where you enable the Email Service `send_email` binding (`"send_email": [{ "name": "SEND_EMAIL" }]`, commented out in `app/wrangler.jsonc`) and onboard a sender domain. `EMAIL_FROM` is shared across providers, and `RESEND_MAIL_FROM` continues to work as its fallback.
 
 When a `HYPERDRIVE` binding is declared, local Cloudflare development supplies `DATABASE_URL` to Wrangler as its local connection string unless an explicit local Hyperdrive connection string is set. Local development does not exercise remote pooling or caching.
 

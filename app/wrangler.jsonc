@@ -17,6 +17,10 @@
       "new_sqlite_classes": ["AgentSessionDO"],
     },
   ],
+  // Optional Cloudflare Email Service binding. Uncomment and onboard a sender
+  // domain to send through Cloudflare Workers Mail, then set
+  // EMAIL_PROVIDER=cloudflare (or leave it unset to auto-detect).
+  // "send_email": [{ "name": "SEND_EMAIL" }],
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",

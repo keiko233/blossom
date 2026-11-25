@@ -8,7 +8,7 @@ import { appSetting } from "@/db/settings-schema";
 import { fromInput } from "@/lib/admin-audit";
 import { adminAudit } from "@/lib/admin-audit-middleware";
 import { getAuth, getEnabledSocialProviders } from "@/lib/auth";
-import { isEmailEnabled } from "@/lib/email";
+import { getConfiguredEmailProvider, isEmailEnabled } from "@/lib/email";
 import { ensureAdmin } from "@/lib/ensure-admin";
 import { getServerEnv } from "@/lib/env";
 import { detectRuntime } from "@/lib/runtime-info";
@@ -35,7 +35,8 @@ function readSystemStatus() {
   return {
     appName: env.APP_NAME,
     authUrl: env.BETTER_AUTH_URL,
-    emailConfigured: isEmailEnabled,
+    emailConfigured: isEmailEnabled(),
+    emailProvider: getConfiguredEmailProvider(),
     socialProviders: getEnabledSocialProviders(),
     runtime: detectRuntime({
       userAgent: typeof navigator === "undefined" ? null : navigator.userAgent,
