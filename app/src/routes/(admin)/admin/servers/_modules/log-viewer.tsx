@@ -6,6 +6,14 @@ import type React from "react";
 import { useEffect, useRef, useState } from "react";
 
 import { nextLogIndex, type LogViewEntry } from "@/lib/admin-logs-view";
+import {
+  formatLogTime,
+  logLevelVariant,
+  logLevelVariants,
+  logRowVariants,
+  padLevel,
+} from "@/lib/log-view-format";
+import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages";
 
 import { LogLineText } from "./log-line-text";
@@ -18,6 +26,7 @@ export interface LogViewerProps {
   onPause(): void;
   onResume(): void;
   onOpenContext(entry: Extract<LogViewEntry, { kind: "record" }>): void;
+  onFocusSearch(): void;
 }
 
 const ROW_HEIGHT = 26;
@@ -49,6 +58,7 @@ export function LogViewer({
   onPause,
   onResume,
   onOpenContext,
+  onFocusSearch,
 }: LogViewerProps): React.ReactElement {
   const scrollRef = useRef<HTMLDivElement>(null);
   const previousScrollTop = useRef(0);
@@ -103,7 +113,7 @@ export function LogViewer({
         aria-activedescendant={activeId}
         tabIndex={0}
         data-slot="agent-log-viewer"
-        className="h-[28rem] overflow-auto rounded-lg border bg-background/60 font-mono text-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/24"
+        className="h-full min-h-0 flex-1 overflow-auto bg-background font-mono text-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/24 focus-visible:ring-inset"
         onScroll={(event) => {
           const element = event.currentTarget;
           const nearBottom =
@@ -143,6 +153,11 @@ export function LogViewer({
             } else {
               onResume();
             }
+            return;
+          }
+          if (event.key === "/") {
+            event.preventDefault();
+            onFocusSearch();
           }
         }}
       >
@@ -155,11 +170,6 @@ export function LogViewer({
             const isActive = virtualItem.index === activeIndex;
             const isSelected =
               entry.kind === "record" && selected.has(entry.id);
-            const rowClass = isActive
-              ? "bg-accent/60"
-              : entry.kind === "gap"
-                ? "bg-warning/8 text-warning-foreground"
-                : "hover:bg-accent/40";
 
             return (
               <div
@@ -169,7 +179,16 @@ export function LogViewer({
                 aria-selected={entry.kind === "record" ? isSelected : false}
                 aria-disabled={entry.kind === "gap" || undefined}
                 data-slot={entry.kind === "record" ? "log-row" : "log-gap"}
-                className={`absolute start-0 top-0 flex h-[26px] w-max min-w-full items-center gap-2 px-2 whitespace-pre ${rowClass}`}
+                className={cn(
+                  "absolute start-0 top-0",
+                  logRowVariants({
+                    state: isActive
+                      ? "active"
+                      : entry.kind === "gap"
+                        ? "gap"
+                        : "idle",
+                  }),
+                )}
                 style={{
                   transform: `translateY(${virtualItem.start}px)`,
                 }}
@@ -187,24 +206,32 @@ export function LogViewer({
                     >
                       {isSelected ? <CheckIcon className="size-3" /> : null}
                     </span>
-                    <span className="shrink-0 text-muted-foreground">
-                      {entry.record.time.slice(11, 23)}
+                    <span className="truncate text-muted-foreground tabular-nums">
+                      {formatLogTime(entry.record.time)}
                     </span>
-                    <span className="shrink-0 font-semibold">
-                      {entry.record.level}
+                    <span
+                      className={logLevelVariants({
+                        level: logLevelVariant(entry.record.level),
+                      })}
+                    >
+                      {padLevel(entry.record.level)}
                     </span>
-                    <span className="shrink-0 text-muted-foreground">
+                    <span className="truncate text-muted-foreground">
                       {entry.record.source}
                     </span>
                     <LogLineText text={entry.record.text} />
                     {entry.record.truncated ? (
-                      <span className="shrink-0 text-warning-foreground">
+                      <span className="text-warning-foreground">
                         {m.agent_logs_truncated()}
                       </span>
-                    ) : null}
+                    ) : (
+                      <span aria-hidden="true" />
+                    )}
                   </>
                 ) : (
-                  <span className="font-sans">{gapLabel(entry)}</span>
+                  <span className="col-span-full font-sans">
+                    {gapLabel(entry)}
+                  </span>
                 )}
               </div>
             );

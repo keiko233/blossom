@@ -20,6 +20,8 @@ import {
   formatLogLine,
   isLogRecordEntry,
   logAvailability,
+  logPhaseTone,
+  logPolicyToolbarTone,
   logTimeLabel,
   nextLogIndex,
   sanitizeLogText,
@@ -380,5 +382,33 @@ describe("nextLogIndex", () => {
   it("leaves unrelated keys to the browser and handles an empty list", () => {
     expect(nextLogIndex("Tab", 0, 5)).toBeNull();
     expect(nextLogIndex("ArrowDown", 0, 0)).toBeNull();
+  });
+});
+
+describe("logPhaseTone", () => {
+  it("maps every connection phase to a status tone", () => {
+    expect(logPhaseTone("live")).toBe("success");
+    expect(logPhaseTone("connecting")).toBe("info");
+    expect(logPhaseTone("paused")).toBe("warning");
+    expect(logPhaseTone("reconnecting")).toBe("warning");
+    expect(logPhaseTone("unauthorized")).toBe("danger");
+    expect(logPhaseTone("error")).toBe("danger");
+    expect(logPhaseTone("idle")).toBe("muted");
+    expect(logPhaseTone("unavailable")).toBe("muted");
+    expect(logPhaseTone("unsupported")).toBe("muted");
+  });
+});
+
+describe("logPolicyToolbarTone", () => {
+  it("ranks errors over applying over pending", () => {
+    expect(logPolicyToolbarTone(["pending", "error"])).toBe("danger");
+    expect(logPolicyToolbarTone(["pending", "applying"])).toBe("info");
+    expect(logPolicyToolbarTone(["pending"])).toBe("warning");
+  });
+
+  it("signals nothing when no source is waiting", () => {
+    expect(logPolicyToolbarTone([])).toBeNull();
+    expect(logPolicyToolbarTone(["in-sync", "not-reported"])).toBeNull();
+    expect(logPolicyToolbarTone(["offline", "in-sync"])).toBeNull();
   });
 });

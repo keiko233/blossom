@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import type React from "react";
 
+import { WorkbenchViewport } from "@/components/app-shell/workspace";
 import { m } from "@/paraglide/messages";
 
 import { ServerLogsPanel } from "../_modules/server-logs-panel";
@@ -15,5 +16,9 @@ export const Route = createFileRoute("/(admin)/admin/servers/$serverId/logs")({
 
 function RouteComponent(): React.ReactElement {
   const server = useWorkspaceServer();
-  return <ServerLogsPanel server={server} />;
+  return (
+    <WorkbenchViewport data-slot="logs-workbench">
+      <ServerLogsPanel server={server} />
+    </WorkbenchViewport>
+  );
 }

@@ -12,6 +12,8 @@ import type {
   AgentWsV2LogsPayloadOf,
 } from "@blossom/contracts/agent-ws-v2-logs";
 
+import type { LogPolicyCue } from "@/lib/log-policy-view";
+
 type AgentWsV2LogsBatchPayload = AgentWsV2LogsPayloadOf<"logs.batch">;
 type AgentWsV2LogsSearchResultPayload =
   AgentWsV2LogsPayloadOf<"logs.search.result">;
@@ -486,4 +488,63 @@ export function nextLogIndex(
 /** A short UTC time for a fixed-height row; the title carries the full value. */
 export function logTimeLabel(iso: string): string {
   return iso.slice(11, 23);
+}
+
+/** Status-dot tone for the workbench status bar. */
+export type LogPhaseTone = "success" | "warning" | "info" | "danger" | "muted";
+
+/**
+ * A connection phase is never communicated by color alone; the status bar
+ * always renders its label next to this dot.
+ */
+export function logPhaseTone(
+  phase:
+    | "idle"
+    | "connecting"
+    | "live"
+    | "paused"
+    | "reconnecting"
+    | "unauthorized"
+    | "unavailable"
+    | "unsupported"
+    | "error",
+): LogPhaseTone {
+  switch (phase) {
+    case "live":
+      return "success";
+    case "paused":
+    case "reconnecting":
+      return "warning";
+    case "connecting":
+      return "info";
+    case "unauthorized":
+    case "error":
+      return "danger";
+    case "idle":
+    case "unavailable":
+    case "unsupported":
+      return "muted";
+  }
+}
+
+/** Most urgent cue shown on the toolbar's policy button, if any. */
+export type LogPolicyToolbarTone = "danger" | "info" | "warning" | null;
+
+/**
+ * Collapses every source's cues into one toolbar signal: an apply error
+ * outranks an in-flight apply, which outranks a pending acknowledgement.
+ */
+export function logPolicyToolbarTone(
+  cues: readonly LogPolicyCue[],
+): LogPolicyToolbarTone {
+  if (cues.includes("error")) {
+    return "danger";
+  }
+  if (cues.includes("applying")) {
+    return "info";
+  }
+  if (cues.includes("pending")) {
+    return "warning";
+  }
+  return null;
 }
