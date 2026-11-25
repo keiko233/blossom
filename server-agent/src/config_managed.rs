@@ -49,6 +49,9 @@ pub const BUILTIN_DIRECT_OUTBOUND_TAG: &str = "direct";
 pub const SUBSCRIBER_INBOUND_TAG_PREFIX: &str = "node-";
 pub const PEER_INBOUND_TAG_PREFIX: &str = "peer-in-";
 pub const PEER_OUTBOUND_TAG_PREFIX: &str = "peer-out-";
+pub const PORT_FORWARD_TAG_PREFIX: &str = "relay-in-";
+pub const CUSTOM_OUTBOUND_TAG_PREFIX: &str = "custom-out-";
+pub const OUTBOUND_GROUP_TAG_PREFIX: &str = "group-out-";
 pub const DIRECT_PROFILE_TAG_PREFIX: &str = "direct-";
 pub const RULE_SET_TAG_PREFIX: &str = "rule-set-";
 pub const AGENT_OWNED_TAG_PREFIX: &str = "blossom-agent-";
@@ -77,6 +80,9 @@ pub enum RuntimeTagKind<'a> {
     SubscriberInbound(&'a str),
     PeerInbound(&'a str),
     PeerOutbound(&'a str),
+    PortForward(&'a str),
+    CustomProxy(&'a str),
+    OutboundGroup(&'a str),
     DirectProfile(&'a str),
     RuleSet(&'a str),
     AgentOwned(&'a str),
@@ -98,6 +104,15 @@ pub fn classify_runtime_tag(tag: &str) -> Option<RuntimeTagKind<'_>> {
     }
     if let Some(id) = tag.strip_prefix(PEER_OUTBOUND_TAG_PREFIX) {
         return (!id.is_empty()).then_some(RuntimeTagKind::PeerOutbound(id));
+    }
+    if let Some(id) = tag.strip_prefix(PORT_FORWARD_TAG_PREFIX) {
+        return (!id.is_empty()).then_some(RuntimeTagKind::PortForward(id));
+    }
+    if let Some(id) = tag.strip_prefix(CUSTOM_OUTBOUND_TAG_PREFIX) {
+        return (!id.is_empty()).then_some(RuntimeTagKind::CustomProxy(id));
+    }
+    if let Some(id) = tag.strip_prefix(OUTBOUND_GROUP_TAG_PREFIX) {
+        return (!id.is_empty()).then_some(RuntimeTagKind::OutboundGroup(id));
     }
     if let Some(id) = tag.strip_prefix(DIRECT_PROFILE_TAG_PREFIX) {
         return (!id.is_empty()).then_some(RuntimeTagKind::DirectProfile(id));
@@ -1258,6 +1273,18 @@ mod tests {
             Some(RuntimeTagKind::PeerOutbound("pout1"))
         );
         assert_eq!(
+            classify_runtime_tag("relay-in-pf1"),
+            Some(RuntimeTagKind::PortForward("pf1"))
+        );
+        assert_eq!(
+            classify_runtime_tag("custom-out-cout1"),
+            Some(RuntimeTagKind::CustomProxy("cout1"))
+        );
+        assert_eq!(
+            classify_runtime_tag("group-out-gout1"),
+            Some(RuntimeTagKind::OutboundGroup("gout1"))
+        );
+        assert_eq!(
             classify_runtime_tag("direct-dprof1"),
             Some(RuntimeTagKind::DirectProfile("dprof1"))
         );
@@ -1270,6 +1297,9 @@ mod tests {
             Some(RuntimeTagKind::AgentOwned("probe"))
         );
         assert_eq!(classify_runtime_tag("peer-in-"), None);
+        assert_eq!(classify_runtime_tag("relay-in-"), None);
+        assert_eq!(classify_runtime_tag("custom-out-"), None);
+        assert_eq!(classify_runtime_tag("group-out-"), None);
         assert_eq!(classify_runtime_tag("custom"), None);
     }
 
@@ -1359,6 +1389,131 @@ mod tests {
             rule_set["path"].as_str().unwrap(),
             "/etc/untrusted/geoip-cn.srs"
         );
+    }
+
+    fn non_tls_managed_document() -> Value {
+        serde_json::json!({
+            "apiVersion": 3,
+            "agent": {"configPollIntervalSeconds": 60, "heartbeatIntervalSeconds": 30},
+            "desiredRevision": "13:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "materializedNodeIds": ["n1"],
+            "singboxConfig": {
+                "log": {"level": "info", "timestamp": true},
+                "inbounds": [
+                    {
+                        "type": "vless",
+                        "tag": "node-n1",
+                        "listen": "::",
+                        "listen_port": 443,
+                        "tls": {"enabled": true, "server_name": "edge-a.example.com"}
+                    },
+                    {
+                        "type": "shadowsocks",
+                        "tag": "peer-in-pin1",
+                        "listen": "::",
+                        "listen_port": 9443,
+                        "method": "2022-blake3-aes-128-gcm",
+                        "password": "inbound-method-password",
+                        "users": [{
+                            "name": "blz.peer.1.6.1.link-11",
+                            "password": "peer-credential"
+                        }]
+                    },
+                    {
+                        "type": "direct",
+                        "tag": "relay-in-pf1",
+                        "listen": "::",
+                        "listen_port": 1080,
+                        "override_address": "203.0.113.20",
+                        "override_port": 9443
+                    }
+                ],
+                "outbounds": [
+                    {"type": "direct", "tag": "direct"},
+                    {
+                        "type": "shadowsocks",
+                        "tag": "peer-out-pout1",
+                        "server": "203.0.113.20",
+                        "server_port": 9443,
+                        "method": "2022-blake3-aes-128-gcm",
+                        "password": "peer-credential"
+                    },
+                    {
+                        "type": "socks",
+                        "tag": "custom-out-cout1",
+                        "server": "198.51.100.5",
+                        "server_port": 1080,
+                        "username": "custom",
+                        "password": "custom-credential"
+                    },
+                    {
+                        "type": "selector",
+                        "tag": "group-out-gout1",
+                        "outbounds": ["direct", "peer-out-pout1"]
+                    }
+                ],
+                "route": {"rules": [], "rule_set": [], "final": "group-out-gout1"}
+            },
+            "managedTlsBindings": [],
+            "certificateArtifacts": [],
+            "managed": {
+                "schemaVersion": 1,
+                "configVersionId": "mcv-srv-a-v2",
+                "intentDigest": "sha256:16ee2d3c0a0b39eae8f18bcf28387fb26b4714fb2842252a53e00ae02d3585a0",
+                "managedFingerprint": "sha256:dc3de16b93e06d49d58fada3e0e614edf1ecd128428810c4ebc3198eda637535",
+                "tlsBindings": [],
+                "peerTrustArtifacts": [],
+                "ruleSetBindings": [],
+                "ruleSetArtifacts": []
+            }
+        })
+    }
+
+    #[test]
+    fn non_tls_peers_and_extended_runtime_namespaces_validate_and_stage() {
+        let document = non_tls_managed_document();
+        let bytes = serde_json::to_vec(&document).unwrap();
+        let decoded = AgentConfigV3Document::decode_and_validate(&bytes).unwrap();
+        let managed = decoded.managed.as_ref().unwrap();
+        assert!(managed.tls_bindings.is_empty());
+        assert!(managed.peer_trust_artifacts.is_empty());
+
+        assert_eq!(
+            classify_runtime_tag("peer-in-pin1"),
+            Some(RuntimeTagKind::PeerInbound("pin1"))
+        );
+        assert_eq!(
+            classify_runtime_tag("peer-out-pout1"),
+            Some(RuntimeTagKind::PeerOutbound("pout1"))
+        );
+        assert_eq!(
+            classify_runtime_tag("relay-in-pf1"),
+            Some(RuntimeTagKind::PortForward("pf1"))
+        );
+        assert_eq!(
+            classify_runtime_tag("custom-out-cout1"),
+            Some(RuntimeTagKind::CustomProxy("cout1"))
+        );
+        assert_eq!(
+            classify_runtime_tag("group-out-gout1"),
+            Some(RuntimeTagKind::OutboundGroup("gout1"))
+        );
+
+        let dir = TempDir::new();
+        let staged = stage_managed_artifacts(managed, &dir.0).unwrap();
+        assert!(staged.peer_trust.is_empty());
+        assert!(staged.peer_trust_bundles.is_empty());
+        assert!(staged.rule_sets.is_empty());
+
+        let mut config = decoded.singbox_config.clone();
+        strip_untrusted_outbound_tls(&mut config);
+        strip_untrusted_rule_set_locations(&mut config);
+        let refs =
+            materialize_managed_config(&mut config, managed, &staged, &dir.0.join("certificates"))
+                .unwrap();
+        assert!(refs.is_empty());
+        assert!(config["inbounds"][1].get("tls").is_none());
+        assert!(config["outbounds"][1].get("tls").is_none());
     }
 
     #[test]

@@ -218,7 +218,7 @@ pub(crate) fn peer_inbound_credential(
         let Some(user) = user.as_object() else {
             return Err(ProbeIdentityError::MalformedUsers(inbound_tag.to_string()));
         };
-        if user.get("name").and_then(Value::as_str) != Some(expected.as_str()) {
+        if peer_identity_name(user) != Some(expected.as_str()) {
             continue;
         }
         let credential = credential_from_object(user, protocol)
@@ -265,7 +265,7 @@ pub(crate) fn peer_inbound_identities(
             let Some(user) = user.as_object() else {
                 return Err(ProbeIdentityError::MalformedUsers(tag.to_string()));
             };
-            let Some(name) = user.get("name").and_then(Value::as_str) else {
+            let Some(name) = peer_identity_name(user) else {
                 continue;
             };
             let Some(identity) = PeerLinkIdentity::decode(name) else {
@@ -363,12 +363,35 @@ fn object_with_tag<'a>(
     Ok(found)
 }
 
+/// The peer inbound user field carrying a link identity. Protocols whose
+/// schema names the credential principal `name` encode it there; SOCKS and
+/// Naive use the schema's `username` field instead.
+fn peer_identity_name(user: &Map<String, Value>) -> Option<&str> {
+    user.get("name")
+        .and_then(Value::as_str)
+        .or_else(|| user.get("username").and_then(Value::as_str))
+}
+
 fn protocol(object: &Map<String, Value>) -> Result<&str, ProbeIdentityError> {
     let protocol = object
         .get("type")
         .and_then(Value::as_str)
         .ok_or_else(|| ProbeIdentityError::UnsupportedProtocol("endpoint".to_string()))?;
-    if matches!(protocol, "trojan" | "vless") {
+    // Mirrors `PEER_PROTOCOLS` in `packages/domain/src/managed-networking.ts`.
+    if matches!(
+        protocol,
+        "vless"
+            | "trojan"
+            | "shadowsocks"
+            | "socks"
+            | "vmess"
+            | "hysteria2"
+            | "tuic"
+            | "anytls"
+            | "naive"
+            | "hysteria"
+            | "shadowtls"
+    ) {
         Ok(protocol)
     } else {
         Err(ProbeIdentityError::UnsupportedProtocol(
@@ -377,12 +400,35 @@ fn protocol(object: &Map<String, Value>) -> Result<&str, ProbeIdentityError> {
     }
 }
 
+/// Extracts the shared link secret from either an outbound object or the
+/// matching inbound user. The same function runs on both ends, so a protocol
+/// with alternative credential fields resolves them identically in both
+/// directions.
 fn credential_from_object(object: &Map<String, Value>, protocol: &str) -> Option<LinkCredential> {
-    let field = match protocol {
-        "trojan" => "password",
-        "vless" => "uuid",
-        _ => return None,
-    };
+    match protocol {
+        "vless" | "vmess" => credential_field(object, "uuid"),
+        "trojan" | "shadowsocks" | "hysteria2" | "anytls" | "shadowtls" => {
+            credential_field(object, "password")
+        }
+        // SOCKS and Naive users carry an authentication principal in `username`
+        // and the shared secret in `password`.
+        "socks" | "naive" => {
+            if object.get("username").and_then(Value::as_str)?.is_empty() {
+                return None;
+            }
+            credential_field(object, "password")
+        }
+        // TUIC supports both UUID and password authentication. Choose the UUID
+        // when the endpoint has one so inbound user and outbound agree.
+        "tuic" => credential_field(object, "uuid").or_else(|| credential_field(object, "password")),
+        "hysteria" => {
+            credential_field(object, "auth_str").or_else(|| credential_field(object, "password"))
+        }
+        _ => None,
+    }
+}
+
+fn credential_field(object: &Map<String, Value>, field: &str) -> Option<LinkCredential> {
     object
         .get(field)
         .and_then(Value::as_str)
@@ -484,6 +530,109 @@ mod tests {
         assert_eq!(
             peer_inbound_identities(&config).unwrap(),
             vec![("peer-in-pin1".to_string(), identity())]
+        );
+    }
+
+    fn protocol_config(
+        protocol: &str,
+        identity_field: &str,
+        credential_field: &str,
+    ) -> Map<String, Value> {
+        let mut user = Map::new();
+        user.insert(
+            identity_field.to_string(),
+            Value::String(identity().user_name()),
+        );
+        user.insert(
+            credential_field.to_string(),
+            Value::String("peer-credential".to_string()),
+        );
+        let mut outbound = json!({
+            "type": protocol,
+            "tag": "peer-out-p1",
+            "server": "127.0.0.1",
+            "server_port": 9000
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        outbound.insert(
+            credential_field.to_string(),
+            Value::String("peer-credential".to_string()),
+        );
+        if matches!(protocol, "socks" | "naive") {
+            outbound.insert(
+                "username".to_string(),
+                Value::String("client-user".to_string()),
+            );
+        }
+        json!({
+            "inbounds": [{
+                "type": protocol,
+                "tag": "peer-in-p1",
+                "listen": "127.0.0.1",
+                "listen_port": 9001,
+                "users": [Value::Object(user)]
+            }],
+            "outbounds": [Value::Object(outbound)]
+        })
+        .as_object()
+        .unwrap()
+        .clone()
+    }
+
+    #[test]
+    fn every_peer_protocol_extracts_matching_credentials() {
+        let cases = [
+            ("shadowsocks", "name", "password"),
+            ("socks", "username", "password"),
+            ("hysteria2", "name", "password"),
+            ("tuic", "name", "uuid"),
+            ("anytls", "name", "password"),
+            ("vmess", "name", "uuid"),
+            ("naive", "username", "password"),
+            ("hysteria", "name", "auth_str"),
+            ("shadowtls", "name", "password"),
+        ];
+        let request = request();
+        for (protocol, identity_field, credential_field) in cases {
+            let config = protocol_config(protocol, identity_field, credential_field);
+            let source = source_link_credential(&config, "peer-out-p1").unwrap();
+            let destination = peer_inbound_credential(&config, "peer-in-p1", &identity()).unwrap();
+            assert_eq!(
+                source, destination,
+                "{protocol} inbound and outbound credentials"
+            );
+            assert_eq!(source.expose(), "peer-credential", "{protocol}");
+            let token = request_token(&request, &source);
+            assert!(
+                verify_request_token(&request, &destination, &token),
+                "{protocol} probe token round trip"
+            );
+            assert_eq!(
+                peer_inbound_identities(&config).unwrap(),
+                vec![("peer-in-p1".to_string(), identity())],
+                "{protocol} link identity recovery"
+            );
+        }
+    }
+
+    #[test]
+    fn tuic_password_auth_and_unknown_protocols() {
+        let config = protocol_config("tuic", "name", "password");
+        let source = source_link_credential(&config, "peer-out-p1").unwrap();
+        let destination = peer_inbound_credential(&config, "peer-in-p1", &identity()).unwrap();
+        assert_eq!(source, destination);
+        assert_eq!(source.expose(), "peer-credential");
+
+        let unsupported = protocol_config("http", "name", "password");
+        assert_eq!(
+            source_link_credential(&unsupported, "peer-out-p1").unwrap_err(),
+            ProbeIdentityError::UnsupportedProtocol("http".to_string())
+        );
+        assert_eq!(
+            peer_inbound_credential(&unsupported, "peer-in-p1", &identity()).unwrap_err(),
+            ProbeIdentityError::UnsupportedProtocol("http".to_string())
         );
     }
 

@@ -28,6 +28,7 @@ const MAX_LENGTH_DIGITS: usize = 9;
 /// subscriber.
 const SUBSCRIBER_INBOUND_TAG_PREFIX: &str = "node-";
 const PEER_INBOUND_TAG_PREFIX: &str = "peer-in-";
+const PORT_FORWARD_TAG_PREFIX: &str = "relay-in-";
 const AGENT_OWNED_TAG_PREFIX: &str = "blossom-agent-";
 
 /// What a configured inbound is allowed to contribute to billable traffic.
@@ -39,6 +40,8 @@ pub(crate) enum InboundKind {
     Subscriber,
     /// A managed peer listener. Infrastructure telemetry, never billable.
     Peer,
+    /// An L4 port-forward listener. Infrastructure telemetry, never billable.
+    Relay,
     /// An agent-owned probe listener. Infrastructure telemetry, never billable.
     Probe,
 }
@@ -165,6 +168,7 @@ impl InboundClassification {
                     events.push(event.clone());
                 }
                 Some(InboundKind::Peer) => counts.peer_events += 1,
+                Some(InboundKind::Relay) => counts.relay_events += 1,
                 Some(InboundKind::Probe) => counts.probe_events += 1,
                 None => {
                     counts.unknown_tags += 1;
@@ -237,6 +241,7 @@ fn read_length(value: &str) -> Option<(usize, &str)> {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct FilterCounts {
     pub(crate) peer_events: usize,
+    pub(crate) relay_events: usize,
     pub(crate) probe_events: usize,
     pub(crate) unknown_tags: usize,
     pub(crate) missing_inbound: usize,
@@ -246,6 +251,7 @@ pub(crate) struct FilterCounts {
 impl FilterCounts {
     pub(crate) fn add(&mut self, other: Self) {
         self.peer_events += other.peer_events;
+        self.relay_events += other.relay_events;
         self.probe_events += other.probe_events;
         self.unknown_tags += other.unknown_tags;
         self.missing_inbound += other.missing_inbound;
@@ -357,6 +363,11 @@ fn classify_committed_tag(tag: &str) -> Result<InboundKind, ClassificationError>
             .then_some(InboundKind::Peer)
             .ok_or(ClassificationError::EmptyTag);
     }
+    if let Some(id) = tag.strip_prefix(PORT_FORWARD_TAG_PREFIX) {
+        return (!id.is_empty())
+            .then_some(InboundKind::Relay)
+            .ok_or(ClassificationError::EmptyTag);
+    }
     if let Some(id) = tag.strip_prefix(AGENT_OWNED_TAG_PREFIX) {
         return (!id.is_empty())
             .then_some(InboundKind::Probe)
@@ -466,6 +477,7 @@ mod tests {
             "inbounds": [
                 { "tag": "node-n1" },
                 { "tag": "peer-in-b" },
+                { "tag": "relay-in-f1" },
                 { "tag": "blossom-agent-probe" }
             ]
         });
@@ -476,6 +488,7 @@ mod tests {
             Some(InboundKind::Subscriber)
         );
         assert_eq!(classification.kind("peer-in-b"), Some(InboundKind::Peer));
+        assert_eq!(classification.kind("relay-in-f1"), Some(InboundKind::Relay));
         assert_eq!(
             classification.kind("blossom-agent-probe"),
             Some(InboundKind::Probe)
@@ -486,6 +499,7 @@ mod tests {
                 "blossom-agent-probe".to_string(),
                 "node-n1".to_string(),
                 "peer-in-b".to_string(),
+                "relay-in-f1".to_string(),
             ]
         );
 
@@ -497,6 +511,11 @@ mod tests {
         let empty_namespace = serde_json::json!({ "inbounds": [{ "tag": "node-" }] });
         assert!(matches!(
             InboundClassification::from_committed_config(empty_namespace.as_object().unwrap()),
+            Err(ClassificationError::EmptyTag)
+        ));
+        let empty_relay = serde_json::json!({ "inbounds": [{ "tag": "relay-in-" }] });
+        assert!(matches!(
+            InboundClassification::from_committed_config(empty_relay.as_object().unwrap()),
             Err(ClassificationError::EmptyTag)
         ));
         let missing_tag = serde_json::json!({ "inbounds": [{}] });
@@ -548,16 +567,18 @@ mod tests {
     }
 
     #[test]
-    fn filter_drops_peer_probe_and_unproven_events_before_accounting() {
+    fn filter_drops_peer_relay_probe_and_unproven_events_before_accounting() {
         let classification = InboundClassification::new([
             ("node-n1".to_string(), InboundKind::Subscriber),
             ("peer-b".to_string(), InboundKind::Peer),
+            ("relay-in-f1".to_string(), InboundKind::Relay),
             ("probe".to_string(), InboundKind::Probe),
         ])
         .unwrap();
         let filtered = classification.filter(&snapshot(vec![
             event("node-n1", "blz.1.2.5.n1sub-a"),
             event("peer-b", "link"),
+            event("relay-in-f1", ""),
             event("probe", "probe"),
             event("node-n1", "bare"),
             event("", "blz.1.2.5.n1sub-a"),
@@ -565,10 +586,43 @@ mod tests {
         ]));
         assert_eq!(filtered.message.events.len(), 1);
         assert_eq!(filtered.counts.peer_events, 1);
+        assert_eq!(filtered.counts.relay_events, 1);
         assert_eq!(filtered.counts.probe_events, 1);
         assert_eq!(filtered.counts.undecodable_identities, 1);
         assert_eq!(filtered.counts.missing_inbound, 1);
         assert_eq!(filtered.counts.unknown_tags, 1);
         assert!(filtered.unproven);
+    }
+
+    #[test]
+    fn port_forward_events_are_never_billed_or_unproven() {
+        let classification = InboundClassification::new([
+            ("node-n1".to_string(), InboundKind::Subscriber),
+            ("relay-in-f1".to_string(), InboundKind::Relay),
+        ])
+        .unwrap();
+        let filtered = classification.filter(&snapshot(vec![
+            event("node-n1", "blz.1.2.5.n1sub-a"),
+            event("relay-in-f1", "any-user"),
+        ]));
+        assert_eq!(filtered.message.events.len(), 1);
+        assert_eq!(
+            filtered.message.events[0]
+                .connection
+                .as_ref()
+                .unwrap()
+                .inbound,
+            "node-n1"
+        );
+        assert_eq!(filtered.counts.relay_events, 1);
+        assert!(!filtered.unproven);
+        assert!(matches!(
+            InboundClassification::from_committed_config(
+                serde_json::json!({ "inbounds": [{ "tag": "relay-in-" }] })
+                    .as_object()
+                    .unwrap()
+            ),
+            Err(ClassificationError::EmptyTag)
+        ));
     }
 }
