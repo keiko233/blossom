@@ -2,6 +2,7 @@ import { Configuration } from "@black-duty/sing-box-schema";
 import type {
   ManagedIntentOutbound,
   ManagedIntentPeerInbound,
+  ManagedIntentPortForward,
   ManagedIntentRouteRule,
   ManagedPeerTlsBinding,
   ManagedPeerTrustArtifact,
@@ -16,8 +17,11 @@ import {
   formatManagedPeerTlsBindingId,
   MANAGED_SNAPSHOT_SCHEMA_VERSION,
 } from "@blossom/contracts/agent-config-v3";
-import { encodePeerLinkIdentity } from "@blossom/domain/link-identity";
-import { BUILTIN_DIRECT_OUTBOUND_TAG } from "@blossom/domain/managed-networking";
+import {
+  BUILTIN_DIRECT_OUTBOUND_TAG,
+  isPeerProtocol,
+  peerProtocolCapability,
+} from "@blossom/domain/managed-networking";
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 
@@ -28,6 +32,12 @@ import {
 import type { SingboxRouteRule } from "@/lib/routing-rules";
 
 import {
+  assertValidManagedOutbound,
+  buildPeerInbound as buildPeerInboundConfig,
+  buildPeerOutbound,
+  outboundSupportsDomainResolver,
+} from "./peer-protocol-adapter";
+import {
   BOOTSTRAP_DNS_TAG,
   canonicalize,
   computeManagedStageIntentDigest,
@@ -35,7 +45,6 @@ import {
   intersectManagedRouteRulesWithMaterializedInbounds,
   type CertificateArtifact,
   type SingboxConfig,
-  type SingboxUser,
 } from "./singbox";
 
 export {
@@ -75,6 +84,8 @@ export interface CompileManagedServerConfigInput {
   tlsMaterial: ManagedPeerTlsMaterial;
   /** Plaintext peer credentials keyed by `managedPeerCredentialKey`. */
   peerCredentials: ReadonlyMap<string, string>;
+  /** Decrypted secret fields for `custom_proxy` rows, keyed by outbound id. */
+  customOutboundSecrets?: ReadonlyMap<string, Record<string, unknown>>;
   /** Test seam only; production compiles use the wall clock. */
   now?: Date;
 }
@@ -128,18 +139,6 @@ function peerCredential(
   return value;
 }
 
-function peerUser(
-  protocol: string,
-  linkId: string,
-  generation: number,
-  credential: string,
-): SingboxUser {
-  const name = encodePeerLinkIdentity(linkId, generation);
-  return protocol === "vless" || protocol === "vmess"
-    ? { name, uuid: credential }
-    : { name, ["password"]: credential };
-}
-
 function buildPeerInbound(
   peer: ManagedIntentPeerInbound,
   credentials: ReadonlyMap<string, string>,
@@ -153,35 +152,35 @@ function buildPeerInbound(
         a.linkId.localeCompare(b.linkId) ||
         a.credentialGeneration - b.credentialGeneration,
     )
-    .map((admission) =>
-      peerUser(
-        peer.protocol,
+    .map((admission) => ({
+      linkId: admission.linkId,
+      generation: admission.credentialGeneration,
+      credential: peerCredential(
+        credentials,
         admission.linkId,
         admission.credentialGeneration,
-        peerCredential(
-          credentials,
-          admission.linkId,
-          admission.credentialGeneration,
-          `peer inbound ${peer.inboundId}`,
-        ),
+        `peer inbound ${peer.inboundId}`,
       ),
-    );
-  return {
-    type: peer.protocol,
-    tag: peer.runtimeTag,
-    listen: peer.listenAddress,
-    listen_port: peer.listenPort,
-    users,
-    tls: {
-      enabled: true,
-      server_name: peer.tlsServerName,
+    }));
+  return buildPeerInboundConfig(
+    {
+      protocol: peer.protocol,
+      runtimeTag: peer.runtimeTag,
+      listenAddress: peer.listenAddress,
+      listenPort: peer.listenPort,
+      network: peer.network,
+      tlsServerName: peer.tlsServerName,
+      certificateId: peer.certificateId,
+      settings: peer.settings,
     },
-  };
+    users,
+  );
 }
 
 function buildManagedOutbound(
   outbound: ManagedIntentOutbound,
   credentials: ReadonlyMap<string, string>,
+  customSecrets: ReadonlyMap<string, Record<string, unknown>> | undefined,
 ): Json {
   if (outbound.kind === "direct_profile") {
     return {
@@ -190,12 +189,51 @@ function buildManagedOutbound(
       tag: outbound.runtimeTag,
     };
   }
+  if (outbound.kind === "custom_proxy") {
+    if (outbound.protocol === null) {
+      fail(
+        "managed_intent_invalid",
+        `custom proxy outbound ${outbound.outboundId} is missing its protocol`,
+      );
+    }
+    const settings = {
+      ...outbound.settings,
+      ...customSecrets?.get(outbound.outboundId),
+    };
+    const built: Json = {
+      ...settings,
+      type: outbound.protocol,
+      tag: outbound.runtimeTag,
+    };
+    const server = built.server;
+    if (
+      typeof server === "string" &&
+      !isIpAddress(server) &&
+      outboundSupportsDomainResolver(outbound.protocol)
+    ) {
+      built.domain_resolver = BOOTSTRAP_DNS_TAG;
+    }
+    return built;
+  }
+  if (outbound.kind === "outbound_group") {
+    if (outbound.protocol !== "selector" && outbound.protocol !== "urltest") {
+      fail(
+        "managed_intent_invalid",
+        `outbound group ${outbound.outboundId} is missing a selector/urltest protocol`,
+      );
+    }
+    return {
+      ...outbound.settings,
+      type: outbound.protocol,
+      tag: outbound.runtimeTag,
+      outbounds: [...(outbound.memberOutboundTags ?? [])],
+    };
+  }
   if (
     outbound.linkId === null ||
     outbound.protocol === null ||
     outbound.serverAddress === null ||
     outbound.serverPort === null ||
-    outbound.tlsServerName === null ||
     outbound.credentialGeneration === null
   ) {
     fail(
@@ -209,28 +247,64 @@ function buildManagedOutbound(
     outbound.credentialGeneration,
     `peer outbound ${outbound.outboundId}`,
   );
-  const tls: Json = {
-    enabled: true,
-    server_name: outbound.tlsServerName,
-  };
-  const base: Json = {
-    type: outbound.protocol,
-    tag: outbound.runtimeTag,
-    server: outbound.serverAddress,
-    server_port: outbound.serverPort,
-    tls,
-  };
-  if (outbound.protocol === "trojan") {
-    base["password"] = credential;
-  } else {
-    base.uuid = credential;
+  return buildPeerOutbound(
+    {
+      runtimeTag: outbound.runtimeTag,
+      protocol: outbound.protocol,
+      serverAddress: outbound.serverAddress,
+      serverPort: outbound.serverPort,
+      tlsServerName: outbound.tlsServerName,
+      trustMode: outbound.trustMode,
+      linkId: outbound.linkId,
+      credentialGeneration: outbound.credentialGeneration,
+      settings: outbound.settings,
+    },
+    credential,
+  );
+}
+
+function managedOutboundProtocol(
+  outbound: ManagedIntentOutbound,
+): string | null {
+  if (outbound.kind === "direct_profile") {
+    return "direct";
   }
-  // A peer hostname must resolve through direct egress, never through the
-  // link being commissioned. IP literals need no resolver.
-  if (!isIpAddress(outbound.serverAddress)) {
-    base.domain_resolver = BOOTSTRAP_DNS_TAG;
+  return outbound.protocol;
+}
+
+function buildPortForwardInbound(forward: ManagedIntentPortForward): Json {
+  return {
+    type: "direct",
+    tag: forward.runtimeTag,
+    listen: forward.listenAddress,
+    listen_port: forward.listenPort,
+    override_address: forward.overrideAddress,
+    override_port: forward.overridePort,
+    ...(forward.network === "both" ? {} : { network: forward.network }),
+  };
+}
+
+function intentOutboundSupportsUdp(
+  outbound: ManagedIntentOutbound,
+  resolveMember: (tag: string) => boolean,
+): boolean {
+  if (outbound.supportsUdp !== undefined) {
+    return outbound.supportsUdp;
   }
-  return base;
+  if (outbound.kind === "direct_profile") {
+    return true;
+  }
+  if (outbound.kind === "outbound_group") {
+    return (outbound.memberOutboundTags ?? []).some(resolveMember);
+  }
+  const protocol = outbound.protocol;
+  if (protocol === "naive" || protocol === "shadowtls") {
+    return false;
+  }
+  if (protocol !== null && isPeerProtocol(protocol)) {
+    return peerProtocolCapability(protocol).supportsUdp;
+  }
+  return true;
 }
 
 function ruleMatch(
@@ -250,6 +324,13 @@ function ruleMatch(
   }
   if (rule.ipCidrs.length > 0) match.ip_cidr = [...rule.ipCidrs];
   if (rule.ports.length > 0) match.port = [...rule.ports];
+  if (rule.portRanges && rule.portRanges.length > 0) {
+    match.port_range = [...rule.portRanges];
+  }
+  if (rule.protocols && rule.protocols.length > 0) {
+    match.protocol = [...rule.protocols];
+  }
+  if (rule.invert === true) match.invert = true;
   if (rule.ruleSetTags.length > 0) match.rule_set = [...rule.ruleSetTags];
   return match;
 }
@@ -262,6 +343,7 @@ function compileManagedRouteRule(
   rule: ManagedIntentRouteRule,
   materializedInboundTags: ReadonlySet<string>,
   outboundTags: ReadonlySet<string>,
+  outboundSupportsUdp: (tag: string) => boolean,
 ): Json[] {
   const inboundTags = rule.inboundTags.filter((tag) =>
     materializedInboundTags.has(tag),
@@ -305,14 +387,13 @@ function compileManagedRouteRule(
       `route rule ${rule.ruleId} targets unknown outbound ${outboundTag ?? "<null>"}`,
     );
   }
-  const peerTarget = outboundTag.startsWith("peer-out-");
-  if (peerTarget) {
-    if (rule.network === "udp") {
-      fail(
-        "unsupported_peer_network",
-        `route rule ${rule.ruleId} routes UDP through TCP-only peer outbound ${outboundTag}`,
-      );
-    }
+  if (rule.network !== null && !outboundSupportsUdp(outboundTag)) {
+    fail(
+      "unsupported_peer_network",
+      `route rule ${rule.ruleId} cannot route UDP through TCP-only outbound ${outboundTag}`,
+    );
+  }
+  if (!outboundSupportsUdp(outboundTag)) {
     actions.push({
       ...actionScope(inboundTags),
       ...ruleMatch(rule, false),
@@ -320,8 +401,9 @@ function compileManagedRouteRule(
       action: "route",
       outbound: outboundTag,
     });
-    // A catch-all peer route must not let UDP/QUIC fall through to a later
-    // global rule. The reject is ingress-scoped and uses the same match.
+    // A catch-all route to a TCP-only outbound must not let UDP/QUIC fall
+    // through to a later global rule. The reject is ingress-scoped and uses
+    // the same match.
     if (rule.network === null) {
       actions.push({
         ...actionScope(inboundTags),
@@ -660,9 +742,35 @@ export function compileManagedServerConfig(
       .map((outbound) => outbound.tag)
       .filter((tag): tag is string => typeof tag === "string"),
   ]);
-  const managedOutbounds = [...intent.outbounds]
-    .sort((a, b) => a.outboundId.localeCompare(b.outboundId))
-    .map((outbound) => buildManagedOutbound(outbound, input.peerCredentials));
+  const sortedOutbounds = [...intent.outbounds].sort((a, b) =>
+    a.outboundId.localeCompare(b.outboundId),
+  );
+  const managedOutbounds = sortedOutbounds.map((outbound) => {
+    try {
+      const built = buildManagedOutbound(
+        outbound,
+        input.peerCredentials,
+        input.customOutboundSecrets,
+      );
+      const protocol = managedOutboundProtocol(outbound);
+      if (protocol === null) {
+        fail(
+          "managed_intent_invalid",
+          `managed outbound ${outbound.outboundId} is missing its protocol`,
+        );
+      }
+      assertValidManagedOutbound(built, protocol);
+      return built;
+    } catch (error) {
+      if (error instanceof ManagedCompileError) {
+        throw error;
+      }
+      fail(
+        "managed_intent_invalid",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  });
   for (const outbound of managedOutbounds) {
     const tag = outbound.tag as string;
     if (existingOutboundTags.has(tag)) {
@@ -674,7 +782,51 @@ export function compileManagedServerConfig(
     existingOutboundTags.add(tag);
     outbounds.push(outbound);
   }
+  for (const outbound of sortedOutbounds) {
+    if (outbound.kind !== "outbound_group") {
+      continue;
+    }
+    for (const member of outbound.memberOutboundTags ?? []) {
+      if (!existingOutboundTags.has(member)) {
+        fail(
+          "unknown_route_outbound",
+          `outbound group ${outbound.outboundId} references unmaterialized member ${member}`,
+        );
+      }
+    }
+  }
   config.outbounds = outbounds;
+
+  const outboundByTag = new Map(
+    sortedOutbounds.map((outbound) => [outbound.runtimeTag, outbound]),
+  );
+  const udpSupportByTag = new Map<string, boolean>([
+    [BUILTIN_DIRECT_OUTBOUND_TAG, true],
+  ]);
+  const resolvingUdpSupport = new Set<string>();
+  const outboundSupportsUdp = (tag: string): boolean => {
+    const cached = udpSupportByTag.get(tag);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const outbound = outboundByTag.get(tag);
+    if (!outbound) {
+      // Outbounds inherited from the live subscriber config are not frozen in
+      // the intent; assume they can carry UDP rather than misclassify them.
+      return true;
+    }
+    if (resolvingUdpSupport.has(tag)) {
+      return false;
+    }
+    resolvingUdpSupport.add(tag);
+    const supports = intentOutboundSupportsUdp(outbound, outboundSupportsUdp);
+    resolvingUdpSupport.delete(tag);
+    udpSupportByTag.set(tag, supports);
+    return supports;
+  };
+  for (const outbound of sortedOutbounds) {
+    outboundSupportsUdp(outbound.runtimeTag);
+  }
 
   const peerInbounds: Json[] = [];
   const peerInboundTags = new Set<string>();
@@ -699,11 +851,31 @@ export function compileManagedServerConfig(
     peerInboundTags.add(peer.runtimeTag);
     peerInbounds.push(built);
   }
-  config.inbounds = [...inbounds, ...peerInbounds];
+
+  const portForwards = [...(intent.portForwards ?? [])].sort((a, b) =>
+    a.forwardId.localeCompare(b.forwardId),
+  );
+  const portForwardTags = new Set<string>();
+  const portForwardInbounds = portForwards.map((forward) => {
+    if (
+      subscriberInboundTags.includes(forward.runtimeTag) ||
+      peerInboundTags.has(forward.runtimeTag) ||
+      portForwardTags.has(forward.runtimeTag)
+    ) {
+      fail(
+        "managed_intent_invalid",
+        `port forward inbound tag ${forward.runtimeTag} is duplicated`,
+      );
+    }
+    portForwardTags.add(forward.runtimeTag);
+    return buildPortForwardInbound(forward);
+  });
+  config.inbounds = [...inbounds, ...peerInbounds, ...portForwardInbounds];
 
   const materializedInboundTags = new Set<string>([
     ...subscriberInboundTags,
     ...peerInboundTags,
+    ...portForwardTags,
   ]);
 
   const finalOutboundTag = intent.routingPolicy.finalOutboundTag;
@@ -713,10 +885,10 @@ export function compileManagedServerConfig(
       `routing final outbound ${finalOutboundTag} is not materialized`,
     );
   }
-  if (finalOutboundTag.startsWith("peer-out-")) {
+  if (!outboundSupportsUdp(finalOutboundTag)) {
     fail(
       "unsupported_final_outbound",
-      "the routing final outbound cannot be a TCP-only peer link",
+      `the routing final outbound ${finalOutboundTag} does not support UDP`,
     );
   }
 
@@ -733,9 +905,35 @@ export function compileManagedServerConfig(
         rule,
         materializedInboundTags,
         existingOutboundTags,
+        outboundSupportsUdp,
       ),
     ),
   ];
+  for (const forward of portForwards) {
+    if (forward.outboundTag === null) {
+      continue;
+    }
+    if (!existingOutboundTags.has(forward.outboundTag)) {
+      fail(
+        "unknown_route_outbound",
+        `port forward ${forward.forwardId} targets unmaterialized outbound ${forward.outboundTag}`,
+      );
+    }
+    if (
+      forward.network !== "tcp" &&
+      !outboundSupportsUdp(forward.outboundTag)
+    ) {
+      fail(
+        "unsupported_peer_network",
+        `port forward ${forward.forwardId} cannot route UDP through TCP-only outbound ${forward.outboundTag}`,
+      );
+    }
+    routeRules.push({
+      inbound: [forward.runtimeTag],
+      action: "route",
+      outbound: forward.outboundTag,
+    });
+  }
   if (peerInboundTags.size > 0) {
     routeRules.push({
       inbound: [...peerInboundTags],
