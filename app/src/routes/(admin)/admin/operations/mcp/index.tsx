@@ -313,17 +313,17 @@ function RouteComponent(): React.ReactElement {
       </PageHeader>
 
       {isPending ? (
-        <PageContent width="form">
+        <PageContent width="form" className="[--page-toolbar-h:0rem]">
           <FormSkeleton fields={4} />
         </PageContent>
       ) : isError || !data ? (
-        <PageContent width="form">
+        <PageContent width="form" className="[--page-toolbar-h:0rem]">
           <Alert variant="error">
             <AlertDescription>{m.admin_mcp_load_error()}</AlertDescription>
           </Alert>
         </PageContent>
       ) : (
-        <PageContent width="form">
+        <PageContent width="form" className="[--page-toolbar-h:0rem]">
           <section className="flex min-w-0 flex-col gap-3">
             <SectionHeader>
               <div className="flex min-w-0 flex-col gap-0.5">

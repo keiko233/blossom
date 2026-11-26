@@ -326,7 +326,7 @@ function RouteComponent(): React.ReactElement {
         </PageHeaderActions>
       </PageHeader>
 
-      <PageContent>
+      <PageContent className="[--page-toolbar-h:0rem]">
         <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
           <InfoIcon aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
           {m.admin_announcements_note()}

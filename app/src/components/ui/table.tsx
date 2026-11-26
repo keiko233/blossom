@@ -9,14 +9,14 @@ import { cn } from "@/lib/utils";
 
 export type TableVariant = "default" | "card" | "pane";
 
-const tableVariants = cva("relative w-full overflow-x-auto", {
+export const tableVariants = cva("relative w-full", {
   defaultVariants: {
     variant: "default",
   },
   variants: {
     variant: {
-      default: "",
-      card: "",
+      default: "overflow-x-auto",
+      card: "overflow-x-auto",
       pane: "overflow-visible",
     },
   },
@@ -77,7 +77,7 @@ export function TableHeader({
     <thead
       className={cn(
         "bg-primary-foreground [&_tr]:border-b",
-        "in-data-[variant=pane]:sticky in-data-[variant=pane]:top-[calc(var(--page-header-h)+var(--page-toolbar-h))] in-data-[variant=pane]:z-[1] in-data-[variant=pane]:bg-background",
+        "in-data-[variant=pane]:sticky in-data-[variant=pane]:top-[calc(var(--page-header-h,0px)+var(--page-toolbar-h,0px))] in-data-[variant=pane]:z-[1] in-data-[variant=pane]:bg-background",
         className,
       )}
       data-slot="table-header"

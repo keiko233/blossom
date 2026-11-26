@@ -54,7 +54,7 @@ function RouteComponent() {
         <div
           data-slot="admin-viewport"
           data-scroll-restoration-id={ADMIN_VIEWPORT_SCROLL_ID}
-          className="flex min-h-0 flex-1 flex-col overflow-y-auto md:has-[>[data-slot=workspace]]:overflow-hidden"
+          className="flex min-h-0 flex-1 flex-col overflow-y-auto [--page-header-h:3rem] [--page-toolbar-h:0rem] md:has-[>[data-slot=workspace]]:overflow-hidden"
         >
           <Outlet />
         </div>
