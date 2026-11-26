@@ -77,7 +77,7 @@ export function AccessLogTable({
     <div className="flex flex-col gap-3">
       {rows.length > 0 ? (
         <>
-          <Table variant="pane">
+          <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>{m.access_log_col_time()}</TableHead>
