@@ -381,35 +381,37 @@ export function StackedBarChart({
       </div>
 
       {/* Full data for screen readers. */}
-      <table className="sr-only">
-        <caption>{labels.chart}</caption>
-        <thead>
-          <tr>
-            <th scope="col">
-              {labels.time} ({labels.timeZone})
-            </th>
-            {series.map((item, seriesIndex) => (
-              <th key={seriesIndex} scope="col">
-                {item.label}
+      <div className="sr-only">
+        <table>
+          <caption>{labels.chart}</caption>
+          <thead>
+            <tr>
+              <th scope="col">
+                {labels.time} ({labels.timeZone})
               </th>
-            ))}
-            <th scope="col">{labels.total}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {points.map((point, pointIndex) => (
-            <tr key={point.start}>
-              <th scope="row">{formatX(point.start, "full")}</th>
-              {series.map((_, seriesIndex) => (
-                <td key={seriesIndex}>
-                  {formatValue(point.values[seriesIndex] ?? 0)}
-                </td>
+              {series.map((item, seriesIndex) => (
+                <th key={seriesIndex} scope="col">
+                  {item.label}
+                </th>
               ))}
-              <td>{formatValue(totals[pointIndex] ?? 0)}</td>
+              <th scope="col">{labels.total}</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {points.map((point, pointIndex) => (
+              <tr key={point.start}>
+                <th scope="row">{formatX(point.start, "full")}</th>
+                {series.map((_, seriesIndex) => (
+                  <td key={seriesIndex}>
+                    {formatValue(point.values[seriesIndex] ?? 0)}
+                  </td>
+                ))}
+                <td>{formatValue(totals[pointIndex] ?? 0)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
