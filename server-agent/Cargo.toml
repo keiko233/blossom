@@ -60,7 +60,7 @@ panic = "abort"
 [build-dependencies]
 openapiv3 = "2.2"
 prettyplease = "0.3.0"
-progenitor = "0.16.0"
+progenitor = "0.17.0"
 serde_json = "1.0.150"
 syn = "3.0.0"
 
